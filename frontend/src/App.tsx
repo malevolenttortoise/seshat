@@ -91,40 +91,39 @@ function renderPage(
   page: string,
   pageArg: string | number | null,
   nav: (p: string, arg?: string | number | null) => void,
-  t: ReturnType<typeof useTheme>,
 ) {
   switch (page) {
     // Dashboard
-    case "dashboard":          return <PipelineDashboard nav={nav} t={t} />;
-    case "disc-dashboard":     return <DiscDashboard nav={nav} t={t} />;
+    case "dashboard":          return <PipelineDashboard onNav={nav} />;
+    case "disc-dashboard":     return <DiscDashboard onNav={nav} />;
 
-    // Discovery pages
-    case "disc-library":       return <DiscBooksPage nav={nav} t={t} mode="owned" />;
-    case "disc-missing":       return <DiscBooksPage nav={nav} t={t} mode="missing" />;
-    case "disc-upcoming":      return <DiscBooksPage nav={nav} t={t} mode="upcoming" />;
-    case "disc-authors":       return <DiscAuthorsPage nav={nav} t={t} />;
-    case "disc-author-detail": return <DiscAuthorDetailPage nav={nav} t={t} authorId={pageArg as number} />;
-    case "disc-mam":           return <DiscMAMPage nav={nav} t={t} />;
-    case "disc-suggestions":   return <DiscSuggestionsPage nav={nav} t={t} />;
-    case "disc-hidden":        return <DiscHiddenPage nav={nav} t={t} />;
-    case "disc-importexport":  return <DiscImportExportPage nav={nav} t={t} />;
+    // Discovery pages (use onNav prop + useTheme context)
+    case "disc-library":       return <DiscBooksPage title="Library" apiPath="/discovery/books" extraParams={{owned: "1"}} />;
+    case "disc-missing":       return <DiscBooksPage title="Missing" apiPath="/discovery/missing" />;
+    case "disc-upcoming":      return <DiscBooksPage title="Upcoming" apiPath="/discovery/upcoming" />;
+    case "disc-authors":       return <DiscAuthorsPage onNav={nav} />;
+    case "disc-author-detail": return <DiscAuthorDetailPage authorId={pageArg as number} onNav={nav} />;
+    case "disc-mam":           return <DiscMAMPage onNav={nav} />;
+    case "disc-suggestions":   return <DiscSuggestionsPage onNav={nav} />;
+    case "disc-hidden":        return <DiscHiddenPage onNav={nav} />;
+    case "disc-importexport":  return <DiscImportExportPage />;
 
-    // Pipeline pages
-    case "pipe-review":        return <ReviewPage nav={nav} t={t} />;
-    case "pipe-tentative":     return <TentativePage nav={nav} t={t} />;
-    case "pipe-ignored":       return <IgnoredWeeklyPage nav={nav} t={t} />;
-    case "pipe-authors":       return <PipelineAuthorsPage nav={nav} t={t} />;
-    case "pipe-delayed":       return <DelayedPage nav={nav} t={t} />;
-    case "pipe-migration":     return <MigrationPage nav={nav} t={t} />;
-    case "pipe-mam":           return <PipelineMamPage nav={nav} t={t} />;
+    // Pipeline pages (no props — use useTheme context)
+    case "pipe-review":        return <ReviewPage />;
+    case "pipe-tentative":     return <TentativePage />;
+    case "pipe-ignored":       return <IgnoredWeeklyPage />;
+    case "pipe-authors":       return <PipelineAuthorsPage />;
+    case "pipe-delayed":       return <DelayedPage />;
+    case "pipe-migration":     return <MigrationPage />;
+    case "pipe-mam":           return <PipelineMamPage />;
 
-    // Shared pages
-    case "filters":            return <FiltersPage nav={nav} t={t} />;
-    case "settings":           return <SettingsPage nav={nav} t={t} />;
-    case "logs":               return <LogsPage nav={nav} t={t} />;
-    case "database":           return <DatabasePage nav={nav} t={t} />;
+    // Shared pages (no props)
+    case "filters":            return <FiltersPage />;
+    case "settings":           return <SettingsPage />;
+    case "logs":               return <LogsPage />;
+    case "database":           return <DatabasePage />;
 
-    default:                   return <PipelineDashboard nav={nav} t={t} />;
+    default:                   return <PipelineDashboard onNav={nav} />;
   }
 }
 
@@ -176,7 +175,7 @@ function SeshatApp() {
   }
 
   if (!auth.authenticated) {
-    return <LoginPage onLogin={() => setAuth(a => ({ ...a, authenticated: true, loading: false }))} firstRun={auth.firstRun} t={t} />;
+    return <LoginPage onLoginSuccess={() => setAuth(a => ({ ...a, authenticated: true, loading: false }))} firstRun={auth.firstRun} />;
   }
 
   const themeIcon = themeName === "dark" ? "🌙" : themeName === "dim" ? "⛅" : "☀️";
@@ -319,7 +318,7 @@ function SeshatApp() {
       {/* ─── Page content ───────────────────────────────────── */}
       <main style={{ maxWidth: maxW, margin: "0 auto", padding: "24px 16px" }}>
         <ErrorBoundary>
-          {renderPage(page, pageArg, nav, t)}
+          {renderPage(page, pageArg, nav)}
         </ErrorBoundary>
       </main>
     </div>

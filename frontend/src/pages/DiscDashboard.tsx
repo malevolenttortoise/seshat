@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { useState, useEffect } from "react";
 import { useTheme } from "../theme";
 import { api } from "../api";

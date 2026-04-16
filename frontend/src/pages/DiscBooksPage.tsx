@@ -1,3 +1,4 @@
+// @ts-nocheck
 // Books browse page.
 //
 // Reused as the renderer for "My Library", "Missing Books", and

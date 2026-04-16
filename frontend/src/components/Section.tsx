@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useTheme } from "../theme";
 
 export function Section({
@@ -6,13 +6,18 @@ export function Section({
   subtitle,
   children,
   right,
+  count,
+  defaultOpen = true,
 }: {
   title: string;
   subtitle?: string;
   children: ReactNode;
   right?: ReactNode;
+  count?: number;
+  defaultOpen?: boolean;
 }) {
   const theme = useTheme();
+  const [open, setOpen] = useState(defaultOpen);
   return (
     <section
       style={{
@@ -24,33 +29,38 @@ export function Section({
       }}
     >
       <header
+        onClick={() => setOpen(!open)}
         style={{
           display: "flex",
           alignItems: "flex-start",
           justifyContent: "space-between",
           gap: 12,
-          marginBottom: 16,
+          marginBottom: open ? 16 : 0,
+          cursor: "pointer",
+          userSelect: "none",
         }}
       >
-        <div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <h2 style={{ fontSize: 16, fontWeight: 700, color: theme.text }}>
             {title}
           </h2>
-          {subtitle && (
-            <p
-              style={{
-                fontSize: 13,
-                color: theme.textDim,
-                marginTop: 4,
-              }}
-            >
-              {subtitle}
-            </p>
+          {count !== undefined && (
+            <span style={{ fontSize: 12, color: theme.textDim, fontWeight: 500 }}>
+              ({count})
+            </span>
           )}
         </div>
-        {right && <div>{right}</div>}
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {right && <div>{right}</div>}
+          {subtitle && (
+            <span style={{ fontSize: 13, color: theme.textDim }}>
+              {subtitle}
+            </span>
+          )}
+          <span style={{ fontSize: 12, color: theme.textDim }}>{open ? "▾" : "▸"}</span>
+        </div>
       </header>
-      {children}
+      {open && children}
     </section>
   );
 }

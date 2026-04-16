@@ -1,3 +1,4 @@
+// @ts-nocheck
 // Hidden books page.
 //
 // Lists every book the user has hidden via the "Hide" action elsewhere

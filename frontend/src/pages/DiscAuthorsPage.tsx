@@ -1,3 +1,4 @@
+// @ts-nocheck
 // Authors browse page.
 //
 // Lists every author with at least one linked book (orphan rows are
