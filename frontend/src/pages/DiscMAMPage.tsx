@@ -48,7 +48,7 @@ api.get("/discovery/mam/scan/status").then(r=>{if(r.running)setMamScan(r)}).catc
 },[]);
 
 // Load section data
-const load=useCallback((page:number=1,signal?:AbortSignal)=>{setLd(true);const p=new URLSearchParams({section:tab,search:q,sort,page:String(page),per_page:String(perPage)});return api.get(`/mam/books?${p}`,signal).then(d=>{setBooks(d.books||[]);setTotal(d.total||0);setPg(page);setLd(false)}).catch(e=>{if(!api.isAbort(e))setLd(false)})},[tab,q,sort]);
+const load=useCallback((page:number=1,signal?:AbortSignal)=>{setLd(true);const p=new URLSearchParams({section:tab,search:q,sort,page:String(page),per_page:String(perPage)});return api.get(`/discovery/mam/books?${p}`,signal).then(d=>{setBooks(d.books||[]);setTotal(d.total||0);setPg(page);setLd(false)}).catch(e=>{if(!api.isAbort(e))setLd(false)})},[tab,q,sort]);
 useEffect(()=>{const c=new AbortController();load(1,c.signal);return()=>c.abort()},[load]);
 
 // Scan polling
@@ -56,11 +56,11 @@ useEffect(()=>{if(!mamScan?.running)return;const iv=setInterval(()=>{api.get("/d
 
 const totalPages=Math.max(1,Math.ceil(total/perPage));
 const switchTab=tb=>{setTab(tb);setQ("");setSort("title");setPg(1)};
-const startScan=async()=>{setScanStarting(true);try{const r=await api.post(`/mam/scan?limit=${scanLimit}`);if(r.error){alert(r.error);setScanStarting(false);return}setMamScan({running:true,scanned:0,total:r.total||scanLimit,found:0,possible:0,not_found:0,errors:0,status:"scanning",type:"manual"})}catch{alert("Failed to start scan")}setScanStarting(false)};
+const startScan=async()=>{setScanStarting(true);try{const r=await api.post(`/discovery/mam/scan?limit=${scanLimit}`);if(r.error){alert(r.error);setScanStarting(false);return}setMamScan({running:true,scanned:0,total:r.total||scanLimit,found:0,possible:0,not_found:0,errors:0,status:"scanning",type:"manual"})}catch{alert("Failed to start scan")}setScanStarting(false)};
 const cancelScan=async()=>{try{await api.post("/discovery/mam/scan/cancel")}catch{}};
 const closeSb=()=>{if(!sb)return;setSbClosing(true);setTimeout(()=>{setSb(null);setSbClosing(false)},200)};
 const toggleSb=b=>{if(sb&&sb.id===b.id)closeSb();else{setSbClosing(false);setSb(b)}};
-const onAction=async(act,id)=>{const scrollY=window.scrollY;if(act==="hide")await api.post(`/books/${id}/hide`);if(act==="dismiss")await api.post(`/books/${id}/dismiss`);await load(pg);setTimeout(()=>window.scrollTo(0,scrollY),100)};
+const onAction=async(act,id)=>{const scrollY=window.scrollY;if(act==="hide")await api.post(`/discovery/books/${id}/hide`);if(act==="dismiss")await api.post(`/discovery/books/${id}/dismiss`);await load(pg);setTimeout(()=>window.scrollTo(0,scrollY),100)};
 const clearData=async(type)=>{const labels={source:"source scan",mam:"MAM scan",both:"all scan"};if(!confirm(`Clear ${labels[type]} data for ${sel.size} book(s)? ${type==="source"||type==="both"?"Discovered (non-Calibre) selected books will be DELETED.":"MAM status will be reset and books will need re-scanning."}`))return;setBusy(true);try{const r=await api.post("/discovery/books/clear-scan-data",{book_ids:[...sel],clear_source:type==="source"||type==="both",clear_mam:type==="mam"||type==="both"});if(r.error){alert(`Error: ${r.error}`)}else{setSel(new Set());setSelMode(false);load(pg);api.get<MamStatusResponse>("/discovery/mam/status").then(r2=>{if(r2.stats)setCounts({upload:r2.stats.upload_candidates||0,download:r2.stats.available_to_download||0,missing:r2.stats.missing_everywhere||0,unscanned:r2.stats.total_unscanned||0})}).catch(()=>{})}}catch(e){alert(`Error: ${e.message||e}`)}setBusy(false)};
 const scanSelected=async()=>{if(!confirm(`Run a MAM scan against ${sel.size} selected book(s)? This will re-scan even already-scanned books.`))return;setBusy(true);try{const r=await api.post("/discovery/books/scan-mam",{book_ids:[...sel]});if(r.error){alert(`MAM scan failed: ${r.error}`)}else{alert(`MAM scan complete: ${r.scanned||0} scanned, ${r.found||0} found, ${r.possible||0} possible, ${r.not_found||0} not on MAM`+(r.errors?`, ${r.errors} errors`:""));setSel(new Set());setSelMode(false);load(pg);api.get<MamStatusResponse>("/discovery/mam/status").then(r2=>{if(r2.stats)setCounts({upload:r2.stats.upload_candidates||0,download:r2.stats.available_to_download||0,missing:r2.stats.missing_everywhere||0,unscanned:r2.stats.total_unscanned||0})}).catch(()=>{})}}catch(e){alert(`MAM scan failed: ${e.message||e}`)}setBusy(false)};
 const[hermConf,setHermConf]=useState(false);

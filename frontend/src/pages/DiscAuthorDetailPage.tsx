@@ -36,7 +36,7 @@ interface ISProps extends SectionSharedProps {
   // string via URL params).
   authorId: number | string;
 }
-function IS({series,vm,onAction,onBookClick,collapsed,authorId}:ISProps){const t=useTheme();const[ld,setLd]=useState(false);const[bks,setBks]=useState<Book[]|null>(null);const load=()=>{if(bks)return;setLd(true);api.get<{books?:Book[]}>(`/series/${series.id}`).then(d=>{setBks(d.books||[]);setLd(false)}).catch(()=>setLd(false))};useEffect(()=>{load()},[]);
+function IS({series,vm,onAction,onBookClick,collapsed,authorId}:ISProps){const t=useTheme();const[ld,setLd]=useState(false);const[bks,setBks]=useState<Book[]|null>(null);const load=()=>{if(bks)return;setLd(true);api.get<{books?:Book[]}>(`/discovery/series/${series.id}`).then(d=>{setBks(d.books||[]);setLd(false)}).catch(()=>setLd(false))};useEffect(()=>{load()},[]);
 const isMulti=!!series.multi_author;
 const header=isMulti?<span>{series.name} <span style={{fontSize:11,color:useTheme().cyant,fontWeight:600,textTransform:"none",background:useTheme().cyan+"22",padding:"2px 8px",borderRadius:4,marginLeft:4}}>shared series</span></span>:series.name;
 // Separate regular books from omnibus entries for display
@@ -66,14 +66,14 @@ interface AuthorDetailPageProps {
 
 export default function AuthorDetailPage({authorId,onNav}:AuthorDetailPageProps){const t=useTheme();const[a,setA]=useState<any>(null);const[ld,setLd]=useState(true);const[ref,setRef]=useState(false);const[mamRef,setMamRef]=useState(false);const[vm,setVm]=usePersist<ViewMode>("adp_vm","grid");const[rk,setRk]=useState(0);const[sb,setSb]=useState<any>(null);const[sbClosing,setSbClosing]=useState(false);const[allCol,setAllCol]=useState(false);const[mamOn,setMamOn]=useState(false);
 const[penLinks,setPenLinks]=useState<PenNameLink[]>([]);const[penQ,setPenQ]=useState("");const[penResults,setPenResults]=useState<Author[]>([]);const[penBusy,setPenBusy]=useState(false);const[penType,setPenType]=usePersist<string>("adp_pen_type","pen_name");
-useEffect(()=>{if(!authorId)return;api.get<PenNamesResponse>(`/authors/${authorId}/pen-names`).then(r=>setPenLinks(r.links||[])).catch(()=>{})},[authorId]);
-useEffect(()=>{if(penQ.length<2){setPenResults([]);return}const tm=setTimeout(()=>{api.get<AuthorsResponse>(`/authors?search=${encodeURIComponent(penQ)}`).then(r=>setPenResults((r.authors||[]).filter(x=>x.id!==parseInt(String(authorId))))).catch(()=>{})},300);return()=>clearTimeout(tm)},[penQ,authorId]);
-const linkPen=async(aliasId:number)=>{setPenBusy(true);try{await api.post("/discovery/authors/link-pen-names",{canonical_author_id:parseInt(String(authorId)),alias_author_id:aliasId,link_type:penType});const r=await api.get<PenNamesResponse>(`/authors/${authorId}/pen-names`);setPenLinks(r.links||[]);setPenQ("");setPenResults([]);toast.success(penType==="co_author"?"Co-author linked":"Pen name linked")}catch(e:any){toast.error(e.message||"Link failed")}setPenBusy(false)};
-const unlinkPen=async(linkId:number)=>{try{await api.del(`/authors/pen-name-link/${linkId}`);setPenLinks(penLinks.filter(l=>l.id!==linkId));toast.success("Author unlinked")}catch{}};
+useEffect(()=>{if(!authorId)return;api.get<PenNamesResponse>(`/discovery/authors/${authorId}/pen-names`).then(r=>setPenLinks(r.links||[])).catch(()=>{})},[authorId]);
+useEffect(()=>{if(penQ.length<2){setPenResults([]);return}const tm=setTimeout(()=>{api.get<AuthorsResponse>(`/discovery/authors?search=${encodeURIComponent(penQ)}`).then(r=>setPenResults((r.authors||[]).filter(x=>x.id!==parseInt(String(authorId))))).catch(()=>{})},300);return()=>clearTimeout(tm)},[penQ,authorId]);
+const linkPen=async(aliasId:number)=>{setPenBusy(true);try{await api.post("/discovery/authors/link-pen-names",{canonical_author_id:parseInt(String(authorId)),alias_author_id:aliasId,link_type:penType});const r=await api.get<PenNamesResponse>(`/discovery/authors/${authorId}/pen-names`);setPenLinks(r.links||[]);setPenQ("");setPenResults([]);toast.success(penType==="co_author"?"Co-author linked":"Pen name linked")}catch(e:any){toast.error(e.message||"Link failed")}setPenBusy(false)};
+const unlinkPen=async(linkId:number)=>{try{await api.del(`/discovery/authors/pen-name-link/${linkId}`);setPenLinks(penLinks.filter(l=>l.id!==linkId));toast.success("Author unlinked")}catch{}};
 useEffect(()=>{api.get<MamStatusResponse>("/discovery/mam/status").then(r=>setMamOn(!!r.enabled)).catch(()=>{})},[]);
 const closeSb=()=>{if(!sb)return;setSbClosing(true);setTimeout(()=>{setSb(null);setSbClosing(false)},200)};
 const toggleSb=b=>{if(sb&&sb.id===b.id)closeSb();else{setSbClosing(false);setSb(b)}};
-const loadA=useCallback((signal?:AbortSignal)=>{setLd(true);return api.get(`/authors/${authorId}`,signal).then(d=>{setA(d);setLd(false)}).catch(e=>{if(!api.isAbort(e))console.error(e)})},[authorId]);useEffect(()=>{const c=new AbortController();loadA(c.signal);return()=>c.abort()},[loadA]);
+const loadA=useCallback((signal?:AbortSignal)=>{setLd(true);return api.get(`/discovery/authors/${authorId}`,signal).then(d=>{setA(d);setLd(false)}).catch(e=>{if(!api.isAbort(e))console.error(e)})},[authorId]);useEffect(()=>{const c=new AbortController();loadA(c.signal);return()=>c.abort()},[loadA]);
 // Author scans run as background tasks on the server. The flow:
 //   1. Dispatch `seshat:scan-started` so the Dashboard widget
 //      shows it immediately.
@@ -81,12 +81,12 @@ const loadA=useCallback((signal?:AbortSignal)=>{setLd(true);return api.get(`/aut
 //      `{status: "started"}`).
 //   3. Listen for `seshat:scan-completed` from App's unified
 //      poller and refresh the page data when it fires.
-const refresh=async(full=false)=>{if(ref)return;setRef(true);try{const r=await api.post(`/authors/${authorId}/${full?"full-rescan":"lookup"}`);toast.info(`${full?"Full re-scan":"Source scan"} started for ${r.author||"author"}`);window.dispatchEvent(new CustomEvent("seshat:scan-started"))}catch(e){toast.error(e.message||"Scan failed to start");setRef(false)}};
-const scanMam=async()=>{if(mamRef)return;setMamRef(true);try{const r=await api.post(`/mam/scan-author/${authorId}`);if(r.status==="complete"){toast.info(r.message||"No un-scanned books for this author");setMamRef(false)}else{toast.info(`MAM scan started — ${r.total||0} books`);window.dispatchEvent(new CustomEvent("seshat:scan-started"))}}catch(e){toast.error(e.message||"MAM scan failed to start");setMamRef(false)}};
+const refresh=async(full=false)=>{if(ref)return;setRef(true);try{const r=await api.post(`/discovery/authors/${authorId}/${full?"full-rescan":"lookup"}`);toast.info(`${full?"Full re-scan":"Source scan"} started for ${r.author||"author"}`);window.dispatchEvent(new CustomEvent("seshat:scan-started"))}catch(e){toast.error(e.message||"Scan failed to start");setRef(false)}};
+const scanMam=async()=>{if(mamRef)return;setMamRef(true);try{const r=await api.post(`/discovery/mam/scan-author/${authorId}`);if(r.status==="complete"){toast.info(r.message||"No un-scanned books for this author");setMamRef(false)}else{toast.info(`MAM scan started — ${r.total||0} books`);window.dispatchEvent(new CustomEvent("seshat:scan-started"))}}catch(e){toast.error(e.message||"MAM scan failed to start");setMamRef(false)}};
 // Listen for scan completion (broadcast by the unified poller in
 // App-level Dashboard) and refresh this page's author data + book grid.
 useEffect(()=>{const onDone=()=>{loadA();setRk(k=>k+1);setRef(false);setMamRef(false)};window.addEventListener("seshat:scan-completed",onDone);return()=>window.removeEventListener("seshat:scan-completed",onDone)},[loadA]);
-const onAction=async(act,id)=>{const scrollY=window.scrollY;if(act==="hide")await api.post(`/books/${id}/hide`);if(act==="dismiss")await api.post(`/books/${id}/dismiss`);if(act==="delete")await api.del(`/books/${id}`);await loadA();setTimeout(()=>window.scrollTo(0,scrollY),100)};
+const onAction=async(act,id)=>{const scrollY=window.scrollY;if(act==="hide")await api.post(`/discovery/books/${id}/hide`);if(act==="dismiss")await api.post(`/discovery/books/${id}/dismiss`);if(act==="delete")await api.del(`/discovery/books/${id}`);await loadA();setTimeout(()=>window.scrollTo(0,scrollY),100)};
 if(ld)return<Load/>;if(!a)return<div style={{color:t.tf}}>Not found</div>;
 const saOwned=(a.standalone_books||[]).filter(b=>b.owned===1).length;const saTotal=(a.standalone_books||[]).length;const serOwned=(a.series||[]).reduce((n,s)=>n+(s.owned_count||0),0);const serTotal=(a.series||[]).reduce((n,s)=>n+(s.book_count||0),0);const oc=saOwned+serOwned;const total=saTotal+serTotal;
 return<div style={{display:"flex",flexDirection:"column",gap:24}}>

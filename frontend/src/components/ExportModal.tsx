@@ -4,7 +4,7 @@ import { Btn } from "./Btn";
 import { Spin } from "./Spin";
 
 export function ExportModal({onClose,defaultFilter="missing"}:any){const t=useTheme();const[filter,setFilter]=useState(defaultFilter);const[fmt,setFmt]=useState("csv");const[content,setContent]=useState<string|null>(null);const[ld,setLd]=useState(false);const[copied,setCopied]=useState(false);const[downloaded,setDownloaded]=useState(false);const taRef=useRef<HTMLTextAreaElement>(null);
-const generate=async()=>{setLd(true);setCopied(false);setDownloaded(false);try{const r=await fetch(`/api/export?filter=${filter}&format=${fmt}`);const text=await r.text();setContent(text)}catch{setContent("Error generating export")}setLd(false)};
+const generate=async()=>{setLd(true);setCopied(false);setDownloaded(false);try{const r=await fetch(`/api/discovery/export?filter=${filter}&format=${fmt}`);const text=await r.text();setContent(text)}catch{setContent("Error generating export")}setLd(false)};
 const download=()=>{if(!content)return;const blob=new Blob([content],{type:fmt==="csv"?"text/csv":"text/plain"});const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download=`books_${filter}.${fmt==="csv"?"csv":"txt"}`;a.click();URL.revokeObjectURL(url);setDownloaded(true);setTimeout(()=>setDownloaded(false),2000)};
 const copy=async()=>{if(!content)return;try{await navigator.clipboard.writeText(content);setCopied(true);setTimeout(()=>setCopied(false),2000)}catch{try{if(taRef.current){taRef.current.select();document.execCommand("copy");setCopied(true);setTimeout(()=>setCopied(false),2000)}}catch{}}};
 const sel={padding:"7px 12px",borderRadius:6,border:`1px solid ${t.border}`,background:t.inp,color:t.text2,fontSize:13};

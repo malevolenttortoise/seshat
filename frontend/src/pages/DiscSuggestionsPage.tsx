@@ -40,7 +40,7 @@ export default function SuggestionsPage({ onNav }: { onNav: NavFn }) {
 
   const load = () => {
     setData(null);
-    api.get(`/series-suggestions?status=${status}`)
+    api.get(`/discovery/series-suggestions?status=${status}`)
       .then(setData)
       .catch(e => { console.error(e); setData({ suggestions: [], count: 0 }); });
   };
@@ -51,9 +51,9 @@ export default function SuggestionsPage({ onNav }: { onNav: NavFn }) {
     if (busy[sug.id]) return;
     setBusy(b => ({ ...b, [sug.id]: action }));
     try {
-      if (action === "apply")       await api.post(`/series-suggestions/${sug.id}/apply`);
-      else if (action === "ignore") await api.post(`/series-suggestions/${sug.id}/ignore`);
-      else if (action === "delete") await api.del(`/series-suggestions/${sug.id}`);
+      if (action === "apply")       await api.post(`/discovery/series-suggestions/${sug.id}/apply`);
+      else if (action === "ignore") await api.post(`/discovery/series-suggestions/${sug.id}/ignore`);
+      else if (action === "delete") await api.del(`/discovery/series-suggestions/${sug.id}`);
       notifyChanged();
       load();
     } catch (e) {
