@@ -54,11 +54,13 @@ export default function UnifiedDashboard({ onNav }: Props) {
 
   const ds = d || {};
   const b = budget || {};
-  const owned = ds.owned ?? 0, total = ds.total ?? 0;
-  const missing = ds.missing ?? 0, upcoming = ds.upcoming ?? 0;
-  const authors = ds.authors ?? 0, series = ds.series ?? 0;
-  const newBooks = ds.new_books ?? 0, mamFound = ds.mam_found ?? 0;
-  const mamPossible = ds.mam_possible ?? 0, mamNotFound = ds.mam_not_found ?? 0;
+  const owned = ds.owned_books ?? 0, total = ds.total_books ?? 0;
+  const missing = ds.missing_books ?? 0, upcoming = ds.upcoming_books ?? 0;
+  const authors = ds.authors ?? 0, series = ds.total_series ?? 0;
+  const newBooks = ds.new_books ?? 0;
+  const mamStats = ds.mam || {};
+  const mamFound = mamStats.found ?? 0;
+  const mamPossible = mamStats.possible ?? 0, mamNotFound = mamStats.not_found ?? 0;
   const comp = total > 0 ? pct(owned, total) : 0;
   const allowed = counts?.authors_allowed ?? 0;
   const ignored = counts?.authors_ignored ?? 0;
@@ -67,10 +69,11 @@ export default function UnifiedDashboard({ onNav }: Props) {
   const cwaUrl = settings?.cwa_web_url || "";
   const calibreUrl = settings?.calibre_web_url || "";
 
-  // Scan progress
-  const libScan = scanStatus?.library_sync || {};
-  const srcScan = scanStatus?.lookup || {};
-  const mamScan = scanStatus?.mam || {};
+  // Scan progress — API returns {scans: [{kind: "lookup"}, {kind: "mam"}, {kind: "library"}]}
+  const scansArr = scanStatus?.scans || [];
+  const libScan = scansArr.find(s => s.kind === "library") || {};
+  const srcScan = scansArr.find(s => s.kind === "lookup") || {};
+  const mamScan = scansArr.find(s => s.kind === "mam") || {};
 
   const triggerSync = async () => { setSyncing(true); try { await api.post("/discovery/sync/library"); } catch {} setSyncing(false); refresh(); };
   const triggerSources = async () => { setScanning(true); try { await api.post("/discovery/lookup"); } catch {} setScanning(false); refresh(); };
@@ -225,16 +228,16 @@ export default function UnifiedDashboard({ onNav }: Props) {
             {/* Scan stats summary */}
             <div style={{ ...vsep, minWidth: 130 }}>
               <div style={{ fontSize: 10, fontWeight: 600, color: t.td, textTransform: "uppercase", marginBottom: 6 }}>Last Scan</div>
-              {srcScan.status === "complete" && srcScan.source_timeouts && Object.keys(srcScan.source_timeouts).length > 0 ? (
+              {srcScan.status === "complete" && srcScan.extra?.source_timeouts && Object.keys(srcScan.extra.source_timeouts).length > 0 ? (
                 <div style={{ fontSize: 11, color: t.warn }}>
-                  {Object.entries(srcScan.source_timeouts).map(([src, sec]) => (
+                  {Object.entries(srcScan.extra.source_timeouts).map(([src, sec]) => (
                     <div key={src}>{src}: timed out ({sec}s)</div>
                   ))}
                 </div>
-              ) : srcScan.new_books != null ? (
+              ) : srcScan.extra?.new_books != null ? (
                 <div style={{ fontSize: 12, color: t.text2 }}>
-                  <div>{srcScan.checked ?? 0} authors checked</div>
-                  <div style={{ color: t.jade }}>{srcScan.new_books ?? 0} new books</div>
+                  <div>{srcScan.current ?? 0} authors checked</div>
+                  <div style={{ color: t.jade }}>{srcScan.extra.new_books ?? 0} new books</div>
                 </div>
               ) : (
                 <div style={{ fontSize: 11, color: t.tf, fontStyle: "italic" }}>No recent scan</div>
@@ -347,8 +350,8 @@ function Tile({ label, value, color, sub, onClick }) {
 function ProgressRow({ label, scan, t }) {
   const running = scan?.running;
   const status = scan?.status || "idle";
-  const current = scan?.current_author || scan?.current_book || "";
-  const checked = scan?.checked ?? scan?.current ?? scan?.scanned ?? 0;
+  const current = scan?.current_label || scan?.current_book || "";
+  const checked = scan?.current ?? 0;
   const total = scan?.total ?? 0;
   const pctDone = total > 0 ? Math.floor((checked / total) * 100) : 0;
   return (
