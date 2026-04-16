@@ -54,6 +54,20 @@ export const api = {
     const r = await fetch(`/api${url}`, init);
     return (await check(r)) as T;
   },
+  put: async <T>(
+    url: string,
+    body?: unknown,
+    signal?: AbortSignal,
+  ): Promise<T> => {
+    const init: RequestInit = { method: "PUT" };
+    if (body !== undefined) {
+      init.headers = { "Content-Type": "application/json" };
+      init.body = JSON.stringify(body);
+    }
+    if (signal) init.signal = signal;
+    const r = await fetch(`/api${url}`, init);
+    return (await check(r)) as T;
+  },
   patch: async <T>(
     url: string,
     body?: unknown,
