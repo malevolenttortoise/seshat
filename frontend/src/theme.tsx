@@ -47,6 +47,8 @@ export interface Theme {
   // Aliases for simple usage
   ok: string; warn: string; err: string;
   inp: string;
+  // Backward-compat alias (pipeline pages use textDim)
+  textDim: string;
 }
 
 export const THEMES: Record<string, Theme> = {
@@ -81,6 +83,7 @@ export const THEMES: Record<string, Theme> = {
     cyan: "#5ab8c8", cyant: "#4898a8", cyanb: "rgba(90,184,200,0.12)",
     ok: "#4daf8b", warn: "#e0b84a", err: "#e06060",
     inp: "#11132a",
+    textDim: "#8884a0",
   },
   dim: {
     name: "Dim",
@@ -109,6 +112,7 @@ export const THEMES: Record<string, Theme> = {
     cyan: "#60c0cc", cyant: "#50a0b0", cyanb: "rgba(96,192,204,0.14)",
     ok: "#52b890", warn: "#e8c050", err: "#e87070",
     inp: "#313136",
+    textDim: "#989690",
   },
   light: {
     name: "Light",
@@ -137,6 +141,7 @@ export const THEMES: Record<string, Theme> = {
     cyan: "#388898", cyant: "#307080", cyanb: "rgba(56,136,152,0.10)",
     ok: "#2e8a62", warn: "#a07824", err: "#c04242",
     inp: "#fffdf8",
+    textDim: "#686058",
   },
 };
 
