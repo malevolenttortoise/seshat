@@ -1,20 +1,9 @@
 // Seshat theme — Egyptian goddess color scheme.
 //
-// Three brightness variants:
-//   - dark:  deep indigo with gold accents
-//   - dim:   warm charcoal with muted gold
-//   - light: warm papyrus with rich bronze accents
-//
-// Color palette inspired by Egyptian aesthetics:
-//   - Gold (#d4a357) — primary accent, highlights, links
-//   - Deep indigo (#0a0b1a, #11132a) — dark mode surfaces
-//   - Warm sand/papyrus (#f5f0e8) — light mode surfaces
-//   - Jade green (#4daf8b) — tertiary accent, success states
-//
-// Usage:
-//   import { useTheme } from "../theme";
-//   const t = useTheme();
-//   <div style={{color: t.text, background: t.bg2}} />
+// Three brightness variants, each with distinct Egyptian character:
+//   - dark:  nighttime temple — deep indigo with gold accents
+//   - dim:   torchlit chamber — dark warm sand/papyrus
+//   - light: sunlit papyrus — warm sand with rich bronze
 import {
   createContext,
   useCallback,
@@ -30,71 +19,31 @@ export interface Theme {
   bg: string;   bg2: string;  bg3: string;  bg4: string;
   border: string; borderL: string; borderH: string;
   text: string; text2: string;
-  // Extended text gradations (medium → dim → faint → ghost → invisible)
   tm: string; td: string; tf: string; tg: string; ti: string;
-  // Gold accent
   accent: string; accentDim: string;
-  abg: string;  // accent background tint
-  abr: string;  // accent border tint
-  // Jade green (tertiary)
+  abg: string; abr: string;
   jade: string; jadeDim: string;
-  // Semantic colors with tints + backgrounds
   grn: string; grnt: string; grnb: string;
   red: string; redt: string; redb: string;
   ylw: string; ylwt: string; ylwb: string;
   pur: string; purt: string; purb: string;
   cyan: string; cyant: string; cyanb: string;
-  // Aliases for simple usage
   ok: string; warn: string; err: string;
   inp: string;
-  // Backward-compat alias (pipeline pages use textDim)
   textDim: string;
 }
 
 export const THEMES: Record<string, Theme> = {
   dark: {
     name: "Dark",
-    // Deep indigo backgrounds
-    bg:  "#0a0b1a",
-    bg2: "#11132a",
-    bg3: "#0e1022",
-    bg4: "#1a1c30",
-    border:  "#2a2c4a",
-    borderL: "#1a1c30",
-    borderH: "#4a4c6a",
-    // Cool-tinted text
-    text:  "#e8e4f0",
-    text2: "#c8c4d8",
-    tm: "#a8a4c0", td: "#8884a0", tf: "#706c90",
-    tg: "#585478", ti: "#404060",
-    // Gold accent
-    accent:    "#d4a357",
-    accentDim: "#b08840",
-    abg: "rgba(212,163,87,0.14)",
-    abr: "rgba(212,163,87,0.30)",
-    // Jade green
-    jade:    "#4daf8b",
-    jadeDim: "#3a8c6e",
-    // Semantic
-    grn: "#4daf8b", grnt: "#3a8c6e", grnb: "rgba(77,175,139,0.12)",
-    red: "#e06060", redt: "#c04848", redb: "rgba(224,96,96,0.12)",
-    ylw: "#e0b84a", ylwt: "#c8a040", ylwb: "rgba(224,184,74,0.12)",
-    pur: "#a07cc8", purt: "#8866b0", purb: "rgba(160,124,200,0.12)",
-    cyan: "#5ab8c8", cyant: "#4898a8", cyanb: "rgba(90,184,200,0.12)",
-    ok: "#4daf8b", warn: "#e0b84a", err: "#e06060",
-    inp: "#11132a",
-    textDim: "#8884a0",
-  },
-  dim: {
-    name: "Dim",
-    // Indigo-tinted charcoal — Egyptian twilight
-    bg:  "#1e2030",
-    bg2: "#262838",
-    bg3: "#222434",
-    bg4: "#2c2e40",
-    border:  "#3c3e54",
-    borderL: "#323446",
-    borderH: "#565874",
+    // Nighttime temple — deep indigo
+    bg:  "#1a1c30",
+    bg2: "#222438",
+    bg3: "#1e2034",
+    bg4: "#2a2c42",
+    border:  "#3a3c56",
+    borderL: "#2e3048",
+    borderH: "#545878",
     text:  "#e4e2ec",
     text2: "#cccad8",
     tm: "#a8a6b8", td: "#8886a0", tf: "#707088",
@@ -106,17 +55,46 @@ export const THEMES: Record<string, Theme> = {
     jade:    "#4cb888",
     jadeDim: "#3a9468",
     grn: "#4cb888", grnt: "#3a9468", grnb: "rgba(76,184,136,0.14)",
-    red: "#e87070", redt: "#c85858", redb: "rgba(232,112,112,0.14)",
+    red: "#e06060", redt: "#c04848", redb: "rgba(224,96,96,0.14)",
     ylw: "#e0c060", ylwt: "#c8a848", ylwb: "rgba(224,192,96,0.14)",
     pur: "#a088cc", purt: "#8870b4", purb: "rgba(160,136,204,0.14)",
     cyan: "#58b8cc", cyant: "#4898b0", cyanb: "rgba(88,184,204,0.14)",
-    ok: "#4cb888", warn: "#e0c060", err: "#e87070",
-    inp: "#262838",
+    ok: "#4cb888", warn: "#e0c060", err: "#e06060",
+    inp: "#222438",
     textDim: "#8886a0",
+  },
+  dim: {
+    name: "Dim",
+    // Torchlit chamber — dark warm sand/papyrus
+    bg:  "#2a2520",
+    bg2: "#332e28",
+    bg3: "#2e2924",
+    bg4: "#3a342e",
+    border:  "#504840",
+    borderL: "#443e38",
+    borderH: "#6a6058",
+    text:  "#ece6dc",
+    text2: "#d8d0c4",
+    tm: "#b8b0a4", td: "#989088", tf: "#807870",
+    tg: "#686058", ti: "#585048",
+    accent:    "#d4a050",
+    accentDim: "#b88838",
+    abg: "rgba(212,160,80,0.18)",
+    abr: "rgba(212,160,80,0.34)",
+    jade:    "#4aaa80",
+    jadeDim: "#389060",
+    grn: "#4aaa80", grnt: "#389060", grnb: "rgba(74,170,128,0.14)",
+    red: "#d86060", redt: "#b84848", redb: "rgba(216,96,96,0.14)",
+    ylw: "#d8b050", ylwt: "#c09840", ylwb: "rgba(216,176,80,0.14)",
+    pur: "#9880b8", purt: "#8068a0", purb: "rgba(152,128,184,0.14)",
+    cyan: "#50b0b8", cyant: "#40909a", cyanb: "rgba(80,176,184,0.14)",
+    ok: "#4aaa80", warn: "#d8b050", err: "#d86060",
+    inp: "#332e28",
+    textDim: "#989088",
   },
   light: {
     name: "Light",
-    // Warm papyrus / sand
+    // Sunlit papyrus
     bg:  "#f5f0e8",
     bg2: "#fffdf8",
     bg3: "#faf6f0",
@@ -149,7 +127,6 @@ const THEME_ORDER: readonly string[] = ["dark", "dim", "light"] as const;
 const STORAGE_KEY = "seshat_theme";
 
 export const ThemeContext = createContext<Theme>(THEMES.dark);
-
 export const useTheme = (): Theme => useContext(ThemeContext);
 
 interface ThemeControls {
