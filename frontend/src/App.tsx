@@ -183,7 +183,7 @@ function SeshatApp() {
 
   const themeIcon = themeName === "dark" ? "🌙" : themeName === "dim" ? "⛅" : "☀️";
   const activeNav = section === "discovery" ? DISCOVERY_NAV : PIPELINE_NAV;
-  const maxW = WIDE_PAGES.has(page) ? 1400 : 1120;
+  const maxW = page === "settings" ? 1800 : WIDE_PAGES.has(page) ? 1400 : 1120;
 
   return (
     <div style={{ minHeight: "100vh", background: t.bg, color: t.text }}>

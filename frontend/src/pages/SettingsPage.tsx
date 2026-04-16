@@ -218,9 +218,9 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      <div className="settings-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, alignItems: "start" }}>
+      <div className="settings-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16, alignItems: "start" }}>
 
-      {/* Left column */}
+      {/* Left column — Pipeline */}
       <div>
       <SSection title="Pipeline" desc="Master controls for each stage">
         <SF label="IRC Listener" desc="Connects to MAM's #announce channel and processes every new torrent through the filter gate." example="Disabling pauses all automatic grabbing. Manual injects still work.">
@@ -412,7 +412,107 @@ export default function SettingsPage() {
         </p>
         <DataSection />
       </SSection>
-      </div>{/* end right column */}
+      </div>{/* end right/middle column */}
+
+      {/* Right column — Discovery */}
+      <div>
+      <SSection title="Metadata Sources" desc="Which sources to scan for book metadata">
+        <SF label="Goodreads" desc="HTML scraper for author pages. Richest data source for most fiction.">
+          <STog on={(s.goodreads_enabled as boolean) ?? true} onToggle={() => upd("goodreads_enabled", !(s.goodreads_enabled ?? true))} label />
+        </SF>
+        <SF label="Hardcover" desc="GraphQL API. Requires API key (set in API Keys section). Modern book data with series info.">
+          <STog on={(s.hardcover_enabled as boolean) ?? true} onToggle={() => upd("hardcover_enabled", !(s.hardcover_enabled ?? true))} label />
+        </SF>
+        <SF label="Kobo" desc="HTML scraper via cloudscraper. Good for ISBN and publication dates.">
+          <STog on={(s.kobo_enabled as boolean) ?? true} onToggle={() => upd("kobo_enabled", !(s.kobo_enabled ?? true))} label />
+        </SF>
+        <SF label="Amazon" desc="Kindle Store scraper. Slower, but unique series and release data.">
+          <STog on={(s.amazon_enabled as boolean) ?? false} onToggle={() => upd("amazon_enabled", !(s.amazon_enabled ?? false))} label />
+        </SF>
+        <SF label="IBDB" desc="Internet Book Database. Supplementary source for drama/theater.">
+          <STog on={(s.ibdb_enabled as boolean) ?? false} onToggle={() => upd("ibdb_enabled", !(s.ibdb_enabled ?? false))} label />
+        </SF>
+        <SF label="Google Books" desc="REST API. Auto-disables on quota exhaustion (429s). Re-enable here after cooldown.">
+          <STog on={(s.google_books_enabled as boolean) ?? false} onToggle={() => upd("google_books_enabled", !(s.google_books_enabled ?? false))} label />
+        </SF>
+      </SSection>
+
+      <SSection title="Source Rate Limits" desc="Seconds between requests per source">
+        <SF label="Goodreads" desc="Default 2s — gentle on scraping">
+          <input type="number" min={0.5} step={0.5} value={s.rate_goodreads as number ?? 2} onChange={e => upd("rate_goodreads", parseFloat(e.target.value) || 2)} style={nist} />
+        </SF>
+        <SF label="Hardcover" desc="Default 1s — API, more tolerant">
+          <input type="number" min={0.5} step={0.5} value={s.rate_hardcover as number ?? 1} onChange={e => upd("rate_hardcover", parseFloat(e.target.value) || 1)} style={nist} />
+        </SF>
+        <SF label="Kobo" desc="Default 3s — cloudscraper, be gentle">
+          <input type="number" min={0.5} step={0.5} value={s.rate_kobo as number ?? 3} onChange={e => upd("rate_kobo", parseFloat(e.target.value) || 3)} style={nist} />
+        </SF>
+        <SF label="Amazon" desc="Default 2s">
+          <input type="number" min={0.5} step={0.5} value={s.rate_amazon as number ?? 2} onChange={e => upd("rate_amazon", parseFloat(e.target.value) || 2)} style={nist} />
+        </SF>
+        <SF label="IBDB" desc="Default 1s">
+          <input type="number" min={0.5} step={0.5} value={s.rate_ibdb as number ?? 1} onChange={e => upd("rate_ibdb", parseFloat(e.target.value) || 1)} style={nist} />
+        </SF>
+        <SF label="Google Books" desc="Default 1.5s">
+          <input type="number" min={0.5} step={0.5} value={s.rate_google_books as number ?? 1.5} onChange={e => upd("rate_google_books", parseFloat(e.target.value) || 1.5)} style={nist} />
+        </SF>
+        <SF label="MAM Search" desc="Default 2s — rate limit for discovery MAM scans">
+          <input type="number" min={0.5} step={0.5} value={s.rate_mam as number ?? 2} onChange={e => upd("rate_mam", parseFloat(e.target.value) || 2)} style={nist} />
+        </SF>
+      </SSection>
+
+      <SSection title="Author Scanning" desc="Background metadata lookup">
+        <SF label="Auto-scan Enabled" desc="Periodically scan all authors against enabled sources for new books.">
+          <STog on={(s.author_scanning_enabled as boolean) ?? true} onToggle={() => upd("author_scanning_enabled", !(s.author_scanning_enabled ?? true))} label />
+        </SF>
+        <SF label="Owned Books Only" desc="Only enrich metadata on books already in Calibre — no new 'missing' discoveries.">
+          <STog on={(s.author_scan_owned_only as boolean) ?? false} onToggle={() => upd("author_scan_owned_only", !(s.author_scan_owned_only ?? false))} label />
+        </SF>
+        <SF label="Exclude Audiobooks" desc="Filter out audiobook-only editions and narrator credits during scans.">
+          <STog on={(s.exclude_audiobooks as boolean) ?? true} onToggle={() => upd("exclude_audiobooks", !(s.exclude_audiobooks ?? true))} label />
+        </SF>
+        <SF label="Lookup Interval (days)" desc="How often the scheduled author scan runs. 0 = manual only.">
+          <input type="number" min={0} value={s.lookup_interval_days as number ?? 3} onChange={e => upd("lookup_interval_days", parseInt(e.target.value) || 3)} style={nist} />
+        </SF>
+      </SSection>
+
+      <SSection title="Library Sync" desc="Calibre library discovery & sync">
+        <SF label="Sync Interval (minutes)" desc="How often to check Calibre's metadata.db for changes. 0 = manual only.">
+          <input type="number" min={0} value={s.library_sync_interval_minutes as number ?? 60} onChange={e => upd("library_sync_interval_minutes", parseInt(e.target.value) || 60)} style={nist} />
+        </SF>
+        <SF label="Languages" desc="Comma-separated language filter for source scans." wide>
+          <input value={((s.languages as string[]) ?? []).join(", ")} onChange={e => upd("languages", e.target.value.split(",").map((x: string) => x.trim()).filter(Boolean))} placeholder="English" style={{ ...ist, width: "100%" }} />
+        </SF>
+        <SF label="Theme" desc="UI color scheme.">
+          <select value={(s.theme as string) || "dark"} onChange={e => upd("theme", e.target.value)}
+            style={{ ...ist, width: 140, cursor: "pointer", appearance: "auto" }}>
+            <option value="dark">Dark</option>
+            <option value="dim">Dim</option>
+            <option value="light">Light</option>
+          </select>
+        </SF>
+      </SSection>
+
+      <SSection title="Discovery MAM" desc="MAM search for missing books">
+        <SF label="MAM Search Enabled" desc="Enable searching MyAnonamouse for books your library is missing.">
+          <STog on={(s.mam_enabled as boolean) ?? false} onToggle={() => upd("mam_enabled", !(s.mam_enabled ?? false))} label />
+        </SF>
+        <SF label="Auto-scan Enabled" desc="Periodically batch-scan unscanned books against MAM.">
+          <STog on={(s.mam_scanning_enabled as boolean) ?? true} onToggle={() => upd("mam_scanning_enabled", !(s.mam_scanning_enabled ?? true))} label />
+        </SF>
+        <SF label="Scan Interval (minutes)" desc="How often the MAM batch scanner runs.">
+          <input type="number" min={0} value={s.mam_scan_interval_minutes as number ?? 360} onChange={e => upd("mam_scan_interval_minutes", parseInt(e.target.value) || 360)} style={nist} />
+        </SF>
+      </SSection>
+
+      <SSection title="Discovery Notifications" desc="ntfy events for the discovery domain">
+        <NCheck label="Scan complete" field="ntfy_on_scan_complete" s={s} upd={upd} />
+        <NCheck label="New books found" field="ntfy_on_new_books" s={s} upd={upd} />
+        <NCheck label="MAM scan complete" field="ntfy_on_mam_complete" s={s} upd={upd} />
+        <NCheck label="Sent to pipeline" field="ntfy_on_pipeline_sent" s={s} upd={upd} />
+        <NCheck label="Library sync" field="ntfy_on_library_sync" s={s} upd={upd} />
+      </SSection>
+      </div>{/* end discovery column */}
 
       </div>{/* close settings-grid */}
 
