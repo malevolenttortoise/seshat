@@ -375,6 +375,7 @@ async def run_loop(
     the surrounding asyncio task at shutdown instead.
     """
     _log.info(f"budget watcher started (interval={interval_seconds}s)")
+    consecutive_auth_failures = 0
     while True:
         result = await tick(deps)
         if result.queue_pops_submitted or result.seedtime_released or result.removed_released:
@@ -384,8 +385,22 @@ async def run_loop(
                 f"released_removed={result.removed_released} "
                 f"pops={result.queue_pops_submitted}/{result.queue_pops_attempted}"
             )
+            consecutive_auth_failures = 0
         elif result.error:
             _log.warning(f"budget watcher tick error: {result.error}")
+            # Back off exponentially on auth failures (403 ban, wrong creds)
+            # to avoid hammering qBit and extending the IP ban.
+            if "auth" in result.error.lower() or "403" in result.error or "banned" in result.error.lower():
+                consecutive_auth_failures += 1
+                backoff = min(interval_seconds * (2 ** consecutive_auth_failures), 3600)
+                _log.warning(
+                    f"budget watcher: qBit auth failure #{consecutive_auth_failures}, "
+                    f"backing off {backoff:.0f}s (check qBit credentials in Settings)"
+                )
+                await asyncio.sleep(backoff)
+                continue
+            else:
+                consecutive_auth_failures = 0
 
         if stop_event is not None and stop_event.is_set():
             _log.info("budget watcher stop_event signaled, exiting loop")
@@ -393,9 +408,6 @@ async def run_loop(
 
         try:
             if stop_event is not None:
-                # Wait for either the interval OR a stop signal —
-                # mirrors the IRC client's manual-stop guard so a
-                # shutdown doesn't have to wait through a sleep.
                 await asyncio.wait_for(
                     stop_event.wait(), timeout=interval_seconds
                 )
