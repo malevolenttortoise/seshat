@@ -188,21 +188,22 @@ function TentativeCard({
       }}
     >
       {coverUrl && (
-        <img
-          src={coverUrl}
-          alt="Cover"
-          style={{
-            width: 80,
-            height: 120,
-            objectFit: "cover",
-            borderRadius: 6,
-            border: `1px solid ${theme.borderL}`,
-            background: theme.bg3,
-          }}
-          onError={(e) => {
-            (e.target as HTMLImageElement).style.display = "none";
-          }}
-        />
+        <div style={{ width: 80, height: 120, borderRadius: 6, background: theme.bg3, overflow: "hidden", flexShrink: 0 }}>
+          <img
+            src={coverUrl}
+            alt="Cover"
+            style={{
+              width: 80,
+              height: 120,
+              objectFit: "cover",
+              borderRadius: 6,
+              border: `1px solid ${theme.borderL}`,
+            }}
+            onError={(e) => {
+              (e.target as HTMLImageElement).style.display = "none";
+            }}
+          />
+        </div>
       )}
       <div style={{ minWidth: 0 }}>
         <div

@@ -179,7 +179,7 @@ export default function MigrationPage() {
   const isFinished = status?.finished ?? false;
 
   return (
-    <div>
+    <div style={{ maxWidth: 1100, margin: "0 auto" }}>
       <h1 style={{ fontSize: 24, fontWeight: 700, color: t.text, marginBottom: 4 }}>Migration Wizard</h1>
       <p style={{ fontSize: 14, color: t.textDim, marginBottom: 20 }}>
         Move existing downloads into the configured folder structure based on file modification dates.

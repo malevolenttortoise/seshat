@@ -120,7 +120,7 @@ export default function MamPage() {
   }
 
   return (
-    <div>
+    <div style={{ maxWidth: 1100, margin: "0 auto" }}>
       <h1
         style={{
           fontSize: 24,

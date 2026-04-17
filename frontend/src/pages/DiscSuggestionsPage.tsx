@@ -135,6 +135,7 @@ export default function SuggestionsPage({ onNav }: { onNav: NavFn }) {
         borderRadius: 12,
         padding: "16px 20px",
         opacity: isApplied ? 0.7 : 1,
+        maxWidth: 1100,
       }}>
 
         {/* Title row */}

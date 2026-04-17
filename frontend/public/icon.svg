@@ -1,54 +1,56 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <defs>
     <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#1a1d2e"/>
-      <stop offset="100%" style="stop-color:#0e1019"/>
+      <stop offset="0%" style="stop-color:#1e1a2e"/>
+      <stop offset="100%" style="stop-color:#12101c"/>
     </linearGradient>
-    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#6fa8ff"/>
-      <stop offset="100%" style="stop-color:#4f7fcc"/>
+    <linearGradient id="gold" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#f0d060"/>
+      <stop offset="100%" style="stop-color:#c8982a"/>
     </linearGradient>
-    <linearGradient id="gold" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#ffd700"/>
-      <stop offset="100%" style="stop-color:#d4a040"/>
+    <linearGradient id="indigo" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#5a6abf"/>
+      <stop offset="100%" style="stop-color:#3d4a8a"/>
     </linearGradient>
   </defs>
 
-  <!-- Background circle -->
-  <circle cx="256" cy="256" r="240" fill="url(#bg)" stroke="url(#accent)" stroke-width="8"/>
+  <!-- Background -->
+  <circle cx="256" cy="256" r="248" fill="url(#bg)"/>
+  <circle cx="256" cy="256" r="240" fill="none" stroke="url(#gold)" stroke-width="4" opacity="0.6"/>
 
-  <!-- Book body (open book, two pages) -->
+  <!-- Seven-pointed star (Seshat's emblem) -->
+  <g transform="translate(256,130)" fill="url(#gold)">
+    <polygon points="0,-52 8,-16 44,-28 20,2 48,28 12,22 0,58 -12,22 -48,28 -20,2 -44,-28 -8,-16" opacity="0.9"/>
+    <circle cx="0" cy="0" r="10" fill="#1e1a2e"/>
+  </g>
+
+  <!-- Vertical staff (notched palm branch — stylized) -->
+  <line x1="256" y1="178" x2="256" y2="430" stroke="url(#gold)" stroke-width="6" stroke-linecap="round"/>
+  <!-- Staff notches (tally marks) -->
+  <line x1="250" y1="210" x2="262" y2="205" stroke="url(#gold)" stroke-width="3" stroke-linecap="round"/>
+  <line x1="250" y1="235" x2="262" y2="230" stroke="url(#gold)" stroke-width="3" stroke-linecap="round"/>
+  <line x1="250" y1="260" x2="262" y2="255" stroke="url(#gold)" stroke-width="3" stroke-linecap="round"/>
+  <line x1="250" y1="285" x2="262" y2="280" stroke="url(#gold)" stroke-width="3" stroke-linecap="round"/>
+  <line x1="250" y1="310" x2="262" y2="305" stroke="url(#gold)" stroke-width="3" stroke-linecap="round"/>
+
+  <!-- Open book at the base of the staff -->
   <!-- Left page -->
-  <path d="M130 180 L248 200 L248 370 L130 350 Z" fill="#2a3048" stroke="url(#accent)" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M160 340 L248 355 L248 420 L160 405 Z" fill="#2a2540" stroke="url(#indigo)" stroke-width="2.5" stroke-linejoin="round"/>
   <!-- Right page -->
-  <path d="M382 180 L264 200 L264 370 L382 350 Z" fill="#2a3048" stroke="url(#accent)" stroke-width="3" stroke-linejoin="round"/>
-  <!-- Book spine -->
-  <line x1="256" y1="195" x2="256" y2="375" stroke="url(#accent)" stroke-width="4"/>
+  <path d="M352 340 L264 355 L264 420 L352 405 Z" fill="#2a2540" stroke="url(#indigo)" stroke-width="2.5" stroke-linejoin="round"/>
+  <!-- Book spine highlight -->
+  <line x1="256" y1="352" x2="256" y2="423" stroke="url(#indigo)" stroke-width="3"/>
 
   <!-- Page lines (left) -->
-  <line x1="155" y1="225" x2="238" y2="237" stroke="#4a5070" stroke-width="2" stroke-linecap="round"/>
-  <line x1="155" y1="250" x2="238" y2="262" stroke="#4a5070" stroke-width="2" stroke-linecap="round"/>
-  <line x1="155" y1="275" x2="238" y2="287" stroke="#4a5070" stroke-width="2" stroke-linecap="round"/>
-  <line x1="155" y1="300" x2="218" y2="310" stroke="#4a5070" stroke-width="2" stroke-linecap="round"/>
+  <line x1="178" y1="362" x2="238" y2="370" stroke="#4a4570" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="178" y1="376" x2="238" y2="384" stroke="#4a4570" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="178" y1="390" x2="220" y2="396" stroke="#4a4570" stroke-width="1.5" stroke-linecap="round"/>
 
   <!-- Page lines (right) -->
-  <line x1="357" y1="225" x2="274" y2="237" stroke="#4a5070" stroke-width="2" stroke-linecap="round"/>
-  <line x1="357" y1="250" x2="274" y2="262" stroke="#4a5070" stroke-width="2" stroke-linecap="round"/>
-  <line x1="357" y1="275" x2="274" y2="287" stroke="#4a5070" stroke-width="2" stroke-linecap="round"/>
-  <line x1="357" y1="300" x2="294" y2="310" stroke="#4a5070" stroke-width="2" stroke-linecap="round"/>
+  <line x1="334" y1="362" x2="274" y2="370" stroke="#4a4570" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="334" y1="376" x2="274" y2="384" stroke="#4a4570" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="334" y1="390" x2="292" y2="396" stroke="#4a4570" stroke-width="1.5" stroke-linecap="round"/>
 
-  <!-- Left wing -->
-  <path d="M120 230 Q60 190 70 140 Q80 160 100 170 Q75 145 85 110 Q95 140 115 155 Q100 125 110 95 Q120 135 135 160 L130 190 Z"
-        fill="url(#gold)" opacity="0.85"/>
-
-  <!-- Right wing -->
-  <path d="M392 230 Q452 190 442 140 Q432 160 412 170 Q437 145 427 110 Q417 140 397 155 Q412 125 402 95 Q392 135 377 160 L382 190 Z"
-        fill="url(#gold)" opacity="0.85"/>
-
-  <!-- Mouse ears (subtle, at the top) -->
-  <ellipse cx="220" cy="130" rx="28" ry="32" fill="none" stroke="url(#gold)" stroke-width="4" opacity="0.6"/>
-  <ellipse cx="292" cy="130" rx="28" ry="32" fill="none" stroke="url(#gold)" stroke-width="4" opacity="0.6"/>
-
-  <!-- Small "H" monogram on the book -->
-  <text x="256" y="345" text-anchor="middle" font-family="serif" font-size="36" font-weight="700" fill="url(#accent)" opacity="0.5">H</text>
+  <!-- Arch / crescent behind the star (leopard skin headband abstracted) -->
+  <path d="M200 150 Q256 95 312 150" fill="none" stroke="url(#gold)" stroke-width="4" stroke-linecap="round" opacity="0.5"/>
 </svg>

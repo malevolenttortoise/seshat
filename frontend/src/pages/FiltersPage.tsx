@@ -147,7 +147,7 @@ export default function FiltersPage() {
   const dirty = Object.keys(draft).length;
 
   return (
-    <div>
+    <div style={{ maxWidth: 1100, margin: "0 auto" }}>
       <h1
         style={{
           fontSize: 24,

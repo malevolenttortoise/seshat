@@ -240,26 +240,37 @@ export default function DatabasePage() {
         <div style={{ display: "grid", gridTemplateColumns: "220px 1fr", gap: 16 }}>
           {/* Table list */}
           <div style={{ background: t.bg2, border: `1px solid ${t.borderL}`, borderRadius: 8, padding: 8, alignSelf: "start", maxHeight: "75vh", overflowY: "auto" }}>
-            {tables.map((tbl) => (
-              <button
-                key={tbl.name}
-                onClick={() => { setSelected(tbl.name); setPage(1); setSearch(""); }}
-                style={{
-                  display: "flex", justifyContent: "space-between", alignItems: "center",
-                  width: "100%", padding: "8px 10px", margin: "1px 0",
-                  background: selected === tbl.name ? t.bg4 : "transparent",
-                  color: selected === tbl.name ? t.accent : t.text2,
-                  border: "none", borderRadius: 6,
-                  fontSize: 13, fontFamily: "ui-monospace, Consolas, monospace",
-                  cursor: "pointer", textAlign: "left",
-                }}
-              >
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{tbl.name}</span>
-                <span style={{ fontSize: 11, color: t.textDim, flexShrink: 0 }}>
-                  {tbl.row_count.toLocaleString()}
-                </span>
-              </button>
-            ))}
+            {(() => {
+              const DISC = new Set(["authors", "series", "books", "sync_log", "mam_scan_log", "book_series_suggestions", "pen_name_links"]);
+              const disc = tables.filter((x) => DISC.has(x.name));
+              const pipe = tables.filter((x) => !DISC.has(x.name));
+              const renderGroup = (label: string, list: TableEntry[]) => (
+                <>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: t.textDim, textTransform: "uppercase", letterSpacing: "0.06em", padding: "8px 10px 4px" }}>{label}</div>
+                  {list.map((tbl) => (
+                    <button
+                      key={tbl.name}
+                      onClick={() => { setSelected(tbl.name); setPage(1); setSearch(""); }}
+                      style={{
+                        display: "flex", justifyContent: "space-between", alignItems: "center",
+                        width: "100%", padding: "8px 10px", margin: "1px 0",
+                        background: selected === tbl.name ? t.bg4 : "transparent",
+                        color: selected === tbl.name ? t.accent : t.text2,
+                        border: "none", borderRadius: 6,
+                        fontSize: 13, fontFamily: "ui-monospace, Consolas, monospace",
+                        cursor: "pointer", textAlign: "left",
+                      }}
+                    >
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{tbl.name}</span>
+                      <span style={{ fontSize: 11, color: t.textDim, flexShrink: 0 }}>
+                        {tbl.row_count.toLocaleString()}
+                      </span>
+                    </button>
+                  ))}
+                </>
+              );
+              return <>{renderGroup("Pipeline", pipe)}{disc.length > 0 && <div style={{ borderTop: `1px solid ${t.borderL}`, margin: "6px 0" }} />}{disc.length > 0 && renderGroup("Discovery", disc)}</>;
+            })()}
           </div>
 
           {/* Right pane: rows */}

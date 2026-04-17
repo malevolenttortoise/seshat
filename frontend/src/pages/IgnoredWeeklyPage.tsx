@@ -26,7 +26,7 @@ export default function IgnoredWeeklyPage() {
   const theme = useTheme();
   const [groups, setGroups] = useState<AuthorGroup[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [expandedAuthor, setExpandedAuthor] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -89,7 +89,7 @@ export default function IgnoredWeeklyPage() {
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {groups.map((g) => {
-            const expanded = expandedAuthor === g.author_blob;
+            const expanded = !collapsed.has(g.author_blob);
             return (
               <div
                 key={g.author_blob}
@@ -101,7 +101,7 @@ export default function IgnoredWeeklyPage() {
                 }}
               >
                 <div
-                  onClick={() => setExpandedAuthor(expanded ? null : g.author_blob)}
+                  onClick={() => setCollapsed(prev => { const next = new Set(prev); if (expanded) next.add(g.author_blob); else next.delete(g.author_blob); return next; })}
                   style={{
                     display: "flex",
                     alignItems: "center",

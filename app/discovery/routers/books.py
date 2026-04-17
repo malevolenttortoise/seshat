@@ -66,11 +66,12 @@ _BOOKS_SELECT = (
 
 # ─── Books ───────────────────────────────────────────────────
 @router.get("/books")
-async def get_books(search: str = Query(None), author_id: int = Query(None), series_id: int = Query(None), owned: bool = Query(None), book_type: str = Query(None), mam_status: str = Query(None), sort: str = Query("title"), sort_dir: str = Query("asc"), page: int = Query(1, ge=1), per_page: int = Query(60, ge=1, le=5000), include_hidden: bool = Query(False)):
+async def get_books(search: str = Query(None), author_id: int = Query(None), series_id: int = Query(None), owned: bool = Query(None), book_type: str = Query(None), mam_status: str = Query(None), sort: str = Query("title"), sort_dir: str = Query("asc"), page: int = Query(1, ge=1), per_page: int = Query(60, ge=1, le=5000), include_hidden: bool = Query(False), hidden_only: bool = Query(False)):
     db = await get_db()
     try:
         c = []; p = []
-        if not include_hidden: c.append(HF)
+        if hidden_only: c.append("b.hidden=1")
+        elif not include_hidden: c.append(HF)
         if search: c.append("(b.title LIKE ? OR a.name LIKE ? OR COALESCE(s.name,'') LIKE ?)"); p.extend([f"%{search}%"]*3)
         if author_id: c.append("b.author_id=?"); p.append(author_id)
         if series_id: c.append("b.series_id=?"); p.append(series_id)
@@ -144,13 +145,19 @@ async def unhide(bid: int):
 
 
 @router.get("/books/hidden")
-async def get_hidden():
+async def get_hidden(search: str = Query(None), sort: str = Query("title"), sort_dir: str = Query("asc"), page: int = Query(1, ge=1), per_page: int = Query(60, ge=1, le=5000)):
     db = await get_db()
     try:
-        rows = await (await db.execute(f"{_BOOKS_SELECT} WHERE b.hidden=1 ORDER BY a.sort_name, b.title")).fetchall()
-        return {"books": [dict(r) for r in rows]}
-    finally:
-        await db.close()
+        c = ["b.hidden=1"]; p = []
+        if search: c.append("(b.title LIKE ? OR a.name LIKE ? OR COALESCE(s.name,'') LIKE ?)"); p.extend([f"%{search}%"]*3)
+        w = " AND ".join(c)
+        cnt = (await (await db.execute(f"SELECT COUNT(*) c FROM books b JOIN authors a ON b.author_id=a.id LEFT JOIN series s ON b.series_id=s.id WHERE {w}", p)).fetchone())["c"]
+        d = "DESC" if sort_dir == "desc" else "ASC"
+        o = {"title": f"b.title {d}", "author": f"a.sort_name {d}, b.title ASC", "series": f"COALESCE(s.name,'zzz') {d}, b.series_index ASC", "date": f"b.pub_date {d}", "added": f"b.first_seen_at {d}"}.get(sort, f"b.title {d}")
+        off = (page-1)*per_page
+        rows = await (await db.execute(f"{_BOOKS_SELECT} WHERE {w} ORDER BY {o} LIMIT ? OFFSET ?", p+[per_page, off])).fetchall()
+        return {"books": [dict(r) for r in rows], "total": cnt, "page": page, "per_page": per_page, "pages": max(1, (cnt+per_page-1)//per_page)}
+    finally: await db.close()
 
 
 @router.post("/books/{bid}/dismiss")

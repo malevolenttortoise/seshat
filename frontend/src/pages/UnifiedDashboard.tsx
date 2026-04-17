@@ -212,7 +212,7 @@ export default function UnifiedDashboard({ onNav }: Props) {
         {/* Command Center */}
         <div style={{ background: t.bg2, border: `1px solid ${t.border}`, borderRadius: 12, padding: "14px 18px" }}>
           <div style={{ ...hdr(), marginBottom: 10 }}><Dot color={t.accent} /> Command Center</div>
-          <div style={{ display: "grid", gridTemplateColumns: "auto 1fr auto", gap: 0, alignItems: "start" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "auto 1fr auto", gap: 0, alignItems: "stretch" }}>
             {/* Trigger buttons */}
             <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingRight: 16 }}>
               <CmdBtn label={<><Dot color={t.jade} /> Sync Library</>} busy={syncing || libScan.running} onClick={triggerSync} />
@@ -224,14 +224,14 @@ export default function UnifiedDashboard({ onNav }: Props) {
               </div>
             </div>
             {/* Progress display */}
-            <div style={vsep}>
+            <div style={{ ...vsep, paddingRight: 40 }}>
               <div style={{ fontSize: 12, fontWeight: 600, color: t.td, textTransform: "uppercase", marginBottom: 8 }}>Progress</div>
               <ProgressRow label="Library Sync" scan={libScan} t={t} />
               <ProgressRow label="Source Scan" scan={srcScan} t={t} onCancel={srcScan.running ? cancelSources : undefined} />
               <ProgressRow label="MAM Scan" scan={mamScan} t={t} onCancel={mamScan.running ? cancelMam : undefined} />
             </div>
             {/* Scan stats summary */}
-            <div style={{ ...vsep, minWidth: 150 }}>
+            <div style={{ ...vsep, minWidth: 200 }}>
               <div style={{ fontSize: 12, fontWeight: 600, color: t.td, textTransform: "uppercase", marginBottom: 8 }}>Last Scan</div>
               {srcScan.status === "complete" && srcScan.extra?.source_timeouts && Object.keys(srcScan.extra.source_timeouts).length > 0 ? (
                 <div style={{ fontSize: 12, color: t.warn }}>

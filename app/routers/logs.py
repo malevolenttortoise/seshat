@@ -54,9 +54,7 @@ class _BufferHandler(logging.Handler):
                 "logger": record.name,
                 "message": record.getMessage(),
                 "is_announce": (
-                    "mam.irc" in record.name
-                    or "announce" in record.getMessage().lower()
-                    or record.name.startswith("seshat.orchestrator.dispatch")
+                    record.name.startswith("seshat.orchestrator.dispatch")
                 ),
             }
             _buffer.append(entry)
@@ -129,6 +127,8 @@ async def get_logs(
         entries = [e for e in entries if e["logger"].startswith("seshat.mam.irc")]
     elif category == "application":
         entries = [e for e in entries if not e["logger"].startswith("seshat.mam.irc")]
+    elif category == "scans":
+        entries = [e for e in entries if e["logger"].startswith("seshat.discovery")]
     # "all" / None = no category filter
 
     if filter == "announces":

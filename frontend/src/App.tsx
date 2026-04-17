@@ -33,7 +33,6 @@ import DiscAuthorsPage from "./pages/DiscAuthorsPage";
 import DiscAuthorDetailPage from "./pages/DiscAuthorDetailPage";
 import DiscMAMPage from "./pages/DiscMAMPage";
 import DiscSuggestionsPage from "./pages/DiscSuggestionsPage";
-import DiscHiddenPage from "./pages/DiscHiddenPage";
 import DiscImportExportPage from "./pages/DiscImportExportPage";
 
 interface AuthState {
@@ -54,6 +53,7 @@ const DISCOVERY_NAV = [
   { id: "disc-upcoming",    label: "Upcoming",    icon: "📅" },
   { id: "disc-mam",         label: "MAM Search",  icon: "🔍" },
   { id: "disc-suggestions", label: "Suggestions", icon: "💡" },
+  { id: "disc-hidden",      label: "Hidden",      icon: "🚫" },
 ];
 
 const PIPELINE_NAV = [
@@ -109,7 +109,7 @@ function renderPage(
     case "disc-author-detail": return <DiscAuthorDetailPage authorId={pageArg as number} onNav={nav} />;
     case "disc-mam":           return <DiscMAMPage onNav={nav} />;
     case "disc-suggestions":   return <DiscSuggestionsPage onNav={nav} />;
-    case "disc-hidden":        return <DiscHiddenPage onNav={nav} />;
+    case "disc-hidden":        return <DiscBooksPage title="Hidden Books" apiPath="/discovery/books/hidden" />;
     case "disc-importexport":  return <DiscImportExportPage />;
 
     // Pipeline pages (no props — use useTheme context)
@@ -211,9 +211,13 @@ function SeshatApp() {
             letterSpacing: "0.02em",
             marginRight: 20,
             userSelect: "none",
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
           }}
         >
-          𓋹 Seshat
+          <img src="/icon.svg" alt="" style={{ width: 32, height: 32 }} />
+          Seshat
         </div>
 
         {/* Section switcher */}
@@ -268,7 +272,7 @@ function SeshatApp() {
         {/* Right icons */}
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
           {[
-            { id: "filters", icon: "🎯", title: "Filters" },
+            { id: "disc-importexport", icon: "📦", title: "Import / Export" },
             { id: "pipe-mam", icon: "📡", title: "MAM Status" },
             { id: "logs", icon: "📋", title: "Logs" },
             { id: "database", icon: "🗄️", title: "Database" },

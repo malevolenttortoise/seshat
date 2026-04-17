@@ -32,7 +32,8 @@ from typing import Any, Optional
 from fastapi import APIRouter, Body, HTTPException, Query
 from pydantic import BaseModel
 
-from app.database import get_db
+from app.database import get_db as get_pipeline_db
+from app.discovery.database import get_db as get_discovery_db
 
 _log = logging.getLogger("seshat.routers.db_editor")
 
@@ -42,7 +43,7 @@ router = APIRouter(prefix="/api/v1/db", tags=["db_editor"])
 # listed here are rejected with 404 — the name is never interpolated
 # into SQL without passing through this check, so a caller can't
 # point the browser at sqlite_master or anything else interesting.
-_TABLES: frozenset[str] = frozenset({
+_PIPELINE_TABLES: frozenset[str] = frozenset({
     "authors_allowed",
     "authors_ignored",
     "authors_weekly_skip",
@@ -59,6 +60,18 @@ _TABLES: frozenset[str] = frozenset({
     "calibre_additions",
 })
 
+_DISCOVERY_TABLES: frozenset[str] = frozenset({
+    "authors",
+    "series",
+    "books",
+    "sync_log",
+    "mam_scan_log",
+    "book_series_suggestions",
+    "pen_name_links",
+})
+
+_TABLES = _PIPELINE_TABLES | _DISCOVERY_TABLES
+
 
 def _check_table(name: str) -> None:
     if name not in _TABLES:
@@ -66,6 +79,13 @@ def _check_table(name: str) -> None:
             status_code=404,
             detail=f"unknown or disallowed table: {name!r}",
         )
+
+
+async def _get_db(name: str):
+    """Return the correct database connection for a table."""
+    if name in _DISCOVERY_TABLES:
+        return await get_discovery_db()
+    return await get_pipeline_db()
 
 
 # ─── Response models ──────────────────────────────────────────
@@ -106,15 +126,23 @@ class RowsResponse(BaseModel):
 @router.get("/tables", response_model=TablesResponse)
 async def list_tables() -> TablesResponse:
     """List every whitelisted table with its current row count."""
-    db = await get_db()
-    try:
-        entries: list[TableEntry] = []
-        for name in sorted(_TABLES):
-            cur = await db.execute(f"SELECT COUNT(*) FROM [{name}]")
-            row = await cur.fetchone()
-            entries.append(TableEntry(name=name, row_count=int(row[0]) if row else 0))
-    finally:
-        await db.close()
+    entries: list[TableEntry] = []
+    for table_set, get_db_fn in [
+        (_PIPELINE_TABLES, get_pipeline_db),
+        (_DISCOVERY_TABLES, get_discovery_db),
+    ]:
+        db = await get_db_fn()
+        try:
+            for name in sorted(table_set):
+                try:
+                    cur = await db.execute(f"SELECT COUNT(*) FROM [{name}]")
+                    row = await cur.fetchone()
+                    entries.append(TableEntry(name=name, row_count=int(row[0]) if row else 0))
+                except Exception:
+                    entries.append(TableEntry(name=name, row_count=0))
+        finally:
+            await db.close()
+    entries.sort(key=lambda e: e.name)
     return TablesResponse(tables=entries)
 
 
@@ -126,7 +154,7 @@ async def table_schema(name: str) -> SchemaResponse:
     small dataclass rather than returning the 6-tuple raw.
     """
     _check_table(name)
-    db = await get_db()
+    db = await _get_db(name)
     try:
         cur = await db.execute(f"PRAGMA table_info([{name}])")
         rows = await cur.fetchall()
@@ -159,7 +187,7 @@ async def list_rows(
     find-in-page for narrower queries.
     """
     _check_table(name)
-    db = await get_db()
+    db = await _get_db(name)
     try:
         # Column set for the search filter.
         sch = await db.execute(f"PRAGMA table_info([{name}])")
@@ -264,7 +292,7 @@ async def update_rows(name: str, body: dict = Body(...)) -> dict[str, Any]:
     if not edits:
         return {"status": "ok", "updated": 0}
 
-    db = await get_db()
+    db = await _get_db(name)
     try:
         col_meta, pk_col = await _column_meta(db, name)
         if pk_col is None:
@@ -328,7 +356,7 @@ async def add_row(name: str, body: dict = Body(...)) -> dict[str, Any]:
     if not values:
         raise HTTPException(400, "no values provided")
 
-    db = await get_db()
+    db = await _get_db(name)
     try:
         col_meta, _pk = await _column_meta(db, name)
 
@@ -368,7 +396,7 @@ async def delete_row(name: str, row_id: int) -> dict[str, Any]:
     without making the user decode sqlite3's raw error string.
     """
     _check_table(name)
-    db = await get_db()
+    db = await _get_db(name)
     try:
         col_meta, pk_col = await _column_meta(db, name)
         if pk_col is None:

@@ -30,7 +30,7 @@ interface LogsResponse {
 // existing "announces" pseudo-category. "application" and "irc"
 // slice by logger-name prefix (everything not under
 // `seshat.mam.irc` vs everything under it).
-type Tab = "all" | "announces" | "application" | "irc";
+type Tab = "all" | "announces" | "application" | "irc" | "scans";
 
 export default function LogsPage() {
   const theme = useTheme();
@@ -58,6 +58,7 @@ export default function LogsPage() {
       if (tab === "announces") params.set("filter", "announces");
       else if (tab === "application") params.set("category", "application");
       else if (tab === "irc") params.set("category", "irc");
+      else if (tab === "scans") params.set("category", "scans");
       const r = await api.get<LogsResponse>(`/v1/logs?${params}`);
       setEntries(r.entries);
       setTotal(r.total_buffered);
@@ -148,7 +149,7 @@ export default function LogsPage() {
           borderBottom: `1px solid ${theme.borderL}`,
         }}
       >
-        {(["all", "application", "irc", "announces"] as Tab[]).map((t) => (
+        {(["all", "application", "irc", "announces", "scans"] as Tab[]).map((t) => (
           <button
             key={t}
             onClick={() => {
@@ -168,10 +169,11 @@ export default function LogsPage() {
               textTransform: "capitalize",
             }}
           >
-            {t === "all" ? "All logs"
+            {t === "all" ? "All Logs"
               : t === "application" ? "Application"
               : t === "irc" ? "IRC"
-              : "Announces"}
+              : t === "announces" ? "Announces"
+              : "Scans"}
           </button>
         ))}
       </div>

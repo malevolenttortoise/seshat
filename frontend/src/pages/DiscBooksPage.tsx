@@ -43,7 +43,7 @@ const toggleSb=b=>{if(sb&&sb.id===b.id)closeSb();else{setSbClosing(false);setSb(
 const isGrouped=grp!=="all";
 const perPage=isGrouped?5000:60;
 const sortParam=grp==="author"?"author":grp==="series"?"series":sort;
-const load=useCallback((page:number=1,signal?:AbortSignal)=>{setLd(true);const init:Record<string,string>={search:q,sort:sortParam,per_page:String(perPage),page:String(page)};for(const[k,v]of Object.entries(extraParams))init[k]=String(v);const p=new URLSearchParams(init);if(mamFilter)p.set("mam_status",mamFilter);return api.get<BooksResponse>(`${apiPath}?${p}`,signal).then(d=>{setBks(d.books);setTotal(d.total);setPg(page);setLd(false)}).catch(e=>{if(!api.isAbort(e))setLd(false)})},[q,sortParam,apiPath,grp,mamFilter]);
+const load=useCallback((page:number=1,signal?:AbortSignal)=>{setLd(true);const init:Record<string,string>={search:q,sort:sortParam,per_page:String(perPage),page:String(page)};for(const[k,v]of Object.entries(extraParams))init[k]=String(v);const p=new URLSearchParams(init);if(mamFilter)p.set("mam_status",mamFilter);return api.get<BooksResponse>(`${apiPath}?${p}`,signal).then(d=>{setBks(d.books);setTotal(d.total??d.books.length);setPg(page);setLd(false)}).catch(e=>{if(!api.isAbort(e))setLd(false)})},[q,sortParam,apiPath,grp,mamFilter]);
 useEffect(()=>{const c=new AbortController();load(1,c.signal);return()=>c.abort()},[load]);
 useEffect(()=>{api.get<MamStatusResponse>("/discovery/mam/status").then(r=>setMamOn(!!r.enabled)).catch(()=>{})},[]);
 const totalPages=Math.max(1,Math.ceil(total/perPage));

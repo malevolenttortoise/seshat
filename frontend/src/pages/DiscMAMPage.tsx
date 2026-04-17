@@ -131,15 +131,18 @@ return<div style={{display:"flex",flexDirection:"column",gap:16}}>
 {tab==="upload"?<a href="https://www.myanonamouse.net/tor/upload.php" target="_blank" rel="noopener noreferrer" style={{display:"inline-flex",alignItems:"center",gap:4,padding:"6px 14px",borderRadius:6,fontSize:12,fontWeight:600,textDecoration:"none",background:t.grn+"22",color:t.grnt,border:`1px solid ${t.grn}44`}}>Upload to MAM ↗</a>:null}
 </div>
 
-{/* Controls */}
-<div className="bp-controls" style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
-<div style={{fontSize:13,color:t.td}}>{total} books</div>
+{/* Controls — sticky */}
+<div style={{position:"sticky",top:56,zIndex:20,background:t.bg+"ee",backdropFilter:"blur(8px)",padding:"8px 0"}}>
+<div className="bp-controls" style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
+<div style={{fontSize:14,fontWeight:600,color:t.td}}>{total} books</div>
 <div className="bp-right" style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
 <SearchBar value={q} onChange={v=>{setQ(v);setPg(1)}}/>
-<select value={sort} onChange={e=>{setSort(e.target.value);setPg(1)}} style={{padding:"7px 10px",borderRadius:6,border:`1px solid ${t.border}`,background:t.inp,color:t.text2,fontSize:12}}><option value="title">Sort: Title</option><option value="author">Sort: Author</option><option value="date">Sort: Date</option><option value="series">Sort: Series</option></select>
+<select value={sort} onChange={e=>{setSort(e.target.value);setPg(1)}} style={{padding:"6px 10px",borderRadius:6,border:`1px solid ${t.border}`,background:t.inp,color:t.text2,fontSize:12}}><option value="title">Sort: Title</option><option value="author">Sort: Author</option><option value="date">Sort: Date</option><option value="series">Sort: Series</option></select>
 <VT mode={vm} setMode={setVm}/>
-<Btn size="sm" variant={selMode?"accent":"default"} onClick={()=>{setSelMode(!selMode);if(selMode)setSel(new Set())}}>{selMode?"Cancel Select":"Select"}</Btn>
+<Btn size="sm" variant={selMode?"accent":"default"} onClick={()=>{setSelMode(!selMode);if(selMode)setSel(new Set())}}>{selMode?"Cancel":"Select"}</Btn>
 </div></div>
+{totalPages>1&&!ld&&<MamPager pg={pg} totalPages={totalPages} onPage={p=>load(p)} t={t}/>}
+</div>
 
 {selMode?<div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",background:t.bg2,border:`1px solid ${t.border}`,borderRadius:8,flexWrap:"wrap"}}>
 <span style={{fontSize:13,fontWeight:600,color:t.text2}}>{sel.size} book{sel.size===1?"":"s"} selected</span>
@@ -173,3 +176,19 @@ return<div style={{display:"flex",flexDirection:"column",gap:16}}>
 {sb?<BookSidebar book={sb} closing={sbClosing} onClose={closeSb} onAction={onAction} onEdit={()=>load(pg)}/>:null}
 
 </div>}
+
+function MamPager({pg,totalPages,onPage,t}){
+  const[jumpVal,setJumpVal]=useState("");
+  const doJump=()=>{const n=parseInt(jumpVal);if(n>=1&&n<=totalPages){onPage(n);setJumpVal("")}};
+  return <div style={{display:"flex",gap:6,padding:"4px 0",alignItems:"center"}}>
+    <Btn size="sm" disabled={pg<=1} onClick={()=>onPage(1)}>«</Btn>
+    <Btn size="sm" disabled={pg<=1} onClick={()=>onPage(pg-1)}>‹ Prev</Btn>
+    <span style={{fontSize:13,color:t.td,fontWeight:500,padding:"0 4px"}}>Page {pg} of {totalPages}</span>
+    <Btn size="sm" disabled={pg>=totalPages} onClick={()=>onPage(pg+1)}>Next ›</Btn>
+    <Btn size="sm" disabled={pg>=totalPages} onClick={()=>onPage(totalPages)}>»</Btn>
+    <span style={{width:1,height:16,background:t.border,margin:"0 2px"}}/>
+    <input value={jumpVal} onChange={e=>setJumpVal(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")doJump()}}
+      placeholder="#" style={{width:50,padding:"4px 6px",borderRadius:5,border:`1px solid ${t.border}`,background:t.inp,color:t.text2,fontSize:12,textAlign:"center",outline:"none"}}/>
+    <Btn size="sm" variant="ghost" onClick={doJump}>Go</Btn>
+  </div>;
+}
