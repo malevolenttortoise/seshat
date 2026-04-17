@@ -95,7 +95,7 @@ async def get_books(search: str = Query(None), author_id: int = Query(None), ser
 
 @router.get("/missing")
 async def get_missing(search: str = Query(None), author_id: int = Query(None), series_id: int = Query(None), book_type: str = Query(None), mam_status: str = Query(None), sort: str = Query("title"), sort_dir: str = Query("asc"), page: int = Query(1, ge=1), per_page: int = Query(60, ge=1, le=5000), include_hidden: bool = Query(False)):
-    return await get_books(search=search, author_id=author_id, series_id=series_id, owned=False, book_type=book_type, mam_status=mam_status, sort=sort, sort_dir=sort_dir, page=page, per_page=per_page, include_hidden=include_hidden)
+    return await get_books(search=search, author_id=author_id, series_id=series_id, owned=False, book_type=book_type, mam_status=mam_status, sort=sort, sort_dir=sort_dir, page=page, per_page=per_page, include_hidden=include_hidden, hidden_only=False)
 
 
 @router.get("/upcoming")
