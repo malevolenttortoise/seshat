@@ -352,6 +352,21 @@ function Tile({ label, value, color, sub, onClick }) {
   );
 }
 
+function formatAgo(ts) {
+  if (!ts) return null;
+  const secs = Math.max(0, Date.now() / 1000 - ts);
+  if (secs < 60) return "Just Now";
+  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
+  if (secs < 86400) {
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    return `${h}h ${m}m ago`;
+  }
+  const d = Math.floor(secs / 86400);
+  const h = Math.floor((secs % 86400) / 3600);
+  return `${d}d ${h}h ago`;
+}
+
 function ProgressRow({ label, scan, t, onCancel }) {
   const running = scan?.running;
   const status = scan?.status || "idle";
@@ -360,13 +375,22 @@ function ProgressRow({ label, scan, t, onCancel }) {
   const checked = scan?.current ?? 0;
   const total = scan?.total ?? 0;
   const pctDone = total > 0 ? Math.floor((checked / total) * 100) : 0;
+  const ago = !running ? formatAgo(scan?.completed_at) : null;
+  // "Library Sync" → "Sync"; "Source Scan" / "MAM Scan" → "Scan".
+  const kind = label.split(" ").pop();
+  const statusText = status === "complete" ? "Done" : status === "cancelled" ? "Cancelled" : "Idle";
   return (
     <div style={{ padding: "6px 0", borderBottom: `1px solid ${t.borderL}` }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span style={{ fontSize: 13, fontWeight: 600, color: running ? t.accent : t.td }}>{label}</span>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ fontSize: 13, color: running ? t.text2 : t.tf }}>
-            {running ? `${checked}/${total} (${pctDone}%)` : status === "complete" ? "Done" : status === "cancelled" ? "Cancelled" : "Idle"}
+            {running ? `${checked}/${total} (${pctDone}%)` : (
+              <>
+                {ago && <span style={{ fontStyle: "italic" }}>(Last {kind}: {ago}) </span>}
+                {statusText}
+              </>
+            )}
           </span>
           {running && onCancel && (
             <button onClick={onCancel} style={{
