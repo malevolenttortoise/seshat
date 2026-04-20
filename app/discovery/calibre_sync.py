@@ -219,6 +219,7 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
             "current_book": "",
             "books_new": 0,
             "books_updated": 0,
+            "books_pruned": 0,
             "status": "scanning",
             "type": "manual",
         }
@@ -418,6 +419,34 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
                 )
             """, (our_author_id, book["title"], book["title"]))
 
+        # Pass 4: reconcile. Books previously imported from Calibre but
+        # no longer in metadata.db (user removed them in Calibre, or
+        # switched to a different library that reuses calibre_ids) would
+        # otherwise linger as ghost `owned=1` rows and inflate library
+        # counts. Prune them here. Discovery-only rows (source != 'calibre')
+        # are untouched — the user's enrichment state for unowned books
+        # is independent of what's in Calibre.
+        #
+        # SAFETY: zero-book calibre_data is almost always a transient
+        # read error, not a deliberate "I deleted everything" — skip
+        # the prune in that case rather than wipe every calibre row.
+        books_pruned = 0
+        if calibre_data["books"]:
+            current_ids = [book["book_id"] for book in calibre_data["books"]]
+            ph = ",".join("?" * len(current_ids))
+            cur = await db.execute(
+                f"DELETE FROM books WHERE source='calibre' "
+                f"AND calibre_id NOT IN ({ph})",
+                current_ids,
+            )
+            books_pruned = cur.rowcount or 0
+            if books_pruned:
+                logger.info(
+                    f"Calibre sync: pruned {books_pruned} stale row(s) "
+                    f"no longer in metadata.db"
+                )
+        state._library_sync_progress["books_pruned"] = books_pruned
+
         await db.commit()
 
         await db.execute("""
@@ -426,13 +455,20 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
         """, (time.time(), books_found, books_new, sync_id))
         await db.commit()
 
-        logger.info(f"Calibre sync complete: {books_found} books, {books_new} new")
+        logger.info(
+            f"Calibre sync complete: {books_found} books, "
+            f"{books_new} new, {books_pruned} pruned"
+        )
         state._library_sync_progress.update({
             "running": False,
             "current_book": "",
             "status": "complete",
         })
-        return {"books_found": books_found, "books_new": books_new}
+        return {
+            "books_found": books_found,
+            "books_new": books_new,
+            "books_pruned": books_pruned,
+        }
 
     except Exception as e:
         logger.error(f"Calibre sync error: {e}", exc_info=True)
