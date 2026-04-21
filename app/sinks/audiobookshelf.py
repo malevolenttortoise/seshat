@@ -22,6 +22,13 @@ from app.sinks.base import SinkResult
 
 _log = logging.getLogger("seshat.sinks")
 
+# Audiobook file formats we consider companions of a multi-part book.
+# Kept in sync with file_copier._AUDIOBOOK_EXTENSIONS — when a new
+# format lands, update both. Intentionally narrow: won't pull in
+# cover images or metadata.opus files. ABS's auto-import handles
+# those from its filesystem watcher once the audio is in place.
+_AUDIOBOOK_EXTENSIONS = frozenset({"m4b", "m4a", "mp3", "aax", "aa"})
+
 
 class AudiobookshelfSink:
     """Delivers audiobook files to Audiobookshelf's library directory."""
@@ -103,10 +110,44 @@ class AudiobookshelfSink:
                     counter += 1
 
             shutil.copy2(str(src), str(dest))
+            copied_count = 1
             _log.info(
                 "audiobookshelf sink: copied %s → %s",
                 src.name, dest,
             )
+
+            # Multi-file audiobook support: scan `src.parent` for
+            # additional audio files and mirror them into `target_dir`.
+            # Multi-part Audible rips (e.g. Halo: Outcasts, Martian)
+            # arrive as 20-30 sequentially-numbered MP3s; without this
+            # loop ABS would get only the primary and render a broken
+            # 1-chapter book. Single-file books (m4b, ebooks) no-op
+            # because no sibling audio files exist.
+            companion_errors = 0
+            if src.parent.exists() and src.parent.is_dir():
+                for sibling in src.parent.iterdir():
+                    if not sibling.is_file() or sibling.name == src.name:
+                        continue
+                    ext = sibling.suffix.lstrip(".").lower()
+                    if ext not in _AUDIOBOOK_EXTENSIONS:
+                        continue
+                    companion_dest = target_dir / sibling.name
+                    if companion_dest.exists():
+                        continue
+                    try:
+                        shutil.copy2(str(sibling), str(companion_dest))
+                        copied_count += 1
+                    except Exception:
+                        companion_errors += 1
+                        _log.exception(
+                            "audiobookshelf sink: companion copy failed %s → %s",
+                            sibling, companion_dest,
+                        )
+            if copied_count > 1:
+                _log.info(
+                    "audiobookshelf sink: multi-file audiobook (%d files copied, %d errors)",
+                    copied_count, companion_errors,
+                )
         except Exception as e:
             _log.exception("audiobookshelf sink copy failed")
             return SinkResult(

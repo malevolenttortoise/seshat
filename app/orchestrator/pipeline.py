@@ -43,6 +43,7 @@ from typing import Optional
 
 import aiosqlite
 
+from app import state
 from app.metadata.covers import fetch_cover
 from app.metadata.extract import BookMetadata, extract as extract_metadata
 from app.metadata.enricher import MetadataEnricher
@@ -88,6 +89,76 @@ def _is_audiobook_grab(book_format: str, category: str = "") -> bool:
     if category and category.strip().lower().startswith("audiobook"):
         return True
     return False
+
+
+async def _backfill_audio_companions(
+    *,
+    review_dir: Path,
+    primary_name: str,
+    qbit_hash: str,
+) -> None:
+    """Copy missing audio companions from qBit's save_path into the review dir.
+
+    Repairs multi-file audiobooks that were staged to review with only
+    the primary MP3 (pre-v1.3 bug where _stage_for_review copied just
+    delivery_source). Queries qBit for the torrent's file list, resolves
+    each to an absolute path under `save_path`, and copies any audio-
+    format files that aren't already in `review_dir`.
+
+    Best-effort. qBit offline, torrent removed, or save_path missing
+    all fall through silently — the caller proceeds with whatever IS
+    already staged.
+    """
+    dispatcher = state.dispatcher
+    if dispatcher is None or not hasattr(dispatcher, "qbit"):
+        return
+    qbit = dispatcher.qbit
+
+    existing = {
+        p.name for p in review_dir.iterdir()
+        if p.is_file() and p.suffix.lstrip(".").lower() in _AUDIOBOOK_EXTS
+    }
+    # Skip the round-trip when the dir already has multiple audio files
+    # — the original _stage_for_review fix made it whole. Only the
+    # single-audio-file case needs repair.
+    if len(existing) > 1:
+        return
+
+    torrent = await qbit.get_torrent(qbit_hash)
+    if torrent is None or not torrent.save_path:
+        return
+    save_path = Path(torrent.save_path)
+    if not save_path.exists():
+        return
+
+    rel_files = await qbit.list_torrent_files(qbit_hash)
+    copied = 0
+    for rel in rel_files:
+        if not rel:
+            continue
+        src = save_path / rel
+        if not src.is_file():
+            continue
+        ext = src.suffix.lstrip(".").lower()
+        if ext not in _AUDIOBOOK_EXTS:
+            continue
+        if src.name in existing or src.name == primary_name:
+            continue
+        dest = review_dir / src.name
+        if dest.exists():
+            continue
+        try:
+            shutil.copy2(str(src), str(dest))
+            copied += 1
+        except Exception:
+            _log.exception(
+                "backfill_audio_companions: copy failed %s → %s", src, dest,
+            )
+    if copied:
+        _log.info(
+            "deliver_reviewed: backfilled %d audio companion(s) into %s "
+            "from qBit save_path=%s", copied, review_dir, save_path,
+        )
 
 
 def _find_torrent_file(parent: Path, torrent_name: str) -> Optional[Path]:
@@ -623,6 +694,31 @@ async def _stage_for_review(
                         "prepared book file missing before review staging",
                         ntfy_url, ntfy_topic)
             return False
+
+        # Multi-file audiobook support: also copy every OTHER book-
+        # format file from the original staging dir so the review
+        # directory is self-contained. Without this a 26-file
+        # Audible rip arrived in Review with only the primary MP3
+        # (usually the last alphabetical part) and ABS ended up
+        # with a broken 1-chapter book. Uses prep.book_path.parent
+        # — that's the per-torrent staging subdir populated by
+        # copy_to_staging. For single-file ebooks this loop runs
+        # once and no-ops.
+        staging_parent = prep.book_path.parent
+        if staging_parent.exists() and staging_parent.is_dir():
+            from app.orchestrator.file_copier import BOOK_EXTENSIONS
+            for sibling in staging_parent.iterdir():
+                if not sibling.is_file():
+                    continue
+                if sibling.name == prep.book_filename:
+                    continue  # primary already staged via delivery_source
+                ext = sibling.suffix.lstrip(".").lower()
+                if ext not in BOOK_EXTENSIONS:
+                    continue
+                sibling_dest = target_dir / sibling.name
+                if sibling_dest.exists():
+                    continue
+                shutil.copy2(str(sibling), str(sibling_dest))
     except Exception as e:
         _log.exception("pipeline: review staging copy failed")
         await _fail(db, run_id, event,
@@ -883,6 +979,31 @@ async def deliver_reviewed(
             decision_note=f"staged file missing: {staged}",
         )
         return False
+
+    # Multi-file audiobook backfill. Pre-v1.3 audiobooks arrived in
+    # the review queue with only the primary MP3 staged (v1.2 bug);
+    # if we don't repair now the sink can only deliver the one file
+    # and ABS shows a broken 1-chapter book. Query qBit for the
+    # torrent's full file list and copy any missing audio companions
+    # from the original download location into the review dir before
+    # the sink runs. Best-effort — qBit offline / torrent removed
+    # falls through to delivering whatever IS present.
+    if (
+        _is_audiobook_grab(entry.book_format, grab.category or "")
+        and grab.qbit_hash
+        and state.dispatcher is not None
+    ):
+        try:
+            await _backfill_audio_companions(
+                review_dir=Path(entry.staged_path),
+                primary_name=entry.book_filename,
+                qbit_hash=grab.qbit_hash,
+            )
+        except Exception:
+            _log.exception(
+                "deliver_reviewed: audio-companion backfill failed "
+                "for review_id=%d (non-fatal)", review_id,
+            )
 
     metadata = BookMetadata(
         title=entry.metadata.get("title", "") or "",
