@@ -92,18 +92,27 @@ def _is_audiobook_grab(book_format: str, category: str = "") -> bool:
 
 
 async def _backfill_audio_companions(
+    db: aiosqlite.Connection,
     *,
     review_dir: Path,
     primary_name: str,
     qbit_hash: str,
+    pipeline_run_id: Optional[int] = None,
 ) -> None:
-    """Copy missing audio companions from qBit's save_path into the review dir.
+    """Copy missing audio companions from the torrent's download location.
 
     Repairs multi-file audiobooks that were staged to review with only
     the primary MP3 (pre-v1.3 bug where _stage_for_review copied just
     delivery_source). Queries qBit for the torrent's file list, resolves
-    each to an absolute path under `save_path`, and copies any audio-
-    format files that aren't already in `review_dir`.
+    each to an absolute path under the correct save_path, and copies
+    any audio-format files that aren't already in `review_dir`.
+
+    Path resolution precedence: `pipeline_runs.source_path` first
+    (captured when the original run executed — guaranteed to be the
+    Seshat-side mount, which is what we can actually read), then
+    qBit's live-reported save_path as a fallback. This matters on
+    setups where qBit and Seshat mount the same share at different
+    paths (/data in qBit vs /downloads in Seshat, common on Unraid).
 
     Best-effort. qBit offline, torrent removed, or save_path missing
     all fall through silently — the caller proceeds with whatever IS
@@ -124,11 +133,39 @@ async def _backfill_audio_companions(
     if len(existing) > 1:
         return
 
+    # Try pipeline_runs.source_path first — this is the path Seshat
+    # actually used when the download completed, so it's known-reachable
+    # from this container. Fall back to qBit's live save_path.
+    candidate_paths: list[Path] = []
+    if pipeline_run_id:
+        try:
+            row = await (await db.execute(
+                "SELECT source_path FROM pipeline_runs WHERE id = ?",
+                (pipeline_run_id,),
+            )).fetchone()
+            if row and row["source_path"]:
+                candidate_paths.append(Path(row["source_path"]))
+        except Exception:
+            _log.debug("backfill: pipeline_runs lookup failed", exc_info=True)
+
     torrent = await qbit.get_torrent(qbit_hash)
-    if torrent is None or not torrent.save_path:
-        return
-    save_path = Path(torrent.save_path)
-    if not save_path.exists():
+    if torrent is not None and torrent.save_path:
+        qbit_save = Path(torrent.save_path)
+        if qbit_save not in candidate_paths:
+            candidate_paths.append(qbit_save)
+
+    save_path: Optional[Path] = None
+    for cand in candidate_paths:
+        if cand.exists():
+            save_path = cand
+            break
+    if save_path is None:
+        _log.warning(
+            "backfill: no reachable save_path among %s (qBit reports %s); "
+            "skipping companion copy",
+            [str(p) for p in candidate_paths],
+            torrent.save_path if torrent else "<no torrent>",
+        )
         return
 
     rel_files = await qbit.list_torrent_files(qbit_hash)
@@ -995,9 +1032,11 @@ async def deliver_reviewed(
     ):
         try:
             await _backfill_audio_companions(
+                db,
                 review_dir=Path(entry.staged_path),
                 primary_name=entry.book_filename,
                 qbit_hash=grab.qbit_hash,
+                pipeline_run_id=entry.pipeline_run_id,
             )
         except Exception:
             _log.exception(
