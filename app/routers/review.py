@@ -316,6 +316,31 @@ async def re_enrich(review_id: int, body: SaveRequest) -> ReviewItem:
             )
 
         merged["enriched"] = result.to_dict()
+
+        # Download the fresh cover into the review staging dir so the
+        # UI can show it without re-running the whole staging pass.
+        # Without this the enriched metadata carries `cover_url` but
+        # the UI has no local file to serve, so the placeholder glyph
+        # shows despite a successful Audible match. Mirrors the
+        # initial `_stage_for_review` cover-fetch step.
+        if result.cover_url:
+            try:
+                from app.metadata.covers import fetch_cover
+                target_dir = Path(row.staged_path)
+                target_dir.mkdir(parents=True, exist_ok=True)
+                cover_path = await fetch_cover(
+                    result.cover_url,
+                    dest_dir=target_dir,
+                    basename="cover-enriched",
+                )
+                if cover_path is not None:
+                    merged["cover_enriched"] = str(cover_path)
+            except Exception:
+                _log.exception(
+                    "review re-enrich: cover fetch crashed "
+                    "for review_id=%d (non-fatal)", review_id,
+                )
+
         await review_storage.set_status(
             db, review_id, review_storage.STATUS_PENDING, metadata=merged,
         )

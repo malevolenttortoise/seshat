@@ -116,14 +116,16 @@ export default function ReviewPage() {
     }
   }
 
-  async function reEnrich(id: number, metadata: Record<string, unknown>) {
+  async function reEnrich(id: number, metadata: Record<string, unknown>): Promise<boolean> {
     setBusyId(id);
     setError(null);
     try {
       await api.post(`/v1/review/${id}/re-enrich`, { metadata });
       await refresh();
+      return true;
     } catch (e) {
       setError(String(e));
+      return false;
     } finally {
       setBusyId(null);
     }
@@ -215,7 +217,7 @@ function ReviewCard({
   busy: boolean;
   onApprove: (metadata?: Record<string, unknown>) => void;
   onSave: (metadata: Record<string, unknown>) => void;
-  onReEnrich: (metadata: Record<string, unknown>) => void;
+  onReEnrich: (metadata: Record<string, unknown>) => Promise<boolean>;
   onReject: () => void;
 }) {
   const theme = useTheme();
@@ -334,8 +336,34 @@ function ReviewCard({
         gridTemplateColumns: "120px 1fr auto",
         gap: 16,
         animation: "slide-up 0.2s ease-out",
+        position: "relative",
       }}
     >
+      {/* Busy overlay — covers the whole card while Approve /
+          Save / Re-enrich / Reject are in flight. Without it the
+          user can't tell whether a Re-enrich is still thinking
+          (fields don't auto-update until the response lands). */}
+      {busy && (
+        <div style={{
+          position: "absolute",
+          inset: 0,
+          background: theme.bg + "cc",
+          backdropFilter: "blur(2px)",
+          borderRadius: 12,
+          zIndex: 5,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 10,
+          color: theme.text2,
+          fontSize: 13,
+          fontWeight: 600,
+          pointerEvents: "auto",
+        }}>
+          <Spin size={18} />
+          <span>Working…</span>
+        </div>
+      )}
       <CoverThumb item={item} />
 
       <div style={{ minWidth: 0 }}>
@@ -520,7 +548,16 @@ function ReviewCard({
             <Btn
               variant="secondary"
               disabled={busy}
-              onClick={() => onReEnrich(currentEdits())}
+              onClick={async () => {
+                // Re-enrich persists edits + runs the scraper chain
+                // server-side. On success auto-exit edit mode so the
+                // user sees the freshly-merged values instead of
+                // continuing to see their (now-stale) edit inputs.
+                // The parent's `refresh()` has already updated
+                // `item.metadata` by the time this promise resolves.
+                const ok = await onReEnrich(currentEdits());
+                if (ok) setEditing(false);
+              }}
               title="Persist edits and re-run the metadata scraper chain against the new title/author"
             >
               {busy ? <Spin size={14} /> : "Re-enrich"}
