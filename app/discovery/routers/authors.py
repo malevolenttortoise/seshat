@@ -180,7 +180,7 @@ async def _author_detail_for_slug(slug: str, aid: int) -> Optional[dict]:
             GROUP BY s.id ORDER BY s.name""",
             (aid, aid, aid, aid)
         )).fetchall()]
-        a["standalone_books"] = [
+        standalone = [
             {**dict(b), "library_slug": slug, "content_type": content_type}
             for b in await (await db.execute(
                 f"SELECT b.*, a2.name as author_name FROM books b JOIN authors a2 ON b.author_id=a2.id "
@@ -188,6 +188,25 @@ async def _author_detail_for_slug(slug: str, aid: int) -> Optional[dict]:
                 (aid,)
             )).fetchall()
         ]
+        # Cross-format sibling info so the UI can render "also
+        # available as audiobook" badges on ebook cards and vice
+        # versa. Series books get stamped by the series endpoint
+        # on its own fetch; here we only need to cover the
+        # standalone list.
+        from app.works.storage import get_siblings_for_books
+        ids = [int(b["id"]) for b in standalone if b.get("id") is not None]
+        if slug and ids:
+            sib_map = await get_siblings_for_books(slug, ids)
+            for b in standalone:
+                s = sib_map.get(int(b["id"]))
+                if s:
+                    b["work_id"] = s[0].work_id
+                    b["work_siblings"] = [
+                        {"library_slug": w.library_slug, "book_id": w.book_id,
+                         "content_type": w.content_type}
+                        for w in s
+                    ]
+        a["standalone_books"] = standalone
         return a
     finally:
         await db.close()

@@ -70,6 +70,66 @@ async def get_link(
             await db.close()
 
 
+async def get_siblings_for_books(
+    library_slug: str,
+    book_ids: list[int],
+    *,
+    db: Optional[aiosqlite.Connection] = None,
+) -> dict[int, list[WorkLink]]:
+    """Bulk lookup: for each book_id in the given library, return its
+    cross-library work siblings (other work_links with the same work_id
+    excluding self).
+
+    Returned dict only contains entries for books that actually have a
+    sibling; books with no work row or no cross-library twin are
+    omitted. Callers treat a missing key as "no pairing" and render no
+    badge. Two round-trips — one to resolve book→work_id, one to pull
+    all siblings for those work_ids — both parameterized so hundreds of
+    books resolve in two statements, not N.
+    """
+    if not book_ids:
+        return {}
+    close_after = db is None
+    if db is None:
+        db = await _open()
+    try:
+        ph = ",".join("?" * len(book_ids))
+        rows = await (await db.execute(
+            f"SELECT id, work_id, library_slug, book_id, content_type, "
+            f"link_source, created_at FROM work_links "
+            f"WHERE library_slug = ? AND book_id IN ({ph})",
+            [library_slug, *book_ids],
+        )).fetchall()
+        # book_id → work_id map for the requested library
+        self_links = [_row_to_link(r) for r in rows]
+        if not self_links:
+            return {}
+        work_ids = list({sl.work_id for sl in self_links})
+        wph = ",".join("?" * len(work_ids))
+        sibling_rows = await (await db.execute(
+            f"SELECT id, work_id, library_slug, book_id, content_type, "
+            f"link_source, created_at FROM work_links "
+            f"WHERE work_id IN ({wph})",
+            work_ids,
+        )).fetchall()
+        all_members: dict[str, list[WorkLink]] = {}
+        for r in sibling_rows:
+            wl = _row_to_link(r)
+            all_members.setdefault(wl.work_id, []).append(wl)
+        result: dict[int, list[WorkLink]] = {}
+        for sl in self_links:
+            siblings = [
+                m for m in all_members.get(sl.work_id, [])
+                if not (m.library_slug == sl.library_slug and m.book_id == sl.book_id)
+            ]
+            if siblings:
+                result[sl.book_id] = siblings
+        return result
+    finally:
+        if close_after:
+            await db.close()
+
+
 async def get_work_members(
     work_id: str, *, db: Optional[aiosqlite.Connection] = None
 ) -> list[WorkLink]:

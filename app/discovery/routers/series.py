@@ -62,7 +62,7 @@ async def get_series(sid: int, slug: str | None = None):
              if l.get("slug") == effective_slug),
             "ebook",
         )
-        s["books"] = [
+        rows = [
             {**dict(b), "library_slug": effective_slug, "content_type": content_type}
             for b in await (await db.execute(f"""
                 SELECT b.*, a.name as author_name, sr.name as series_name,
@@ -86,9 +86,40 @@ async def get_series(sid: int, slug: str | None = None):
                 ORDER BY COALESCE(b.series_index,999), b.pub_date ASC
             """, (sid,))).fetchall()
         ]
+        s["books"] = await _stamp_work_siblings(rows, effective_slug)
         return s
     finally:
         await db.close()
+
+
+async def _stamp_work_siblings(
+    books: list[dict], slug: str,
+) -> list[dict]:
+    """Attach cross-format sibling info to each book in a list.
+
+    Looks up the pipeline DB's `work_links` table in bulk and, for
+    every book with a cross-library twin, sets `work_siblings` to a
+    list of `{library_slug, book_id, content_type}` dicts (excluding
+    self). Books without a work row or without cross-library twins
+    come back unchanged. Empty slug or empty list short-circuit.
+    """
+    if not slug or not books:
+        return books
+    from app.works.storage import get_siblings_for_books
+    ids = [int(b["id"]) for b in books if b.get("id") is not None]
+    if not ids:
+        return books
+    sib_map = await get_siblings_for_books(slug, ids)
+    for b in books:
+        s = sib_map.get(int(b["id"]))
+        if s:
+            b["work_id"] = s[0].work_id
+            b["work_siblings"] = [
+                {"library_slug": w.library_slug, "book_id": w.book_id,
+                 "content_type": w.content_type}
+                for w in s
+            ]
+    return books
 
 
 @router.get("/series")
