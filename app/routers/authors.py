@@ -77,6 +77,10 @@ class SimpleOk(BaseModel):
     detail: Optional[str] = None
 
 
+class BulkMoveResponse(BaseModel):
+    moved: int
+
+
 def _validate_list(list_name: str) -> None:
     if list_name not in _LIST_NAMES:
         raise HTTPException(404, f"Unknown list: {list_name}")
@@ -195,6 +199,51 @@ async def remove_author(list_name: str, normalized: str) -> SimpleOk:
     if n > 0 and list_name in ("allowed", "ignored"):
         await state.refresh_filter_authors()
     return SimpleOk(ok=n > 0, detail=None if n > 0 else "not found")
+
+
+@router.post(
+    "/tentative_review/bulk-move", response_model=BulkMoveResponse,
+)
+async def bulk_move_tentative(body: MoveAuthorRequest) -> BulkMoveResponse:
+    """Move every author currently in tentative_review into allowed or ignored.
+
+    Surfaced from the Authors page's Tentative review tab as
+    "Ignore All" / "Allow All" one-button actions. Writes are
+    done in a single transaction per row (same path as the
+    single-item move) so a partial failure leaves consistent state.
+    """
+    target = body.to
+    if target not in ("allowed", "ignored"):
+        raise HTTPException(400, "to must be 'allowed' or 'ignored'")
+
+    db = await get_db()
+    try:
+        rows = await authors_storage.list_tentative_review(db)
+        moved = 0
+        for row in rows:
+            normalized = row["normalized"]
+            try:
+                if target == "allowed":
+                    await authors_storage.promote_tentative_to_allowed(
+                        db, normalized,
+                    )
+                else:
+                    await authors_storage.promote_tentative_to_ignored(
+                        db, normalized,
+                    )
+                moved += 1
+            except Exception:
+                _log.exception(
+                    "authors bulk-move: failed on normalized=%r", normalized,
+                )
+    finally:
+        await db.close()
+
+    if moved > 0:
+        await state.refresh_filter_authors()
+    _log.info("authors bulk-move: tentative_review → %s (%d moved)",
+              target, moved)
+    return BulkMoveResponse(moved=moved)
 
 
 @router.post("/{list_name}/{normalized}/move", response_model=SimpleOk)

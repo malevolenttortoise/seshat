@@ -161,6 +161,25 @@ export default function AuthorsPage() {
     }
   }
 
+  async function bulkMoveTentative(to: "allowed" | "ignored") {
+    const count = counts?.tentative_review ?? 0;
+    if (count === 0) return;
+    const label = to === "ignored" ? "Ignore" : "Allow";
+    if (!confirm(`${label} all ${count} tentative-review author(s)?`)) return;
+    setBusy(true);
+    try {
+      const r = await api.post<{ moved: number }>(
+        `/v1/authors/tentative_review/bulk-move`, { to },
+      );
+      setError(`Moved ${r.moved} author(s) to ${to}.`);
+      await Promise.all([refreshCounts(), refreshList()]);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div style={{ maxWidth: 1100, margin: "0 auto" }}>
       <h1
@@ -295,24 +314,48 @@ export default function AuthorsPage() {
             : undefined
         }
         right={
-          <input
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
-              setOffset(0);
-            }}
-            placeholder="Search…"
-            style={{
-              padding: "6px 10px",
-              borderRadius: 8,
-              border: `1px solid ${theme.border}`,
-              background: theme.inp,
-              color: theme.text,
-              fontSize: 13,
-              width: 200,
-              outline: "none",
-            }}
-          />
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            {tab === "tentative_review" && (counts?.tentative_review ?? 0) > 0 && (
+              <>
+                <Btn
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => bulkMoveTentative("allowed")}
+                  disabled={busy}
+                  title="Move every tentative-review author into the allowed list"
+                >
+                  Allow All
+                </Btn>
+                <Btn
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => bulkMoveTentative("ignored")}
+                  disabled={busy}
+                  title="Move every tentative-review author into the ignored list"
+                >
+                  Ignore All
+                </Btn>
+              </>
+            )}
+            <input
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setOffset(0);
+              }}
+              placeholder="Search…"
+              style={{
+                padding: "6px 10px",
+                borderRadius: 8,
+                border: `1px solid ${theme.border}`,
+                background: theme.inp,
+                color: theme.text,
+                fontSize: 13,
+                width: 200,
+                outline: "none",
+              }}
+            />
+          </div>
         }
       >
         {items === null ? (

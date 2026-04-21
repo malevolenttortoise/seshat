@@ -43,6 +43,9 @@ export default function TentativePage() {
   const [items, setItems] = useState<TentativeItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [selMode, setSelMode] = useState(false);
+  const [sel, setSel] = useState<Set<number>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   async function refresh() {
     try {
@@ -56,6 +59,23 @@ export default function TentativePage() {
 
   useEffect(() => { refresh(); }, []);
   useVisibleInterval(refresh, 30_000);
+
+  function toggleSel(id: number) {
+    setSel(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function selectAllVisible() {
+    setSel(new Set((items || []).map(i => i.id)));
+  }
+
+  function clearSel() {
+    setSel(new Set());
+  }
 
   async function approve(id: number) {
     setBusyId(id);
@@ -81,9 +101,39 @@ export default function TentativePage() {
     }
   }
 
+  async function bulkAction(action: "approve" | "reject", ids: number[] | null) {
+    const count = ids === null ? (items?.length ?? 0) : ids.length;
+    if (count === 0) return;
+    const label = action === "approve" ? "Approve" : "Reject";
+    const warning = action === "approve"
+      ? `${label} ${count} tentative torrent(s)? Each approval burns a MAM snatch.`
+      : `${label} ${count} tentative torrent(s)? Rejected authors land on the weekly review list.`;
+    if (!confirm(warning)) return;
+    setBulkBusy(true);
+    setError(null);
+    try {
+      const r = await api.post<{ processed: number; failed: number; errors: string[] }>(
+        `/v1/tentative/bulk/${action}`,
+        ids === null ? {} : { ids },
+      );
+      if (r.failed > 0) {
+        setError(
+          `${label}d ${r.processed}, ${r.failed} failed. First errors: ${r.errors.slice(0, 3).join("; ")}`,
+        );
+      }
+      clearSel();
+      setSelMode(false);
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 20, gap: 12, flexWrap: "wrap" }}>
         <div>
           <h1 style={{ fontSize: 24, fontWeight: 700, color: theme.text, marginBottom: 4 }}>
             Tentative torrents
@@ -93,21 +143,83 @@ export default function TentativePage() {
           </p>
         </div>
         {items && items.length > 0 && (
-          <Btn
-            variant="danger"
-            disabled={busyId !== null}
-            onClick={async () => {
-              if (!confirm(`Clear all ${items.length} pending tentative torrents?`)) return;
-              setBusyId(-1);
-              try {
-                await api.post("/v1/data/clear/tentative_torrents", {});
-                await refresh();
-              } catch (e) { setError(String(e)); }
-              finally { setBusyId(null); }
-            }}
-          >
-            Clear all
-          </Btn>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            {selMode ? (
+              <>
+                <span style={{ fontSize: 13, color: theme.textDim }}>
+                  {sel.size} selected
+                </span>
+                <Btn
+                  variant="ghost" size="sm"
+                  onClick={selectAllVisible}
+                  disabled={bulkBusy}
+                >
+                  Select all
+                </Btn>
+                <Btn
+                  variant="primary" size="sm"
+                  onClick={() => bulkAction("approve", [...sel])}
+                  disabled={bulkBusy || sel.size === 0}
+                >
+                  {bulkBusy ? <Spin size={14} /> : `Approve Selected`}
+                </Btn>
+                <Btn
+                  variant="danger" size="sm"
+                  onClick={() => bulkAction("reject", [...sel])}
+                  disabled={bulkBusy || sel.size === 0}
+                >
+                  Reject Selected
+                </Btn>
+                <Btn
+                  variant="ghost" size="sm"
+                  onClick={() => { setSelMode(false); clearSel(); }}
+                  disabled={bulkBusy}
+                >
+                  Cancel
+                </Btn>
+              </>
+            ) : (
+              <>
+                <Btn
+                  variant="ghost" size="sm"
+                  onClick={() => setSelMode(true)}
+                  disabled={bulkBusy || busyId !== null}
+                >
+                  Select…
+                </Btn>
+                <Btn
+                  variant="primary" size="sm"
+                  onClick={() => bulkAction("approve", null)}
+                  disabled={bulkBusy || busyId !== null}
+                >
+                  {bulkBusy ? <Spin size={14} /> : `Approve All (${items.length})`}
+                </Btn>
+                <Btn
+                  variant="danger" size="sm"
+                  onClick={() => bulkAction("reject", null)}
+                  disabled={bulkBusy || busyId !== null}
+                >
+                  Reject All
+                </Btn>
+                <Btn
+                  variant="danger" size="sm"
+                  disabled={busyId !== null || bulkBusy}
+                  onClick={async () => {
+                    if (!confirm(`Clear all ${items.length} pending tentative torrents?`)) return;
+                    setBusyId(-1);
+                    try {
+                      await api.post("/v1/data/clear/tentative_torrents", {});
+                      await refresh();
+                    } catch (e) { setError(String(e)); }
+                    finally { setBusyId(null); }
+                  }}
+                  title="Clear without adding authors to any review list"
+                >
+                  Clear all
+                </Btn>
+              </>
+            )}
+          </div>
         )}
       </div>
 
@@ -147,6 +259,9 @@ export default function TentativePage() {
               busy={busyId === item.id}
               onApprove={() => approve(item.id)}
               onReject={() => reject(item.id)}
+              selMode={selMode}
+              selected={sel.has(item.id)}
+              onToggleSel={() => toggleSel(item.id)}
             />
           ))}
         </div>
@@ -160,11 +275,17 @@ function TentativeCard({
   busy,
   onApprove,
   onReject,
+  selMode,
+  selected,
+  onToggleSel,
 }: {
   item: TentativeItem;
   busy: boolean;
   onApprove: () => void;
   onReject: () => void;
+  selMode: boolean;
+  selected: boolean;
+  onToggleSel: () => void;
 }) {
   const theme = useTheme();
   const mamUrl = `https://www.myanonamouse.net/t/${item.mam_torrent_id}`;
@@ -174,19 +295,40 @@ function TentativeCard({
     ? `/api/v1/covers/${encodeURIComponent(item.cover_path)}`
     : null;
 
+  // When selection mode is active, clicking anywhere on the card
+  // toggles selection instead of rendering per-card buttons — makes
+  // large batches quick to flip through.
+  const cardBorder = selected
+    ? `2px solid ${theme.accent}`
+    : `1px solid ${theme.borderL}`;
+
   return (
     <article
+      onClick={selMode ? onToggleSel : undefined}
       style={{
         background: theme.bg2,
-        border: `1px solid ${theme.borderL}`,
+        border: cardBorder,
         borderRadius: 12,
         padding: 16,
         display: "grid",
-        gridTemplateColumns: coverUrl ? "80px 1fr auto" : "1fr auto",
+        gridTemplateColumns: selMode
+          ? (coverUrl ? "24px 80px 1fr" : "24px 1fr")
+          : (coverUrl ? "80px 1fr auto" : "1fr auto"),
         gap: 16,
         animation: "slide-up 0.2s ease-out",
+        cursor: selMode ? "pointer" : "default",
+        userSelect: selMode ? "none" : "auto",
       }}
     >
+      {selMode && (
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={onToggleSel}
+          onClick={(e) => e.stopPropagation()}
+          style={{ width: 20, height: 20, alignSelf: "center", cursor: "pointer" }}
+        />
+      )}
       {coverUrl && (
         <div style={{ width: 80, height: 120, borderRadius: 6, background: theme.bg3, overflow: "hidden", flexShrink: 0 }}>
           <img
@@ -268,22 +410,24 @@ function TentativeCard({
         </dl>
       </div>
 
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          gap: 8,
-          alignItems: "stretch",
-          minWidth: 110,
-        }}
-      >
-        <Btn variant="primary" disabled={busy} onClick={onApprove}>
-          {busy ? <Spin size={14} /> : "Approve"}
-        </Btn>
-        <Btn variant="danger" disabled={busy} onClick={onReject}>
-          Reject
-        </Btn>
-      </div>
+      {!selMode && (
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+            alignItems: "stretch",
+            minWidth: 110,
+          }}
+        >
+          <Btn variant="primary" disabled={busy} onClick={onApprove}>
+            {busy ? <Spin size={14} /> : "Approve"}
+          </Btn>
+          <Btn variant="danger" disabled={busy} onClick={onReject}>
+            Reject
+          </Btn>
+        </div>
+      )}
     </article>
   );
 }

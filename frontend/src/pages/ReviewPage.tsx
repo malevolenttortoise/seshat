@@ -143,21 +143,92 @@ export default function ReviewPage() {
     }
   }
 
+  const [bulkBusy, setBulkBusy] = useState(false);
+
+  async function bulkApprove() {
+    const count = items?.length ?? 0;
+    if (count === 0) return;
+    if (!confirm(`Approve all ${count} pending review(s)? Each one will go to its configured sink.`)) return;
+    setBulkBusy(true);
+    setError(null);
+    try {
+      const r = await api.post<{ processed: number; failed: number; errors: string[] }>(
+        `/v1/review/bulk/approve`,
+      );
+      if (r.failed > 0) {
+        setError(
+          `Approved ${r.processed}, ${r.failed} failed. First errors: ${r.errors.slice(0, 3).join("; ")}`,
+        );
+      }
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  async function bulkReject() {
+    const count = items?.length ?? 0;
+    if (count === 0) return;
+    if (!confirm(`Reject all ${count} pending review(s)? Staged files will be deleted; seeding originals untouched.`)) return;
+    setBulkBusy(true);
+    setError(null);
+    try {
+      const r = await api.post<{ processed: number; failed: number; errors: string[] }>(
+        `/v1/review/bulk/reject`, { note: "bulk rejected via UI" },
+      );
+      if (r.failed > 0) {
+        setError(
+          `Rejected ${r.processed}, ${r.failed} failed. First errors: ${r.errors.slice(0, 3).join("; ")}`,
+        );
+      }
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
   return (
     <div>
-      <h1
-        style={{
-          fontSize: 24,
-          fontWeight: 700,
-          color: theme.text,
-          marginBottom: 4,
-        }}
-      >
-        Review queue
-      </h1>
-      <p style={{ fontSize: 14, color: theme.textDim, marginBottom: 24 }}>
-        Books waiting on your approval before delivery to Calibre.
-      </p>
+      <div style={{
+        display: "flex", alignItems: "flex-start",
+        justifyContent: "space-between", gap: 12, marginBottom: 4,
+      }}>
+        <div>
+          <h1 style={{
+            fontSize: 24, fontWeight: 700, color: theme.text,
+            marginBottom: 4,
+          }}>
+            Review queue
+          </h1>
+          <p style={{ fontSize: 14, color: theme.textDim, marginBottom: 24 }}>
+            Books waiting on your approval before delivery to Calibre.
+          </p>
+        </div>
+        {items !== null && items.length > 0 && (
+          <div style={{ display: "flex", gap: 8 }}>
+            <Btn
+              variant="primary"
+              size="sm"
+              onClick={bulkApprove}
+              disabled={bulkBusy || busyId !== null}
+            >
+              {bulkBusy ? <Spin size={14} /> : `Approve All (${items.length})`}
+            </Btn>
+            <Btn
+              variant="danger"
+              size="sm"
+              onClick={bulkReject}
+              disabled={bulkBusy || busyId !== null}
+            >
+              Reject All
+            </Btn>
+          </div>
+        )}
+      </div>
 
       {error && (
         <div

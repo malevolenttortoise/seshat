@@ -61,6 +61,17 @@ class TentativeActionResponse(BaseModel):
     error: Optional[str] = None
 
 
+class BulkRequest(BaseModel):
+    """Optional id subset for bulk endpoints. None = every pending row."""
+    ids: Optional[list[int]] = None
+
+
+class BulkResponse(BaseModel):
+    processed: int
+    failed: int
+    errors: list[str] = []
+
+
 def _to_item(row: tentative_storage.TentativeRow) -> TentativeItem:
     return TentativeItem(
         id=row.id,
@@ -201,3 +212,99 @@ async def reject(tentative_id: int) -> TentativeActionResponse:
         )
     finally:
         await db.close()
+
+
+# ─── Bulk actions ─────────────────────────────────────────────
+
+
+async def _pending_ids(db, subset: Optional[list[int]]) -> list[int]:
+    """Return the pending tentative IDs to act on.
+
+    `subset=None` expands to "every pending row." When a subset is
+    provided we still filter to pending — rejected/approved rows in
+    the subset are silently skipped instead of double-processing.
+    """
+    rows = await tentative_storage.list_tentative(db)
+    pending_ids = [r.id for r in rows]
+    if subset is None:
+        return pending_ids
+    wanted = set(subset)
+    return [rid for rid in pending_ids if rid in wanted]
+
+
+@router.post("/bulk/approve", response_model=BulkResponse)
+async def bulk_approve(body: Optional[BulkRequest] = None) -> BulkResponse:
+    """Approve many tentative torrents in one call.
+
+    Each approval fetches a .torrent from MAM (same path as the
+    single-item approve), so this DOES burn snatches — the caller
+    UI is expected to confirm with the user before invoking.
+
+    `body.ids=None` → approve every pending row. Failures on
+    individual items don't halt the batch.
+    """
+    if state.dispatcher is None:
+        raise HTTPException(status_code=503, detail="dispatcher not initialized")
+
+    db = await get_db()
+    try:
+        ids = await _pending_ids(db, body.ids if body else None)
+    finally:
+        await db.close()
+
+    processed = 0
+    failed = 0
+    errors: list[str] = []
+    for tid in ids:
+        try:
+            result = await approve(tid)
+            if result.ok:
+                processed += 1
+            else:
+                failed += 1
+                errors.append(f"tid={tid}: {result.error or 'unknown failure'}")
+        except Exception as e:
+            failed += 1
+            errors.append(f"tid={tid}: {type(e).__name__}: {e}")
+            _log.exception(
+                "bulk tentative approve: tid=%d crashed (non-fatal)", tid,
+            )
+    _log.info("bulk tentative approve: processed=%d failed=%d",
+              processed, failed)
+    return BulkResponse(processed=processed, failed=failed, errors=errors[:20])
+
+
+@router.post("/bulk/reject", response_model=BulkResponse)
+async def bulk_reject(body: Optional[BulkRequest] = None) -> BulkResponse:
+    """Reject many tentative torrents in one call.
+
+    Pure local-state change — no MAM traffic. Each rejected item's
+    authors land on the weekly tentative_review list, same as the
+    single-item reject. `body.ids=None` → reject every pending row.
+    """
+    db = await get_db()
+    try:
+        ids = await _pending_ids(db, body.ids if body else None)
+    finally:
+        await db.close()
+
+    processed = 0
+    failed = 0
+    errors: list[str] = []
+    for tid in ids:
+        try:
+            result = await reject(tid)
+            if result.ok:
+                processed += 1
+            else:
+                failed += 1
+                errors.append(f"tid={tid}: {result.error or 'unknown failure'}")
+        except Exception as e:
+            failed += 1
+            errors.append(f"tid={tid}: {type(e).__name__}: {e}")
+            _log.exception(
+                "bulk tentative reject: tid=%d crashed (non-fatal)", tid,
+            )
+    _log.info("bulk tentative reject: processed=%d failed=%d",
+              processed, failed)
+    return BulkResponse(processed=processed, failed=failed, errors=errors[:20])

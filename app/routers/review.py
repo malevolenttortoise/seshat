@@ -79,6 +79,12 @@ class ReviewActionResponse(BaseModel):
     error: Optional[str] = None
 
 
+class BulkResponse(BaseModel):
+    processed: int
+    failed: int
+    errors: list[str] = []
+
+
 def _to_item(row: review_storage.ReviewRow) -> ReviewItem:
     return ReviewItem(
         id=row.id,
@@ -397,3 +403,100 @@ async def reject(review_id: int, body: RejectRequest) -> ReviewActionResponse:
         )
     finally:
         await db.close()
+
+
+# ─── Bulk actions ─────────────────────────────────────────────
+
+
+@router.post("/bulk/approve", response_model=BulkResponse)
+async def bulk_approve() -> BulkResponse:
+    """Approve every pending review row.
+
+    Iterates the pending list and reuses `deliver_reviewed` for each
+    row so the sink routing / auto-train / counter bookkeeping all
+    stays identical to single-row approve. Failures are collected
+    and reported but don't halt the loop — a single bad row
+    shouldn't block the rest of the batch.
+    """
+    if state.dispatcher is None:
+        raise HTTPException(status_code=503, detail="dispatcher not initialized")
+    deps = state.dispatcher
+    db = await get_db()
+    processed = 0
+    failed = 0
+    errors: list[str] = []
+    try:
+        rows = await review_storage.list_pending(db, limit=500)
+        for row in rows:
+            try:
+                ok = await deliver_reviewed(
+                    db,
+                    review_id=row.id,
+                    default_sink=deps.default_sink,
+                    calibre_library_path=deps.calibre_library_path,
+                    folder_sink_path=deps.folder_sink_path,
+                    audiobookshelf_library_path=deps.audiobookshelf_library_path,
+                    cwa_ingest_path=deps.cwa_ingest_path,
+                    ntfy_url=deps.ntfy_url,
+                    ntfy_topic=deps.ntfy_topic,
+                    auto_train_enabled=deps.auto_train_enabled,
+                    was_timeout=False,
+                    per_event_notifications=deps.per_event_notifications,
+                )
+                if ok:
+                    processed += 1
+                else:
+                    failed += 1
+                    errors.append(f"review_id={row.id}: sink delivery failed")
+            except Exception as e:
+                failed += 1
+                errors.append(f"review_id={row.id}: {type(e).__name__}: {e}")
+                _log.exception(
+                    "bulk approve: review_id=%d crashed (non-fatal)", row.id,
+                )
+    finally:
+        await db.close()
+    _log.info(
+        "bulk approve: processed=%d failed=%d", processed, failed,
+    )
+    return BulkResponse(processed=processed, failed=failed, errors=errors[:20])
+
+
+@router.post("/bulk/reject", response_model=BulkResponse)
+async def bulk_reject(body: Optional[RejectRequest] = None) -> BulkResponse:
+    """Reject every pending review row.
+
+    Mirrors single-row reject: remove each staged dir and mark the
+    row rejected. Seeding originals in the download directory are
+    never touched. `body.note` is shared across the batch so the
+    user can stamp a reason once ("bulk reject: stale queue" etc).
+    """
+    note = (body.note if body else None) or "user bulk-rejected"
+    db = await get_db()
+    processed = 0
+    failed = 0
+    errors: list[str] = []
+    try:
+        rows = await review_storage.list_pending(db, limit=500)
+        for row in rows:
+            try:
+                staged_dir = Path(row.staged_path)
+                if staged_dir.exists():
+                    shutil.rmtree(str(staged_dir), ignore_errors=True)
+                await review_storage.set_status(
+                    db, row.id, review_storage.STATUS_REJECTED,
+                    decision_note=note,
+                )
+                processed += 1
+            except Exception as e:
+                failed += 1
+                errors.append(f"review_id={row.id}: {type(e).__name__}: {e}")
+                _log.exception(
+                    "bulk reject: review_id=%d crashed (non-fatal)", row.id,
+                )
+    finally:
+        await db.close()
+    _log.info(
+        "bulk reject: processed=%d failed=%d", processed, failed,
+    )
+    return BulkResponse(processed=processed, failed=failed, errors=errors[:20])

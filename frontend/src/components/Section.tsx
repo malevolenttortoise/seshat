@@ -51,7 +51,20 @@ export function Section({
           )}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          {right && <div>{right}</div>}
+          {right && (
+            // Stop click events from bubbling up to the header's
+            // collapse-toggle handler. Without this, interacting
+            // with anything in the `right` slot (the AuthorsPage
+            // search box is the caller that surfaced this) triggers
+            // a collapse on the first click and forces a second
+            // click to re-expand and re-focus.
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{ cursor: "auto" }}
+            >
+              {right}
+            </div>
+          )}
           {subtitle && (
             <span style={{ fontSize: 13, color: theme.textDim }}>
               {subtitle}
