@@ -669,6 +669,7 @@ async def lifespan(app: FastAPI):
         import os as _os
         import time as _time
         mtimes = settings.get("library_mtimes", {})
+        any_synced = False
         for lib in state._discovered_libraries:
             set_active_library(lib["slug"])
             try:
@@ -688,11 +689,32 @@ async def lifespan(app: FastAPI):
                     mtimes[lib["slug"]] = current_mtime
                     settings["library_mtimes"] = mtimes
                     save_settings(settings)
+                    any_synced = True
             except Exception as e:
                 _log.warning(f"Sync failed for library '{lib['name']}': {e}")
         set_active_library(active)
         state._last_library_sync_check["at"] = _time.time()
         state._last_library_sync_check["synced"] = True
+        # Seed `_library_sync_progress` with the startup outcome so the
+        # Command Center Sync Progress widget has a "Last sync" timestamp
+        # to display immediately. Without this it shows "Idle" from the
+        # module-default until the first scheduled tick fires (up to 60
+        # minutes later). `sync_all_libraries()` already does this for
+        # every scheduled tick — mirroring the no-op-skip case here
+        # keeps the display consistent across startup and scheduled runs.
+        # `sync_calibre` / `sync_audiobookshelf` already populate the
+        # progress dict during actual syncs, so only the all-skipped
+        # branch needs an explicit completion update here.
+        if not any_synced:
+            state._library_sync_progress.update({
+                "running": False,
+                "status": "complete",
+                "type": "startup_skip",
+                "current": 0,
+                "total": 0,
+                "current_book": "",
+                "completed_at": _time.time(),
+            })
 
     # Per-source rate limits and the Hardcover API key are read once
     # into module-level source instances at import time. Refresh them
