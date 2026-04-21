@@ -139,14 +139,52 @@ export default function UnifiedDashboard({ onNav }: Props) {
   useVisibleInterval(refresh, pollMs);
   useVisibleInterval(() => setCd(c => Math.max(0, c - 1)), 1000);
 
+  // Responsive dashboard grid. Above 1500px the Seshat Stats column
+  // pins to the right as a narrow full-height rail; below, it wraps
+  // underneath the Quick Actions bar so we still fit without a
+  // horizontal scrollbar on laptop-sized screens.
+  const [viewport, setViewport] = useState(
+    typeof window !== "undefined" ? window.innerWidth : 1800,
+  );
+  useEffect(() => {
+    const onResize = () => setViewport(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  const wideMode = viewport >= 1500;
+
   const hdr = (color?) => ({ fontSize: 15, fontWeight: 700, color: color || t.accent, textTransform: "uppercase" as const, letterSpacing: "0.05em" });
   const vsep = { borderLeft: `1px solid ${t.border}`, paddingLeft: 20, marginLeft: 4 };
 
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+  // Grid area names: left (Athena+CC stacked), middle (Hermes with
+  // absorbed MAM Activity), stats (narrow right rail), actions
+  // (full-width bottom bar). Wide mode pins stats to a right column
+  // spanning both the content and actions rows; narrow mode wraps
+  // stats below the actions bar.
+  const gridStyle = wideMode
+    ? {
+        display: "grid",
+        gridTemplateColumns: "1fr 1fr 380px",
+        gridTemplateAreas: `"left middle stats" "actions actions stats"`,
+        gap: 10,
+        alignItems: "start" as const,
+      }
+    : {
+        display: "grid",
+        gridTemplateColumns: "1fr 1fr",
+        gridTemplateAreas: `"left middle" "actions actions" "stats stats"`,
+        gap: 10,
+        alignItems: "start" as const,
+      };
 
-      {/* ══════ ROW 1: Athena | Hermes ══════ */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+  const sectionHdr = { fontSize: 13, fontWeight: 600, color: t.td, textTransform: "uppercase" as const, marginBottom: 8, letterSpacing: "0.04em" };
+  const hsep = { height: 1, background: t.borderL, margin: "14px 0" };
+
+  return (
+    <div style={gridStyle}>
+
+      {/* ══════ LEFT COLUMN: Athena + Command Center ══════ */}
+      <div style={{ gridArea: "left", display: "flex", flexDirection: "column", gap: 10 }}>
 
         {/* ATHENA — ebook and audiobook sections stacked. Each has
             its own ownership percentage, progress bar, MAM metrics,
@@ -167,7 +205,7 @@ export default function UnifiedDashboard({ onNav }: Props) {
           />
           {audiobookStats && (
             <>
-              <div style={{ height: 1, background: t.borderL, margin: "14px 0" }} />
+              <div style={hsep} />
               <LibrarySection
                 stats={audiobookStats}
                 color={t.pur}
@@ -182,177 +220,180 @@ export default function UnifiedDashboard({ onNav }: Props) {
           )}
         </div>
 
-        {/* HERMES */}
-        <div style={{ background: t.bg2, border: `1px solid ${t.border}`, borderRadius: 12, padding: "16px 20px" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
-            <div style={{ flex: 1 }}>
-              <div style={hdr(t.jade)}><Dot color={t.jade} /> Hermes</div>
-              <div style={{ fontSize: 14, color: t.td, marginTop: 3 }}>
-                {health?.dispatcher_ready ? `${fmtNum(totalGrabs)} grabs · ${fmtNum(calibreAdds)} to Calibre` : "Starting…"}
-              </div>
-              <div style={{ display: "flex", gap: 18, marginTop: 14, flexWrap: "wrap", alignItems: "center" }}>
-                <Pill label="Dispatcher" ok={health?.dispatcher_ready} />
-                <Pill label="IRC" ok={health?.dispatcher_ready} />
-                <Pill label="Cookie" ok={mam?.validation_ok} warn={mam?.cookie_configured && !mam?.validation_ok} />
-                <Pill label="Watcher" ok={health?.dispatcher_ready} />
-                <div style={{ background: t.bg3, borderRadius: 8, padding: "8px 16px", display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ fontSize: 12, color: t.td, textTransform: "uppercase", fontWeight: 600 }}>Poll</span>
-                  <span style={{ fontSize: 20, fontWeight: 700, color: cd <= 5 ? t.accent : t.text2 }}>{cd}s</span>
-                </div>
-              </div>
-            </div>
-            {mam?.username && (
-              <div style={{ background: t.bg3, borderRadius: 10, padding: "14px 18px", textAlign: "right", minWidth: 190 }}>
-                <div style={{ fontSize: 13, color: t.td, textTransform: "uppercase", fontWeight: 600 }}>{mam.username}</div>
-                {mam.classname && <div style={{ fontSize: 12, color: t.tf }}>{mam.classname}</div>}
-                <div style={{ display: "flex", gap: 18, justifyContent: "flex-end", marginTop: 8 }}>
-                  {mam.ratio != null && <div><div style={{ fontSize: 26, fontWeight: 700, color: mam.ratio >= 1 ? t.ok : t.warn }}>{fmtRatio(mam.ratio)}</div><div style={{ fontSize: 12, color: t.td }}>Ratio</div></div>}
-                  {mam.wedges != null && <div><div style={{ fontSize: 26, fontWeight: 700, color: t.accent }}>{fmtNum(mam.wedges)}</div><div style={{ fontSize: 12, color: t.td }}>Wedges</div></div>}
-                </div>
-                {(mam.uploaded_bytes || mam.downloaded_bytes) && (
-                  <div style={{ fontSize: 12, color: t.tf, marginTop: 6 }}>↑ {fmtBytes(mam.uploaded_bytes)} · ↓ {fmtBytes(mam.downloaded_bytes)}</div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* ══════ ROW 2: MAM Activity ══════ */}
-      <div style={{ background: t.bg2, border: `1px solid ${t.border}`, borderRadius: 12, padding: "14px 20px" }}>
-        <div style={{ ...hdr(), marginBottom: 10 }}><Dot color={t.accent} /> MAM Activity</div>
-        <div style={{ display: "grid", gridTemplateColumns: "220px 1fr 1fr", gap: 0 }}>
-          {/* Snatch Budget */}
-          <div style={{ paddingRight: 16 }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: t.td, textTransform: "uppercase", marginBottom: 6 }}>Snatch Budget</div>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-              <span style={{ fontSize: 28, fontWeight: 700, color: (b.budget_used ?? 0) >= (b.budget_cap ?? 1) ? t.warn : t.accent }}>{b.budget_used ?? 0}</span>
-              <span style={{ fontSize: 14, color: t.td }}>/ {b.budget_cap ?? 0}</span>
-            </div>
-            <div style={{ fontSize: 12, color: t.td, marginTop: 3 }}>
-              {b.ledger_active ?? 0} active + {b.qbit_extras ?? 0} manual
-              {(b.queue_size ?? 0) > 0 && <span style={{ color: t.warn }}> · {b.queue_size} queued</span>}
-            </div>
-            {b.next_release_seconds > 0 && <div style={{ fontSize: 12, color: t.accent, marginTop: 4 }}>Next: {fmtDuration(b.next_release_seconds)}</div>}
-          </div>
-          {/* Recent Activity */}
-          <div style={{ ...vsep, paddingRight: 16, overflow: "hidden" }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: t.td, textTransform: "uppercase", marginBottom: 6 }}>Recent Activity</div>
-            {grabs.length > 0 ? grabs.slice(0, 5).map((g, i) => (
-              <div key={i} style={{ display: "flex", fontSize: 13, padding: "3px 0", borderBottom: i < 4 ? `1px solid ${t.borderL}` : "none", overflow: "hidden" }}>
-                <span style={{ color: t.text2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>{g.torrent_name}</span>
-                <span style={{ color: t.tf, marginLeft: 8, flexShrink: 0, fontSize: 11 }}>{g.grabbed_at ? new Date(g.grabbed_at + "Z").toLocaleDateString() : ""}</span>
-              </div>
-            )) : <div style={{ fontSize: 13, color: t.tf, fontStyle: "italic" }}>No recent grabs</div>}
-          </div>
-          {/* Seeding Progress */}
-          <div style={vsep}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: t.td, textTransform: "uppercase", marginBottom: 6 }}>Seeding Progress</div>
-            {b.entries?.length > 0 ? (
-              <div style={{ maxHeight: 120, overflowY: "auto" }}>
-                {b.entries.map((e, i) => {
-                  const sp = Math.min(100, (e.seeding_seconds / (b.seed_seconds_required || 1)) * 100);
-                  return (
-                    <div key={e.grab_id ?? i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0", borderBottom: `1px solid ${t.borderL}`, fontSize: 12 }}>
-                      {e.source === "external" && <span style={{ fontSize: 9, padding: "1px 4px", borderRadius: 3, background: t.td + "22", color: t.td, fontWeight: 600 }}>EXT</span>}
-                      <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: t.text2, minWidth: 0 }}>{e.torrent_name}</span>
-                      <div style={{ width: 70, height: 4, borderRadius: 2, background: t.bg4, flexShrink: 0 }}>
-                        <div style={{ width: `${sp}%`, height: "100%", borderRadius: 2, background: sp >= 100 ? t.ok : t.accent }} />
-                      </div>
-                      <span style={{ width: 50, textAlign: "right", color: t.tf, fontSize: 11, flexShrink: 0 }}>{e.remaining_seconds > 0 ? fmtDuration(e.remaining_seconds) : "done"}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : <div style={{ fontSize: 13, color: t.tf, fontStyle: "italic" }}>No active seeds</div>}
-          </div>
-        </div>
-      </div>
-
-      {/* ══════ ROW 3: Command Center | Quick Actions + Tools ══════ */}
-      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10 }}>
-
-        {/* Command Center */}
+        {/* COMMAND CENTER — triggers on top, progress rows below.
+            Restructured from the old 3-col (buttons | progress | last)
+            layout into a 2-row top/bottom so it reads cleanly at
+            half-dashboard width instead of being squeezed horizontally. */}
         <div style={{ background: t.bg2, border: `1px solid ${t.border}`, borderRadius: 12, padding: "16px 20px" }}>
           <div style={{ ...hdr(), marginBottom: 12 }}><Dot color={t.accent} /> Command Center</div>
-          <div style={{ display: "grid", gridTemplateColumns: "auto 1fr auto", gap: 0, alignItems: "stretch" }}>
-            {/* Trigger buttons */}
-            <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingRight: 18 }}>
-              {libScans.map(ls => {
-                const color = ls.content_type === "audiobook" ? t.pur : t.jade;
-                const shortLabel = ls.label?.replace(/\s*Sync$/, "") || ls.slug;
-                return (
-                  <CmdBtn
-                    key={ls.slug}
-                    label={<><Dot color={color} /> Sync {shortLabel}</>}
-                    busy={syncingSlug === ls.slug || ls.running}
-                    onClick={() => triggerSync(ls.slug)}
-                  />
-                );
-              })}
-              <CmdBtn label={<><Dot color={t.cyan} /> Scan Sources</>} busy={scanning || srcScan.running} onClick={triggerSources} />
-              <CmdBtn label={<><Dot color={t.ylw} /> MAM Scan</>} busy={mamScanning || mamScan.running} onClick={triggerMam} />
-              <div style={{ borderTop: `1px solid ${t.borderL}`, paddingTop: 8, marginTop: 4, display: "flex", flexDirection: "column", gap: 8 }}>
-                <CmdBtn label={`Review ${reviewCount ? `(${reviewCount})` : ""}`} highlight onClick={() => onNav("pipe-review")} />
-                <CmdBtn label={`New Authors ${tentativeCount ? `(${tentativeCount})` : ""}`} onClick={() => onNav("pipe-tentative")} />
-              </div>
-            </div>
-            {/* Progress display */}
-            <div style={{ ...vsep, paddingRight: 40 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: t.td, textTransform: "uppercase", marginBottom: 10 }}>Progress</div>
-              {libScans.map(ls => (
-                <ProgressRow key={ls.slug} label={ls.label || "Library Sync"} scan={ls} t={t} />
-              ))}
-              <ProgressRow label="Source Scan" scan={srcScan} t={t} onCancel={srcScan.running ? cancelSources : undefined} />
-              <ProgressRow label="MAM Scan" scan={mamScan} t={t} onCancel={mamScan.running ? cancelMam : undefined} />
-            </div>
-            {/* Scan stats summary */}
-            <div style={{ ...vsep, minWidth: 220 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: t.td, textTransform: "uppercase", marginBottom: 10 }}>Last Scan</div>
+          {/* Buttons row */}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
+            {libScans.map(ls => {
+              const color = ls.content_type === "audiobook" ? t.pur : t.jade;
+              const shortLabel = ls.label?.replace(/\s*Sync$/, "") || ls.slug;
+              return (
+                <CmdBtn
+                  key={ls.slug}
+                  label={<><Dot color={color} /> Sync {shortLabel}</>}
+                  busy={syncingSlug === ls.slug || ls.running}
+                  onClick={() => triggerSync(ls.slug)}
+                />
+              );
+            })}
+            <CmdBtn label={<><Dot color={t.cyan} /> Scan Sources</>} busy={scanning || srcScan.running} onClick={triggerSources} />
+            <CmdBtn label={<><Dot color={t.ylw} /> MAM Scan</>} busy={mamScanning || mamScan.running} onClick={triggerMam} />
+            <CmdBtn label={`Review ${reviewCount ? `(${reviewCount})` : ""}`} highlight onClick={() => onNav("pipe-review")} />
+            <CmdBtn label={`New Authors ${tentativeCount ? `(${tentativeCount})` : ""}`} onClick={() => onNav("pipe-tentative")} />
+          </div>
+          {/* Progress below */}
+          <div style={sectionHdr}>Progress</div>
+          {libScans.map(ls => (
+            <ProgressRow key={ls.slug} label={ls.label || "Library Sync"} scan={ls} t={t} />
+          ))}
+          <ProgressRow label="Source Scan" scan={srcScan} t={t} onCancel={srcScan.running ? cancelSources : undefined} />
+          <ProgressRow label="MAM Scan" scan={mamScan} t={t} onCancel={mamScan.running ? cancelMam : undefined} />
+          {/* Last-scan summary inline, below the progress rows */}
+          {(srcScan.extra?.new_books != null || (srcScan.extra?.source_timeouts && Object.keys(srcScan.extra.source_timeouts).length > 0)) && (
+            <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${t.borderL}` }}>
               {srcScan.status === "complete" && srcScan.extra?.source_timeouts && Object.keys(srcScan.extra.source_timeouts).length > 0 ? (
                 <div style={{ fontSize: 13, color: t.warn }}>
                   {Object.entries(srcScan.extra.source_timeouts).map(([src, sec]) => (
-                    <div key={src}>{src}: timed out ({sec}s)</div>
+                    <div key={src}>{src}: timed out ({sec as any}s)</div>
                   ))}
                 </div>
-              ) : srcScan.extra?.new_books != null ? (
-                <div style={{ fontSize: 15, color: t.text2 }}>
-                  <div>{srcScan.current ?? 0} authors checked</div>
-                  <div style={{ color: t.jade, fontSize: 18, fontWeight: 600, marginTop: 5 }}>{srcScan.extra.new_books ?? 0} new books</div>
-                </div>
               ) : (
-                <div style={{ fontSize: 13, color: t.tf, fontStyle: "italic" }}>No recent scan</div>
+                <div style={{ fontSize: 13, color: t.text2 }}>
+                  <span style={{ color: t.td }}>Last source scan: </span>
+                  {srcScan.current ?? 0} authors checked · <span style={{ color: t.jade, fontWeight: 600 }}>{srcScan.extra?.new_books ?? 0} new books</span>
+                </div>
               )}
             </div>
+          )}
+        </div>
+      </div>
+
+      {/* ══════ MIDDLE COLUMN: Hermes (expanded) ══════ */}
+      {/* Absorbs the former MAM Activity row. Top subsection keeps the
+          existing header + status pills + username card; below the
+          divider sit Snatch Budget, Recent Activity, and Seeding
+          Progress as stacked mini-sections. Widget is tall (roughly
+          Athena+CC combined height) which matches the sketch. */}
+      <div style={{ gridArea: "middle", background: t.bg2, border: `1px solid ${t.border}`, borderRadius: 12, padding: "16px 20px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+          <div style={{ flex: 1 }}>
+            <div style={hdr(t.jade)}><Dot color={t.jade} /> Hermes</div>
+            <div style={{ fontSize: 14, color: t.td, marginTop: 3 }}>
+              {health?.dispatcher_ready ? `${fmtNum(totalGrabs)} grabs · ${fmtNum(calibreAdds)} to Calibre` : "Starting…"}
+            </div>
+            <div style={{ display: "flex", gap: 18, marginTop: 14, flexWrap: "wrap", alignItems: "center" }}>
+              <Pill label="Dispatcher" ok={health?.dispatcher_ready} />
+              <Pill label="IRC" ok={health?.dispatcher_ready} />
+              <Pill label="Cookie" ok={mam?.validation_ok} warn={mam?.cookie_configured && !mam?.validation_ok} />
+              <Pill label="Watcher" ok={health?.dispatcher_ready} />
+              <div style={{ background: t.bg3, borderRadius: 8, padding: "8px 16px", display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 12, color: t.td, textTransform: "uppercase", fontWeight: 600 }}>Poll</span>
+                <span style={{ fontSize: 20, fontWeight: 700, color: cd <= 5 ? t.accent : t.text2 }}>{cd}s</span>
+              </div>
+            </div>
+          </div>
+          {mam?.username && (
+            <div style={{ background: t.bg3, borderRadius: 10, padding: "14px 18px", textAlign: "right", minWidth: 190 }}>
+              <div style={{ fontSize: 13, color: t.td, textTransform: "uppercase", fontWeight: 600 }}>{mam.username}</div>
+              {mam.classname && <div style={{ fontSize: 12, color: t.tf }}>{mam.classname}</div>}
+              <div style={{ display: "flex", gap: 18, justifyContent: "flex-end", marginTop: 8 }}>
+                {mam.ratio != null && <div><div style={{ fontSize: 26, fontWeight: 700, color: mam.ratio >= 1 ? t.ok : t.warn }}>{fmtRatio(mam.ratio)}</div><div style={{ fontSize: 12, color: t.td }}>Ratio</div></div>}
+                {mam.wedges != null && <div><div style={{ fontSize: 26, fontWeight: 700, color: t.accent }}>{fmtNum(mam.wedges)}</div><div style={{ fontSize: 12, color: t.td }}>Wedges</div></div>}
+              </div>
+              {(mam.uploaded_bytes || mam.downloaded_bytes) && (
+                <div style={{ fontSize: 12, color: t.tf, marginTop: 6 }}>↑ {fmtBytes(mam.uploaded_bytes)} · ↓ {fmtBytes(mam.downloaded_bytes)}</div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div style={hsep} />
+
+        {/* Snatch Budget */}
+        <div>
+          <div style={sectionHdr}>Snatch Budget</div>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+            <span style={{ fontSize: 32, fontWeight: 700, color: (b.budget_used ?? 0) >= (b.budget_cap ?? 1) ? t.warn : t.accent }}>{b.budget_used ?? 0}</span>
+            <span style={{ fontSize: 16, color: t.td }}>/ {b.budget_cap ?? 0}</span>
+            {b.next_release_seconds > 0 && <span style={{ fontSize: 13, color: t.accent, marginLeft: 12 }}>Next release in {fmtDuration(b.next_release_seconds)}</span>}
+          </div>
+          <div style={{ fontSize: 13, color: t.td, marginTop: 4 }}>
+            {b.ledger_active ?? 0} active + {b.qbit_extras ?? 0} manual
+            {(b.queue_size ?? 0) > 0 && <span style={{ color: t.warn }}> · {b.queue_size} queued</span>}
           </div>
         </div>
 
-        {/* Quick Actions + Tools */}
-        <div style={{ background: t.bg2, border: `1px solid ${t.border}`, borderRadius: 12, padding: "14px 18px", display: "flex", flexDirection: "column" }}>
-          <div style={{ ...hdr(), marginBottom: 10 }}><Dot color={t.accent} /> Quick Actions</div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, flex: 1 }}>
-            <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: t.tf, textTransform: "uppercase", marginBottom: 2 }}>Discovery</div>
-              <QBtn label=<><Dot color={t.accent} /> Library</> onClick={() => onNav("disc-library")} />
-              <QBtn label=<><Dot color={t.accent} /> Authors</> onClick={() => onNav("disc-authors")} />
-              <QBtn label=<><Dot color={t.ylw} /> Missing</> onClick={() => onNav("disc-missing")} />
-              <QBtn label=<><Dot color={t.cyan} /> Upcoming</> onClick={() => onNav("disc-upcoming")} />
-              <QBtn label=<><Dot color={t.jade} /> MAM Search</> onClick={() => onNav("disc-mam")} />
-              <QBtn label=<><Dot color={t.pur} /> Suggestions</> onClick={() => onNav("disc-suggestions")} />
+        <div style={hsep} />
+
+        {/* Recent Activity */}
+        <div>
+          <div style={sectionHdr}>Recent Activity</div>
+          {grabs.length > 0 ? grabs.slice(0, 5).map((g, i) => (
+            <div key={i} style={{ display: "flex", fontSize: 13, padding: "4px 0", borderBottom: i < 4 ? `1px solid ${t.borderL}` : "none", overflow: "hidden" }}>
+              <span style={{ color: t.text2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, minWidth: 0 }}>{g.torrent_name}</span>
+              <span style={{ color: t.tf, marginLeft: 10, flexShrink: 0, fontSize: 12 }}>{g.grabbed_at ? new Date(g.grabbed_at + "Z").toLocaleDateString() : ""}</span>
             </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: t.tf, textTransform: "uppercase", marginBottom: 2 }}>Pipeline</div>
-              <QBtn label={`Review ${reviewCount ? `(${reviewCount})` : ""}`} primary onClick={() => onNav("pipe-review")} />
-              <QBtn label=<><Dot color={t.warn} /> New Authors</> onClick={() => onNav("pipe-tentative")} />
-              <QBtn label=<><Dot color={t.td} /> Weekly Ignored</> onClick={() => onNav("pipe-ignored")} />
-              <QBtn label=<><Dot color={t.td} /> Author Lists</> onClick={() => onNav("pipe-authors")} />
-              <QBtn label=<><Dot color={t.td} /> Filters</> onClick={() => onNav("filters")} />
-              <QBtn label=<><Dot color={t.td} /> Delayed</> onClick={() => onNav("pipe-delayed")} />
+          )) : <div style={{ fontSize: 13, color: t.tf, fontStyle: "italic" }}>No recent grabs</div>}
+        </div>
+
+        <div style={hsep} />
+
+        {/* Seeding Progress */}
+        <div>
+          <div style={sectionHdr}>Seeding Progress</div>
+          {b.entries?.length > 0 ? (
+            <div style={{ maxHeight: 180, overflowY: "auto" }}>
+              {b.entries.map((e, i) => {
+                const sp = Math.min(100, (e.seeding_seconds / (b.seed_seconds_required || 1)) * 100);
+                return (
+                  <div key={e.grab_id ?? i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", borderBottom: `1px solid ${t.borderL}`, fontSize: 12 }}>
+                    {e.source === "external" && <span style={{ fontSize: 9, padding: "1px 5px", borderRadius: 3, background: t.td + "22", color: t.td, fontWeight: 600 }}>EXT</span>}
+                    <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: t.text2, minWidth: 0 }}>{e.torrent_name}</span>
+                    <div style={{ width: 80, height: 4, borderRadius: 2, background: t.bg4, flexShrink: 0 }}>
+                      <div style={{ width: `${sp}%`, height: "100%", borderRadius: 2, background: sp >= 100 ? t.ok : t.accent }} />
+                    </div>
+                    <span style={{ width: 55, textAlign: "right", color: t.tf, fontSize: 11, flexShrink: 0 }}>{e.remaining_seconds > 0 ? fmtDuration(e.remaining_seconds) : "done"}</span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : <div style={{ fontSize: 13, color: t.tf, fontStyle: "italic" }}>No active seeds</div>}
+        </div>
+      </div>
+
+      {/* ══════ ACTIONS BAR: Quick Actions + Tools (full-width) ══════ */}
+      <div style={{ gridArea: "actions", background: t.bg2, border: `1px solid ${t.border}`, borderRadius: 12, padding: "14px 20px" }}>
+        <div style={{ display: "flex", gap: 20, alignItems: "flex-start", flexWrap: "wrap" }}>
+          <div style={{ flex: 2, minWidth: 280 }}>
+            <div style={{ ...sectionHdr }}>Discovery</div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <QBtn label={<><Dot color={t.accent} /> Library</>} onClick={() => onNav("disc-library")} />
+              <QBtn label={<><Dot color={t.accent} /> Authors</>} onClick={() => onNav("disc-authors")} />
+              <QBtn label={<><Dot color={t.ylw} /> Missing</>} onClick={() => onNav("disc-missing")} />
+              <QBtn label={<><Dot color={t.cyan} /> Upcoming</>} onClick={() => onNav("disc-upcoming")} />
+              <QBtn label={<><Dot color={t.jade} /> MAM Search</>} onClick={() => onNav("disc-mam")} />
+              <QBtn label={<><Dot color={t.pur} /> Suggestions</>} onClick={() => onNav("disc-suggestions")} />
+              <QBtn label={<><Dot color={t.accent} /> Works</>} onClick={() => onNav("works")} />
             </div>
           </div>
-          <div style={{ borderTop: `1px solid ${t.borderL}`, paddingTop: 10, marginTop: 10 }}>
-            <div style={{ fontSize: 11, fontWeight: 600, color: t.td, textTransform: "uppercase", marginBottom: 8, textAlign: "center" }}>Tools</div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
+          <div style={{ flex: 2, minWidth: 280, borderLeft: wideMode ? `1px solid ${t.border}` : "none", paddingLeft: wideMode ? 20 : 0 }}>
+            <div style={sectionHdr}>Pipeline</div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <QBtn label={`Review ${reviewCount ? `(${reviewCount})` : ""}`} primary onClick={() => onNav("pipe-review")} />
+              <QBtn label={<><Dot color={t.warn} /> New Authors</>} onClick={() => onNav("pipe-tentative")} />
+              <QBtn label={<><Dot color={t.td} /> Weekly Ignored</>} onClick={() => onNav("pipe-ignored")} />
+              <QBtn label={<><Dot color={t.td} /> Author Lists</>} onClick={() => onNav("pipe-authors")} />
+              <QBtn label={<><Dot color={t.td} /> Filters</>} onClick={() => onNav("filters")} />
+              <QBtn label={<><Dot color={t.td} /> Delayed</>} onClick={() => onNav("pipe-delayed")} />
+            </div>
+          </div>
+          <div style={{ flex: 1, minWidth: 240, borderLeft: `1px solid ${t.border}`, paddingLeft: 20 }}>
+            <div style={sectionHdr}>Tools</div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               <TBtn icon={<Bar color={t.ylw} />} label="Migration" onClick={() => onNav("pipe-migration")} />
               <TBtn icon={<Bar color={t.cyan} />} label="MAM" onClick={() => onNav("pipe-mam")} />
               <TBtn icon={<Bar color={t.tf} />} label="Logs" onClick={() => onNav("logs")} />
@@ -362,31 +403,47 @@ export default function UnifiedDashboard({ onNav }: Props) {
         </div>
       </div>
 
-      {/* ══════ ROW 4: Seshat Stats (full width) ══════ */}
-      <div style={{ background: t.bg2, border: `1px solid ${t.border}`, borderRadius: 12, padding: "14px 20px" }}>
-        <div style={{ ...hdr(), marginBottom: 10 }}><Dot color={t.accent} /> Seshat Stats</div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 10 }}>
-          <Tile label="Ebooks Owned" value={fmtNum(owned)} color={t.accent} sub="Ebook" onClick={() => onNav("disc-library")} />
-          <Tile label="Missing Ebooks" value={fmtNum(missing)} color={t.ylw} sub="Ebook" onClick={() => onNav("disc-missing")} />
-          <Tile label="New Ebooks" value={fmtNum(newBooks)} color={t.jade} sub="Ebook" />
-          <Tile label="Upcoming" value={fmtNum(upcoming)} color={t.cyan} sub="Ebook" onClick={() => onNav("disc-upcoming")} />
-          <Tile label="Library Authors" value={fmtNum(authors)} sub="Ebook" onClick={() => onNav("disc-authors")} />
-          <Tile label="Series" value={fmtNum(series)} sub="Ebook" />
-          <Tile label="Suggestions" value={fmtNum(ds.suggestions ?? 0)} color={t.pur} sub="Ebook" onClick={() => onNav("disc-suggestions")} />
-          {audiobookStats && (
-            <>
-              <Tile label="Audiobooks Owned" value={fmtNum(audiobookStats.owned_books ?? 0)} color={t.pur} sub="Audiobook" onClick={() => onNav("disc-library")} />
-              <Tile label="Listening Hours" value={fmtNum(Math.round((audiobookStats.total_duration_sec ?? 0) / 3600))} color={t.pur} sub="Audiobook" />
-              <Tile label="Narrators" value={fmtNum(audiobookStats.narrator_count ?? 0)} color={t.pur} sub="Audiobook" />
-              <Tile label="Unabridged" value={fmtNum(audiobookStats.unabridged_count ?? 0)} color={t.jade} sub="Audiobook" />
-            </>
-          )}
-          <Tile label="To Review" value={reviewCount} color={(reviewCount ?? 0) > 0 ? t.accent : t.td} sub="Pipeline" onClick={() => onNav("pipe-review")} />
-          <Tile label="New Authors" value={tentativeCount} color={(tentativeCount ?? 0) > 0 ? t.warn : t.td} sub="Pipeline" onClick={() => onNav("pipe-tentative")} />
-          <Tile label="Allowed Authors" value={fmtNum(allowed)} color={t.ok} sub="Pipeline" onClick={() => onNav("pipe-authors")} />
-          <Tile label="Ignored Authors" value={fmtNum(ignored)} color={t.red} sub="Pipeline" onClick={() => onNav("pipe-authors")} />
-          <Tile label="To Calibre" value={fmtNum(calibreAdds)} color={t.ok} sub="Pipeline" />
-          <Tile label="Total Grabs" value={fmtNum(totalGrabs)} sub="Pipeline" />
+      {/* ══════ SESHAT STATS: right rail on wide, wraps below on narrow ══════ */}
+      {/* Tiles are grouped into Ebook / Audiobook / Pipeline sections
+          with sub-headers so the narrow column reads as three short
+          stacks instead of one long run. Stays in a 2-col grid inside
+          the rail — a single column would be too tall; 3+ would be
+          too cramped at ~380px. When wrapped below the actions bar
+          (narrow viewport) it widens to 4 columns for density. */}
+      <div style={{ gridArea: "stats", background: t.bg2, border: `1px solid ${t.border}`, borderRadius: 12, padding: "16px 20px" }}>
+        <div style={{ ...hdr(), marginBottom: 12 }}><Dot color={t.accent} /> Seshat Stats</div>
+
+        <div style={sectionHdr}>Ebook</div>
+        <div style={{ display: "grid", gridTemplateColumns: wideMode ? "repeat(2, 1fr)" : "repeat(4, 1fr)", gap: 8, marginBottom: 14 }}>
+          <Tile label="Owned" value={fmtNum(owned)} color={t.accent} onClick={() => onNav("disc-library")} />
+          <Tile label="Missing" value={fmtNum(missing)} color={t.ylw} onClick={() => onNav("disc-missing")} />
+          <Tile label="New" value={fmtNum(newBooks)} color={t.jade} />
+          <Tile label="Upcoming" value={fmtNum(upcoming)} color={t.cyan} onClick={() => onNav("disc-upcoming")} />
+          <Tile label="Authors" value={fmtNum(authors)} onClick={() => onNav("disc-authors")} />
+          <Tile label="Series" value={fmtNum(series)} />
+          <Tile label="Suggestions" value={fmtNum(ds.suggestions ?? 0)} color={t.pur} onClick={() => onNav("disc-suggestions")} />
+        </div>
+
+        {audiobookStats && (
+          <>
+            <div style={sectionHdr}>Audiobook</div>
+            <div style={{ display: "grid", gridTemplateColumns: wideMode ? "repeat(2, 1fr)" : "repeat(4, 1fr)", gap: 8, marginBottom: 14 }}>
+              <Tile label="Owned" value={fmtNum(audiobookStats.owned_books ?? 0)} color={t.pur} onClick={() => onNav("disc-library")} />
+              <Tile label="Hours" value={fmtNum(Math.round((audiobookStats.total_duration_sec ?? 0) / 3600))} color={t.pur} />
+              <Tile label="Narrators" value={fmtNum(audiobookStats.narrator_count ?? 0)} color={t.pur} />
+              <Tile label="Unabridged" value={fmtNum(audiobookStats.unabridged_count ?? 0)} color={t.jade} />
+            </div>
+          </>
+        )}
+
+        <div style={sectionHdr}>Pipeline</div>
+        <div style={{ display: "grid", gridTemplateColumns: wideMode ? "repeat(2, 1fr)" : "repeat(4, 1fr)", gap: 8 }}>
+          <Tile label="To Review" value={reviewCount} color={(reviewCount ?? 0) > 0 ? t.accent : t.td} onClick={() => onNav("pipe-review")} />
+          <Tile label="New Authors" value={tentativeCount} color={(tentativeCount ?? 0) > 0 ? t.warn : t.td} onClick={() => onNav("pipe-tentative")} />
+          <Tile label="Allowed" value={fmtNum(allowed)} color={t.ok} onClick={() => onNav("pipe-authors")} />
+          <Tile label="Ignored" value={fmtNum(ignored)} color={t.red} onClick={() => onNav("pipe-authors")} />
+          <Tile label="To Calibre" value={fmtNum(calibreAdds)} color={t.ok} />
+          <Tile label="Total Grabs" value={fmtNum(totalGrabs)} />
         </div>
       </div>
     </div>
