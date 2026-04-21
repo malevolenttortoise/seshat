@@ -285,11 +285,23 @@ async def re_enrich(review_id: int, body: SaveRequest) -> ReviewItem:
         grab = await grabs_storage.get_grab(db, row.grab_id)
         mam_torrent_id = grab.mam_torrent_id if grab else ""
 
+        # Route audiobook re-enrichment through the audiobook priority
+        # list (Audible + Audnexus first) so narrator / duration / ASIN
+        # come from the audiobook-aware sources. Without this flag the
+        # enricher uses the ebook priority and Goodreads tends to
+        # short-circuit at confidence 1.00 before Audible gets a chance.
+        from app.orchestrator.pipeline import _is_audiobook_grab
+        grab_category = grab.category if grab else ""
+        is_audiobook = _is_audiobook_grab(
+            row.book_format or "", grab_category,
+        )
+
         result = await enricher.enrich(
             title=title,
             author=author,
             mam_torrent_id=mam_torrent_id,
             mam_token=_get_mam_token(),
+            audiobook=is_audiobook,
         )
 
         if result is None:
