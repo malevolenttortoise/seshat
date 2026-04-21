@@ -28,10 +28,62 @@ _log = logging.getLogger("seshat.orchestrator.file_copier")
 # Recognized book file extensions (lowercase, no dot).
 BOOK_EXTENSIONS = frozenset({
     "epub", "mobi", "azw", "azw3", "pdf",
-    "m4b", "mp3",           # audiobook formats
+    "m4b", "mp3", "m4a",    # audiobook formats
     "cbz", "cbr",           # comics
     "lit", "fb2", "djvu",
 })
+
+# Audiobook extensions the priority list can reorder. Anything not
+# in this set is untouched by priority-sorting.
+_AUDIOBOOK_EXTENSIONS = frozenset({"m4b", "m4a", "mp3", "aax", "aa"})
+
+
+def _apply_audiobook_priority(
+    files: list[Path],
+    audiobook_priority: Optional[list[str]] = None,
+) -> list[Path]:
+    """Re-rank a file list so the preferred audiobook format lands first.
+
+    Baseline sort (largest-first) is preserved for non-audiobook
+    files and for files within the same audiobook format. Only the
+    between-format ordering changes.
+
+    When `audiobook_priority` is None or empty, returns `files`
+    unchanged. When a torrent contains no audiobook files at all,
+    this is a no-op regardless of the priority list — ebook-only
+    releases don't care about m4b/mp3 ordering.
+
+    Implementation: stable sort with a key that gives audiobook
+    files a (priority_rank, -size) pair, and non-audiobook files
+    a (huge_rank, -size) pair. `sorted` is stable so files within
+    the same format keep their original largest-first order.
+    """
+    if not audiobook_priority or not files:
+        return files
+    priority = [
+        str(p).lstrip(".").lower() for p in audiobook_priority if p
+    ]
+    rank_of = {ext: i for i, ext in enumerate(priority)}
+    has_audio = any(
+        f.suffix.lstrip(".").lower() in _AUDIOBOOK_EXTENSIONS for f in files
+    )
+    if not has_audio:
+        return files
+    # Sentinel rank for extensions missing from the priority list —
+    # they land after every ranked format but before non-audiobook
+    # files (which keep the huge sentinel below).
+    unranked_audio = len(priority)
+    non_audio = unranked_audio + 1
+
+    def _key(p: Path) -> tuple[int, int]:
+        ext = p.suffix.lstrip(".").lower()
+        if ext in rank_of:
+            return (rank_of[ext], 0)
+        if ext in _AUDIOBOOK_EXTENSIONS:
+            return (unranked_audio, 0)
+        return (non_audio, 0)
+
+    return sorted(files, key=_key)
 
 
 @dataclass(frozen=True)
@@ -46,11 +98,19 @@ class CopyResult:
     error: Optional[str] = None
 
 
-def find_book_files(source_dir: Path) -> list[Path]:
+def find_book_files(
+    source_dir: Path,
+    *,
+    audiobook_priority: Optional[list[str]] = None,
+) -> list[Path]:
     """Find all book files in a directory tree.
 
-    Returns files sorted by size descending (largest first) so the
-    caller can use [0] as the "primary" file.
+    Primary sort is size descending (largest-first). When
+    `audiobook_priority` is provided and the torrent contains
+    audiobook files, a second pass reorders so the user's preferred
+    format lands first — covers mixed-format bundles where Seshat
+    would otherwise pick whichever single file happened to be
+    largest regardless of extension.
     """
     if not source_dir.exists():
         return []
@@ -66,7 +126,8 @@ def find_book_files(source_dir: Path) -> list[Path]:
             if ext in BOOK_EXTENSIONS:
                 found.append(path)
 
-    return sorted(found, key=lambda p: p.stat().st_size, reverse=True)
+    by_size = sorted(found, key=lambda p: p.stat().st_size, reverse=True)
+    return _apply_audiobook_priority(by_size, audiobook_priority)
 
 
 def copy_to_staging(
@@ -75,6 +136,7 @@ def copy_to_staging(
     torrent_name: str,
     *,
     explicit_files: Optional[list[Path]] = None,
+    audiobook_priority: Optional[list[str]] = None,
 ) -> CopyResult:
     """Copy book files from source to staging.
 
@@ -84,6 +146,11 @@ def copy_to_staging(
     the save_path also contains files from other torrents. Without
     it, `source_dir` is scanned recursively (legacy behavior used
     when the client can't report its file list).
+
+    `audiobook_priority` (optional) lets mixed-format torrents pick
+    a preferred audiobook extension for the primary file — the
+    baseline largest-first sort runs first, then a stable re-rank
+    promotes files whose extension appears earlier in the priority.
 
     Creates a subdirectory under staging_dir named after the torrent.
     Returns info about the primary (largest) book file.
@@ -103,13 +170,16 @@ def copy_to_staging(
             # Filter the explicit list to existing book-format files
             # and sort largest-first so the primary selection matches
             # the find_book_files ordering.
-            book_files = sorted(
+            by_size = sorted(
                 [p for p in explicit_files
                  if p.is_file() and p.suffix.lstrip(".").lower() in BOOK_EXTENSIONS],
                 key=lambda p: p.stat().st_size, reverse=True,
             )
+            book_files = _apply_audiobook_priority(by_size, audiobook_priority)
         else:
-            book_files = find_book_files(source_dir)
+            book_files = find_book_files(
+                source_dir, audiobook_priority=audiobook_priority,
+            )
         if not book_files:
             return CopyResult(
                 success=False,

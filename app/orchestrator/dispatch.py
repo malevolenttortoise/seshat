@@ -157,6 +157,11 @@ class DispatcherDeps:
     # to 0 for tests / backward compat (no filter); production sets it
     # from settings at dispatcher-build time.
     qbit_orphan_adoption_since: float = 0.0
+    # Audiobook format priority — ordered list like ["m4b", "m4a",
+    # "mp3"]. Used by file_copier to pick the primary file in
+    # mixed-format torrents. None/empty disables the priority sort
+    # (largest-file wins, which matches pre-Phase-7 behaviour).
+    audiobook_format_priority: list[str] = field(default_factory=list)
 
     # Tier 4 metadata enrichment. The enricher instance is built
     # at startup from settings and passed through here so the

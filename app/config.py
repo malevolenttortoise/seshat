@@ -307,6 +307,17 @@ DEFAULT_SETTINGS = {
     # or "both". "both" = owning either format satisfies ownership.
     # Per-author overrides live on the authors row (Phase 2+).
     "audiobook_tracking_mode": "both",
+    # Audiobook format priority. When a torrent contains multiple
+    # audio formats (rare — most audiobook releases stick to one),
+    # the pipeline picks the primary file from the format listed
+    # earliest. Default matches the industry preference:
+    #   m4b — single-file with embedded chapters (best)
+    #   m4a — single-file, no chapters
+    #   mp3 — multi-part legacy format
+    # Within the chosen format, the largest file still wins (same
+    # as the baseline behaviour). No effect on single-format
+    # torrents — the setting only matters on mixed-format bundles.
+    "audiobook_format_priority": ["m4b", "m4a", "mp3"],
 
     # ── Calibre integration ─────────────────────────────────
     "calibre_library_path": "",

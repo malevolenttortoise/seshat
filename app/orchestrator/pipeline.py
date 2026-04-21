@@ -171,6 +171,7 @@ async def process_completion(
     per_event_notifications: bool = False,
     metadata_enricher: Optional[MetadataEnricher] = None,
     torrent_files: Optional[list[str]] = None,
+    audiobook_format_priority: Optional[list[str]] = None,
 ) -> bool:
     """Drive one completed download through the pipeline.
 
@@ -195,6 +196,7 @@ async def process_completion(
             ntfy_url=ntfy_url, ntfy_topic=ntfy_topic,
             metadata_enricher=metadata_enricher,
             torrent_files=torrent_files,
+            audiobook_format_priority=audiobook_format_priority,
         )
         if prep is None:
             return False
@@ -294,6 +296,7 @@ async def _prepare_book(
     ntfy_topic: str,
     metadata_enricher: Optional[MetadataEnricher] = None,
     torrent_files: Optional[list[str]] = None,
+    audiobook_format_priority: Optional[list[str]] = None,
 ) -> Optional[_PreparedBook]:
     """Steps 1-4: locate file, optional staging, metadata, patch.
 
@@ -331,7 +334,16 @@ async def _prepare_book(
         if matched_paths:
             # Sort for deterministic primary selection when a torrent
             # carries multiple book files (e.g. bundle / omnibus pack).
-            book_files = sorted(matched_paths, key=lambda p: p.name.lower())
+            # Secondary pass applies the user's audiobook format
+            # priority (mixed-format bundles pick the preferred
+            # extension first; single-format is a no-op).
+            from app.orchestrator.file_copier import (
+                _apply_audiobook_priority,
+            )
+            book_files = _apply_audiobook_priority(
+                sorted(matched_paths, key=lambda p: p.name.lower()),
+                audiobook_format_priority,
+            )
             # `source` is a representative directory for logging +
             # staging copy fallback. Prefer the common parent when
             # every matched file shares one; otherwise use save_path.
@@ -356,7 +368,13 @@ async def _prepare_book(
                 return None
             fallback_source = matched
         source = fallback_source
-        book_files = await loop.run_in_executor(None, find_book_files, source)
+        book_files = await loop.run_in_executor(
+            None,
+            functools.partial(
+                find_book_files, source,
+                audiobook_priority=audiobook_format_priority,
+            ),
+        )
 
     if not book_files:
         await _fail(db, run_id, event,
@@ -386,6 +404,7 @@ async def _prepare_book(
                 copy_to_staging,
                 source, Path(staging_path), event.torrent_name,
                 explicit_files=explicit,
+                audiobook_priority=audiobook_format_priority,
             ),
         )
         if not copy_result.success:

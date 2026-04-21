@@ -141,3 +141,82 @@ class TestCopyToStaging:
         # Original file must still exist (for seeding).
         assert original.exists()
         assert original.stat().st_size == 300
+
+
+class TestAudiobookFormatPriority:
+    """Phase 7: primary-file selection honours the user's audiobook
+    format preference when a torrent contains multiple formats."""
+
+    def test_m4b_preferred_over_mp3_when_ranked_first(self, tmp_path):
+        _create_file(tmp_path / "audiobook.mp3", size=500)
+        _create_file(tmp_path / "audiobook.m4b", size=100)
+        files = find_book_files(
+            tmp_path, audiobook_priority=["m4b", "m4a", "mp3"],
+        )
+        # m4b wins despite being smaller — priority overrides size.
+        assert files[0].name == "audiobook.m4b"
+        assert files[1].name == "audiobook.mp3"
+
+    def test_no_priority_falls_back_to_size(self, tmp_path):
+        _create_file(tmp_path / "audiobook.mp3", size=500)
+        _create_file(tmp_path / "audiobook.m4b", size=100)
+        files = find_book_files(tmp_path)
+        assert files[0].name == "audiobook.mp3"
+
+    def test_empty_priority_falls_back_to_size(self, tmp_path):
+        _create_file(tmp_path / "audiobook.mp3", size=500)
+        _create_file(tmp_path / "audiobook.m4b", size=100)
+        files = find_book_files(tmp_path, audiobook_priority=[])
+        assert files[0].name == "audiobook.mp3"
+
+    def test_largest_file_wins_within_same_format(self, tmp_path):
+        _create_file(tmp_path / "part01.mp3", size=100)
+        _create_file(tmp_path / "part05.mp3", size=500)
+        _create_file(tmp_path / "part03.mp3", size=300)
+        files = find_book_files(
+            tmp_path, audiobook_priority=["m4b", "m4a", "mp3"],
+        )
+        assert files[0].name == "part05.mp3"
+
+    def test_noop_for_pure_ebook_torrent(self, tmp_path):
+        """A folder of only epubs doesn't care about audiobook priority."""
+        _create_file(tmp_path / "small.epub", size=100)
+        _create_file(tmp_path / "large.epub", size=500)
+        files = find_book_files(
+            tmp_path, audiobook_priority=["m4b", "m4a", "mp3"],
+        )
+        assert files[0].name == "large.epub"
+
+    def test_audiobook_ext_missing_from_priority_ranked_after(self, tmp_path):
+        """An audiobook file whose extension isn't in the priority
+        list lands after ranked formats but before non-audio."""
+        _create_file(tmp_path / "book.mp3", size=100)
+        _create_file(tmp_path / "book.m4a", size=500)
+        # Priority only mentions m4b + mp3 — m4a unranked.
+        files = find_book_files(
+            tmp_path, audiobook_priority=["m4b", "mp3"],
+        )
+        assert files[0].name == "book.mp3"    # ranked in priority
+        assert files[1].name == "book.m4a"    # unranked audio
+
+    def test_m4a_preferred_when_listed_first(self, tmp_path):
+        _create_file(tmp_path / "book.mp3", size=500)
+        _create_file(tmp_path / "book.m4a", size=100)
+        files = find_book_files(
+            tmp_path, audiobook_priority=["m4a", "m4b", "mp3"],
+        )
+        assert files[0].name == "book.m4a"
+
+    def test_copy_to_staging_honours_priority(self, tmp_path):
+        source = tmp_path / "src"
+        staging = tmp_path / "stage"
+        _create_file(source / "book.mp3", size=500)
+        _create_file(source / "book.m4b", size=100)
+        result = copy_to_staging(
+            source, staging, "Book",
+            audiobook_priority=["m4b", "mp3"],
+        )
+        assert result.success
+        # Primary (the file returned as book_filename) should be
+        # the m4b even though it's smaller.
+        assert result.book_filename == "book.m4b"

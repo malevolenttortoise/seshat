@@ -47,6 +47,62 @@ function STog({ on, onToggle, disabled, label }: { on: boolean; onToggle: () => 
   );
 }
 
+// Drag-reorder list for small ordered string sets (audiobook format
+// priority is the first caller; others could follow). Uses native
+// HTML5 DnD — no library — matching the Metadata Sources panel.
+function FormatPriorityList({ value, onChange }: {
+  value: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const t = useTheme();
+  const [dragItem, setDragItem] = useState<string | null>(null);
+  const [hoverItem, setHoverItem] = useState<string | null>(null);
+
+  const move = (item: string, target: string) => {
+    if (item === target) return;
+    const next = value.filter(v => v !== item);
+    const idx = next.indexOf(target);
+    next.splice(idx, 0, item);
+    onChange(next);
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4, width: 280 }}>
+      {value.map((fmt, i) => {
+        const isDragging = dragItem === fmt;
+        const isHover = hoverItem === fmt;
+        return (
+          <div
+            key={fmt}
+            draggable
+            onDragStart={(e) => { setDragItem(fmt); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", fmt); }}
+            onDragOver={(e) => { if (dragItem && dragItem !== fmt) { e.preventDefault(); setHoverItem(fmt); } }}
+            onDragLeave={() => setHoverItem(null)}
+            onDrop={(e) => { e.preventDefault(); if (dragItem) move(dragItem, fmt); setDragItem(null); setHoverItem(null); }}
+            onDragEnd={() => { setDragItem(null); setHoverItem(null); }}
+            style={{
+              display: "flex", alignItems: "center", gap: 10,
+              padding: "8px 12px",
+              background: t.bg3,
+              border: `1px solid ${t.borderL}`,
+              borderTop: isHover ? `2px solid ${t.accent}` : `1px solid ${t.borderL}`,
+              borderRadius: 6,
+              cursor: "grab",
+              opacity: isDragging ? 0.4 : 1,
+            }}
+          >
+            <span style={{ color: t.textDim, fontSize: 14, lineHeight: 1 }}>⋮⋮</span>
+            <span style={{ fontSize: 12, color: t.textDim, fontWeight: 600, width: 16, textAlign: "right" }}>{i + 1}</span>
+            <span style={{ fontSize: 14, color: t.text, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4 }}>
+              {fmt}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function BadgeList({ items, onEdit, onClear }: { items: string[]; onEdit: () => void; onClear: () => void }) {
   const t = useTheme();
   if (items.length === 0) return <Btn variant="ghost" onClick={onEdit}>Add</Btn>;
@@ -759,6 +815,18 @@ function AudiobookshelfSection({ s, upd, ist, creds, onCredSaved }: {
         <option value="ebook">Ebook only</option>
         <option value="audiobook">Audiobook only</option>
       </select>
+    </SF>
+
+    <SF
+      label="Audiobook Format Priority"
+      desc="When a torrent contains multiple audio formats (rare), the pipeline picks the primary file from the format listed earliest. Drag to reorder."
+      example="m4b = chapterized single-file · m4a = single-file no chapters · mp3 = multi-part legacy"
+      wide
+    >
+      <FormatPriorityList
+        value={(s.audiobook_format_priority as string[]) || ["m4b", "m4a", "mp3"]}
+        onChange={(next) => upd("audiobook_format_priority", next)}
+      />
     </SF>
 
     <SF

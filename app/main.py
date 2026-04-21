@@ -349,6 +349,10 @@ async def _build_dispatcher(settings: dict, resolved_secrets: dict = None) -> Di
         qbit_orphan_adoption_since=float(
             settings.get("qbit_orphan_adoption_since", 0) or 0
         ),
+        audiobook_format_priority=list(
+            settings.get("audiobook_format_priority", [])
+            or ["m4b", "m4a", "mp3"]
+        ),
         default_sink=settings.get("default_sink", "calibre"),
         calibre_library_path=settings.get("calibre_library_path", ""),
         folder_sink_path=settings.get("folder_sink_path", ""),

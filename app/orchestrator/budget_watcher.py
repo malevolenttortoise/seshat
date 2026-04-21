@@ -206,6 +206,7 @@ async def _tick_inner(deps: DispatcherDeps, db) -> TickResult:
                         per_event_notifications=deps.per_event_notifications,
                         metadata_enricher=deps.metadata_enricher,
                         torrent_files=torrent_files,
+                        audiobook_format_priority=deps.audiobook_format_priority,
                     )
                 except Exception:
                     _log.exception(
