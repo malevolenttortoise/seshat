@@ -43,6 +43,12 @@ from app.filter.gate import Announce
 from app.mam.announce import parse_announce
 
 _log = logging.getLogger("seshat.mam.irc")
+# Dedicated announce channel — the Logs page "Announces" tab filters
+# on this logger name (plus seshat.orchestrator.dispatch) so users
+# can see every parsed announce without wading through IRC PING/PONG
+# traffic. Writing at INFO so the filter captures it cleanly; the
+# raw PRIVMSG stays at DEBUG on the main _log.
+_announce_log = logging.getLogger("seshat.mam.announce")
 
 
 class _NickInUse(Exception):
@@ -758,6 +764,19 @@ class IrcClient:
         if announce is None:
             _log.debug(f"IRC PRIVMSG didn't parse as announce: {msg.trailing[:80]}")
             return
+
+        # Log every parsed announce to the dedicated announce channel
+        # so the Logs page Announces tab has something to show. Keep
+        # the line compact — torrent name, category, format, VIP flag.
+        # Downstream dispatcher logs the accept/drop decision against
+        # seshat.orchestrator.dispatch which the Announces tab also
+        # surfaces.
+        _announce_log.info(
+            "announce tid=%s %r cat=%s fmt=%s vip=%s",
+            announce.torrent_id, announce.name,
+            announce.category or "?", announce.format or "?",
+            announce.vip,
+        )
 
         try:
             await self.on_announce(announce)

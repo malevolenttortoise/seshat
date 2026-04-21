@@ -53,8 +53,18 @@ class _BufferHandler(logging.Handler):
                 "level": record.levelname,
                 "logger": record.name,
                 "message": record.getMessage(),
+                # Announces tab surfaces:
+                #   1. Every parsed IRC announce via the dedicated
+                #      seshat.mam.announce logger (one line per parse)
+                #   2. Dispatcher decision lines (accept/drop/queue)
+                # Kept narrow to avoid the IRC PING/PONG flood; the
+                # tightening in commit 536bf94 went too far and
+                # silenced announces entirely — restored via the
+                # dedicated announce logger instead of re-adding the
+                # `"announce" in message` substring match.
                 "is_announce": (
-                    record.name.startswith("seshat.orchestrator.dispatch")
+                    record.name == "seshat.mam.announce"
+                    or record.name.startswith("seshat.orchestrator.dispatch")
                 ),
             }
             _buffer.append(entry)
