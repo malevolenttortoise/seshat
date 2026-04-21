@@ -21,10 +21,12 @@ false negatives; unlinked books can be linked manually by the user):
     - lowercase, strip
     - drop leading articles "the/a/an"
     - replace unicode apostrophes with ascii
-    - strip parenthetical + bracketed sections ("(Unabridged)",
-      "[Audiobook]")
-    - drop trailing series markers ("The Way of Kings, Book 1")
+    - strip ONLY format-hint parenthetical/bracketed sections
+      ("(Unabridged)", "[Audiobook]") — volume numbers in parens
+      like "(Book 3)" are preserved so distinct volumes don't merge
     - strip punctuation + collapse whitespace
+    - do NOT strip trailing volume markers ("#7", ", Book 1") — those
+      are load-bearing for volume distinction
 
 The pair `(normalized_author, normalized_title)` is the matcher's
 equality key. It is NOT stored in the DB — we compute it on each
@@ -37,18 +39,31 @@ import re
 import unicodedata
 
 _ARTICLE_RX = re.compile(r"^\s*(the|a|an)\s+", re.IGNORECASE)
-_PARENS_RX = re.compile(r"[\(\[\{].*?[\)\]\}]")
-# Trailing volume-marker stripping was attempted twice (dash/colon/semi
-# separators → comma-only) and both caused false-positive merges for
-# distinct volumes of manga/light-novel series ("Spice & Wolf, Vol. 21"
-# through Vol. 1 all collapsed to "spice wolf"). There's no way to tell
-# apart decorative metadata from actual title content without external
-# knowledge, so the regex is removed entirely. Rely on:
+# Format-hint parentheticals only — do NOT strip arbitrary paren content.
+# Blanket paren stripping collapsed "Ghost in the System (Book 5)" with
+# (Book 2)/(Book 3)/(Book 4)/(Book 6) into one bucket; the same bug hit
+# "Aquilon: The Water Mage (Book N)". Allowlist known format/edition
+# tokens instead — any paren group whose contents aren't in the list is
+# left alone so volume numbers can't disappear.
+_FORMAT_PAREN_RX = re.compile(
+    r"[\(\[\{]\s*"
+    r"(unabridged|abridged|audio[\s-]?book|audiobook|audible|"
+    r"e[\s-]?book|ebook|m4b|mp3|paperback|hardcover|"
+    r"kindle(?:\s+edition)?|special\s+edition)"
+    r"\s*[\)\]\}]",
+    re.IGNORECASE,
+)
+# Trailing volume-marker stripping (`,?\s*#\d+`, dash/colon/semi variants,
+# etc.) was attempted repeatedly and always merged distinct volumes of the
+# same series ("Spice & Wolf, Vol. 21" through Vol. 1 → "spice wolf";
+# "The Last Paladin #1" through #7 → "last paladin"). There's no way to
+# tell decoration from content without external metadata, so we don't
+# strip at all. Rely on:
 #   1. Exact strict match (primary path)
 #   2. " - Subtitle" loose variant in match_keys (covers the
-#      Halo: Evolutions publisher-subtitle drift case)
+#      Halo: Evolutions publisher-subtitle drift case) — skipped when
+#      the suffix is itself a volume marker like "Book 3"
 #   3. Manual linking via the Works UI for anything else
-_TRAILING_HASH_RX = re.compile(r",?\s*#\d+(?:\.\d+)?\s*$")
 # Apostrophes get dropped (not replaced with space) so "Don't" and
 # "Dont" normalize identically. Other punctuation becomes a space so
 # "Title:Subtitle" stays splittable.
@@ -57,6 +72,12 @@ _PUNCT_RX = re.compile(r"[^\w\s]+")
 _SPACE_RX = re.compile(r"\s+")
 _AUTHOR_SUFFIX_RX = re.compile(
     r"[,\s]+(jr|sr|ii|iii|iv|phd|md|esq)\.?\s*$", re.IGNORECASE,
+)
+# "Book 3", "Vol. 1", "Volume 21", "Part 2", "#7" at the start of a
+# suffix — marks a volume indicator, not a publisher subtitle. Used by
+# match_keys to suppress the loose variant in these cases.
+_VOLUME_MARKER_RX = re.compile(
+    r"^(book|vol\.?|volume|part|chapter|#)\s*\d", re.IGNORECASE,
 )
 
 
@@ -106,14 +127,13 @@ def normalize_title(title: str) -> str:
     s = _replace_unicode(title).strip()
     s = unicodedata.normalize("NFKD", s)
     s = "".join(ch for ch in s if not unicodedata.combining(ch))
-    # Drop parenthetical / bracketed decorations first — they often
-    # carry format hints ("Unabridged", "Audiobook") that would
-    # otherwise leak into the comparison key.
-    s = _PARENS_RX.sub(" ", s)
+    # Drop format-hint parentheticals only ("(Unabridged)",
+    # "[Audiobook]"). Do NOT blanket-strip paren content — "(Book 3)"
+    # and "(Vol. 21)" must survive so distinct volumes don't collapse.
+    s = _FORMAT_PAREN_RX.sub(" ", s)
     # Drop leading article (The/A/An) so "The Way of Kings" matches
     # "Way of Kings".
     s = _ARTICLE_RX.sub("", s)
-    s = _TRAILING_HASH_RX.sub("", s)
     s = _APOSTROPHE_RX.sub("", s)
     s = _PUNCT_RX.sub(" ", s.lower())
     s = _SPACE_RX.sub(" ", s).strip()
@@ -157,10 +177,11 @@ def match_keys(author: str, title: str) -> list[str]:
           Time of the Doctor"). Not done.
 
       The one variant we DO generate is "strip trailing ` - Subtitle`
-      IF the base title has 2+ content words" — covers the common
-      "Halo: Evolutions - Essential Tales of the Halo Universe" vs
-      "Halo: Evolutions" case, while the 2-word floor keeps single-
-      word-title tie-ins (e.g., "Doctor Who") from collapsing.
+      IF the base title has 2+ content words AND the suffix isn't a
+      volume marker" — covers the "Halo: Evolutions - Essential Tales
+      of the Halo Universe" vs "Halo: Evolutions" case, while the
+      volume-marker check keeps "Isekai Herald - Book 1: ..." through
+      "Book 3: ..." from collapsing onto a bare "Isekai Herald" key.
     """
     na = normalize_author(author)
     if not na:
@@ -174,14 +195,18 @@ def match_keys(author: str, title: str) -> list[str]:
         keys.append(key)
         seen.add(key)
 
-    # Loose variant: strip " - Subtitle" tail when prefix has 2+ words.
+    # Loose variant: strip " - Subtitle" tail when prefix has 2+ words
+    # AND the stripped tail isn't a volume marker ("Book 3", "Vol. 1",
+    # "#7"). Volume-marker tails would collapse distinct volumes onto
+    # the prefix key, which is the Isekai-Herald false-merge class.
     if title and " - " in title:
-        prefix = title.rsplit(" - ", 1)[0]
-        loose = normalize_title(prefix)
-        if loose and len(loose.split()) >= 2:
-            key = f"{na}||{loose}"
-            if key not in seen:
-                keys.append(key)
-                seen.add(key)
+        prefix, suffix = title.rsplit(" - ", 1)
+        if not _VOLUME_MARKER_RX.match(suffix.strip()):
+            loose = normalize_title(prefix)
+            if loose and len(loose.split()) >= 2:
+                key = f"{na}||{loose}"
+                if key not in seen:
+                    keys.append(key)
+                    seen.add(key)
 
     return keys

@@ -320,7 +320,8 @@ async def _hydrate_links(links: list[WorkLink]) -> list[WorkLinkOut]:
             continue
         try:
             rows = await (await db.execute(
-                f"SELECT b.id, b.title, b.cover_path, a.name AS author_name, "
+                f"SELECT b.id, b.title, b.cover_path, b.audiobookshelf_id, "
+                f"a.name AS author_name, "
                 f"s.name AS series_name, b.series_index "
                 f"FROM books b "
                 f"JOIN authors a ON a.id = b.author_id "
@@ -330,8 +331,9 @@ async def _hydrate_links(links: list[WorkLink]) -> list[WorkLinkOut]:
             )).fetchall()
             for r in rows:
                 cover_url = None
-                # Cover is served via the per-library covers endpoint.
-                if r["cover_path"]:
+                # Cover endpoint handles both local files (Calibre) and
+                # ABS proxy (audiobookshelf_id set, cover_path NULL).
+                if r["cover_path"] or r["audiobookshelf_id"]:
                     cover_url = f"/api/discovery/covers/{slug}/{r['id']}"
                 metadata[(slug, r["id"])] = {
                     "title": r["title"],

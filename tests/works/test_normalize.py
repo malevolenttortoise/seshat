@@ -49,9 +49,23 @@ class TestNormalizeTitle:
         assert normalize_title("A Memory of Light") == "memory of light"
         assert normalize_title("An Unkindness of Ghosts") == "unkindness of ghosts"
 
-    def test_drops_parenthetical(self):
+    def test_drops_format_parenthetical(self):
         assert normalize_title("The Way of Kings (Unabridged)") == "way of kings"
         assert normalize_title("Dune [Audiobook]") == "dune"
+        assert normalize_title("Mistborn (Audible)") == "mistborn"
+
+    def test_keeps_volume_parenthetical(self):
+        """`(Book N)` / `(Vol. N)` parens must NOT be stripped — volumes
+        with different numbers would collapse onto the same key.
+
+        This was a real false-merge: "Ghost in the System (Book 2)"
+        through (Book 6) all lost the Book N via blanket paren
+        stripping and all landed in one bucket.
+        """
+        assert normalize_title("Ghost in the System (Book 5)") != \
+               normalize_title("Ghost in the System (Book 6)")
+        assert normalize_title("Aquilon (Book 1)") != \
+               normalize_title("Aquilon (Book 2)")
 
     def test_keeps_distinct_volumes_separate(self):
         """Distinct volumes in the same series MUST NOT collapse.
@@ -72,9 +86,14 @@ class TestNormalizeTitle:
         assert normalize_title("Halo - Book One") != \
                normalize_title("Halo - Book Two")
 
-    def test_drops_trailing_hash(self):
-        assert normalize_title("Halo #7") == "halo"
-        assert normalize_title("The Stormlight Archive, #1") == "stormlight archive"
+    def test_keeps_trailing_hash_volume(self):
+        """`#N` volume markers must be preserved — stripping them merged
+        "The Last Paladin #1" through "#7" onto a single "last paladin"
+        key. Same class of bug as the `(Book N)` paren strip.
+        """
+        assert normalize_title("The Last Paladin #1") != \
+               normalize_title("The Last Paladin #7")
+        assert normalize_title("Halo #7") != normalize_title("Halo #8")
 
     def test_unicode_smart_quotes(self):
         assert normalize_title("Don\u2019t Look Up") == "dont look up"
@@ -163,6 +182,26 @@ class TestMatchKeys:
         audible = match_keys("Various", "Halo: Evolutions")
         overlap = set(calibre) & set(audible)
         assert overlap == {"various||halo evolutions"}
+
+    def test_no_loose_when_suffix_is_volume_marker(self):
+        """Suffix starting with `Book N` / `Vol. N` / `#N` is a volume
+        marker, not a publisher subtitle. The loose variant must NOT
+        be generated — otherwise "Isekai Herald - Book 1: A LitRPG..."
+        through "Book 3: ..." all share a loose "isekai herald" key
+        and merge into one work.
+        """
+        k1 = match_keys(
+            "Mark Coveny",
+            "Isekai Herald - Book 1: A LitRPG 5E Kingdom-Building Fantasy",
+        )
+        k2 = match_keys(
+            "Mark Coveny",
+            "Isekai Herald - Book 2: A LitRPG 5E Kingdom-Building Fantasy",
+        )
+        # No loose variant on either — only the (distinct) strict keys.
+        assert len(k1) == 1
+        assert len(k2) == 1
+        assert set(k1).isdisjoint(set(k2))
 
     def test_no_false_collision_between_different_subtitled_books(self):
         """Two distinct books sharing only a dash-subtitle pattern should
