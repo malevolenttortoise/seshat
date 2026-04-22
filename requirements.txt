@@ -36,8 +36,11 @@ lxml==6.1.0
 cloudscraper==1.2.71
 
 # Fernet symmetric encryption for the secret store.
-# 46.0.5 patches CVE-2026-26007 (SECT-curve subgroup validation, HIGH);
-# 46.0.6 also folds in CVE-2026-34073 (DNS name constraint enforcement)
-# and ships with a patched OpenSSL wheel (CVE-2024-12797 from the older
-# sub-44.0.1 range). Fernet API is unchanged — no code impact.
-cryptography==46.0.6
+# Patch cascade: 46.0.5 fixes CVE-2026-26007 (SECT-curve subgroup
+# validation, HIGH); 46.0.6 rolls in CVE-2026-34073 (DNS name
+# constraint enforcement) and a patched OpenSSL wheel (older
+# CVE-2024-12797); 46.0.7 closes CVE-2026-39892 (buffer overflow
+# when non-contiguous Python buffers are passed to Hash-family APIs
+# — not a path we hit, but a clean dep graph is worth keeping).
+# Fernet API is unchanged across the whole range — no code impact.
+cryptography==46.0.7
