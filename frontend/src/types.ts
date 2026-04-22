@@ -117,6 +117,11 @@ export interface Author {
   series_count?: number;
   link_count?: number;
   last_lookup_at?: number | null;
+  // Stamped by run_across_libraries when the authors endpoint is
+  // called with `content_type`. The Authors page uses it to build
+  // the "slug:id" nav arg so cross-library click-throughs resolve
+  // in the right library.
+  library_slug?: string;
 }
 
 export interface Book {
