@@ -94,10 +94,7 @@ _PATCHABLE_KEYS: frozenset[str] = frozenset({
     # Pipeline toggles
     "download_client_type",
     "mam_irc_enabled",
-    "pipeline_irc_enabled",
-    "pipeline_qbit_watcher_enabled",
     "pipeline_auto_train_enabled",
-    "pipeline_notifications_enabled",
     # Sink config
     "cwa_ingest_path",
     "calibre_library_path",

@@ -465,10 +465,7 @@ DEFAULT_SETTINGS = {
     # Master switches for each stage of the pipeline. Disabling a
     # stage skips it entirely — useful for testing, maintenance, or
     # going away and not wanting automatic processing to fire.
-    "pipeline_irc_enabled": True,
-    "pipeline_qbit_watcher_enabled": True,
     "pipeline_auto_train_enabled": True,
-    "pipeline_notifications_enabled": True,
 
     # ── Discovery domain (library scanning & metadata lookup) ─
     "hardcover_api_key": "",

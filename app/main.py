@@ -365,6 +365,7 @@ async def _build_dispatcher(settings: dict, resolved_secrets: dict = None) -> Di
         ntfy_url=settings.get("ntfy_url", ""),
         ntfy_topic=settings.get("ntfy_topic", "seshat"),
         per_event_notifications=bool(settings.get("per_event_notifications", False)),
+        auto_train_enabled=bool(settings.get("pipeline_auto_train_enabled", True)),
         metadata_enricher=enricher,
     )
 

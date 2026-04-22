@@ -331,9 +331,6 @@ export default function SettingsPage() {
           <SF label="IRC Listener" desc="Connects to MAM's #announce channel and processes every new torrent through the filter gate.">
             <STog on={(s.mam_irc_enabled as boolean) ?? true} onToggle={() => upd("mam_irc_enabled", !(s.mam_irc_enabled ?? true))} label />
           </SF>
-          <SF label="Download Client Watcher" desc="Polls the download client every 60s to detect completed downloads and reconcile the snatch budget.">
-            <STog on={(s.pipeline_qbit_watcher_enabled as boolean) ?? true} onToggle={() => upd("pipeline_qbit_watcher_enabled", !(s.pipeline_qbit_watcher_enabled ?? true))} label />
-          </SF>
           <SF label="Auto-Train Authors" desc="When a book is grabbed from a co-author, the other co-authors are automatically added to the allow list.">
             <STog on={(s.pipeline_auto_train_enabled as boolean) ?? true} onToggle={() => upd("pipeline_auto_train_enabled", !(s.pipeline_auto_train_enabled ?? true))} label />
           </SF>
@@ -485,29 +482,34 @@ export default function SettingsPage() {
             </div>
           </SF>
           {/* Notification groups restructured around the master toggles
-              that already gate them backend-side — `per_event_notifications`
-              silences the three Pipeline per-event pushes, and
-              `daily_digest_enabled` governs whether any daily_* check
-                  even fires. Previously both masters were invisible in the
-              UI, so users could turn sub-toggles on and see nothing;
-              now the masters sit above their sub-toggles and the
-              dependents dim when the master is off. */}
+              that already gate them backend-side. Each group uses a
+              non-wide SF for the master (toggle right-aligned as
+              every other on/off setting on the page) followed by a
+              wide SF rendering the sub-event grid full-width. This
+              avoids the smooshed look where a tiny toggle was
+              visually glued to a 3-column checkbox grid inside one
+              flex-end container. Sub-event rows dim when the
+              master is off. */}
           {(() => {
             const perEventOn = !!s.per_event_notifications;
             const digestOn = !!s.daily_digest_enabled;
             return <>
-              <SF label="Pipeline Per-Event Pushes" desc="Fire one notification per pipeline event as it happens (grab, download, error)." wide>
+              <SF label="Pipeline Per-Event Pushes" desc="Fire one notification per pipeline event as it happens (grab, download, error). Individual events selectable below.">
                 <STog on={perEventOn} onToggle={() => upd("per_event_notifications", !perEventOn)} label />
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 32px", marginTop: 10, opacity: perEventOn ? 1 : 0.45, pointerEvents: perEventOn ? "auto" : "none" }}>
+              </SF>
+              <SF label="" desc="" wide>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "8px 32px", width: "100%", opacity: perEventOn ? 1 : 0.4, pointerEvents: perEventOn ? "auto" : "none" }}>
                   <NCheck label="New book grabbed" field="notify_on_grab" s={s} upd={upd} />
                   <NCheck label="Download completed" field="notify_on_download_complete" s={s} upd={upd} />
                   <NCheck label="Pipeline errors" field="notify_on_pipeline_error" s={s} upd={upd} />
                 </div>
               </SF>
 
-              <SF label="Daily Digest" desc="One summary push per day covering the day's pipeline activity." wide>
+              <SF label="Daily Digest" desc="One summary push per day covering the day's pipeline activity. Categories selectable below.">
                 <STog on={digestOn} onToggle={() => upd("daily_digest_enabled", !digestOn)} label />
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 32px", marginTop: 10, opacity: digestOn ? 1 : 0.45, pointerEvents: digestOn ? "auto" : "none" }}>
+              </SF>
+              <SF label="" desc="" wide>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "8px 32px", width: "100%", opacity: digestOn ? 1 : 0.4, pointerEvents: digestOn ? "auto" : "none" }}>
                   <NCheck label="Accepted books" field="notify_daily_accepted" s={s} upd={upd} />
                   <NCheck label="Tentative books" field="notify_daily_tentative" s={s} upd={upd} />
                   <NCheck label="Ignored books" field="notify_daily_ignored" s={s} upd={upd} />
@@ -515,11 +517,14 @@ export default function SettingsPage() {
               </SF>
 
               <SF label="Weekly Digest" desc="Weekly rollup covering ignored-author reviews and longer-horizon stats.">
-                <NCheck label="Enabled" field="notify_weekly_digest" s={s} upd={upd} />
+                <STog on={!!s.notify_weekly_digest} onToggle={() => upd("notify_weekly_digest", !s.notify_weekly_digest)} label />
               </SF>
 
-              <SF label="Discovery Events" desc="Which discovery-side events trigger a push notification." wide>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 32px", marginTop: 4 }}>
+              <SF label="Discovery Events" desc="Which discovery-side events trigger a push notification. Each fires independently — no master gate.">
+                <span style={{ fontSize: 12, color: t.textDim }}>Per-event below</span>
+              </SF>
+              <SF label="" desc="" wide>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "8px 32px", width: "100%" }}>
                   <NCheck label="Source scan complete" field="ntfy_on_scan_complete" s={s} upd={upd} />
                   <NCheck label="New books found" field="ntfy_on_new_books" s={s} upd={upd} />
                   <NCheck label="MAM scan complete" field="ntfy_on_mam_complete" s={s} upd={upd} />
