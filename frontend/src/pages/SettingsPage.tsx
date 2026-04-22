@@ -47,6 +47,60 @@ function PolicyRow({ label, hint, on, onToggle }: { label: string; hint?: string
   );
 }
 
+// Grab-mode dropdown — collapses the two independent `policy_vip_only`
+// + `policy_free_only` bools into a single 3-option selector. The
+// engine still reads the two individual bools (see
+// app/policy/engine.py decision matrix steps 3 + 5), so no backend
+// migration is needed — the UI derives the mode from the bools on
+// read and sets both on write.
+//
+//   any     → vip_only=false, free_only=false (grab whatever policy allows)
+//   free    → vip_only=false, free_only=true  (only free torrents via VIP/FL/wedge)
+//   vip     → vip_only=true,  free_only=false (only VIP torrents)
+//
+// Historical weirdness: both bools true was a valid-but-redundant
+// state — step 3 fires first and skips any non-VIP. On read, a
+// setting with vip_only=true coerces to "vip" regardless of
+// free_only, matching the engine's precedence.
+type GrabMode = "any" | "free" | "vip";
+function grabModeFrom(s: S): GrabMode {
+  if (s.policy_vip_only) return "vip";
+  if (s.policy_free_only) return "free";
+  return "any";
+}
+function PolicyGrabMode({ s, upd }: { s: S; upd: (k: string, v: unknown) => void }) {
+  const t = useTheme();
+  const mode = grabModeFrom(s);
+  const setMode = (m: GrabMode) => {
+    upd("policy_vip_only", m === "vip");
+    upd("policy_free_only", m === "free");
+  };
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "6px 12px", background: t.bg3, borderRadius: 6, gridColumn: "span 2" }}>
+      <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+        <span style={{ fontSize: 13, fontWeight: 600, color: t.text }}>Grab Mode</span>
+        <span style={{ fontSize: 11, color: t.textDim }}>
+          {mode === "any"  && "Follow other rules — grab anything policy allows"}
+          {mode === "free" && "Only grab free torrents (VIP, global FL, personal FL, or wedged)"}
+          {mode === "vip"  && "Only grab torrents flagged VIP on MAM"}
+        </span>
+      </div>
+      <select
+        value={mode}
+        onChange={e => setMode(e.target.value as GrabMode)}
+        style={{
+          padding: "6px 10px", borderRadius: 6, border: `1px solid ${t.border}`,
+          background: t.inp, color: t.text2, fontSize: 13, fontWeight: 600, cursor: "pointer",
+        }}
+      >
+        <option value="any">Any</option>
+        <option value="free">Free only</option>
+        <option value="vip">VIP only</option>
+      </select>
+    </div>
+  );
+}
+
 function STog({ on, onToggle, disabled, label }: { on: boolean; onToggle: () => void; disabled?: boolean; label?: boolean }) {
   const t = useTheme();
   return (
@@ -376,11 +430,10 @@ export default function SettingsPage() {
               Each cell has a short label on the left and its control
               on the right; the full desc tooltip is elided in favor
               of a single shared subtitle for the section. */}
-          <SF label="Grab Policy" desc="These toggles + numbers all feed the policy engine that decides whether each torrent actually gets grabbed. VIP-only + Free-only are mutually nested modes; ratio floor + min wedges reserved are guardrails." wide>
+          <SF label="Grab Policy" desc="These toggles + numbers all feed the policy engine that decides whether each torrent actually gets grabbed. Grab Mode narrows what's eligible; ratio floor + min wedges reserved are guardrails." wide>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "12px 28px", width: "100%", marginTop: 8 }}>
+              <PolicyGrabMode s={s} upd={upd} />
               <PolicyRow label="Always grab VIP" on={(s.policy_vip_always_grab as boolean) ?? true} onToggle={() => upd("policy_vip_always_grab", !(s.policy_vip_always_grab ?? true))} hint="VIP bypasses other checks" />
-              <PolicyRow label="VIP only" on={!!s.policy_vip_only} onToggle={() => upd("policy_vip_only", !s.policy_vip_only)} hint="Skip everything non-VIP" />
-              <PolicyRow label="Free only" on={!!s.policy_free_only} onToggle={() => upd("policy_free_only", !s.policy_free_only)} hint="Requires VIP/FL/wedge" />
               <PolicyRow label="Use freeleech wedges" on={!!s.policy_use_wedge} onToggle={() => upd("policy_use_wedge", !s.policy_use_wedge)} hint="Spend a wedge to make non-free free" />
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "6px 12px", background: t.bg3, borderRadius: 6 }}>
                 <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
@@ -734,6 +787,7 @@ function AudiobookshelfSection({ s, upd, ist, nist, creds, onCredSaved }: {
   const [libs, setLibs] = useState<AbsLibrary[] | null>(null);
   const [rebuilding, setRebuilding] = useState(false);
   const [rebuildResult, setRebuildResult] = useState<string | null>(null);
+  const [showManualSinkId, setShowManualSinkId] = useState(false);
 
   const apiKeyConfigured = creds.some(c => c.key === "abs_api_key" && c.configured);
   const url = (s.abs_url as string) || "";
@@ -872,16 +926,64 @@ function AudiobookshelfSection({ s, upd, ist, nist, creds, onCredSaved }: {
       />
     </SF>
 
+    {/* Sink library target — the primary UX is "Use as sink" on a
+        row in the library list above. This block is the status
+        readout (which library is currently selected) plus a
+        collapsed manual-paste fallback for users who skipped the
+        test step or want to paste a UUID directly. */}
     <SF
-      label="Sink Library ID"
-      desc="Which ABS library the audiobook sink delivers into. Click 'Use as sink' above after testing, or paste a library UUID."
+      label="Sink Library Target"
+      desc="Which ABS library the audiobook sink delivers into. Set via 'Use as sink' in the library list above; this row is the current status."
     >
-      <input
-        value={(s.abs_sink_library_id as string) || ""}
-        onChange={e => upd("abs_sink_library_id", e.target.value.trim())}
-        placeholder="UUID from Test above"
-        style={{ ...ist, width: 280, fontFamily: "monospace", fontSize: 11 }}
-      />
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        {(() => {
+          const currentId = (s.abs_sink_library_id as string) || "";
+          if (!currentId) {
+            return <span style={{ fontSize: 12, color: t.textDim, fontStyle: "italic" }}>
+              Not set — click "Use as sink" above after testing.
+            </span>;
+          }
+          const matched = (libs || []).find(l => l.id === currentId);
+          return (
+            <span style={{ fontSize: 12, color: t.text2, display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <span style={{ color: t.ok, fontWeight: 700 }}>✓</span>
+              {matched ? (
+                <>
+                  <span style={{ fontWeight: 600 }}>{matched.name}</span>
+                  <span style={{ color: t.textDim, fontFamily: "monospace", fontSize: 11 }}>({currentId})</span>
+                </>
+              ) : (
+                <span style={{ fontFamily: "monospace", fontSize: 11 }}>{currentId}</span>
+              )}
+              <button
+                onClick={() => upd("abs_sink_library_id", "")}
+                title="Clear selection"
+                style={{
+                  marginLeft: 4, fontSize: 11, padding: "1px 7px",
+                  background: "transparent", color: t.textDim,
+                  border: `1px solid ${t.borderL}`, borderRadius: 4, cursor: "pointer",
+                }}
+              >Clear</button>
+            </span>
+          );
+        })()}
+        <button
+          onClick={() => setShowManualSinkId(v => !v)}
+          style={{
+            fontSize: 11, padding: "2px 8px",
+            background: "transparent", color: t.textDim,
+            border: `1px dashed ${t.border}`, borderRadius: 4, cursor: "pointer",
+          }}
+        >{showManualSinkId ? "Hide manual paste" : "Paste UUID manually"}</button>
+      </div>
+      {showManualSinkId && (
+        <input
+          value={(s.abs_sink_library_id as string) || ""}
+          onChange={e => upd("abs_sink_library_id", e.target.value.trim())}
+          placeholder="Paste ABS library UUID"
+          style={{ ...ist, width: 280, fontFamily: "monospace", fontSize: 11, marginTop: 6 }}
+        />
+      )}
     </SF>
 
     <SF
