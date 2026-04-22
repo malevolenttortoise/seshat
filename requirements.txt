@@ -24,12 +24,20 @@ itsdangerous==2.2.0
 # Audiobook metadata reading (M4B/MP3 tags via mutagen)
 mutagen==1.47.0
 
-# Metadata scraper HTML parsing (Goodreads, Amazon, etc.)
+# Metadata scraper HTML parsing (Goodreads, Amazon, etc.).
+# lxml 6.1.0 patches CVE-2026-41066 (default iterparse/ETCompatXMLParser
+# config allowed XXE to local files). We only use `from lxml import html`
+# in the Kobo scrapers — the XXE paths aren't exercised here — but a
+# clean dep graph beats carrying a known-CVE lib.
 beautifulsoup4==4.12.3
-lxml==5.3.0
+lxml==6.1.0
 
 # Cloudflare bypass for Amazon + Kobo scraping
 cloudscraper==1.2.71
 
-# Fernet symmetric encryption for the secret store
-cryptography==44.0.0
+# Fernet symmetric encryption for the secret store.
+# 46.0.5 patches CVE-2026-26007 (SECT-curve subgroup validation, HIGH);
+# 46.0.6 also folds in CVE-2026-34073 (DNS name constraint enforcement)
+# and ships with a patched OpenSSL wheel (CVE-2024-12797 from the older
+# sub-44.0.1 range). Fernet API is unchanged — no code impact.
+cryptography==46.0.6
