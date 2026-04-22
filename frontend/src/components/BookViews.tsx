@@ -4,17 +4,19 @@
 // only ever wraps BListRow and BGrid only ever wraps BCard.
 import { useTheme } from "../theme";
 import { fmtDate } from "../lib/format";
-import type { Book } from "../types";
+import type { Book, BookActionHandler } from "../types";
 
 // Shared props across the single-book renderers (BCard, BListRow).
 // `onAction` is accepted but currently unused inside both renderers —
-// kept in the signature so callers can pass it without TS complaining;
-// remove once a real action handler is wired up. `sel` (the Set used
-// in the list/grid wrappers) is the parent's selection state and
-// passed in per-row as `selected: boolean`.
+// kept in the signature so callers can pass through their existing
+// action handler without two-tier prop drilling; the type matches
+// `BookActionHandler` (action + book id) so BookSidebar and BList
+// share one callback shape. `sel` (the Set used in the list/grid
+// wrappers) is the parent's selection state and passed in per-row
+// as `selected: boolean`.
 interface BookViewItemProps {
   book: Book;
-  onAction?: (action: string, book: Book) => void;
+  onAction?: BookActionHandler;
   onClick?: (book: Book) => void;
   showAuthor?: boolean;
   // number | string because AuthorDetailPage's prop shape passes
@@ -34,7 +36,7 @@ interface BookViewItemProps {
 // everything else is forwarded 1:1 to each rendered BCard / BListRow.
 interface BookViewListProps {
   books: Book[];
-  onAction?: (action: string, book: Book) => void;
+  onAction?: BookActionHandler;
   onBookClick?: (book: Book) => void;
   showAuthor?: boolean;
   highlightAuthorId?: number | string;
