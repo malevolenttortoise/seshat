@@ -534,24 +534,39 @@ export default function SettingsPage() {
               <option value="audiobookshelf">Audiobookshelf — library folder</option>
             </select>
           </SF>
-          <SF label="CWA Ingest Path" desc="Folder CWA watches for auto-import. Ebooks dropped here flow through CWA's conversion + ingest pipeline.">
-            <input value={(s.cwa_ingest_path as string) || ""} onChange={e => upd("cwa_ingest_path", e.target.value)} placeholder="/cwa-ingest" style={{ ...ist, width: 260 }} />
-          </SF>
-          <SF label="Folder Sink Path" desc="Destination when Default Sink is set to Folder.">
-            <input value={(s.folder_sink_path as string) || ""} onChange={e => upd("folder_sink_path", e.target.value)} placeholder="/books" style={{ ...ist, width: 260 }} />
-          </SF>
-          <SF label="Staging Path" desc="Intermediate folder where newly-grabbed files are copied before review or direct delivery.">
-            <input value={(s.staging_path as string) || ""} onChange={e => upd("staging_path", e.target.value)} placeholder="/staging" style={{ ...ist, width: 260 }} />
-          </SF>
-          <SF label="Review Staging Path" desc="Folder that holds books awaiting manual review. Cleared on approval or rejection.">
-            <input value={(s.review_staging_path as string) || ""} onChange={e => upd("review_staging_path", e.target.value)} placeholder="/review-staging" style={{ ...ist, width: 260 }} />
-          </SF>
-          <SF label="Emergency Export Path" desc="Fallback folder when sink is unreachable.">
-            <input value={(s.emergency_export_path as string) || ""} onChange={e => upd("emergency_export_path", e.target.value)} placeholder="/emergency-books" style={{ ...ist, width: 220 }} />
-          </SF>
           <SF label="Sink Max Retries" desc="Retries before exporting to emergency folder.">
             <input type="number" min={1} value={s.sink_max_retries as number ?? 3} onChange={e => upd("sink_max_retries", parseInt(e.target.value) || 3)} style={nist} />
           </SF>
+
+          {/* Advanced paths — the 5 scratch-dir settings most users
+              never touch (defaults in the Docker template cover the
+              common case). Native <details> for browser-handled
+              disclosure so there's no extra state to track. */}
+          <details style={{ marginTop: 4, background: t.bg3, border: `1px solid ${t.borderL}`, borderRadius: 8, padding: "8px 14px" }}>
+            <summary style={{ cursor: "pointer", fontSize: 13, fontWeight: 600, color: t.text2, userSelect: "none" }}>
+              Advanced paths
+              <span style={{ fontSize: 11, color: t.textDim, fontWeight: 400, marginLeft: 8 }}>
+                (CWA ingest, staging, review staging, folder sink, emergency export — defaults work for most setups)
+              </span>
+            </summary>
+            <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+              <SF label="CWA Ingest Path" desc="Folder CWA watches for auto-import. Ebooks dropped here flow through CWA's conversion + ingest pipeline.">
+                <input value={(s.cwa_ingest_path as string) || ""} onChange={e => upd("cwa_ingest_path", e.target.value)} placeholder="/cwa-ingest" style={{ ...ist, width: 260 }} />
+              </SF>
+              <SF label="Folder Sink Path" desc="Destination when Default Sink is set to Folder.">
+                <input value={(s.folder_sink_path as string) || ""} onChange={e => upd("folder_sink_path", e.target.value)} placeholder="/books" style={{ ...ist, width: 260 }} />
+              </SF>
+              <SF label="Staging Path" desc="Intermediate folder where newly-grabbed files are copied before review or direct delivery.">
+                <input value={(s.staging_path as string) || ""} onChange={e => upd("staging_path", e.target.value)} placeholder="/staging" style={{ ...ist, width: 260 }} />
+              </SF>
+              <SF label="Review Staging Path" desc="Folder that holds books awaiting manual review. Cleared on approval or rejection.">
+                <input value={(s.review_staging_path as string) || ""} onChange={e => upd("review_staging_path", e.target.value)} placeholder="/review-staging" style={{ ...ist, width: 260 }} />
+              </SF>
+              <SF label="Emergency Export Path" desc="Fallback folder when sink is unreachable.">
+                <input value={(s.emergency_export_path as string) || ""} onChange={e => upd("emergency_export_path", e.target.value)} placeholder="/emergency-books" style={{ ...ist, width: 220 }} />
+              </SF>
+            </div>
+          </details>
         </>}
 
         {section === "notifications" && <>
