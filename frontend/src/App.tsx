@@ -28,6 +28,7 @@ import SettingsPage from "./pages/SettingsPage";
 // Unified + Discovery pages
 import UnifiedDashboard from "./pages/UnifiedDashboard";
 import DiscDashboard from "./pages/DiscDashboard";
+import { SetupWizard } from "./components/SetupWizard";
 import DiscBooksPage from "./pages/DiscBooksPage";
 import DiscAuthorsPage from "./pages/DiscAuthorsPage";
 import DiscAuthorDetailPage from "./pages/DiscAuthorDetailPage";
@@ -155,6 +156,12 @@ function SeshatApp() {
   const { cycle, themeName } = useThemeControls();
 
   const [auth, setAuth] = useState<AuthState>({ loading: true, authenticated: false, firstRun: false });
+  // Library-level first-run gate — orthogonal to auth.firstRun (which
+  // only covers "no admin account exists yet"). A user who finishes
+  // the account-create flow but then lands on an empty library /
+  // settings.json gets the SetupWizard next. `null` = not yet
+  // fetched; true/false = known.
+  const [setupNeeded, setSetupNeeded] = useState<boolean | null>(null);
   const [page, setPage] = useState(loadSavedPage);
   const [pageArg, setPageArg] = useState<string | number | null>(loadSavedPageArg);
   const [section, setSection] = useState<Section>(loadSavedSection);
@@ -195,6 +202,21 @@ function SeshatApp() {
     return () => window.removeEventListener("seshat:auth-required", onAuthRequired);
   }, []);
 
+  // Library-setup check — runs once the user is authenticated. The
+  // /discovery/platform endpoint's `first_run` composes "no libraries
+  // discovered AND no user-configured sources AND setup not completed"
+  // into a single bool, which is exactly the gate we want. On any
+  // fetch error fall open (setupNeeded=false) — a broken /platform
+  // shouldn't lock the user out of the app.
+  useEffect(() => {
+    if (!auth.authenticated) return;
+    if (setupNeeded !== null) return;
+    api
+      .get<{ first_run?: boolean }>("/discovery/platform")
+      .then(p => setSetupNeeded(!!p.first_run))
+      .catch(() => setSetupNeeded(false));
+  }, [auth.authenticated, setupNeeded]);
+
   if (auth.loading) {
     return (
       <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100vh", background: t.bg }}>
@@ -205,6 +227,21 @@ function SeshatApp() {
 
   if (!auth.authenticated) {
     return <LoginPage onLoginSuccess={() => setAuth(a => ({ ...a, authenticated: true, loading: false }))} firstRun={auth.firstRun} />;
+  }
+
+  // Library-level first-run wizard. Only shown when /discovery/platform
+  // reports no libraries + no configured sources + setup_complete=false.
+  // `onComplete` flips the gate to false so subsequent renders go
+  // straight to the main app without a re-fetch.
+  if (setupNeeded === null) {
+    return (
+      <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100vh", background: t.bg }}>
+        <Spin size={28} />
+      </div>
+    );
+  }
+  if (setupNeeded) {
+    return <SetupWizard onComplete={() => setSetupNeeded(false)} />;
   }
 
   const themeIcon = themeName === "dark" ? "🌙" : themeName === "dim" ? "⛅" : "☀️";
