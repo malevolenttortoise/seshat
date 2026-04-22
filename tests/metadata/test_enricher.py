@@ -161,8 +161,9 @@ class TestEnricher:
 
     async def test_audiobook_flag_swaps_source_list(self):
         """Phase 6: `audiobook=True` routes to `audiobook_sources` so the
-        audiobook-specific priority (Audible + Audnexus first) actually
-        runs, and the ebook sources aren't called."""
+        audiobook-specific priority (Audible leads; Audnexus is
+        hydrated internally by AudibleSource) actually runs, and the
+        ebook sources aren't called."""
         cfg = EnrichmentConfig(enabled=True, accept_confidence=0.6)
         ebook_rec = MetaRecord(
             title="Book", authors=["A"], source="goodreads",

@@ -269,6 +269,27 @@ accommodate two library backends.
 - **Inline `monthly_download_folders` code** (superseded by the
   `download_folder_structure` string setting added in v1.3.0).
 
+- **Audnexus as a standalone enricher entry / Metadata Sources
+  row.** Audnexus has no title/author search endpoint — its
+  `search_book()` always returns None by design — so as a
+  toggleable source it always logged "no match", which led users
+  (and the Phase 7 memory notes) to conclude Audnexus coverage
+  was unreliable. In fact `AudibleSource` instantiates its own
+  `AudnexusSource` internally and hydrates every Audible catalog
+  hit through `fetch_by_asin` — that's where the narrator /
+  duration / ASIN fields come from. Toggling Audible toggles
+  the whole Audible+Audnexus chain; a separate Audnexus toggle
+  only created confusion. Investigated via J S Morin's "Lava &
+  Lightning" review row where Audible matched at 1.0 with ASIN
+  `B0FKHL8X9Q` while the log showed `audnexus → no match` right
+  next to a successful `GET api.audnex.us/books/B0FKHL8X9Q` —
+  the Audnexus call was Audible's hydration, not the standalone
+  enricher entry. The class (`app/metadata/sources/audnexus.py`)
+  and every internal caller are untouched; only the standalone
+  registration is gone. A one-shot `_strip_retired_sources`
+  migration drops `audnexus` from `metadata_sources` +
+  `metadata_priority` on first boot after upgrade.
+
 ---
 
 ## [1.3.0] — 2026-04-15

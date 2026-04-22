@@ -360,12 +360,12 @@ DEFAULT_SETTINGS = {
     ],
     # Audiobook-specific provider priority. Used when the pipeline
     # detects an audiobook grab (format=m4b/mp3/m4a or MAM category
-    # starts with "audiobooks"). Audible + Audnexus lead because
-    # they carry the audiobook-specific fields (narrator, duration,
-    # ASIN); ebook sources backfill description / ISBN / cover.
+    # starts with "audiobooks"). Audible leads because it carries
+    # the audiobook-specific fields (narrator, duration, ASIN) and
+    # hydrates its own hits through Audnexus internally; ebook
+    # sources backfill description / ISBN / cover.
     "metadata_audiobook_priority": [
         "audible",
-        "audnexus",
         "goodreads",
         "hardcover",
         "google_books",

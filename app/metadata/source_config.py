@@ -56,9 +56,18 @@ _log = logging.getLogger("seshat.metadata.source_config")
 # All sources the app knows about. The migration seeds an entry for
 # each of these (even if the legacy config didn't list them) so the
 # new UI always shows every supported source. `available_for`
-# describes where a source can run — e.g. Audnexus only makes sense
+# describes where a source can run — e.g. Audible only makes sense
 # for audiobook content, so its ebook toggles stay hidden/disabled
 # in the UI.
+#
+# Audnexus is deliberately NOT listed here even though the
+# `AudnexusSource` class still exists. It has no title/author search
+# endpoint, so as a standalone toggleable source it would always log
+# "no match". AudibleSource instantiates its own AudnexusSource
+# internally to hydrate Audible catalog hits, and the pipeline calls
+# `fetch_by_asin()` directly for m4b ASIN lookups — enabling/
+# disabling Audible is already the user-facing control for the
+# whole Audible+Audnexus chain.
 KNOWN_SOURCES: dict[str, dict[str, Any]] = {
     "mam":         {"display": "MyAnonamouse",  "available_for": ("ebook", "audiobook"), "default_rate": 2.0, "mam_only": True},
     "goodreads":   {"display": "Goodreads",     "available_for": ("ebook", "audiobook"), "default_rate": 2.0},
@@ -68,7 +77,6 @@ KNOWN_SOURCES: dict[str, dict[str, Any]] = {
     "ibdb":        {"display": "IBDB",          "available_for": ("ebook",),             "default_rate": 1.0},
     "google_books": {"display": "Google Books", "available_for": ("ebook", "audiobook"), "default_rate": 1.5},
     "audible":     {"display": "Audible",       "available_for": ("audiobook",),         "default_rate": 0.5},
-    "audnexus":    {"display": "Audnexus",      "available_for": ("audiobook",),         "default_rate": 1.0},
 }
 
 
@@ -87,10 +95,6 @@ _DEFAULT_NEW_INSTALL_STATE: dict[str, dict[str, bool]] = {
     # ASIN). Keeps firing for ebook grabs where it's useful.
     "google_books": {"ebook_enrich": True, "ebook_scan": True,  "audiobook_enrich": False, "audiobook_scan": False},
     "audible":     {"ebook_enrich": False, "ebook_scan": False, "audiobook_enrich": True,  "audiobook_scan": True},
-    # Audnexus defaults off for audiobook enrich — 0 matches across
-    # live test corpus (Halo: Empty Throne / Outcasts / Legacy of
-    # Onyx). Kept on for scan where catalog breadth matters less.
-    "audnexus":    {"ebook_enrich": False, "ebook_scan": False, "audiobook_enrich": False, "audiobook_scan": True},
 }
 
 
@@ -99,10 +103,10 @@ _DEFAULT_NEW_INSTALL_STATE: dict[str, dict[str, bool]] = {
 # first, specialized-last" ordering per content type.
 _DEFAULT_EBOOK_PRIORITY: list[str] = [
     "mam", "goodreads", "amazon", "hardcover", "kobo", "ibdb",
-    "google_books", "audible", "audnexus",
+    "google_books", "audible",
 ]
 _DEFAULT_AUDIOBOOK_PRIORITY: list[str] = [
-    "mam", "audible", "audnexus", "goodreads", "hardcover",
+    "mam", "audible", "goodreads", "hardcover",
     "google_books", "amazon", "kobo", "ibdb",
 ]
 
@@ -129,6 +133,15 @@ def migrate_legacy_settings(settings: dict) -> bool:
     On fresh install (all legacy keys empty/missing), seeds sensible
     ship-with defaults from `_DEFAULT_NEW_INSTALL_STATE`.
     """
+    # Retired-source scrub: `audnexus` was briefly exposed as a
+    # standalone toggleable source in v1.4.0. It has no title/author
+    # search endpoint, so it always logged "no match" — confusing
+    # users into thinking the Audnexus catalog was unreliable, when
+    # in fact Audible was hydrating its own hits through Audnexus
+    # internally the whole time. Drop the row so the panel stops
+    # showing a misleading toggle.
+    _strip_retired_sources(settings)
+
     existing_sources = settings.get("metadata_sources") or {}
     existing_priority = settings.get("metadata_priority") or {}
 
@@ -166,6 +179,50 @@ def migrate_legacy_settings(settings: dict) -> bool:
     return True
 
 
+# Sources that were once registered as user-facing toggles but have
+# since been retired. Kept as a named set so the scrub helper below
+# stays grep-able and future removals can append without editing the
+# migration body.
+_RETIRED_SOURCES: frozenset[str] = frozenset({
+    "audnexus",
+})
+
+
+def _strip_retired_sources(settings: dict) -> None:
+    """Drop retired source names from every place they could surface.
+
+    Pure in-place mutation. Runs at the top of `migrate_legacy_settings`
+    on every call so existing settings.json files get cleaned on first
+    load after the upgrade.
+
+    Covers:
+      * `metadata_sources` — unified shape, remove the key
+      * `metadata_priority.{ebook,audiobook}` — unified priority lists
+      * `metadata_provider_priority` — legacy ebook priority
+      * `metadata_audiobook_priority` — legacy audiobook priority
+
+    The legacy-list scrub matters because the migration path derives
+    the new priority from those keys when they're non-empty, so a
+    retired name would otherwise re-seed into the new shape.
+    """
+    sources = settings.get("metadata_sources")
+    if isinstance(sources, dict):
+        for name in _RETIRED_SOURCES:
+            sources.pop(name, None)
+
+    priority = settings.get("metadata_priority")
+    if isinstance(priority, dict):
+        for key in ("ebook", "audiobook"):
+            lst = priority.get(key)
+            if isinstance(lst, list):
+                priority[key] = [n for n in lst if n not in _RETIRED_SOURCES]
+
+    for legacy_key in ("metadata_provider_priority", "metadata_audiobook_priority"):
+        lst = settings.get(legacy_key)
+        if isinstance(lst, list):
+            settings[legacy_key] = [n for n in lst if n not in _RETIRED_SOURCES]
+
+
 def _derive_priority_list(
     settings: dict, legacy_key: str, fallback: list[str],
 ) -> list[str]:
@@ -197,9 +254,9 @@ def _build_source_entry(
     #   1. MAM — always use ship-with defaults; `mam_enabled` guards
     #      the whole IRC listener, not source scanning.
     #   2. Legacy key ABSENT — fall through to the ship-with default
-    #      for each surface independently. Sources like audnexus
-    #      that never had a legacy `*_enabled` key should inherit
-    #      their per-surface defaults rather than a single fallback.
+    #      for each surface independently. Sources that never had a
+    #      legacy `*_enabled` key should inherit their per-surface
+    #      defaults rather than a single fallback.
     #   3. Legacy key PRESENT — use that one bool to drive both
     #      surfaces, filtered by `available_for` so Kobo (ebook-only)
     #      doesn't flip its audiobook toggle on.

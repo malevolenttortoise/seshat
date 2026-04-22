@@ -219,7 +219,7 @@ def _build_metadata_enricher(
     # Phase 7: priority lists derived from the unified
     # `metadata_sources` + `metadata_priority` shape. The derivation
     # filters the priority list to sources whose `*_enrich` toggle is
-    # True, so a user who turns Audnexus off for audiobook enrichment
+    # True, so a user who turns Audible off for audiobook enrichment
     # via the Metadata Sources panel sees that source drop out of the
     # priority tuple here without further plumbing.
     #
@@ -237,7 +237,7 @@ def _build_metadata_enricher(
     if not audiobook_priority:
         audiobook_priority = tuple(
             settings.get("metadata_audiobook_priority", [])
-            or ("audible", "audnexus", "goodreads", "hardcover", "google_books")
+            or ("audible", "goodreads", "hardcover", "google_books")
         )
 
     cfg = EnrichmentConfig(

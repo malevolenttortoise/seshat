@@ -53,8 +53,8 @@ interface ReviewItem {
       source_url?: string;
       confidence?: number;
       source_log?: { source: string; confidence: number | null; status: string }[];
-      // Audiobook-specific fields populated by AudibleSource /
-      // AudnexusSource. Absent on ebook grabs.
+      // Audiobook-specific fields populated by AudibleSource (which
+      // hydrates through Audnexus internally). Absent on ebook grabs.
       narrator?: string;
       duration_sec?: number;
       asin?: string;
@@ -374,9 +374,9 @@ function ReviewCard({
   const pubDate = resolvedPubDate;
   const pageCount = resolvedPageCount;
   // Audiobook fields only appear when the grab was routed through the
-  // audiobook enricher priority (AudibleSource / AudnexusSource).
-  // Ebook grabs leave these undefined, so the conditionals below
-  // collapse to no-ops.
+  // audiobook enricher priority — Audible leads and hydrates each hit
+  // via Audnexus internally. Ebook grabs leave these undefined, so the
+  // conditionals below collapse to no-ops.
   const narrator = e?.narrator || "";
   const durationSec = e?.duration_sec;
   const asin = e?.asin || "";

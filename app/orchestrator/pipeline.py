@@ -70,8 +70,9 @@ _BOOK_EXTS = (".epub", ".mobi", ".azw", ".azw3", ".pdf", ".m4b", ".mp3", ".m4a",
 
 # File extensions that identify an audiobook grab. The sink router and
 # enricher both consult this — audiobook grabs go to ABS (when
-# configured) and use `metadata_audiobook_priority` (Audible +
-# Audnexus first) instead of the ebook priority list.
+# configured) and use `metadata_audiobook_priority` (Audible leads;
+# it hydrates via Audnexus internally) instead of the ebook priority
+# list.
 _AUDIOBOOK_EXTS = frozenset({"m4b", "mp3", "m4a", "aax", "aa"})
 
 

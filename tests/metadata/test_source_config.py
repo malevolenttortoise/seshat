@@ -37,10 +37,6 @@ class TestMigration:
         assert sources["audible"]["audiobook_enrich"] is True
         assert sources["audible"]["ebook_enrich"] is False
 
-        # Shipped defaults: Audnexus off for audiobook enrich
-        # (live-observed no matches).
-        assert sources["audnexus"]["audiobook_enrich"] is False
-
         # Google Books off for audiobook enrich (rate-limited, no
         # audiobook fields).
         assert sources["google_books"]["audiobook_enrich"] is False
@@ -48,17 +44,20 @@ class TestMigration:
 
     def test_legacy_priority_preserved(self):
         """When the legacy priority list is populated, migration
-        preserves its order — MAM gets prepended if absent."""
+        preserves its order — MAM gets prepended if absent.
+        Retired source names (audnexus) are scrubbed."""
         settings = {
             "metadata_provider_priority": ["goodreads", "hardcover", "amazon"],
-            "metadata_audiobook_priority": ["audible", "audnexus"],
+            # Legacy list that includes the retired audnexus entry —
+            # scrub should drop it but preserve the rest.
+            "metadata_audiobook_priority": ["audible", "audnexus", "hardcover"],
         }
         migrate_legacy_settings(settings)
         assert settings["metadata_priority"]["ebook"] == [
             "mam", "goodreads", "hardcover", "amazon",
         ]
         assert settings["metadata_priority"]["audiobook"] == [
-            "mam", "audible", "audnexus",
+            "mam", "audible", "hardcover",
         ]
 
     def test_legacy_enabled_flags_respected(self):
@@ -89,25 +88,25 @@ class TestMigration:
         inherit the per-surface ship-with default, not collapse to
         False via a single-bool fallback.
 
-        Surfaced when live migration produced audnexus audiobook_scan
-        = False despite the ship-with default being True, because
-        the buggy fallback used `defaults["ebook_scan"]` (False) as
-        the "absent legacy" fallback for BOTH surfaces.
+        Originally written against audnexus (now retired); still
+        valuable as a regression guard using audible instead, since
+        it exhibits the same "new audiobook-surface source with no
+        legacy bool" shape.
         """
         settings = {
             # Plausible legacy state: goodreads & hardcover mentioned,
-            # audnexus completely absent.
+            # audible completely absent.
             "goodreads_enabled": True,
             "hardcover_enabled": True,
         }
         migrate_legacy_settings(settings)
-        audnexus = settings["metadata_sources"]["audnexus"]
-        # Ship-with default had audiobook_scan=True; we want that
-        # preserved for sources the user hadn't explicitly touched.
-        assert audnexus["audiobook_scan"] is True
-        # audnexus's ebook_scan default is False (ebook coverage
-        # is poor) — stays at the ship-with default too.
-        assert audnexus["ebook_scan"] is False
+        audible = settings["metadata_sources"]["audible"]
+        # Ship-with default has audiobook_scan=True; preserved for
+        # sources the user hadn't explicitly touched.
+        assert audible["audiobook_scan"] is True
+        # audible's ebook_scan default is False (audiobook-only
+        # `available_for`) — stays at the ship-with default.
+        assert audible["ebook_scan"] is False
 
     def test_legacy_rate_limits_carried_over(self):
         settings = {
@@ -129,6 +128,33 @@ class TestMigration:
         snapshot_sources = dict(settings["metadata_sources"])
         assert migrate_legacy_settings(settings) is False
         assert settings["metadata_sources"] == snapshot_sources
+
+    def test_retired_sources_scrubbed_from_existing_settings(self):
+        """Settings.json from an older build that still carries
+        `audnexus` in both the unified shape and the legacy priority
+        lists should come out clean on the next migration pass."""
+        settings = {
+            "metadata_sources": {
+                "audnexus": {"rate_limit": 1.0, "audiobook_enrich": True},
+                "audible": {"rate_limit": 0.5, "audiobook_enrich": True},
+            },
+            "metadata_priority": {
+                "ebook": ["mam", "audnexus", "goodreads"],
+                "audiobook": ["mam", "audible", "audnexus"],
+            },
+            # A user whose legacy list still named audnexus, forcing
+            # the seeder to scrub there too.
+            "metadata_audiobook_priority": ["audible", "audnexus"],
+        }
+        migrate_legacy_settings(settings)
+        sources = settings["metadata_sources"]
+        priority = settings["metadata_priority"]
+        assert "audnexus" not in sources
+        assert "audnexus" not in priority["ebook"]
+        assert "audnexus" not in priority["audiobook"]
+        # Non-retired entries preserved.
+        assert "audible" in sources
+        assert "audible" in priority["audiobook"]
 
     def test_migration_enabled_means_in_priority_list(self):
         """A source present in the legacy priority list gets

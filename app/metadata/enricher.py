@@ -42,7 +42,6 @@ from app.metadata.sources.base import MetaSource
 from app.metadata.sources.goodreads import GoodreadsSource
 from app.metadata.sources.amazon import AmazonSource
 from app.metadata.sources.audible import AudibleSource
-from app.metadata.sources.audnexus import AudnexusSource
 from app.metadata.sources.google_books import GoogleBooksSource
 from app.metadata.sources.hardcover import HardcoverSource
 from app.metadata.sources.ibdb import IbdbSource
@@ -56,10 +55,14 @@ _log = logging.getLogger("seshat.metadata.enricher")
 # in the user's spec order (#21) for fields MAM doesn't carry
 # (covers, page count, pub date, ISBN).
 #
-# Audible + Audnexus land after the ebook-centric sources because
-# they contribute zero signal for ebook searches (no ASIN → no
-# audiobook-side hit). For audiobook grabs the routing layer puts
-# them first via `DEFAULT_AUDIOBOOK_PRIORITY` instead.
+# Audible lands after the ebook-centric sources because it
+# contributes zero signal for ebook searches (no audiobook-side
+# hit). For audiobook grabs the routing layer puts it first via
+# `DEFAULT_AUDIOBOOK_PRIORITY` instead. Audible internally hydrates
+# every hit through Audnexus (see app/metadata/sources/audible.py),
+# so Audnexus is not listed here as its own standalone source —
+# it has no title/author search endpoint and would always log
+# "no match" if registered independently.
 DEFAULT_PRIORITY: tuple[str, ...] = (
     "mam",
     "goodreads",
@@ -75,10 +78,10 @@ DEFAULT_PRIORITY: tuple[str, ...] = (
 # based on MAM category `audiobooks …` or an audio file extension
 # (.m4b/.mp3/.m4a). MAM still runs first because it's free and
 # often has the category/tag metadata no external source carries.
+# Audible owns the Audnexus chain internally.
 DEFAULT_AUDIOBOOK_PRIORITY: tuple[str, ...] = (
     "mam",
     "audible",
-    "audnexus",
     "goodreads",
     "hardcover",
     "google_books",
@@ -86,9 +89,9 @@ DEFAULT_AUDIOBOOK_PRIORITY: tuple[str, ...] = (
 
 # Audiobook title sanitization. MAM filenames often carry
 # `[Series N]` / `(Unabridged)` / `, Book 5` suffixes that the
-# Audible + Audnexus catalogs don't, which breaks fuzzy title
-# matching. Stripped only for audiobook enrichment calls — the
-# canonical title stored on the review queue is untouched.
+# Audible catalog doesn't, which breaks fuzzy title matching.
+# Stripped only for audiobook enrichment calls — the canonical
+# title stored on the review queue is untouched.
 _AB_BRACKET_TAIL_RX = re.compile(r"\s*\[[^\]]*\]\s*$")
 _AB_FORMAT_PAREN_RX = re.compile(
     r"\s*\((unabridged|abridged|audio[\s-]?book|audible)\)\s*$",
@@ -104,7 +107,7 @@ def _clean_audiobook_title(title: str) -> str:
     """Normalize an audiobook title for external catalog search.
 
     Runs when `enrich(audiobook=True)` is invoked — strips publisher
-    decorations that Audible / Audnexus don't reproduce. Ordering
+    decorations that the Audible catalog doesn't reproduce. Ordering
     matters: remove outer wrappers first, then the volume tail so
     "Halo: Empty Throne [Halo 36] (Unabridged)" collapses cleanly to
     "Halo: Empty Throne".
@@ -179,7 +182,10 @@ _SOURCE_REGISTRY: dict[str, type[MetaSource]] = {
     IbdbSource.name: IbdbSource,
     GoogleBooksSource.name: GoogleBooksSource,
     AudibleSource.name: AudibleSource,
-    AudnexusSource.name: AudnexusSource,
+    # Audnexus is NOT registered — it has no standalone title/author
+    # search. AudibleSource instantiates its own AudnexusSource
+    # internally to hydrate catalog hits, and the pipeline calls
+    # `AudnexusSource.fetch_by_asin()` directly for m4b ASIN lookups.
 }
 
 
@@ -231,9 +237,9 @@ class MetadataEnricher:
         External scrapers then fill any gaps (covers, page count, etc.)
 
         `audiobook=True` switches the priority list to
-        `config.audiobook_priority` (Audible + Audnexus lead) so
-        narrator / duration / ASIN come from the audiobook-aware
-        sources first.
+        `config.audiobook_priority` (Audible leads, hydrating its
+        hits through Audnexus internally) so narrator / duration /
+        ASIN come from the audiobook-aware sources first.
 
         Returns None when every source returned None or errored.
         """
@@ -401,8 +407,9 @@ def _build_default_sources(
     in which case it returns None silently on every search.
 
     `audible_region` controls which Audible TLD the catalog search
-    hits (and the `region` query param on Audnexus). User-visible
-    via the `audible_region` setting; defaults to "us".
+    hits, and propagates into the Audnexus hydration call Audible
+    makes internally. User-visible via the `audible_region` setting;
+    defaults to "us".
     """
     if not hardcover_api_key:
         _log.debug(
@@ -420,7 +427,7 @@ def _build_default_sources(
             continue
         if name == "hardcover" and hardcover_api_key:
             out.append(cls(api_key=hardcover_api_key))
-        elif name in ("audible", "audnexus"):
+        elif name == "audible":
             out.append(cls(region=audible_region))
         else:
             out.append(cls())

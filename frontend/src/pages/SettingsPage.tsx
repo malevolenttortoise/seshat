@@ -911,7 +911,7 @@ function AudiobookshelfSection({ s, upd, ist, nist, creds, onCredSaved }: {
 
     <SF
       label="Audible Region"
-      desc="Controls which Audible TLD catalog searches hit. Audnexus regional data follows the same code."
+      desc="Controls which Audible TLD catalog searches hit. Audible also hydrates every hit through Audnexus internally using the same region code."
     >
       <select
         value={(s.audible_region as string) || "us"}
@@ -933,8 +933,10 @@ function AudiobookshelfSection({ s, upd, ist, nist, creds, onCredSaved }: {
 
     {/* Note: the per-source Audible toggle previously lived here but
         migrated to the unified Metadata Sources panel (Discovery →
-        Metadata Sources). Same for Audnexus, Goodreads, Hardcover,
-        etc. — the panel is now the sole editor. */}
+        Metadata Sources). Same for Goodreads, Hardcover, etc. — the
+        panel is now the sole editor. Audnexus has no standalone row
+        because it piggybacks on Audible's hydration; toggling Audible
+        toggles the whole Audible+Audnexus chain. */}
 
     <SF
       label="Rebuild Cross-Library Links"
