@@ -688,7 +688,11 @@ async def scan_books_mam(data: dict = Body(...)):
             return {"error": "No matching books found"}
 
         delay = s.get("rate_mam", 2)
-        format_priority = s.get("mam_format_priority")
+        # Active library's content_type routes the whole bulk scan
+        # through either the ebook or audiobook MAM category.
+        from app.discovery.routers.mam import _active_content_type
+        ct = _active_content_type()
+        format_priority = s.get("audiobook_format_priority" if ct == "audiobook" else "mam_format_priority")
         token = s["mam_session_id"]
         lang_ids = _resolve_mam_languages(s.get("languages", ["English"]))
         stats = {"scanned": 0, "found": 0, "possible": 0, "not_found": 0, "errors": 0}
@@ -697,7 +701,7 @@ async def scan_books_mam(data: dict = Body(...)):
         for row in rows:
             bid, btitle, aname = row["id"], row["title"], row["name"]
             try:
-                check = await mam_check_book(token, btitle, aname, format_priority, delay, lang_ids=lang_ids)
+                check = await mam_check_book(token, btitle, aname, format_priority, delay, lang_ids=lang_ids, content_type=ct)
             except Exception as e:
                 logger.error(f"Bulk MAM scan error on book {bid} ({btitle[:40]}): {e}")
                 stats["errors"] += 1

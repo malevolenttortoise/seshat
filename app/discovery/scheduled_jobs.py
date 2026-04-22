@@ -321,15 +321,23 @@ async def mam_scheduler_loop() -> None:
 
         db = await get_db()
         try:
+            # Active-library content_type decides whether this tick
+            # scans the ebook or audiobook side of MAM. Scheduled MAM
+            # scans honor whatever library the user has selected as
+            # active; multi-library users can get audiobook coverage
+            # by switching active between ticks (or per manual scan).
+            from app.discovery.routers.mam import _active_content_type
+            _ct = _active_content_type()
             result = await mam_scan_batch(
                 db, session_id=mam_token, limit=150,
                 delay=s.get("rate_mam", 2), skip_ip_update=True,
-                format_priority=s.get("mam_format_priority"),
+                format_priority=s.get("audiobook_format_priority" if _ct == "audiobook" else "mam_format_priority"),
                 on_progress=_sched_progress,
                 cancel_check=_sched_cancel_check,
                 lang_ids=_resolve_mam_languages(
                     s.get("languages", ["English"])
                 ),
+                content_type=_ct,
             )
             was_cancelled = state._scheduled_mam_cancel_requested
             state._mam_scan_progress.update({

@@ -52,6 +52,19 @@ MAM_BROWSE_BASE = "https://www.myanonamouse.net/tor/browse.php"
 MAM_TORRENT_BASE = "https://www.myanonamouse.net/t"
 MAM_DYNIP_URL = "https://t.myanonamouse.net/json/dynamicSeedbox.php"
 EBOOK_CATEGORY = "14"
+AUDIOBOOK_CATEGORY = "13"
+
+
+def _cat_for(content_type: str) -> str:
+    """MAM main_cat id for the given content_type.
+
+    Every scan entry point flows through here so flipping ebook ↔
+    audiobook is a single string swap. Unknown content_type falls
+    back to ebook — safer default since the historical pipeline was
+    ebook-only and most code that doesn't pass a content_type explicitly
+    is ebook-era.
+    """
+    return AUDIOBOOK_CATEGORY if content_type == "audiobook" else EBOOK_CATEGORY
 
 # ─── SQL predicates for "books needing MAM scan" ─────────────
 # Two flavors: BASIC checks only mam_status, STRICT also requires mam_url.
@@ -157,11 +170,15 @@ def _resolve_mam_languages(language_names: list[str]) -> list[int]:
 
 # Default format priority (user can override in settings)
 DEFAULT_FORMAT_PRIORITY = ["epub", "azw3", "mobi", "kfx", "pdf", "html", "lit", "rtf", "doc"]
+DEFAULT_AUDIOBOOK_FORMAT_PRIORITY = ["m4b", "m4a", "mp3", "aax", "aa"]
 
 # All known ebook format tokens MAM might return in filetypes
 KNOWN_EBOOK_FORMATS = {
     "epub", "mobi", "azw", "azw3", "kfx", "pdf", "html", "htm",
     "lit", "rtf", "doc", "docx", "djvu", "fb2", "txt", "cbr", "cbz",
+}
+KNOWN_AUDIOBOOK_FORMATS = {
+    "m4b", "m4a", "mp3", "aax", "aa", "flac", "ogg", "wav",
 }
 
 
@@ -346,17 +363,21 @@ def _author_match(calibre_authors: str, mam_result: dict) -> bool:
 # Format preference scoring
 # ---------------------------------------------------------------------------
 
-def _parse_formats(filetypes_str: str) -> list[str]:
+def _parse_formats(filetypes_str: str, content_type: str = "ebook") -> list[str]:
     """
-    Parse MAM filetypes string into a list of known ebook formats.
-    Input: space-separated string like "epub mobi pdf" or "epub mp3 m4a"
-    Output: list of ebook formats only, e.g. ["epub", "mobi", "pdf"]
+    Parse MAM filetypes string into a list of known formats for the
+    target content type.
+
+    For ebook scans, audio formats (mp3, m4a) are filtered out so a
+    torrent tagged "epub mp3" returns just ["epub"]. For audiobook
+    scans the filter inverts — "mp3 m4a aa" returns all three and
+    an ebook-only torrent returns [].
     """
     if not filetypes_str:
         return []
     all_tokens = set(f.strip().lower() for f in filetypes_str.split() if f.strip())
-    # Only keep tokens that are known ebook formats (filter out audio: mp3, m4a, etc.)
-    return sorted(t for t in all_tokens if t in KNOWN_EBOOK_FORMATS)
+    allowed = KNOWN_AUDIOBOOK_FORMATS if content_type == "audiobook" else KNOWN_EBOOK_FORMATS
+    return sorted(t for t in all_tokens if t in allowed)
 
 
 def _format_score(formats: list[str], priority: list[str]) -> tuple[int, int, str]:
@@ -767,11 +788,17 @@ async def _mam_search(
     title: str,
     perpage: int = RESULTS_PER_PAGE,
     lang_ids: Optional[list[int]] = None,
+    content_type: str = "ebook",
 ) -> Optional[dict]:
     """
     Search MAM natively (httpx.AsyncClient). Pass authors=None for
     title-only search (pass 5). Returns parsed JSON response or None on
     error. Raises _AuthError on 401/403.
+
+    `content_type` routes the `main_cat` filter: "ebook" (default)
+    scopes to E-Books, "audiobook" scopes to AudioBooks. Callers that
+    want both categories aren't currently supported — scan flows
+    know the book's library and pass exactly one.
     """
     if authors is None:
         query = _clean_title_loose(title)
@@ -795,7 +822,7 @@ async def _mam_search(
             },
             "searchType": "active",
             "searchIn": "torrents",
-            "main_cat": [EBOOK_CATEGORY],
+            "main_cat": [_cat_for(content_type)],
             "browse_lang": lang_ids,
             "browseFlagsHideVsShow": "0",
             "startDate": "", "endDate": "", "hash": "",
@@ -831,6 +858,7 @@ def _evaluate_results(
     authors: str,
     lang_ids: Optional[list[int]] = None,
     known_series: str = "",
+    content_type: str = "ebook",
 ) -> list[dict]:
     """
     Evaluate all MAM search results for a book. Returns a list of viable
@@ -878,19 +906,30 @@ def _evaluate_results(
         # as mam_title above — MAM occasionally returns numeric values here
         # for malformed catalog entries.
         filetypes_raw = str(item.get("filetype") or item.get("filetypes") or "")
-        formats = _parse_formats(filetypes_raw)
+        formats = _parse_formats(filetypes_raw, content_type=content_type)
 
-        # Explicit audiobook rejection: if no ebook formats were parsed,
-        # the torrent is audio-only (mp3, m4a, etc.) — skip it entirely.
+        # Format-based rejection: inverted by content_type. An ebook scan
+        # skips audio-only torrents (mp3/m4a/etc.) since _parse_formats
+        # returned nothing under the ebook allowlist; an audiobook scan
+        # skips ebook-only torrents the same way.
         if not formats and filetypes_raw.strip():
-            logger.debug(f"  Eval: SKIP '{mam_title[:50]}' — audio-only formats ({filetypes_raw.strip()})")
+            other = "audio" if content_type == "ebook" else "ebook"
+            logger.debug(f"  Eval: SKIP '{mam_title[:50]}' — {other}-only formats ({filetypes_raw.strip()})")
             continue
 
-        # Category-based audiobook rejection: MAM categories like
-        # "AudioBooks - Fantasy" vs "Ebooks - Fantasy".
+        # Category-based rejection: MAM categories like "AudioBooks -
+        # Fantasy" vs "Ebooks - Fantasy". For ebook scans we drop
+        # audiobook-prefixed categories; for audiobook scans we drop
+        # ebook-prefixed ones. The main_cat filter on the search
+        # request already narrows this, but a handful of older
+        # cross-category listings still slip through.
         category = str(item.get("category") or "").strip()
-        if category.lower().startswith("audiobook"):
+        cat_lower = category.lower()
+        if content_type == "ebook" and cat_lower.startswith("audiobook"):
             logger.debug(f"  Eval: SKIP '{mam_title[:50]}' — audiobook category ({category})")
+            continue
+        if content_type == "audiobook" and cat_lower.startswith("ebook"):
+            logger.debug(f"  Eval: SKIP '{mam_title[:50]}' — ebook category ({category})")
             continue
 
         # ── Improved scoring via scoring.py ──
@@ -959,16 +998,25 @@ async def check_book(
     delay: float = DEFAULT_DELAY,
     lang_ids: Optional[list[int]] = None,
     series_name: str = "",
+    content_type: str = "ebook",
 ) -> dict:
     """
     Five-pass search cascade for a single book, with format preference scoring.
+
+    `content_type` routes the whole cascade through the ebook or
+    audiobook variants — search main_cat, format filtering, category
+    rejection, default priority list. Callers that don't pass
+    content_type get the ebook path (historical behavior).
 
     Returns dict with:
       status, mam_url, mam_torrent_id, mam_title, mam_formats, mam_has_multiple,
       match_pct, best_format, passes_tried, search_link, error
     """
     if format_priority is None:
-        format_priority = DEFAULT_FORMAT_PRIORITY
+        format_priority = (
+            DEFAULT_AUDIOBOOK_FORMAT_PRIORITY if content_type == "audiobook"
+            else DEFAULT_FORMAT_PRIORITY
+        )
     if not lang_ids:
         lang_ids = [_ENGLISH_LANG_ID]
 
@@ -1016,7 +1064,7 @@ async def check_book(
                     )
             except (ValueError, TypeError):
                 pass
-        matches = _evaluate_results(data, title, search_title, authors, lang_ids, known_series=series_name)
+        matches = _evaluate_results(data, title, search_title, authors, lang_ids, known_series=series_name, content_type=content_type)
 
         if not matches:
             return False
@@ -1079,7 +1127,7 @@ async def check_book(
 
     try:
         # --- Pass 1: author + full title ---
-        r = await _mam_search(token, authors, title, lang_ids=lang_ids)
+        r = await _mam_search(token, authors, title, lang_ids=lang_ids, content_type=content_type)
         await asyncio.sleep(delay)
         result["passes_tried"].append(1)
         if _try_evaluate(1, r, title):
@@ -1088,7 +1136,7 @@ async def check_book(
         # --- Pass 2: author + core title (volume prefix stripped) ---
         core = _extract_core_title(title)
         if core:
-            r = await _mam_search(token, authors, core, lang_ids=lang_ids)
+            r = await _mam_search(token, authors, core, lang_ids=lang_ids, content_type=content_type)
             await asyncio.sleep(delay)
             if _try_evaluate(2, r, core):
                 return result
@@ -1096,7 +1144,7 @@ async def check_book(
         # --- Pass 3: author + subtitle right (part after colon) ---
         sub_right = _extract_subtitle_part(title)
         if sub_right and sub_right != core:
-            r = await _mam_search(token, authors, sub_right, lang_ids=lang_ids)
+            r = await _mam_search(token, authors, sub_right, lang_ids=lang_ids, content_type=content_type)
             await asyncio.sleep(delay)
             if _try_evaluate(3, r, sub_right):
                 return result
@@ -1104,14 +1152,14 @@ async def check_book(
         # --- Pass 4: author + short title (part before colon) ---
         short = _strip_subtitle(title)
         if short and short != title and short != core:
-            r = await _mam_search(token, authors, short, lang_ids=lang_ids)
+            r = await _mam_search(token, authors, short, lang_ids=lang_ids, content_type=content_type)
             await asyncio.sleep(delay)
             if _try_evaluate(4, r, short):
                 return result
 
         # --- Pass 5: title only (no author), loose cleaning ---
         title_only = core or sub_right or short or title
-        r = await _mam_search(token, None, title_only, lang_ids=lang_ids)
+        r = await _mam_search(token, None, title_only, lang_ids=lang_ids, content_type=content_type)
         await asyncio.sleep(delay)
         if _try_evaluate(5, r, title_only):
             return result
@@ -1153,6 +1201,7 @@ async def scan_books_batch(
     cancel_check: Optional[Callable[[], bool]] = None,
     lang_ids: Optional[list[int]] = None,
     book_ids: Optional[list[int]] = None,
+    content_type: str = "ebook",
 ) -> dict:
     """
     Scan a batch of books that don't yet have MAM data.
@@ -1170,7 +1219,10 @@ async def scan_books_batch(
     the user expects (otherwise the queue would silently grow forever).
     """
     if format_priority is None:
-        format_priority = DEFAULT_FORMAT_PRIORITY
+        format_priority = (
+            DEFAULT_AUDIOBOOK_FORMAT_PRIORITY if content_type == "audiobook"
+            else DEFAULT_FORMAT_PRIORITY
+        )
 
     # Register IP first
     ip_result = await register_ip(session_id, skip_ip_update)
@@ -1265,7 +1317,7 @@ async def scan_books_batch(
         if on_progress:
             on_progress(dict(stats))
 
-        check = await check_book(session_id, book_title, author_name, format_priority, delay, lang_ids=lang_ids, series_name=book_series or "")
+        check = await check_book(session_id, book_title, author_name, format_priority, delay, lang_ids=lang_ids, series_name=book_series or "", content_type=content_type)
         stats["scanned"] += 1
 
         # Write result to DB
@@ -1370,6 +1422,7 @@ async def run_full_scan_batch(
     lang_ids: Optional[list[int]] = None,
     on_book: Optional[Callable[[str], None]] = None,
     on_progress: Optional[Callable[[dict], None]] = None,
+    content_type: str = "ebook",
 ) -> dict:
     """
     Run one batch of a full scan (400 books per batch).
@@ -1387,7 +1440,10 @@ async def run_full_scan_batch(
     Returns {"status": "batch_complete"|"scan_complete"|"error"|"no_scan", ...}.
     """
     if format_priority is None:
-        format_priority = DEFAULT_FORMAT_PRIORITY
+        format_priority = (
+            DEFAULT_AUDIOBOOK_FORMAT_PRIORITY if content_type == "audiobook"
+            else DEFAULT_FORMAT_PRIORITY
+        )
 
     rows = await db.execute_fetchall(
         "SELECT id, total_books, last_offset, batch_size, book_ids_snapshot "
@@ -1467,7 +1523,7 @@ async def run_full_scan_batch(
         if on_book:
             on_book(book_title)
 
-        check = await check_book(session_id, book_title, author_name, format_priority, delay, lang_ids=lang_ids)
+        check = await check_book(session_id, book_title, author_name, format_priority, delay, lang_ids=lang_ids, content_type=content_type)
         scanned += 1
 
         await db.execute("""

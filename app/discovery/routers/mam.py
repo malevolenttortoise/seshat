@@ -45,6 +45,22 @@ from app.discovery.sources.mam import (
 from app import state
 from app.discovery.sources.mam import get_current_token as mam_get_current_token
 
+
+def _active_content_type(slug: str | None = None) -> str:
+    """Return the content_type of the target library, for MAM scan
+    routing. Falls back to the active library when no slug is given,
+    and to "ebook" when no match is found in _discovered_libraries.
+    Threading this through every scan entry point ensures audiobook
+    libraries search MAM's audiobook category instead of being
+    silently filtered out by the ebook main_cat default.
+    """
+    from app.discovery.database import get_active_library as _active
+    target = slug or _active()
+    for lib in state._discovered_libraries:
+        if lib.get("slug") == target:
+            return lib.get("content_type", "ebook")
+    return "ebook"
+
 logger = logging.getLogger("seshat.discovery")
 
 router = APIRouter(prefix="/api/discovery/mam", tags=["mam"])
@@ -247,13 +263,15 @@ async def mam_scan_endpoint(limit: int = Query(None, ge=1)):
                     await db.close()
                     await _notify_mam_done()
                     return
+                _ct = _active_content_type()
                 result = await mam_scan_batch(
                     db, session_id=cs_token, limit=len(batch_ids),
                     delay=cs.get("rate_mam", 2), skip_ip_update=True,
-                    format_priority=cs.get("mam_format_priority"),
+                    format_priority=cs.get("audiobook_format_priority" if _ct == "audiobook" else "mam_format_priority"),
                     on_progress=_progress,
                     lang_ids=_resolve_mam_languages(cs.get("languages", ["English"])),
                     book_ids=batch_ids,
+                    content_type=_ct,
                 )
                 if result.get("error"):
                     state._mam_scan_progress.update({"status": f"error: {result['error']}", "running": False})
@@ -372,12 +390,14 @@ async def mam_test_scan():
         return {"error": "A MAM scan is already running — wait for it to finish"}
     db = await get_db()
     try:
+        _ct = _active_content_type()
         result = await mam_scan_batch(
             db, session_id=token, limit=10,
             delay=s.get("rate_mam", 2),
             skip_ip_update=True,
-            format_priority=s.get("mam_format_priority"),
+            format_priority=s.get("audiobook_format_priority" if _ct == "audiobook" else "mam_format_priority"),
             lang_ids=_resolve_mam_languages(s.get("languages", ["English"])),
+            content_type=_ct,
         )
         return result
     finally:
@@ -444,13 +464,15 @@ async def mam_full_scan_start():
                             "current_book": stats.get("current_book", ""),
                         })
 
+                    _ct_full = _active_content_type()
                     result = await mam_run_full_scan_batch(
                         db, session_id=cs_token,
                         skip_ip_update=True,
                         delay=cs.get("rate_mam", 2),
-                        format_priority=cs.get("mam_format_priority"),
+                        format_priority=cs.get("audiobook_format_priority" if _ct_full == "audiobook" else "mam_format_priority"),
                         lang_ids=_resolve_mam_languages(cs.get("languages", ["English"])),
                         on_book=_on_book,
+                        content_type=_ct_full,
                         on_progress=_on_progress,
                     )
                     fs = await mam_get_full_scan_status(db)
@@ -644,11 +666,13 @@ async def mam_scan_single_book(book_id: int):
             return {"error": f"Book {book_id} not found"}
         _, title, author = rows[0]
 
+        ct = _active_content_type()
         check = await mam_check_book(
             token, title, author,
-            format_priority=s.get("mam_format_priority"),
+            format_priority=s.get("audiobook_format_priority" if ct == "audiobook" else "mam_format_priority"),
             delay=s.get("rate_mam", 2),
             lang_ids=_resolve_mam_languages(s.get("languages", ["English"])),
+            content_type=ct,
         )
         await db.execute("""
             UPDATE books SET mam_url=?, mam_status=?, mam_formats=?,
@@ -746,7 +770,9 @@ async def mam_scan_single_author(author_id: int, slug: str | None = None):
     }
 
     delay = s.get("rate_mam", 2)
-    format_priority = s.get("mam_format_priority")
+    # Route format priority + main_cat by the target library's content_type.
+    scan_ct = _active_content_type(target_slug)
+    format_priority = s.get("audiobook_format_priority" if scan_ct == "audiobook" else "mam_format_priority")
     # `token` already resolved above via _get_mam_token() and gated on
     lang_ids = _resolve_mam_languages(s.get("languages", ["English"]))
 
@@ -761,7 +787,7 @@ async def mam_scan_single_author(author_id: int, slug: str | None = None):
                 # finished.
                 state._mam_scan_progress["current_book"] = btitle
                 try:
-                    check = await mam_check_book(token, btitle, author_name, format_priority, delay, lang_ids=lang_ids)
+                    check = await mam_check_book(token, btitle, author_name, format_priority, delay, lang_ids=lang_ids, content_type=scan_ct)
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:

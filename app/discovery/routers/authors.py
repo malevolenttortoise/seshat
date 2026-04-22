@@ -599,7 +599,13 @@ async def scan_authors_mam(data: dict = Body(...)):
 
     total = len(book_rows)
     delay = s.get("rate_mam", 2)
-    format_priority = s.get("mam_format_priority")
+    # Scan content_type tracks the currently-active library — authors
+    # pages don't accept a slug override yet, so we use the caller's
+    # selected library. Determines MAM main_cat + format-priority
+    # selection for the batch.
+    from app.discovery.routers.mam import _active_content_type
+    ct = _active_content_type()
+    format_priority = s.get("audiobook_format_priority" if ct == "audiobook" else "mam_format_priority")
     token = s["mam_session_id"]
     lang_ids = _resolve_mam_languages(s.get("languages", ["English"]))
 
@@ -621,7 +627,7 @@ async def scan_authors_mam(data: dict = Body(...)):
                 bid, btitle, aname = row[0], row[1], row[2]
                 state._mam_scan_progress["current_book"] = btitle[:60]
                 try:
-                    check = await mam_check_book(token, btitle, aname, format_priority, delay, lang_ids=lang_ids)
+                    check = await mam_check_book(token, btitle, aname, format_priority, delay, lang_ids=lang_ids, content_type=ct)
                 except Exception as e:
                     logger.error(f"Bulk author MAM scan error on book {bid} ({btitle[:40]}): {e}")
                     state._mam_scan_progress["errors"] = state._mam_scan_progress.get("errors", 0) + 1
