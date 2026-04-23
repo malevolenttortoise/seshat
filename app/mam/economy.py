@@ -40,7 +40,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, Optional, Union
 
-from app.mam.bonus_buy import BP_PER_UPLOAD_GB, BP_PER_VIP_WEEK
+from app.mam.bonus_buy import (
+    BP_PER_UPLOAD_GB,
+    BP_PER_VIP_WEEK,
+    MIN_UPLOAD_GB,
+)
 from app.mam.user_status import UserStatus
 
 
@@ -132,14 +136,19 @@ def max_affordable_upload_gb(seedbonus: float) -> float:
     """Biggest upload-credit amount a balance can fund.
 
     Used by the router's "Max Affordable" preset. Floor-divided is
-    deliberate — offering 19.98 GB when the user has 9992 BP looks
-    worse than rounding down to 19 GB, even though MAM would accept
-    either. Fractional GB values ARE supported in buys, but the
-    preset picks whole-GB chunks for user clarity.
+    deliberate — offering 49.98 GB when the user has 24,992 BP looks
+    worse than returning 0 and surfacing the minimum-buy error. MAM
+    rejects programmatic buys under `MIN_UPLOAD_GB`, so "max
+    affordable" for a balance below that threshold is genuinely
+    zero — the button should be unclickable, not silently submit a
+    doomed 49.98 GB request.
     """
     if seedbonus <= 0:
         return 0.0
-    return float(int(seedbonus // BP_PER_UPLOAD_GB))
+    whole_gb = int(seedbonus // BP_PER_UPLOAD_GB)
+    if whole_gb < MIN_UPLOAD_GB:
+        return 0.0
+    return float(whole_gb)
 
 
 # ─── Decisions ──────────────────────────────────────────────
@@ -234,14 +243,29 @@ def decide_upload_buy(
     elif config.bonus_trigger and status.seedbonus > config.bonus_ceiling:
         excess = status.seedbonus - config.bonus_ceiling
         gb = excess / BP_PER_UPLOAD_GB
-        # Guard against degenerate tiny amounts — a <0.1 GB spend
-        # just rattles the audit log without helping anything.
-        if gb < 0.1:
-            return EconomyDecision(action="skip", reason="no_trigger")
         mode = "bonus"
 
     if mode is None or gb is None:
         return EconomyDecision(action="skip", reason="no_trigger")
+
+    # MAM's minimum-buy floor. A sub-50 GB buy would round-trip to
+    # MAM only to come back as a log-spam rejection; skip it here
+    # so the audit shows a clean no_trigger instead of a noisy
+    # failure. Reached when:
+    #   - ratio/buffer chunk_gb is misconfigured below 50
+    #     (router's PUT /config rejects this, but the decision
+    #     engine stays defensive in case settings.json is hand-
+    #     edited),
+    #   - bonus mode's computed gb is below 50 because the excess
+    #     over the ceiling is smaller than `MIN_UPLOAD_GB *
+    #     BP_PER_UPLOAD_GB` (= 25,000 BP at MAM's default pricing).
+    if gb < MIN_UPLOAD_GB:
+        return EconomyDecision(
+            action="skip",
+            reason="no_trigger",
+            amount_gb=gb,
+            mode=mode,
+        )
 
     estimated_cost = estimate_upload_cost_bp(gb)
     if status.seedbonus < estimated_cost:

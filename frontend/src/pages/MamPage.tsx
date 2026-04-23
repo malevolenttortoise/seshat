@@ -25,6 +25,7 @@ import {
   type AuditRow,
   type EconomyConfig,
 } from "../lib/economyApi";
+import { toast } from "../lib/toast";
 import { useTheme } from "../theme";
 
 interface MamStatus {
@@ -441,7 +442,6 @@ function EconomySections() {
   const [config, setConfig] = useState<EconomyConfig | null>(null);
   const [audit, setAudit] = useState<AuditRow[] | null>(null);
   const [configBusy, setConfigBusy] = useState(false);
-  const [actionMessage, setActionMessage] = useState<string | null>(null);
 
   async function loadAll() {
     try {
@@ -463,12 +463,11 @@ function EconomySections() {
   async function patchConfig(patch: Partial<EconomyConfig>) {
     if (!config) return;
     setConfigBusy(true);
-    setActionMessage(null);
     try {
       const next = await economyApi.putConfig(patch);
       setConfig(next);
     } catch (e) {
-      setActionMessage(String(e));
+      toast.error(String(e));
     } finally {
       setConfigBusy(false);
     }
@@ -479,32 +478,34 @@ function EconomySections() {
   }
 
   async function vipBuyNow(weeks: number | "max") {
-    setActionMessage(null);
     try {
       const r = await economyApi.vipBuy(weeks);
-      setActionMessage(
-        r.ok
-          ? `VIP buy OK — new seedbonus ${r.new_seedbonus?.toLocaleString() ?? "?"}`
-          : `VIP buy failed: ${r.message}`,
-      );
+      if (r.ok) {
+        toast.success(
+          `VIP buy OK — new seedbonus ${r.new_seedbonus?.toLocaleString() ?? "?"}`,
+        );
+      } else {
+        toast.error(`VIP buy failed: ${r.message}`);
+      }
       await loadAll();
     } catch (e) {
-      setActionMessage(String(e));
+      toast.error(String(e));
     }
   }
 
   async function uploadBuyNow(body: { gb: number } | { mode: "max_affordable" }) {
-    setActionMessage(null);
     try {
       const r = await economyApi.uploadBuy(body);
-      setActionMessage(
-        r.ok
-          ? `Upload buy OK — new seedbonus ${r.new_seedbonus?.toLocaleString() ?? "?"}`
-          : `Upload buy failed: ${r.message}`,
-      );
+      if (r.ok) {
+        toast.success(
+          `Upload buy OK — new seedbonus ${r.new_seedbonus?.toLocaleString() ?? "?"}`,
+        );
+      } else {
+        toast.error(`Upload buy failed: ${r.message}`);
+      }
       await loadAll();
     } catch (e) {
-      setActionMessage(String(e));
+      toast.error(String(e));
     }
   }
 
@@ -580,22 +581,6 @@ function EconomySections() {
         </div>
       )}
 
-      {actionMessage && (
-        <div
-          style={{
-            background: theme.accent + "22",
-            border: `1px solid ${theme.accent}55`,
-            color: theme.text2,
-            padding: "10px 14px",
-            borderRadius: 8,
-            fontSize: 13,
-            marginBottom: 16,
-          }}
-        >
-          {actionMessage}
-        </div>
-      )}
-
       {/* VIP auto-buy */}
       <Section
         title="Auto-buy: VIP"
@@ -668,7 +653,11 @@ function EconomySections() {
         subtitle="Three independent triggers — ratio, buffer, bonus excess. The first to fire wins each interval tick."
         right={
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            {[1, 5, 20, 50, 100].map((gb) => (
+            {/* MAM rejects programmatic upload buys under 50 GB
+                with a log-spam error — preset buttons start at the
+                floor. Chunk minimums are also enforced at config
+                PUT time on the backend. */}
+            {[50, 100, 250, 500].map((gb) => (
               <Btn
                 key={gb}
                 variant="ghost"

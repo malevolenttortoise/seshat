@@ -102,12 +102,23 @@ class TestBuyUploadHappyPath:
         assert "amount=50" in urls[0]
 
     async def test_success_with_float_gb(self, fake_mam):
-        # MAM's own UI exposes 2.5 GB as a preset — fractional amounts
-        # must round-trip through urlencode without being quantized.
-        result = await buy_upload_credit(2.5, token="tok")
+        # Fractional amounts above the 50 GB floor must round-trip
+        # through urlencode without being quantized. Sub-50 GB is
+        # MAM-rejected, so we use 50.5 here instead of 2.5.
+        result = await buy_upload_credit(50.5, token="tok")
         assert result.success is True
         urls = [str(r.url) for r in _bonus_requests(fake_mam)]
-        assert "amount=2.5" in urls[0]
+        assert "amount=50.5" in urls[0]
+
+    async def test_rejects_below_minimum_floor(self, fake_mam):
+        from app.mam.bonus_buy import MIN_UPLOAD_GB
+        # Live MAM capture 2026-04-24: `"Automated spenders are limited
+        # to buying at least 50 GB of upload at a time, due to log spam"`.
+        with pytest.raises(ValueError, match="at least"):
+            await buy_upload_credit(1, token="tok")
+        with pytest.raises(ValueError, match="at least"):
+            await buy_upload_credit(MIN_UPLOAD_GB - 0.01, token="tok")
+        assert _bonus_requests(fake_mam) == []
 
 
 class TestBuyPersonalFreeleechHappyPath:
@@ -290,7 +301,7 @@ class TestRatioParsing:
             b'{"success":true,"type":"upload","amount":1,'
             b'"seedbonus":100.0,"uploaded":1,"downloaded":1,"ratio":3.5}'
         )
-        result = await buy_upload_credit(1, token="tok")
+        result = await buy_upload_credit(50, token="tok")
         assert result.new_ratio == pytest.approx(3.5)
 
     async def test_missing_ratio_yields_none(self, fake_mam):
@@ -298,7 +309,7 @@ class TestRatioParsing:
             b'{"success":true,"type":"upload","amount":1,'
             b'"seedbonus":100.0,"uploaded":1,"downloaded":1}'
         )
-        result = await buy_upload_credit(1, token="tok")
+        result = await buy_upload_credit(50, token="tok")
         assert result.new_ratio is None
         assert result.success is True
 

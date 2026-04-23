@@ -37,6 +37,7 @@ from app.database import get_db
 from app.mam.bonus_buy import (
     BP_PER_PERSONAL_FL,
     BP_PER_UPLOAD_GB,
+    MIN_UPLOAD_GB,
     BuyResult,
     buy_personal_freeleech,
     buy_upload_credit,
@@ -109,11 +110,31 @@ async def put_config(updates: dict) -> dict:
 
     Silently drops any key not in `_CONFIG_KEYS` — the user can't
     corrupt timestamps or unrelated settings through this endpoint.
+
+    Chunk-GB values are additionally range-checked: MAM rejects
+    programmatic upload-credit buys under `MIN_UPLOAD_GB`, so a
+    sub-50 chunk would just produce a silent no_trigger skip every
+    interval. Reject at write time with a clear message instead.
     """
     s = dict(load_settings())
     allowed = {k: v for k, v in updates.items() if k in _CONFIG_KEYS}
     if not allowed:
         raise HTTPException(400, "No recognized economy keys in request body")
+    for chunk_key in (
+        "mam_economy_upload_ratio_chunk_gb",
+        "mam_economy_upload_buffer_chunk_gb",
+    ):
+        if chunk_key in allowed:
+            try:
+                chunk_gb = float(allowed[chunk_key])
+            except (TypeError, ValueError):
+                raise HTTPException(400, f"{chunk_key} must be a number")
+            if chunk_gb < MIN_UPLOAD_GB:
+                raise HTTPException(
+                    400,
+                    f"{chunk_key} must be >= {MIN_UPLOAD_GB} — MAM rejects "
+                    f"programmatic upload buys below that floor (got {chunk_gb})",
+                )
     s.update(allowed)
     save_settings(s)
     return {k: s.get(k) for k in (_CONFIG_KEYS + _CONFIG_READONLY_KEYS)}
@@ -166,15 +187,23 @@ async def upload_buy(body: UploadBuyRequest) -> BuyResponse:
     if body.mode == "max_affordable":
         gb = max_affordable_upload_gb(prev_seedbonus)
         if gb <= 0:
+            min_bp = MIN_UPLOAD_GB * BP_PER_UPLOAD_GB
             raise HTTPException(
                 400,
-                f"Not enough seedbonus for a whole-GB buy "
-                f"(have {prev_seedbonus:.0f} BP, need at least "
-                f"{BP_PER_UPLOAD_GB} BP for 1 GB)",
+                f"Not enough seedbonus for MAM's minimum {MIN_UPLOAD_GB} GB "
+                f"programmatic buy (have {prev_seedbonus:.0f} BP, need "
+                f"at least {min_bp:,} BP)",
             )
     else:
         if body.gb is None or body.gb <= 0:
             raise HTTPException(400, "gb must be a positive number")
+        if body.gb < MIN_UPLOAD_GB:
+            raise HTTPException(
+                400,
+                f"MAM rejects programmatic upload-credit buys under "
+                f"{MIN_UPLOAD_GB} GB (got {body.gb} GB). Use a larger "
+                f"amount or switch to `mode=max_affordable`.",
+            )
         gb = body.gb
 
     result = await buy_upload_credit(gb, token=token)

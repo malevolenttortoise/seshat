@@ -65,6 +65,13 @@ BP_PER_UPLOAD_GB: int = int(os.getenv("MAM_BP_PER_UPLOAD_GB", "500"))
 BP_PER_VIP_WEEK: int = int(os.getenv("MAM_BP_PER_VIP_WEEK", "1250"))
 BP_PER_PERSONAL_FL: int = int(os.getenv("MAM_BP_PER_PERSONAL_FL", "50000"))
 
+# MAM-enforced minimum for programmatic upload-credit buys. A sub-50
+# GB purchase comes back with `"Automated spenders are limited to
+# buying at least 50 GB of upload at a time, due to log spam"`. The
+# web UI has smaller presets, but the API does not. Not env-
+# overridable — the floor lives on MAM's side, not ours.
+MIN_UPLOAD_GB: int = 50
+
 
 # ─── Result type ─────────────────────────────────────────────
 
@@ -189,6 +196,16 @@ async def buy_upload_credit(
     """
     if not isinstance(gb, (int, float)) or gb <= 0:
         raise ValueError(f"buy_upload_credit gb must be positive number (got {gb!r})")
+    if gb < MIN_UPLOAD_GB:
+        # Let the ValueError fire BEFORE the dry-run short-circuit so
+        # a misconfigured caller gets the same feedback whether or not
+        # we'd have hit real MAM. Sub-50 GB buys are MAM-rejected with
+        # a log-spam warning, so there's no reason to let them through
+        # even in dry-run.
+        raise ValueError(
+            f"buy_upload_credit gb must be at least {MIN_UPLOAD_GB} GB — "
+            f"MAM rejects smaller programmatic buys (got {gb} GB)"
+        )
     if _is_dry_run():
         return _dry_run_result(
             f"upload {gb} GB", int(round(gb * BP_PER_UPLOAD_GB)),
@@ -385,11 +402,16 @@ def _coerce_int(value: Any) -> Optional[int]:
 
 
 def _parse_ratio(value: Any) -> Optional[float]:
-    """Ratio comes in two shapes from MAM.
+    """Ratio comes in one of two shapes from MAM.
 
-    jsonLoad.php returns a bare float. bonusBuy.php returns a dict like
-    `{"source": "94186.97...", "parsedValue": 94186.97}`. This accepts
-    either — the `parsedValue` is the authoritative numeric form.
+    Real bonusBuy.php (verified 2026-04-24 live capture): bare float
+    e.g. `94743.55`. That matches jsonLoad.php's shape.
+
+    Defensive dict form `{"source": "...", "parsedValue": N}`: earlier
+    memory notes listed this shape, but production MAM does not
+    actually use it for the three spendtypes we hit. Keep the branch
+    anyway — MAM has historically shipped both forms on adjacent
+    endpoints, and the cost of accepting either is two lines.
     """
     if value is None:
         return None

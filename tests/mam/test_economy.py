@@ -249,9 +249,10 @@ class TestUploadBufferTrigger:
 
 class TestUploadBonusTrigger:
     def test_fires_above_ceiling(self):
-        # 10100 seedbonus, ceiling 5000 → excess 5100 / 500 = 10.2 GB
+        # 40000 seedbonus, ceiling 5000 → excess 35000 / 500 = 70 GB.
+        # Amounts must be >= MAM's 50 GB programmatic floor.
         d = decide_upload_buy(
-            _status(seedbonus=10_100),
+            _status(seedbonus=40_000),
             UploadBuyConfig(
                 enabled=True, bonus_trigger=True, bonus_ceiling=5000,
             ),
@@ -260,19 +261,20 @@ class TestUploadBonusTrigger:
         assert d.action == "buy"
         assert d.mode == "bonus"
         assert d.reason == "trigger:bonus"
-        assert d.amount_gb == pytest.approx(10.2)
-        assert d.estimated_cost_bp == 5100
+        assert d.amount_gb == pytest.approx(70.0)
+        assert d.estimated_cost_bp == 35_000
 
     def test_spend_drops_balance_to_ceiling(self):
         # Post-buy: seedbonus − cost = ceiling (the design invariant).
+        # Needs excess >= 25000 BP (50 GB minimum × 500 BP/GB).
         d = decide_upload_buy(
-            _status(seedbonus=12_345),
+            _status(seedbonus=32_345),
             UploadBuyConfig(
                 enabled=True, bonus_trigger=True, bonus_ceiling=5000,
             ),
             last_bought_at=0, now_ts=1_000_000,
         )
-        post = 12_345 - d.estimated_cost_bp
+        post = 32_345 - d.estimated_cost_bp
         assert post == 5000
 
     def test_at_ceiling_does_not_fire(self):
@@ -286,12 +288,15 @@ class TestUploadBonusTrigger:
         assert d.action == "skip"
         assert d.reason == "no_trigger"
 
-    def test_tiny_excess_does_not_rattle_audit(self):
-        # Ceiling 5000, balance 5005 → excess 5 / 500 = 0.01 GB. We
-        # explicitly skip amounts under 0.1 GB because spending 5 BP
-        # for an audit row is worse than just waiting.
+    def test_excess_below_min_buy_floor_skips(self):
+        # Ceiling 5000, balance 10100 → excess 5100 / 500 = 10.2 GB.
+        # Even though the user technically has enough to buy 10 GB,
+        # MAM rejects sub-50 GB programmatic buys, so we skip instead
+        # of letting a doomed request through. Next tick retries once
+        # the excess grows enough for a 50+ GB buy (25,000+ BP above
+        # the ceiling).
         d = decide_upload_buy(
-            _status(seedbonus=5005),
+            _status(seedbonus=10_100),
             UploadBuyConfig(
                 enabled=True, bonus_trigger=True, bonus_ceiling=5000,
             ),
@@ -304,31 +309,31 @@ class TestUploadBonusTrigger:
 class TestUploadTriggerPriority:
     def test_ratio_beats_buffer_and_bonus(self):
         d = decide_upload_buy(
-            _status(ratio=1.0, upload_buffer_bytes=1_000_000_000, seedbonus=10_000),
+            _status(ratio=1.0, upload_buffer_bytes=1_000_000_000, seedbonus=100_000),
             UploadBuyConfig(
                 enabled=True,
-                ratio_trigger=True, ratio_floor=1.5, ratio_chunk_gb=10,
-                buffer_trigger=True, buffer_floor_gb=10, buffer_chunk_gb=20,
+                ratio_trigger=True, ratio_floor=1.5, ratio_chunk_gb=50,
+                buffer_trigger=True, buffer_floor_gb=10, buffer_chunk_gb=60,
                 bonus_trigger=True, bonus_ceiling=1000,
             ),
             last_bought_at=0, now_ts=1_000_000,
         )
         assert d.mode == "ratio"
-        assert d.amount_gb == 10
+        assert d.amount_gb == 50
 
     def test_buffer_beats_bonus_when_ratio_ok(self):
         d = decide_upload_buy(
-            _status(ratio=5.0, upload_buffer_bytes=1_000_000_000, seedbonus=10_000),
+            _status(ratio=5.0, upload_buffer_bytes=1_000_000_000, seedbonus=100_000),
             UploadBuyConfig(
                 enabled=True,
                 ratio_trigger=True, ratio_floor=1.5,
-                buffer_trigger=True, buffer_floor_gb=10, buffer_chunk_gb=20,
+                buffer_trigger=True, buffer_floor_gb=10, buffer_chunk_gb=60,
                 bonus_trigger=True, bonus_ceiling=1000,
             ),
             last_bought_at=0, now_ts=1_000_000,
         )
         assert d.mode == "buffer"
-        assert d.amount_gb == 20
+        assert d.amount_gb == 60
 
     def test_bonus_fires_when_ratio_and_buffer_ok(self):
         d = decide_upload_buy(
@@ -364,14 +369,47 @@ class TestUploadAffordability:
     def test_bonus_trigger_cannot_underrun_balance(self):
         # Bonus mode's formula guarantees seedbonus >= cost — there
         # is no scenario where affordability fails in bonus mode.
+        # Need enough excess for MAM's 50 GB floor: 25,000 BP above
+        # the ceiling minimum.
         d = decide_upload_buy(
-            _status(seedbonus=5_500),
+            _status(seedbonus=35_000),
             UploadBuyConfig(
                 enabled=True, bonus_trigger=True, bonus_ceiling=5000,
             ),
             last_bought_at=0, now_ts=1_000_000,
         )
         assert d.action == "buy"
+
+    def test_ratio_chunk_below_min_floor_skips(self):
+        # Router's PUT /config rejects sub-50 chunk values, but if
+        # settings.json gets hand-edited the decision engine stays
+        # defensive — skip with no_trigger rather than fire a doomed
+        # request that MAM will reject with a log-spam error.
+        d = decide_upload_buy(
+            _status(ratio=1.0),
+            UploadBuyConfig(
+                enabled=True, ratio_trigger=True,
+                ratio_floor=1.5, ratio_chunk_gb=20,
+            ),
+            last_bought_at=0, now_ts=1_000_000,
+        )
+        assert d.action == "skip"
+        assert d.reason == "no_trigger"
+        assert d.mode == "ratio"
+        assert d.amount_gb == 20  # preserved so audit row shows what was attempted
+
+    def test_buffer_chunk_below_min_floor_skips(self):
+        d = decide_upload_buy(
+            _status(upload_buffer_bytes=1_000_000_000),
+            UploadBuyConfig(
+                enabled=True, buffer_trigger=True,
+                buffer_floor_gb=10, buffer_chunk_gb=10,
+            ),
+            last_bought_at=0, now_ts=1_000_000,
+        )
+        assert d.action == "skip"
+        assert d.reason == "no_trigger"
+        assert d.mode == "buffer"
 
 
 # ─── Cost helpers ───────────────────────────────────────────
@@ -390,8 +428,18 @@ class TestCostHelpers:
         assert estimate_upload_cost_bp(0.001) in (0, 1)
 
     def test_max_affordable_floors_to_whole_gb(self):
-        assert max_affordable_upload_gb(9_992) == 19  # 9992 // 500 = 19
-        assert max_affordable_upload_gb(10_000) == 20
+        # Above MAM's 50 GB minimum — floors to whole GB normally.
+        assert max_affordable_upload_gb(25_000) == 50  # exactly at floor
+        assert max_affordable_upload_gb(49_992) == 99  # 49992 // 500 = 99
+        assert max_affordable_upload_gb(50_000) == 100
+
+    def test_max_affordable_returns_zero_below_min_buy(self):
+        # Below 25,000 BP, the "Max Affordable" button should be
+        # unclickable rather than submit a sub-50-GB buy that MAM
+        # will reject. max_affordable_upload_gb returning 0 is the
+        # signal the router uses to short-circuit with 400.
+        assert max_affordable_upload_gb(9_992) == 0
+        assert max_affordable_upload_gb(24_999) == 0
         assert max_affordable_upload_gb(499) == 0
 
     def test_max_affordable_on_zero_or_negative(self):
@@ -415,7 +463,7 @@ class TestDecisionShape:
             _status(ratio=1.0),
             UploadBuyConfig(
                 enabled=True, ratio_trigger=True,
-                ratio_floor=1.5, ratio_chunk_gb=5,
+                ratio_floor=1.5, ratio_chunk_gb=50,
             ),
             last_bought_at=0, now_ts=1_000_000,
         )

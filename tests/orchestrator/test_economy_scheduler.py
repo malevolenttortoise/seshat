@@ -351,9 +351,12 @@ class TestUploadTickBuy:
             "mam_economy_upload_bonus_trigger": True,
             "mam_economy_upload_bonus_ceiling": 5000,
         })
-        # seedbonus 10100 → excess 5100 / 500 = 10.2 GB
+        # seedbonus 40250 → excess 35250 / 500 = 70.5 GB — above
+        # MAM's 50 GB programmatic floor. Fractional amounts must
+        # format with two decimals in the audit row so the history
+        # tile renders "70.50" not "70.5".
         fake_mam.user_status.body = (
-            b'{"seedbonus":10100,"wedges":1,"ratio":2.0,'
+            b'{"seedbonus":40250,"wedges":1,"ratio":2.0,'
             b'"username":"t","uid":1,"uploaded_bytes":0,'
             b'"downloaded_bytes":0}'
         )
@@ -363,7 +366,7 @@ class TestUploadTickBuy:
         assert outcome == economy_audit.OUTCOME_SUCCESS
 
         rows = await _audit_rows()
-        assert rows[0].amount == "10.20"  # formatted with two decimals
+        assert rows[0].amount == "70.50"  # formatted with two decimals
         assert rows[0].mode == "bonus"
 
 

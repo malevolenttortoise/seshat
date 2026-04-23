@@ -65,15 +65,20 @@ DEFAULT_USER_STATUS_BODY = (
     b'"uploaded_bytes":8768386723586,"username":"Turtles81","wedges":462}'
 )
 
-# Default bonusBuy.php success response — realistic post-buy user state.
-# `seedbonus` is a float here on purpose (MAM returns fractional values
-# on this endpoint even though jsonLoad.php reports integers).
+# Default bonusBuy.php success response — shape is from a real upload
+# buy response captured against live MAM 2026-04-24. Notable details:
+# `seedbonus` is a float (jsonLoad.php reports integers but bonusBuy
+# returns fractional values); `ratio` is a bare float on this endpoint
+# (our earlier memory had it as a `{source, parsedValue}` dict, which
+# was wrong — `_parse_ratio` handles both shapes regardless). The
+# uploadFancy/downloadFancy fields are display-only and ignored by
+# our parser but kept here so the fixture matches MAM byte-for-byte.
 DEFAULT_BONUS_BUY_BODY = (
     b'{"success":true,"type":"upload","amount":50,'
     b'"seedbonus":26512.091,"uploaded":9094496082151,'
     b'"downloaded":96557899,"uploadFancy":"8.271 TiB",'
     b'"downloadFancy":"92.08 MiB",'
-    b'"ratio":{"source":"94186.97","parsedValue":94186.97}}'
+    b'"ratio":94186.97}'
 )
 
 # Default search-by-id response — a single torrent result with
