@@ -20,6 +20,7 @@ import {
   formatBp,
   type PreflightResponse,
 } from "../lib/economyApi";
+import { toast } from "../lib/toast";
 import { useTheme } from "../theme";
 
 export interface Props {
@@ -46,11 +47,16 @@ export function BufferInsufficientBanner({
       });
       if (!result.ok) {
         setError(result.message || "Buy failed");
+        toast.error(`Upload buy failed: ${result.message}`);
         return;
       }
+      toast.success(
+        `Upload buy OK — new seedbonus ${result.new_seedbonus?.toLocaleString() ?? "?"}`,
+      );
       onBufferReady();
     } catch (e) {
       setError(String(e));
+      toast.error(String(e));
     } finally {
       setBusy(false);
     }
