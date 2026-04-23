@@ -64,17 +64,20 @@ class TestBuyVipHappyPath:
         result = await buy_vip(4, token="tok")
         assert result.amount_echo == 50
 
-    async def test_url_has_spendtype_vip_and_amount(self, fake_mam):
+    async def test_url_has_spendtype_vip_and_duration(self, fake_mam):
+        # MAM's VIP endpoint uses `duration=`, NOT `amount=`. Passing
+        # `amount=` silently 404s. Guard that regression.
         await buy_vip(8, token="tok")
         urls = [str(r.url) for r in _bonus_requests(fake_mam)]
         assert len(urls) == 1
         assert "spendtype=VIP" in urls[0]
-        assert "amount=8" in urls[0]
+        assert "duration=8" in urls[0]
+        assert "amount=" not in urls[0]
 
     async def test_max_weeks_accepted(self, fake_mam):
         await buy_vip("max", token="tok")
         urls = [str(r.url) for r in _bonus_requests(fake_mam)]
-        assert "amount=max" in urls[0]
+        assert "duration=max" in urls[0]
 
     async def test_request_method_is_get(self, fake_mam):
         await buy_vip(4, token="tok")
@@ -323,10 +326,13 @@ class TestModuleSurface:
         assert callable(bonus_buy.buy_personal_freeleech)
         assert bonus_buy.BuyResult is BuyResult
 
-    def test_uses_t_subdomain(self):
-        # The seedbox host (t.myanonamouse.net) is deliberate — matches
-        # the dynamicSeedbox host and the wider `/json/*` API pattern.
-        assert bonus_buy._BONUS_BUY_URL.startswith("https://t.myanonamouse.net/json/")
+    def test_uses_www_subdomain(self):
+        # bonusBuy.php is only served from www — `t.` returns 404 for
+        # every spendtype. Guard that choice so a future refactor
+        # that "unifies" MAM hosts doesn't silently break the feature.
+        assert bonus_buy._BONUS_BUY_URL.startswith(
+            "https://www.myanonamouse.net/json/"
+        )
 
 
 # ─── Never raises on network errors ───────────────────────

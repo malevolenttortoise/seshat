@@ -48,11 +48,11 @@ _log = logging.getLogger("seshat.mam.bonus_buy")
 
 # ─── Endpoint ────────────────────────────────────────────────
 
-# `t.myanonamouse.net` (not www) matches the host MAM uses for its
-# seedbox/API flows — same host that `dynamicSeedbox.php` lives on.
-# Both hosts accept the call in practice, but `t.` is the one every
-# bonus-point purchase in the wild routes through.
-_BONUS_BUY_URL = "https://t.myanonamouse.net/json/bonusBuy.php"
+# `www.myanonamouse.net` — all three bonusBuy call shapes route
+# through the www host. The `t.` subdomain hosts other /json/
+# endpoints (dynamicSeedbox.php) but returns 404 for bonusBuy.php
+# regardless of spendtype. Verified against live MAM 2026-04-24.
+_BONUS_BUY_URL = "https://www.myanonamouse.net/json/bonusBuy.php"
 
 
 # ─── Pricing ─────────────────────────────────────────────────
@@ -113,9 +113,14 @@ async def buy_vip(
         raise ValueError(
             f"buy_vip weeks must be 4, 8, 12, or 'max' (got {weeks!r})"
         )
+    # MAM's VIP endpoint uses `duration=` as the query param, NOT
+    # `amount=` — despite the parallel upload endpoint using `amount=`.
+    # Passing `amount=` to VIP silently returns HTTP 404. The response
+    # still echoes the credited value under `amount` in the JSON body,
+    # so downstream parsing of `BuyResult.amount_echo` is unchanged.
     return await _do_buy(
         spendtype="VIP",
-        extra_params={"amount": str(weeks)},
+        extra_params={"duration": str(weeks)},
         token=token,
         log_label=f"VIP {weeks}w",
     )
