@@ -103,6 +103,39 @@ _AB_VOLUME_TAIL_RX = re.compile(
 )
 
 
+# Series-decorator pattern: strips the word "Book" / "Vol." / "Volume"
+# / "Tome" / "Part" / "Episode" and any preceding colon / dash /
+# en-dash / em-dash, but KEEPS the number that follows. Used by the
+# title-variant fallback in `enrich()` to normalize a MAM torrent
+# name like "Monster's Mercy: Book 2" into the Goodreads-canonical
+# "Monster's Mercy 2" — the number is usually part of the real book
+# title and stripping it (as `_clean_title` in scoring.py does) can
+# match a sibling volume in the series by mistake.
+_SERIES_DECORATOR_RX = re.compile(
+    r"[\s:—–-]*\b(?:book|volume|vol|tome|part|episode)\.?\s+#?(\d+(?:\.\d+)?)\b",
+    re.IGNORECASE,
+)
+
+
+def _strip_series_decorator(title: str) -> str:
+    r"""Strip series-decorator words but keep the number they introduce.
+
+    Examples:
+        "Monster's Mercy: Book 2"   → "Monster's Mercy 2"
+        "Triangulum Fold Vol. 8"    → "Triangulum Fold 8"
+        "Dune — Part 3"             → "Dune 3"
+        "Foundation"                → "Foundation" (unchanged)
+
+    Returns the input unchanged when no decorator matches. Whitespace
+    is collapsed and trimmed on successful strips.
+    """
+    if not title:
+        return title
+    result = _SERIES_DECORATOR_RX.sub(r" \1", title)
+    result = re.sub(r"\s+", " ", result).strip()
+    return result
+
+
 def _clean_audiobook_title(title: str) -> str:
     """Normalize an audiobook title for external catalog search.
 
@@ -299,6 +332,33 @@ class MetadataEnricher:
             result = await self._safe_search(
                 src, title=title, author=author, max_wait=remaining,
             )
+            # Title-variant fallback. When a source returns no match
+            # for the raw title, retry with the series/edition-stripped
+            # variant IF that variant actually differs. Caught by Tier 1
+            # UAT: MAM's "Monster's Mercy: Book 2" missed on Goodreads,
+            # but "Monster's Mercy 2" (same title minus the "Book 2"
+            # suffix) matched cleanly. Only costs a second HTTP call
+            # when the first whiffed, never pays the fallback cost on
+            # already-clean titles.
+            if result is None:
+                cleaned = _strip_series_decorator(title)
+                if cleaned and cleaned != title:
+                    elapsed_after = (
+                        asyncio.get_event_loop().time() - budget_started_at
+                    )
+                    remaining_after = (
+                        self.config.per_book_budget - elapsed_after
+                    )
+                    if remaining_after > 0:
+                        _log.info(
+                            "enricher: %s → retry with cleaned title %r "
+                            "(raw %r returned no match)",
+                            src.name, cleaned, title,
+                        )
+                        result = await self._safe_search(
+                            src, title=cleaned, author=author,
+                            max_wait=remaining_after,
+                        )
             if result is None:
                 # Emit at INFO so the log stream shows the full chain —
                 # otherwise sources that fail to match for a given book

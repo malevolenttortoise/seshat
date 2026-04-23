@@ -14,6 +14,7 @@ from app.metadata.enricher import (
     EnrichmentConfig,
     MetadataEnricher,
     _clean_audiobook_title,
+    _strip_series_decorator,
 )
 from app.metadata.record import MetaRecord
 from app.metadata.sources.base import MetaSource
@@ -30,6 +31,29 @@ class _FakeSource(MetaSource):
     async def search_book(self, title, author):
         self.call_count += 1
         return self._result
+
+
+class _TitleAwareSource(MetaSource):
+    """Fake source that returns a different result depending on the
+    title string it was called with. Used for title-variant fallback
+    tests where the raw title fails but the cleaned variant succeeds.
+    """
+
+    def __init__(
+        self,
+        *,
+        name: str,
+        title_to_result: dict,
+    ):
+        super().__init__(rate_limit=0)
+        self.__class__.name = name
+        self.name = name
+        self._map = title_to_result
+        self.titles_seen: list[str] = []
+
+    async def search_book(self, title, author):
+        self.titles_seen.append(title)
+        return self._map.get(title)
 
 
 class _SlowSource(MetaSource):
@@ -180,6 +204,84 @@ class TestEnricher:
         result = await enricher.enrich(title="Book", author="Author")
         assert result is not None
         assert result.description == long_text
+
+    async def test_title_variant_fallback_on_miss(self):
+        """When a source returns no match for the raw title, the
+        enricher retries with a series-decorator-stripped variant.
+        Tier 1 UAT: MAM's "Monster's Mercy: Book 2" missed on
+        Goodreads, but "Monster's Mercy 2" (same title minus the
+        "Book" word, keeping the "2") matched cleanly.
+        """
+        cfg = EnrichmentConfig(enabled=True, accept_confidence=0.6)
+        cleaned_match = MetaRecord(
+            title="Monster's Mercy 2",
+            authors=["Randi Darren"],
+            source="goodreads",
+        )
+        source = _TitleAwareSource(
+            name="goodreads",
+            title_to_result={
+                # Raw title → miss (None)
+                "Monster's Mercy: Book 2": None,
+                # Cleaned title → match
+                "Monster's Mercy 2": cleaned_match,
+            },
+        )
+        enricher = MetadataEnricher(cfg, sources=[source])
+
+        result = await enricher.enrich(
+            title="Monster's Mercy: Book 2", author="Randi Darren",
+        )
+        assert result is not None
+        assert result.title == "Monster's Mercy 2"
+        # Both titles were tried, in order.
+        assert source.titles_seen == [
+            "Monster's Mercy: Book 2",
+            "Monster's Mercy 2",
+        ]
+
+    async def test_no_fallback_when_raw_title_matches(self):
+        """Common case: raw title matches on the first try, no
+        second HTTP call. Protects against the fallback doubling the
+        scraping load on already-clean titles.
+        """
+        cfg = EnrichmentConfig(enabled=True, accept_confidence=0.6)
+        hit = MetaRecord(
+            title="Monster's Mercy: Book 2",
+            authors=["Randi Darren"],
+            source="goodreads",
+        )
+        source = _TitleAwareSource(
+            name="goodreads",
+            title_to_result={"Monster's Mercy: Book 2": hit},
+        )
+        enricher = MetadataEnricher(cfg, sources=[source])
+
+        result = await enricher.enrich(
+            title="Monster's Mercy: Book 2", author="Randi Darren",
+        )
+        assert result is not None
+        assert source.titles_seen == ["Monster's Mercy: Book 2"]
+
+    async def test_no_fallback_when_cleaned_equals_raw(self):
+        """When the title has no series decorator to strip, the
+        cleaned variant is identical to the raw — don't fire the
+        fallback for zero benefit.
+        """
+        cfg = EnrichmentConfig(enabled=True, accept_confidence=0.6)
+        source = _TitleAwareSource(
+            name="goodreads",
+            title_to_result={},  # nothing matches
+        )
+        enricher = MetadataEnricher(cfg, sources=[source])
+
+        result = await enricher.enrich(
+            title="Foundation", author="Isaac Asimov",
+        )
+        assert result is None
+        # Raw title had no decorator; only one call should have
+        # been made.
+        assert source.titles_seen == ["Foundation"]
 
     async def test_below_threshold_merge_is_skipped(self):
         """A source that returns a wrong-book match (rescored below
@@ -349,3 +451,66 @@ class TestCleanAudiobookTitle:
         assert _clean_audiobook_title(
             "A Novel [Remastered Edition] with Extras"
         ) == "A Novel [Remastered Edition] with Extras"
+
+
+class TestStripSeriesDecorator:
+    """Unit tests for the `_strip_series_decorator` helper used by
+    the enricher's title-variant fallback. Distinct from
+    `_clean_title` in scoring.py: this keeps the NUMBER after the
+    stripped decorator word, which matters for search-engine queries
+    where the number is part of the canonical title."""
+
+    def test_strips_colon_book_n(self):
+        # Tier 1 UAT primary case.
+        assert _strip_series_decorator(
+            "Monster's Mercy: Book 2"
+        ) == "Monster's Mercy 2"
+
+    def test_strips_bare_book_n_suffix(self):
+        assert _strip_series_decorator(
+            "The Triangulum Fold Book 8"
+        ) == "The Triangulum Fold 8"
+
+    def test_strips_volume_with_period(self):
+        assert _strip_series_decorator(
+            "The Triangulum Fold Vol. 8"
+        ) == "The Triangulum Fold 8"
+
+    def test_strips_volume_word(self):
+        assert _strip_series_decorator(
+            "The Triangulum Fold Volume 8"
+        ) == "The Triangulum Fold 8"
+
+    def test_strips_part(self):
+        assert _strip_series_decorator("Dune — Part 3") == "Dune 3"
+
+    def test_strips_with_hash_prefix(self):
+        assert _strip_series_decorator(
+            "Monster's Mercy: Book #2"
+        ) == "Monster's Mercy 2"
+
+    def test_strips_decimal_index(self):
+        assert _strip_series_decorator(
+            "Mistborn: Book 3.5"
+        ) == "Mistborn 3.5"
+
+    def test_no_change_on_clean_title(self):
+        assert _strip_series_decorator("Foundation") == "Foundation"
+
+    def test_no_change_on_bare_number_format(self):
+        # "#N" without the word "Book" doesn't match — the regex
+        # only fires after a decorator keyword. That's intentional:
+        # bare "Dune #2" on Goodreads is already the canonical form.
+        assert _strip_series_decorator("Dune #2") == "Dune #2"
+
+    def test_empty_and_none_safe(self):
+        assert _strip_series_decorator("") == ""
+        assert _strip_series_decorator(None) is None  # type: ignore[arg-type]
+
+    def test_case_insensitive(self):
+        assert _strip_series_decorator(
+            "Monster's Mercy: BOOK 2"
+        ) == "Monster's Mercy 2"
+        assert _strip_series_decorator(
+            "Monster's Mercy: book 2"
+        ) == "Monster's Mercy 2"
