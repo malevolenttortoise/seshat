@@ -121,28 +121,44 @@ Needs an unowned book that's "Found" on MAM.
 
 ## Section D — Buffer gate
 
-19. On MamPage, enable the **Buffer gate** toggle under Auto-buy:
-    Upload credit → "Buffer gate (pre-download)". Set safety margin
-    to something large (e.g. 50 GB) so it's easy to trigger.
-20. Pick a largish torrent via BookSidebar (> 10 GB) and click Send.
-    Expected: the send does NOT complete. Instead the
-    **BufferInsufficientBanner** appears at the bottom of the sidebar
-    with the real size, buffer, and shortfall. A "Buy N GB" button
-    shows the recommended amount and BP cost.
-21. Click **"Buy N GB & retry"**. Two things should happen:
-    - a history row `upload, manual, success` for the buy
-    - the grab then submits (the banner dismisses and the sidebar
-      should indicate the send completed)
-22. Turn buffer gate back off when done.
+**BP-free testing approach**: you don't need a 10 GB+ torrent or
+lots of BP. Two tricks:
+
+- Set the safety margin to something absurd (e.g. `5000` GB). That
+  guarantees ANY non-free torrent triggers the gate regardless of
+  real size. Testing just the banner math + dispatch path.
+- Turn on Dry-run mode before doing step 21. The fake buy succeeds,
+  the retry's preflight still sees the unchanged real buffer, so it
+  re-blocks. That's expected — you're verifying the button fires +
+  audit records, not that the grab actually goes through under dry-
+  run. (In real mode with a reasonable margin, the retry succeeds.)
+
+19. On MamPage, enable **Buffer gate** toggle under Auto-buy: Upload
+    credit → "Buffer gate (pre-download)". Set safety margin to
+    `5000` GB. Turn Dry-run mode on under Operator / testing.
+20. Pick any non-free book via BookSidebar that's `mam_status=found`
+    and click Send to pipeline. Expected: the send does NOT complete
+    — the **BufferInsufficientBanner** renders at the bottom of the
+    sidebar showing real size + buffer + shortfall + a "Buy N GB (X
+    BP) & retry" button with sensible math.
+21. Click **"Buy N GB & retry"**. Expected:
+    - a toast: `Upload buy OK — new seedbonus [unchanged]`
+    - a new history row `upload, manual, success` tagged
+      `[DRY RUN]`
+    - the banner re-appears (preflight still sees unchanged buffer
+      since dry-run doesn't actually move MAM state)
+    Click Cancel to dismiss.
+22. Turn Buffer gate back off AND safety margin back to `1` AND
+    Dry-run mode back off when done.
 23. **IRC autograb block (optional, requires IRC to be receiving)**:
-    temporarily set the safety margin to something absurd (100 GB).
-    Wait for an IRC announce for a non-free torrent. Check Auto-buy
-    history — you should see a `buffer_gate_block, irc_autograb,
-    buffer_gate_block` row with a message like "Would need X GB;
-    buffer is Y GB". If you have ntfy configured you should also get
-    a push: "Buffer gate blocked a grab. Further blocks suppressed
-    for 6h." Subsequent IRC blocks within 6h should NOT push (but
-    still audit).
+    temporarily set the safety margin to `5000` again with dry-run
+    OFF. Wait for an IRC announce for a non-free torrent. Check
+    Auto-buy history — you should see a `buffer_gate_block,
+    irc_autograb, buffer_gate_block` row with a message like
+    "Would need X GB; buffer is Y GB". If you have ntfy configured
+    you should also get a push: "Buffer gate blocked a grab.
+    Further blocks suppressed for 6h." Subsequent IRC blocks
+    within 6h should NOT push (but still audit).
 
 ## Section E — Intro banner + cleanup
 
