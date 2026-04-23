@@ -463,12 +463,25 @@ def _build_default_sources(
 def _merge_records(
     into: Optional[MetaRecord], new: MetaRecord
 ) -> MetaRecord:
-    """First-non-None-wins merge.
+    """First-non-None-wins merge, with a longest-wins exception for
+    description.
 
     `into` is the accumulator (highest-priority so far); `new` is
-    the next source's result. When a field is already populated on
-    `into`, keep it. Confidence takes the max so we can stop once
-    any source is above the threshold.
+    the next source's result. For most fields, if the accumulator
+    is already populated, keep it — file-embedded metadata and
+    earlier high-priority sources are usually authoritative for
+    identifiers (title/authors/ISBN/etc).
+
+    Description is different: the first source to supply one is
+    often a truncated preview (MAM's ~150-char torrent-page excerpt,
+    Amazon's product-card blurb) while later sources (Goodreads,
+    Hardcover) typically carry the full back-of-book text. First-
+    non-empty would lock out the richer content; longest-wins lets
+    it replace the preview. Caught by Tier 1 UAT where MAM's
+    56-char description locked out Goodreads' full text.
+
+    Confidence takes the max so the threshold gate above can decide
+    when to stop.
     """
     if into is None:
         return new
@@ -476,12 +489,21 @@ def _merge_records(
     def _pick(a, b):
         return a if a not in (None, "", []) else b
 
+    def _pick_longer(a, b):
+        """Prefer the longer non-empty string. None/empty counts as
+        zero length and loses to any real content."""
+        a_str = a if isinstance(a, str) else ""
+        b_str = b if isinstance(b, str) else ""
+        if len(b_str) > len(a_str):
+            return b
+        return a if a_str else b
+
     into.title = _pick(into.title, new.title)
     if not into.authors:
         into.authors = list(new.authors)
     into.series = _pick(into.series, new.series)
     into.series_index = _pick(into.series_index, new.series_index)
-    into.description = _pick(into.description, new.description)
+    into.description = _pick_longer(into.description, new.description)
     into.isbn = _pick(into.isbn, new.isbn)
     into.publisher = _pick(into.publisher, new.publisher)
     into.pub_date = _pick(into.pub_date, new.pub_date)

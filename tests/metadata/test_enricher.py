@@ -120,6 +120,67 @@ class TestEnricher:
         assert result.isbn == "9781234567890"
         assert result.cover_url == "first-cover.jpg"  # first wins
 
+    async def test_description_merge_prefers_longer(self):
+        """When a later source returns a longer description, it
+        replaces a shorter one from an earlier source. Tier 1 UAT
+        bug: MAM returned a ~56-char preview that locked out
+        Goodreads' full back-of-book text under first-non-empty.
+        """
+        cfg = EnrichmentConfig(enabled=True, accept_confidence=0.6)
+        preview_text = "Short preview ending in…"  # ~24 chars
+        full_text = (
+            "A long back-of-book description that runs to "
+            "several hundred characters describing the plot "
+            "and characters in vivid detail across paragraphs."
+        )
+        preview_rec = MetaRecord(
+            title="Book", authors=["Author"], source="mam",
+            description=preview_text,
+            confidence=1.0,  # exact-ID: bypasses threshold, doesn't short-circuit
+        )
+        full_rec = MetaRecord(
+            title="Book", authors=["Author"], source="goodreads",
+            description=full_text,
+        )
+        mam_src = _FakeSource(name="mam", result=preview_rec)
+        gr_src = _FakeSource(name="goodreads", result=full_rec)
+        enricher = MetadataEnricher(cfg, sources=[mam_src, gr_src])
+
+        result = await enricher.enrich(title="Book", author="Author")
+        assert result is not None
+        # Compare against captured text values rather than the record
+        # objects — `_merge_records` mutates `into` in place, so
+        # `preview_rec.description` is the 141-char Goodreads text by
+        # the time enrich() returns.
+        assert result.description == full_text
+        assert len(result.description) > len(preview_text)
+
+    async def test_description_merge_keeps_longer_when_new_is_shorter(self):
+        """Converse: if the earlier source already has the fuller
+        description, a later source's shorter one does not overwrite."""
+        cfg = EnrichmentConfig(enabled=True, accept_confidence=0.6)
+        long_text = (
+            "A long description with lots of detail about the "
+            "plot and characters."
+        )
+        short_text = "Short."
+        long_rec = MetaRecord(
+            title="Book", authors=["Author"], source="mam",
+            description=long_text,
+            confidence=1.0,
+        )
+        short_rec = MetaRecord(
+            title="Book", authors=["Author"], source="goodreads",
+            description=short_text,
+        )
+        mam_src = _FakeSource(name="mam", result=long_rec)
+        gr_src = _FakeSource(name="goodreads", result=short_rec)
+        enricher = MetadataEnricher(cfg, sources=[mam_src, gr_src])
+
+        result = await enricher.enrich(title="Book", author="Author")
+        assert result is not None
+        assert result.description == long_text
+
     async def test_below_threshold_merge_is_skipped(self):
         """A source that returns a wrong-book match (rescored below
         accept_confidence) must NOT contribute any fields to the
