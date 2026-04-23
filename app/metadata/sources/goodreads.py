@@ -181,6 +181,13 @@ def _merge_detail_page(record: MetaRecord, html: str) -> None:
     """
     soup = BeautifulSoup(html, "lxml")
 
+    # Capture the caller-supplied description (if any) before any
+    # selector writes to `record`. Longest-wins below needs this as
+    # one of the candidates so a pre-populated field can survive
+    # if it's genuinely longer than anything on this page.
+    initial_desc = record.description
+    jsonld_desc: Optional[str] = None
+
     # JSON-LD structured data block.
     for script in soup.select("script[type='application/ld+json']"):
         try:
@@ -216,6 +223,16 @@ def _merge_detail_page(record: MetaRecord, html: str) -> None:
         if isbn and not record.isbn:
             record.isbn = str(isbn).replace("-", "")
 
+        # JSON-LD `description` is frequently the full back-of-book
+        # text for Goodreads-mastered entries. When present it's
+        # often LONGER than the og:description meta tag's teaser.
+        # Collect here rather than writing directly to
+        # `record.description` so the post-loop longest-wins step
+        # can compare across all candidates.
+        desc_ld = data.get("description")
+        if desc_ld and not jsonld_desc:
+            jsonld_desc = _squeeze(str(desc_ld))
+
         # Goodreads' author list in JSON-LD is a list of Person objects
         # with `name` fields. Fall back to HTML if missing.
         authors_ld = data.get("author")
@@ -240,11 +257,36 @@ def _merge_detail_page(record: MetaRecord, html: str) -> None:
             if parsed:
                 record.pub_date = parsed
 
-    # Description: meta og:description is the most stable handle.
-    if not record.description:
-        og_desc = soup.select_one("meta[property='og:description']")
-        if og_desc and og_desc.get("content"):
-            record.description = _squeeze(og_desc["content"])
+    # Description: collect every candidate on the page, pick longest.
+    # Goodreads serves the same description through multiple channels
+    # depending on page age / A/B variant:
+    #   - JSON-LD `description` (captured into `jsonld_desc` above)
+    #   - Schema.org microdata `[itemprop="description"]`
+    #   - React-era placeholder `[data-testid="description"]`
+    #   - `meta[property="og:description"]` teaser
+    # These can differ in length — og:description in particular is
+    # often a truncated ~250-char teaser while JSON-LD or the
+    # microdata span carries the full back-of-book text. Longest
+    # wins so we never lock in the shortest variant. Mirrors the
+    # longest-wins merge policy at the enricher level.
+    desc_candidates: list[str] = []
+    if initial_desc:
+        desc_candidates.append(initial_desc)
+    if jsonld_desc:
+        desc_candidates.append(jsonld_desc)
+    for selector in (
+        '[itemprop="description"]',
+        '[data-testid="description"]',
+    ):
+        for el in soup.select(selector):
+            t = _squeeze(el.get_text(" ", strip=True))
+            if t:
+                desc_candidates.append(t)
+    og_desc = soup.select_one("meta[property='og:description']")
+    if og_desc and og_desc.get("content"):
+        desc_candidates.append(_squeeze(og_desc["content"]))
+    if desc_candidates:
+        record.description = max(desc_candidates, key=len)
 
     # Series info: Goodreads uses `h3.Text__title3` with an anchor for
     # the series name. Shape: "Stormlight Archive #1".
