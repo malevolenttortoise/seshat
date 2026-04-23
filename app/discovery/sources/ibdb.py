@@ -10,7 +10,7 @@ import logging
 from typing import Optional
 
 from app.discovery.sources.base import BaseSource, AuthorResult, SeriesResult, BookResult
-from app.discovery.scoring import score_match
+from app.metadata.scoring import score_match
 
 logger = logging.getLogger("seshat.discovery.ibdb")
 

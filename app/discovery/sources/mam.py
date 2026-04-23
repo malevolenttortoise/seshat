@@ -40,7 +40,7 @@ from urllib.parse import urlencode
 import httpx
 
 from app import state
-from app.discovery.scoring import score_match
+from app.metadata.scoring import score_match
 
 logger = logging.getLogger("seshat.discovery.mam")
 

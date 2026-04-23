@@ -18,7 +18,7 @@ from typing import Optional
 import httpx
 
 from app.discovery.sources.base import BaseSource, AuthorResult, SeriesResult, BookResult
-from app.discovery.scoring import score_match
+from app.metadata.scoring import score_match
 
 logger = logging.getLogger("seshat.discovery.google_books")
 
