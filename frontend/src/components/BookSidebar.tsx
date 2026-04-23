@@ -18,6 +18,7 @@ import { Btn } from "./Btn";
 import { Spin } from "./Spin";
 import { SBRow } from "./SBRow";
 import { BufferInsufficientBanner } from "./BufferInsufficientBanner";
+import { economyApi, type PreflightResponse } from "../lib/economyApi";
 import type {
   Book,
   BookAction,
@@ -149,8 +150,7 @@ export function BookSidebar({
   const [bufferGateOn, setBufferGateOn] = useState(false);
   const [useWedgeChecked, setUseWedgeChecked] = useState(false);
   const [buyFlChecked, setBuyFlChecked] = useState(false);
-  const [preflight, setPreflight] =
-    useState<import("../lib/economyApi").PreflightResponse | null>(null);
+  const [preflight, setPreflight] = useState<PreflightResponse | null>(null);
 
   useEffect(() => {
     requestAnimationFrame(() => setMounted(true));
@@ -173,16 +173,14 @@ export function BookSidebar({
     // Economy offers config — cheap one-shot fetch. Failures are
     // non-blocking (the checkboxes just stay hidden, matching the
     // pre-commit-7 UX).
-    import("../lib/economyApi").then(({ economyApi }) =>
-      economyApi
-        .getConfig()
-        .then((cfg) => {
-          setOfferWedge(!!cfg.mam_economy_manual_wedge_offer_enabled);
-          setOfferFl(!!cfg.mam_economy_fl_wedge_offer_enabled);
-          setBufferGateOn(!!cfg.mam_economy_buffer_gate_enabled);
-        })
-        .catch(() => {}),
-    );
+    economyApi
+      .getConfig()
+      .then((cfg) => {
+        setOfferWedge(!!cfg.mam_economy_manual_wedge_offer_enabled);
+        setOfferFl(!!cfg.mam_economy_fl_wedge_offer_enabled);
+        setBufferGateOn(!!cfg.mam_economy_buffer_gate_enabled);
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -279,7 +277,6 @@ export function BookSidebar({
     // normal grab — the server-side gate is authoritative.
     if (bufferGateOn && book.mam_torrent_id) {
       try {
-        const { economyApi } = await import("../lib/economyApi");
         const match = /(\d+)/.exec(String(book.mam_torrent_id));
         if (match) {
           const pf = await economyApi.preflight(match[1]);

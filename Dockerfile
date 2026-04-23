@@ -24,6 +24,10 @@ FROM python:3.12-slim
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
+    # Silence pip's "running as root" nag. In a Docker image the
+    # container IS the isolation boundary — a venv would just add
+    # indirection without any security benefit.
+    PIP_ROOT_USER_ACTION=ignore \
     SESHAT_MODE=docker \
     DATA_DIR=/app/data
 
@@ -34,8 +38,14 @@ WORKDIR /app
 #   - calibre: provides calibredb CLI for the post-download pipeline.
 #     ~500MB but needed for Phase 2 Calibre sink integration.
 #   - wget, xdg-utils: calibre installer dependencies
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
+#
+# DEBIAN_FRONTEND=noninteractive is scoped to this RUN via the inline
+# env rather than an ENV directive so it doesn't persist into the
+# runtime image. Quiets debconf's "can't find Term::ReadLine / TERM is
+# not set" cascade when apt has no tty — the fallback it ends at
+# (Noninteractive) is what we want anyway.
+RUN DEBIAN_FRONTEND=noninteractive apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         sqlite3 \
         calibre \
     && rm -rf /var/lib/apt/lists/*
