@@ -117,7 +117,10 @@ async def publish_torrent_progress(current: Iterable[TorrentInfo]) -> None:
 
 # None = unknown (pre-first-tick). True/False = last published state.
 # Transition-only publish so the stream doesn't re-assert the same
-# reachable=True on every 60s tick.
+# reachable=True on every 60s tick. Replay-on-connect uses the same
+# value so a browser tab opened after the first transition still
+# sees the current reachability (otherwise the Downloader pill stays
+# stuck at its "unknown" default).
 _client_reachable: bool | None = None
 
 
@@ -135,13 +138,29 @@ async def publish_client_status(reachable: bool) -> None:
     await sse_broadcast.publish("client-status", {"reachable": reachable})
 
 
+def client_status_last_state() -> dict | None:
+    """Return the last-published `client-status` payload, or None.
+
+    Used by the SSE route to seed newly-connected subscribers so
+    tabs opened AFTER the container's first tick still see the
+    current qBit reachability immediately.
+    """
+    if _client_reachable is None:
+        return None
+    return {"reachable": _client_reachable}
+
+
 # ─── mam-stats ─────────────────────────────────────────────
 
-# Previously-published values keyed by username (not token, so the
-# MAM audit log doesn't have a cookie fingerprint). None = never
-# published; changes re-publish. Retrying the same 60s user-status
-# poll shouldn't re-fire the event if nothing moved.
-_last_mam_stats: tuple[float, int, float, int] | None = None
+# Two separate trackers: `_last_mam_stats_key` is the rounded tuple
+# used to decide whether the NEXT publish should fire (jitter filter).
+# `_last_mam_stats_payload` is the full payload of the LAST publish,
+# replayed verbatim to new subscribers so they don't have to wait for
+# the next rounded-away change to see any value at all. Separating
+# them keeps the filter aggressive (sub-0.1 ratio jitter suppressed)
+# while still giving new tabs a current snapshot.
+_last_mam_stats_key: tuple[float, int, float, int] | None = None
+_last_mam_stats_payload: dict | None = None
 
 
 def _mam_stats_key(s: UserStatus) -> tuple[float, int, float, int]:
@@ -170,17 +189,52 @@ async def publish_mam_stats(status: UserStatus) -> None:
         immediate post-action update without waiting for the next
         periodic poll.
     """
-    global _last_mam_stats
+    global _last_mam_stats_key, _last_mam_stats_payload
     key = _mam_stats_key(status)
-    if _last_mam_stats == key:
+    if _last_mam_stats_key == key:
         return
-    _last_mam_stats = key
-    await sse_broadcast.publish("mam-stats", {
+    _last_mam_stats_key = key
+    payload = {
         "ratio": status.ratio,
         "seedbonus": status.seedbonus,
         "upload_buffer_bytes": status.upload_buffer_bytes,
         "wedges": status.wedges,
-    })
+    }
+    _last_mam_stats_payload = payload
+    await sse_broadcast.publish("mam-stats", payload)
+
+
+def mam_stats_last_state() -> dict | None:
+    """Return the last-published `mam-stats` payload, or None."""
+    return _last_mam_stats_payload
+
+
+# ─── Subscriber seeding ────────────────────────────────────
+
+def seed_new_subscriber(queue) -> None:
+    """Push current stateful-event values to a freshly-registered queue.
+
+    Called synchronously by the SSE route handler right after
+    `sse_broadcast.register()` so new subscribers immediately receive
+    the last-known `client-status` + `mam-stats` values instead of
+    waiting for the NEXT publish (which, for steady-state reachable=
+    True + unchanged ratio, would never come).
+
+    `torrent-progress` is deliberately not seeded: a full snapshot of
+    every active torrent would flood a fresh queue on every connect,
+    and the budget watcher's next tick (≤60s) will re-emit any
+    changed torrents naturally. The BookSidebar live-progress wiring
+    would need its own snapshot API on connect, not replay.
+
+    `toast` is ephemeral by design — old toasts shouldn't replay on
+    reconnect (the user already saw them, or they're stale context).
+    """
+    cs = client_status_last_state()
+    if cs is not None:
+        queue.put_nowait(("client-status", cs))
+    ms = mam_stats_last_state()
+    if ms is not None:
+        queue.put_nowait(("mam-stats", ms))
 
 
 # ─── toast ─────────────────────────────────────────────────
@@ -212,7 +266,8 @@ async def publish_toast(level: str, message: str) -> None:
 
 def reset_for_tests() -> None:
     """Clear the module-global state between tests."""
-    global _client_reachable, _last_mam_stats
+    global _client_reachable, _last_mam_stats_key, _last_mam_stats_payload
     _last_snapshot.clear()
     _client_reachable = None
-    _last_mam_stats = None
+    _last_mam_stats_key = None
+    _last_mam_stats_payload = None

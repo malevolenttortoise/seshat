@@ -28,7 +28,7 @@ import logging
 from fastapi import APIRouter, Request
 from sse_starlette.sse import EventSourceResponse, ServerSentEvent
 
-from app.orchestrator import sse_broadcast
+from app.orchestrator import sse_broadcast, sse_publishers
 
 logger = logging.getLogger("seshat.sse")
 
@@ -49,8 +49,17 @@ async def events(request: Request) -> EventSourceResponse:
     still reaches this client — the generator body doesn't start
     running until the response is committed and the client is reading,
     which can lag behind the backend's reaction to an API call.
+
+    `sse_publishers.seed_new_subscriber` immediately pushes the last-
+    known value for each stateful event type (client-status, mam-
+    stats) onto the freshly-registered queue. Without this the first
+    tick after container start publishes `client-status=true` to an
+    empty subscriber set, later ticks see no transition and never
+    re-publish, and tabs opened after that first tick would never
+    learn qBit was reachable.
     """
     queue = sse_broadcast.register()
+    sse_publishers.seed_new_subscriber(queue)
     logger.debug(
         "SSE client connected (%d total)",
         sse_broadcast.subscriber_count(),

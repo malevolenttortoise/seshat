@@ -260,3 +260,132 @@ class TestPublishToast:
             assert a == b == ("toast", {"level": "info", "message": "hi"})
         finally:
             sse_broadcast.unregister(q)
+
+
+# ─── last_state accessors ─────────────────────────────────────
+
+class TestLastStateAccessors:
+    def test_client_status_last_state_none_before_first_publish(self):
+        assert sse_publishers.client_status_last_state() is None
+
+    async def test_client_status_last_state_tracks_last_publish(self):
+        await sse_publishers.publish_client_status(True)
+        assert sse_publishers.client_status_last_state() == {"reachable": True}
+        await sse_publishers.publish_client_status(False)
+        assert sse_publishers.client_status_last_state() == {"reachable": False}
+
+    def test_mam_stats_last_state_none_before_first_publish(self):
+        assert sse_publishers.mam_stats_last_state() is None
+
+    async def test_mam_stats_last_state_returns_full_payload(self):
+        await sse_publishers.publish_mam_stats(_status(
+            ratio=2500.5, seedbonus=7000.0, wedges=5,
+            upload_buffer_bytes=1_000_000_000,
+        ))
+        state = sse_publishers.mam_stats_last_state()
+        assert state == {
+            "ratio": 2500.5,
+            "seedbonus": 7000.0,
+            "upload_buffer_bytes": 1_000_000_000,
+            "wedges": 5,
+        }
+
+    async def test_mam_stats_jitter_does_not_reset_last_payload(self):
+        # Sub-0.1 ratio jitter is dedup'd by the key filter but the
+        # last-published payload must survive unchanged so new
+        # subscribers see the real value (not a rounded placeholder).
+        await sse_publishers.publish_mam_stats(_status(ratio=2500.51))
+        first = sse_publishers.mam_stats_last_state()
+        # Same rounded bucket — publish is suppressed, payload unchanged.
+        await sse_publishers.publish_mam_stats(_status(ratio=2500.53))
+        assert sse_publishers.mam_stats_last_state() == first
+
+
+# ─── seed_new_subscriber ──────────────────────────────────────
+
+class TestSeedNewSubscriber:
+    async def test_seeds_nothing_when_no_publishes_yet(self):
+        # Fresh process state: no publishes have happened, so the
+        # new subscriber's queue stays empty. The generator in the
+        # SSE route will then block on the next real publish.
+        q = sse_broadcast.register()
+        try:
+            sse_publishers.seed_new_subscriber(q)
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(q.get(), timeout=0.05)
+        finally:
+            sse_broadcast.unregister(q)
+
+    async def test_seeds_client_status_after_first_publish(self):
+        # Simulate the real scenario: backend publishes client-status
+        # before any tab connects. Tab opens AFTER → seeding must
+        # replay the current state onto the fresh queue.
+        await sse_publishers.publish_client_status(True)
+
+        q = sse_broadcast.register()
+        try:
+            sse_publishers.seed_new_subscriber(q)
+            event_type, data = await asyncio.wait_for(q.get(), timeout=1)
+            assert event_type == "client-status"
+            assert data == {"reachable": True}
+        finally:
+            sse_broadcast.unregister(q)
+
+    async def test_seeds_both_stateful_events(self):
+        # Both client-status AND mam-stats were published before this
+        # subscriber arrived. Both should land on its queue.
+        await sse_publishers.publish_client_status(True)
+        await sse_publishers.publish_mam_stats(_status(ratio=1500.0))
+
+        q = sse_broadcast.register()
+        try:
+            sse_publishers.seed_new_subscriber(q)
+            events = []
+            for _ in range(2):
+                events.append(
+                    await asyncio.wait_for(q.get(), timeout=1)
+                )
+            event_types = {e[0] for e in events}
+            assert event_types == {"client-status", "mam-stats"}
+        finally:
+            sse_broadcast.unregister(q)
+
+    async def test_torrent_progress_not_seeded(self):
+        # torrent-progress deliberately doesn't replay — the budget
+        # watcher's next tick (≤60s) re-emits changed torrents anyway,
+        # and a full snapshot would flood the queue on every connect.
+        await sse_publishers.publish_torrent_progress([_torrent(
+            "abc", progress=0.5, dlspeed=1000, state="downloading",
+        )])
+
+        q = sse_broadcast.register()
+        try:
+            sse_publishers.seed_new_subscriber(q)
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(q.get(), timeout=0.05)
+        finally:
+            sse_broadcast.unregister(q)
+
+    async def test_existing_subscribers_unaffected_by_new_connection(self):
+        # Seeding a new subscriber pushes to THAT queue only — the
+        # already-connected clients don't get a second copy of the
+        # current state.
+        await sse_publishers.publish_client_status(True)
+
+        old_q = sse_broadcast.register()
+        try:
+            # Old subscriber would have received the publish live if
+            # it had been connected; in this test it missed it.
+            new_q = sse_broadcast.register()
+            try:
+                sse_publishers.seed_new_subscriber(new_q)
+                # New subscriber got a client-status event.
+                event = await asyncio.wait_for(new_q.get(), timeout=1)
+                assert event[0] == "client-status"
+                # Old subscriber still has nothing.
+                with pytest.raises(asyncio.TimeoutError):
+                    await asyncio.wait_for(old_q.get(), timeout=0.05)
+            finally:
+                sse_broadcast.unregister(new_q)
+        finally:
+            sse_broadcast.unregister(old_q)

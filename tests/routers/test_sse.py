@@ -18,15 +18,17 @@ from unittest.mock import AsyncMock
 import pytest
 from sse_starlette.sse import EventSourceResponse
 
-from app.orchestrator import sse_broadcast
+from app.orchestrator import sse_broadcast, sse_publishers
 from app.routers.sse import events
 
 
 @pytest.fixture(autouse=True)
 def _reset():
     sse_broadcast.reset_for_tests()
+    sse_publishers.reset_for_tests()
     yield
     sse_broadcast.reset_for_tests()
+    sse_publishers.reset_for_tests()
 
 
 async def test_handler_registers_subscriber_synchronously():
@@ -63,6 +65,30 @@ async def test_generator_yields_published_events():
     # but the raw object exposes .data + .event directly.
     assert sse_event.event == "torrent-progress"
     assert json.loads(sse_event.data) == {"hash": "abc", "progress": 0.5}
+
+
+async def test_connect_seeds_current_client_status():
+    """Bug A fix: a tab that connects AFTER the backend's first
+    client-status publish still needs to learn the current state.
+    Seeding on register pushes the last-known value onto the new
+    client's queue before the first await on queue.get()."""
+    request = AsyncMock()
+    request.is_disconnected = AsyncMock(return_value=False)
+
+    # Simulate backend tick #1 publishing client-status BEFORE anyone
+    # is listening — nobody receives it on the live wire.
+    await sse_publishers.publish_client_status(True)
+    assert sse_broadcast.subscriber_count() == 0
+
+    # Tab opens → route handler runs register() + seed_new_subscriber().
+    resp = await events(request)
+    body_iter = resp.body_iterator
+
+    # First event the client sees should be the seeded client-status,
+    # not something that requires a fresh publish to arrive.
+    sse_event = await asyncio.wait_for(body_iter.__anext__(), timeout=1)
+    assert sse_event.event == "client-status"
+    assert json.loads(sse_event.data) == {"reachable": True}
 
 
 async def test_generator_unregisters_on_cancel():
