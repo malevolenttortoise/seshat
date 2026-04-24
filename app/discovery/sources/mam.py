@@ -1283,13 +1283,13 @@ async def scan_books_batch(
         #
         # CRITICAL: commit before the pause-sleep loop. The previous
         # iteration's UPDATE books call started an implicit transaction
-        # that only flushes at the every-10-books `db.commit()` below.
-        # Without the explicit commit here, MAM's uncommitted writer
-        # transaction keeps the writer lock for however long the source
-        # scan runs — which re-creates the exact starvation bug we're
-        # trying to prevent. v1.1.9-dev3 testing confirmed: Goodreads
-        # spent 30s blocked on UPDATE authors while MAM sat paused with
-        # book 4's UPDATE uncommitted.
+        # that only flushes at the per-book `db.commit()` below. Without
+        # the explicit commit here, MAM's uncommitted writer transaction
+        # would keep the writer lock for however long the source scan
+        # runs — which re-creates the exact starvation bug we're trying
+        # to prevent. v1.1.9-dev3 testing confirmed: Goodreads spent 30s
+        # blocked on UPDATE authors while MAM sat paused with its last
+        # UPDATE uncommitted.
         if state._source_scan_refs > 0:
             await db.commit()
             logger.info(
@@ -1354,15 +1354,20 @@ async def scan_books_batch(
         if on_progress:
             on_progress(dict(stats))
 
+        # Commit per-book. Was every-10-books, but with rate_mam=2s the
+        # writer transaction stayed open for ~20s between commits and
+        # user-originated writes (Hide/Dismiss/Delete/Approve MAM from
+        # the sidebar, edit Save) queued behind it until the 30s SQLite
+        # busy_timeout expired. Per-book commit drops the hold time to
+        # just the UPDATE itself (~ms), so user clicks feel instant
+        # during an active scan. WAL + synchronous=NORMAL makes the
+        # extra commits effectively free.
+        await db.commit()
+
         if cancel_check and cancel_check():
             logger.info(f"MAM scan: pause requested after {stats['scanned']} books")
-            await db.commit()
             return stats
 
-        if (i + 1) % 10 == 0:
-            await db.commit()
-
-    await db.commit()
     logger.info(f"MAM scan complete: {stats}")
     return stats
 
