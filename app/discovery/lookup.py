@@ -1205,9 +1205,23 @@ async def _title_to_series_pass(author_id: int):
     """
     db = await get_db()
     try:
-        # Get all series for this author
+        # Get series the author's books are linked to.
+        #
+        # Under pen-name linking, `series.author_id` can be a DIFFERENT
+        # author (e.g. Darren's "Incubus Inc." books all reference
+        # Arand's series row id=715 because `_ensure_series` resolves
+        # by name globally, not per-author). Filtering by
+        # `series.author_id = author_id` would miss those cross-linked
+        # series and skip the standalone → series link + dedup entirely.
+        #
+        # Query by "series my books reference" instead so every series
+        # this author's library actually uses is in scope, regardless
+        # of which author's id sits on the series row.
         series_rows = await (await db.execute(
-            "SELECT id, name FROM series WHERE author_id = ?",
+            "SELECT id, name FROM series WHERE id IN ("
+            "  SELECT DISTINCT series_id FROM books "
+            "  WHERE author_id = ? AND series_id IS NOT NULL"
+            ")",
             (author_id,),
         )).fetchall()
         if not series_rows:

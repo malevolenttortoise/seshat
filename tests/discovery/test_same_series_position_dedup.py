@@ -410,6 +410,54 @@ class TestInsertTimePrevention:
         assert rows[0]["title"] == "Remnant 2"
         assert rows[0]["series_index"] == 2.0
 
+    async def test_title_series_pass_finds_cross_author_pen_name_series(
+        self, discovery_db,
+    ):
+        """
+        Pen-name regression: Darren (id=49) and Arand (id=19) are
+        linked. `_ensure_series` resolves "Incubus Inc." globally by
+        name, so ALL of Darren's Incubus Inc. books end up pointing
+        to Arand's series row (series_id=X, author_id=19) rather
+        than their own.
+
+        Before the fix, `_title_to_series_pass(author_id=49)` queried
+        `series WHERE author_id = 49` and found ZERO series for
+        Darren — so an ibdb-sourced standalone "Incubus Inc. Book 2"
+        never got dedup'd against the Darren-scoped "Incubus Inc. II"
+        sitting at the same series position in Arand's series row.
+
+        The fix queries series by "any series my books reference"
+        which correctly picks up cross-author series shared via
+        pen-name links.
+        """
+        from app.discovery.lookup import _title_to_series_pass
+
+        # Arand owns the series row.
+        arand_id = await _insert_author("William D. Arand")
+        shared_series_id = await _insert_series("Incubus Inc.", arand_id)
+
+        # Darren links his books to Arand's series (pen-name
+        # cross-assignment — the real DB situation).
+        darren_id = await _insert_author("Randi Darren")
+        canonical_id = await _insert_book(
+            "Incubus Inc. II", darren_id,
+            series_id=shared_series_id, series_index=2.0,
+            owned=0, source="goodreads",
+        )
+        # ibdb-sourced standalone for the same series position.
+        await _insert_book(
+            "Incubus Inc. Book 2", darren_id,
+            series_id=None, series_index=None,
+            owned=0, source="ibdb",
+        )
+
+        await _title_to_series_pass(darren_id)
+
+        rows = await _book_rows(darren_id)
+        assert len(rows) == 1, f"expected dedup, got {rows!r}"
+        assert rows[0]["id"] == canonical_id
+        assert rows[0]["title"] == "Incubus Inc. II"
+
     async def test_title_series_pass_no_collision_links_normally(
         self, discovery_db,
     ):

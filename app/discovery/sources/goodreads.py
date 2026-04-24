@@ -618,8 +618,20 @@ class GoodreadsSource(BaseSource):
                 if existing_titles:
                     norm_title = re.sub(r'[^\w\s]', '', rb["title"].lower()).strip()
                     norm_title = re.sub(r'\s+', ' ', norm_title)
-                    if any(norm_title == et or norm_title in et or et in norm_title 
-                           for et in existing_titles):
+                    # EXACT normalized match only — previously this used
+                    # substring containment on either side, which caused
+                    # "Monster's Mercy" (book #1) to be classified as
+                    # known when the library already owned "Monster's
+                    # Mercy 2" / "Monster's Mercy 3", because
+                    # "monsters mercy" is a substring of "monsters
+                    # mercy 2". The URL-backfill path then fired and
+                    # emitted a minimal BookResult with no cover_url,
+                    # so the subsequent insert landed with no cover.
+                    # Downstream `_fuzzy_match` in the merge layer
+                    # still handles Calibre↔Goodreads spelling variance;
+                    # this fast-path only exists to skip detail fetches
+                    # for books we're certain are duplicates.
+                    if norm_title in existing_titles:
                         skipped.setdefault("known", 0)
                         skipped["known"] += 1
                         logger.debug(f"    SKIP (known, URL backfill): '{rb['title']}' → book/{rb['book_id']}")
@@ -633,12 +645,17 @@ class GoodreadsSource(BaseSource):
                         on_book = getattr(self, '_on_book', None)
                         if on_book:
                             on_book(rb["title"])
-                        # Emit minimal result for URL backfill (no page visit needed)
+                        # Emit minimal result for URL backfill (no page visit needed).
+                        # Include the list-page cover thumbnail so the
+                        # backfilled row at least has SOMETHING to
+                        # render — otherwise a false-positive match
+                        # here would leave the book permanently coverless.
                         sname = rb["list_series"]
                         br = BookResult(
                             title=rb["title"],
                             series_name=sname,
                             series_index=rb["list_series_idx"],
+                            cover_url=rb.get("list_cover"),
                             external_id=rb["book_id"],
                             source="goodreads",
                             source_url=f"https://www.goodreads.com/book/show/{rb['book_id']}",
