@@ -13,6 +13,7 @@ import { api } from "../api";
 import { Ic } from "../icons";
 import { usePersist } from "../hooks/usePersist";
 import { Btn } from "../components/Btn";
+import { ClearMenu } from "../components/ClearMenu";
 import { Spin } from "../components/Spin";
 import { Load } from "../components/Load";
 import { PB } from "../components/PB";
@@ -851,80 +852,43 @@ export default function AuthorDetailPage({
                 margin: "0 2px",
               }}
             />
-            <Btn
-              size="sm"
-              onClick={() => clearData("source")}
+            <ClearMenu
               disabled={clearing}
-              title="Clear this author's source scan data in the active library"
-              style={{
-                height: 38,
-                background: t.ylw + "22",
-                color: t.ylwt,
-                border: `1px solid ${t.ylw}44`,
-              }}
-            >
-              Clear Source
-            </Btn>
-            <Btn
-              size="sm"
-              onClick={() => clearData("source", "ebook")}
-              disabled={clearing}
-              title="Clear this author's source data across every ebook library"
-              style={{
-                height: 38,
-                background: t.ylw + "11",
-                color: t.ylwt,
-                border: `1px dashed ${t.ylw}55`,
-              }}
-            >
-              Clear Ebook Src
-            </Btn>
-            <Btn
-              size="sm"
-              onClick={() => clearData("source", "audiobook")}
-              disabled={clearing}
-              title="Clear this author's source data across every audiobook library"
-              style={{
-                height: 38,
-                background: t.pur + "11",
-                color: t.purt,
-                border: `1px dashed ${t.pur}55`,
-              }}
-            >
-              Clear Audio Src
-            </Btn>
-            {mamOn ? (
-              <Btn
-                size="sm"
-                onClick={() => clearData("mam")}
-                disabled={clearing}
-                title="Clear this author's MAM scan data"
-                style={{
-                  height: 38,
-                  background: t.cyan + "22",
-                  color: t.cyant,
-                  border: `1px solid ${t.cyan}44`,
-                }}
-              >
-                Clear MAM
-              </Btn>
-            ) : null}
-            {mamOn ? (
-              <Btn
-                size="sm"
-                onClick={() => clearData("both")}
-                disabled={clearing}
-                title="Clear both source and MAM scan data for this author"
-                style={{
-                  height: 38,
-                  background: t.red + "22",
-                  color: t.redt,
-                  border: `1px solid ${t.red}44`,
-                }}
-              >
-                Clear Both
-              </Btn>
-            ) : null}
+              align="right"
+              options={[
+                {
+                  label: "Clear Source",
+                  hint: "active library",
+                  onClick: () => clearData("source"),
+                },
+                {
+                  label: "Clear Source",
+                  hint: "all ebook libraries",
+                  variant: "ebook",
+                  onClick: () => clearData("source", "ebook"),
+                },
+                {
+                  label: "Clear Source",
+                  hint: "all audiobook libraries",
+                  variant: "audio",
+                  onClick: () => clearData("source", "audiobook"),
+                },
+                ...(mamOn
+                  ? [
+                      {
+                        label: "Clear MAM",
+                        divider: true,
+                        onClick: () => clearData("mam"),
+                      },
+                      {
+                        label: "Clear Both (Source + MAM)",
+                        variant: "danger" as const,
+                        onClick: () => clearData("both"),
+                      },
+                    ]
+                  : []),
+              ]}
+            />
           </div>
         </div>
       </div>

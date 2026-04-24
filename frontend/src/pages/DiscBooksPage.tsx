@@ -18,6 +18,7 @@ import { SearchBar } from "../components/SearchBar";
 import { Section } from "../components/Section";
 import { BGrid, BList } from "../components/BookViews";
 import { BookSidebar } from "../components/BookSidebar";
+import { ClearMenu } from "../components/ClearMenu";
 import { toast } from "../lib/toast";
 import { ExportModal } from "../components/ExportModal";
 import type {
@@ -594,46 +595,29 @@ export default function BooksPage({
                     margin: "0 4px",
                   }}
                 />
-                <Btn
-                  size="sm"
-                  onClick={() => clearData("source")}
+                <ClearMenu
                   disabled={busy}
-                  style={{
-                    background: t.ylw + "22",
-                    color: t.ylwt,
-                    border: `1px solid ${t.ylw}44`,
-                  }}
-                >
-                  Clear Source Data
-                </Btn>
-                {mamOn ? (
-                  <Btn
-                    size="sm"
-                    onClick={() => clearData("mam")}
-                    disabled={busy}
-                    style={{
-                      background: t.cyan + "22",
-                      color: t.cyant,
-                      border: `1px solid ${t.cyan}44`,
-                    }}
-                  >
-                    Clear MAM Data
-                  </Btn>
-                ) : null}
-                {mamOn ? (
-                  <Btn
-                    size="sm"
-                    onClick={() => clearData("both")}
-                    disabled={busy}
-                    style={{
-                      background: t.red + "22",
-                      color: t.redt,
-                      border: `1px solid ${t.red}44`,
-                    }}
-                  >
-                    Clear Both
-                  </Btn>
-                ) : null}
+                  options={[
+                    {
+                      label: "Clear Source Data",
+                      onClick: () => clearData("source"),
+                    },
+                    ...(mamOn
+                      ? [
+                          {
+                            label: "Clear MAM Data",
+                            onClick: () => clearData("mam"),
+                          },
+                          {
+                            label: "Clear Both (Source + MAM)",
+                            variant: "danger" as const,
+                            divider: true,
+                            onClick: () => clearData("both"),
+                          },
+                        ]
+                      : []),
+                  ]}
+                />
                 <span
                   style={{
                     width: 1,

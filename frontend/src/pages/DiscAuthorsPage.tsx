@@ -5,6 +5,7 @@ import type { Theme } from "../theme";
 import { api } from "../api";
 import { usePersist } from "../hooks/usePersist";
 import { Btn } from "../components/Btn";
+import { ClearMenu } from "../components/ClearMenu";
 import { Load } from "../components/Load";
 import { SearchBar } from "../components/SearchBar";
 import { VT, type ViewMode } from "../components/VT";
@@ -579,73 +580,42 @@ export default function AuthorsPage({ onNav }: { onNav: NavFn }) {
               </>
             )}
             <span style={{ width: 1, height: 20, background: t.border }} />
-            <Btn
-              size="sm"
-              onClick={() => clearData("source")}
+            <ClearMenu
               disabled={clearing}
-              title="Clear source scan data in the active library"
-              style={{
-                background: t.ylw + "22",
-                color: t.ylwt,
-                border: `1px solid ${t.ylw}44`,
-              }}
-            >
-              Clear Source
-            </Btn>
-            <Btn
-              size="sm"
-              onClick={() => clearData("source", "ebook")}
-              disabled={clearing}
-              title="Clear source scan data across every ebook library"
-              style={{
-                background: t.ylw + "11",
-                color: t.ylwt,
-                border: `1px dashed ${t.ylw}55`,
-              }}
-            >
-              Clear Ebook Src
-            </Btn>
-            <Btn
-              size="sm"
-              onClick={() => clearData("source", "audiobook")}
-              disabled={clearing}
-              title="Clear source scan data across every audiobook library"
-              style={{
-                background: t.pur + "11",
-                color: t.purt,
-                border: `1px dashed ${t.pur}55`,
-              }}
-            >
-              Clear Audio Src
-            </Btn>
-            {mamOn && (
-              <Btn
-                size="sm"
-                onClick={() => clearData("mam")}
-                disabled={clearing}
-                style={{
-                  background: t.cyan + "22",
-                  color: t.cyant,
-                  border: `1px solid ${t.cyan}44`,
-                }}
-              >
-                Clear MAM
-              </Btn>
-            )}
-            {mamOn && (
-              <Btn
-                size="sm"
-                onClick={() => clearData("both")}
-                disabled={clearing}
-                style={{
-                  background: t.red + "22",
-                  color: t.redt,
-                  border: `1px solid ${t.red}44`,
-                }}
-              >
-                Clear Both
-              </Btn>
-            )}
+              options={[
+                {
+                  label: "Clear Source",
+                  hint: "active library",
+                  onClick: () => clearData("source"),
+                },
+                {
+                  label: "Clear Source",
+                  hint: "all ebook libraries",
+                  variant: "ebook",
+                  onClick: () => clearData("source", "ebook"),
+                },
+                {
+                  label: "Clear Source",
+                  hint: "all audiobook libraries",
+                  variant: "audio",
+                  onClick: () => clearData("source", "audiobook"),
+                },
+                ...(mamOn
+                  ? [
+                      {
+                        label: "Clear MAM",
+                        divider: true,
+                        onClick: () => clearData("mam"),
+                      },
+                      {
+                        label: "Clear Both (Source + MAM)",
+                        variant: "danger" as const,
+                        onClick: () => clearData("both"),
+                      },
+                    ]
+                  : []),
+              ]}
+            />
             <Btn size="sm" onClick={() => setSel(new Set())}>
               Deselect
             </Btn>

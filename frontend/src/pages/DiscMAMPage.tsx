@@ -23,6 +23,7 @@ import { VT, type ViewMode } from "../components/VT";
 import { SearchBar } from "../components/SearchBar";
 import { BGrid, BList } from "../components/BookViews";
 import { BookSidebar } from "../components/BookSidebar";
+import { ClearMenu } from "../components/ClearMenu";
 import type {
   Book,
   BookAction,
@@ -946,42 +947,25 @@ export default function MAMPage({ onNav }: { onNav: NavFn }) {
                   margin: "0 4px",
                 }}
               />
-              <Btn
-                size="sm"
-                onClick={() => clearData("source")}
+              <ClearMenu
                 disabled={busy}
-                style={{
-                  background: t.ylw + "22",
-                  color: t.ylwt,
-                  border: `1px solid ${t.ylw}44`,
-                }}
-              >
-                Clear Source Data
-              </Btn>
-              <Btn
-                size="sm"
-                onClick={() => clearData("mam")}
-                disabled={busy}
-                style={{
-                  background: t.cyan + "22",
-                  color: t.cyant,
-                  border: `1px solid ${t.cyan}44`,
-                }}
-              >
-                Clear MAM Data
-              </Btn>
-              <Btn
-                size="sm"
-                onClick={() => clearData("both")}
-                disabled={busy}
-                style={{
-                  background: t.red + "22",
-                  color: t.redt,
-                  border: `1px solid ${t.red}44`,
-                }}
-              >
-                Clear Both
-              </Btn>
+                options={[
+                  {
+                    label: "Clear Source Data",
+                    onClick: () => clearData("source"),
+                  },
+                  {
+                    label: "Clear MAM Data",
+                    onClick: () => clearData("mam"),
+                  },
+                  {
+                    label: "Clear Both (Source + MAM)",
+                    variant: "danger",
+                    divider: true,
+                    onClick: () => clearData("both"),
+                  },
+                ]}
+              />
               <span
                 style={{
                   width: 1,
