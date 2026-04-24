@@ -359,6 +359,9 @@ export default function UnifiedDashboard({ onNav }: Props) {
     return () => window.removeEventListener("resize", onResize);
   }, []);
   const wideMode = viewport >= 1500;
+  // Phone mode collapses the multi-column dashboard to a single
+  // stacked column. Drives the grid-area selection below.
+  const mobileMode = viewport <= 700;
 
   const hdr = (color?: string): React.CSSProperties => ({
     fontSize: 15,
@@ -373,7 +376,15 @@ export default function UnifiedDashboard({ onNav }: Props) {
   // (full-width bottom bar). Wide mode pins stats to a right column
   // spanning both the content and actions rows; narrow mode wraps
   // stats below the actions bar.
-  const gridStyle: React.CSSProperties = wideMode
+  const gridStyle: React.CSSProperties = mobileMode
+    ? {
+        display: "grid",
+        gridTemplateColumns: "1fr",
+        gridTemplateAreas: `"left" "middle" "actions" "stats"`,
+        gap: 10,
+        alignItems: "start",
+      }
+    : wideMode
     ? {
         display: "grid",
         gridTemplateColumns: "1fr 1fr 380px",
@@ -1099,7 +1110,7 @@ export default function UnifiedDashboard({ onNav }: Props) {
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: wideMode ? "repeat(2, 1fr)" : "repeat(4, 1fr)",
+            gridTemplateColumns: mobileMode ? "repeat(2, 1fr)" : wideMode ? "repeat(2, 1fr)" : "repeat(4, 1fr)",
             gap: 8,
             marginBottom: 14,
           }}
@@ -1143,7 +1154,7 @@ export default function UnifiedDashboard({ onNav }: Props) {
             <div
               style={{
                 display: "grid",
-                gridTemplateColumns: wideMode ? "repeat(2, 1fr)" : "repeat(4, 1fr)",
+                gridTemplateColumns: mobileMode ? "repeat(2, 1fr)" : wideMode ? "repeat(2, 1fr)" : "repeat(4, 1fr)",
                 gap: 8,
                 marginBottom: 14,
               }}
@@ -1179,7 +1190,7 @@ export default function UnifiedDashboard({ onNav }: Props) {
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: wideMode ? "repeat(2, 1fr)" : "repeat(4, 1fr)",
+            gridTemplateColumns: mobileMode ? "repeat(2, 1fr)" : wideMode ? "repeat(2, 1fr)" : "repeat(4, 1fr)",
             gap: 8,
           }}
         >

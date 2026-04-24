@@ -61,6 +61,19 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   .seshat-author-cols {
     columns: 1 !important;
   }
+
+  /* Author detail header — stack the image + identity column + the
+   * controls row vertically on phones instead of cramming them
+   * into a horizontal row that overflows. */
+  .author-header {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 12px !important;
+  }
+  .author-controls {
+    flex-wrap: wrap !important;
+    justify-content: flex-start !important;
+  }
 }
 
 /* Default mobile-tap target sizing — buttons in dense bars are
