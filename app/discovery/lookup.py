@@ -452,6 +452,35 @@ def _fuzzy_match(a: str, b: str) -> bool:
     return False
 
 
+def _series_index_conflicts(
+    incoming_index: float | int | None,
+    existing_index: float | int | None,
+) -> bool:
+    """True iff both sides assert a series_index and the two disagree.
+
+    Used as a post-hoc guard on `_fuzzy_match` results: the fuzzy
+    title matcher accepts `"Incubus Inc."` against `"Incubus Inc. 3"`
+    via its substring-containment path, but those are clearly
+    different books (series #1 vs #3). If both sides have an index
+    and the numbers don't match, they can't be the same book —
+    reject the fuzzy match. When one side is missing its index, we
+    can't prove conflict and defer to the fuzzy match (a source
+    might legitimately report a series book without its position,
+    and we'd want to still merge it).
+
+    Cast through `float` so `1 == 1.0` returns True regardless of
+    which side happened to store an int vs a float.
+    """
+    if incoming_index is None or existing_index is None:
+        return False
+    try:
+        return float(incoming_index) != float(existing_index)
+    except (TypeError, ValueError):
+        # Non-numeric index (shouldn't happen per the dataclass typing,
+        # but be defensive) — can't prove a conflict, don't reject.
+        return False
+
+
 def _lang_ok(book_lang: str, allowed: list[str]) -> bool:
     """Check if a book's language is in the allowed list."""
     if not allowed: return True
@@ -860,6 +889,23 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                 if matched_row is None:
                     for r in rows:
                         if _fuzzy_match(bk.title, r["title"]):
+                            # Series-index conflict guard: `_fuzzy_match`
+                            # accepts "Incubus Inc." against "Incubus
+                            # Inc. 3" via substring-containment, but
+                            # those are different books (#1 vs #3). If
+                            # both sides carry a series_index and they
+                            # disagree, skip this candidate and keep
+                            # looking — a real match with agreeing
+                            # indices might still be in `rows`.
+                            if _series_index_conflicts(
+                                bk.series_index, r["series_index"],
+                            ):
+                                logger.debug(
+                                    f"    FUZZY MATCH REJECTED: '{bk.title}' "
+                                    f"(#{bk.series_index}) vs '{r['title']}' "
+                                    f"(#{r['series_index']}) — series indices differ"
+                                )
+                                continue
                             matched_row = r
                             break
                 # ── Omnibus guard: "BookTitle: SeriesName" detection ──
@@ -959,6 +1005,21 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
             if matched_row is None:
                 for r in rows:
                     if _fuzzy_match(bk.title, r["title"]):
+                        # Same series-index guard as the series-books
+                        # path above. Catches the case where an ibdb/
+                        # Hardcover result reports a book as standalone
+                        # but with a series_index hint — avoids it
+                        # colliding onto a different-numbered existing
+                        # book whose title fuzzy-prefixes.
+                        if _series_index_conflicts(
+                            bk.series_index, r["series_index"],
+                        ):
+                            logger.debug(
+                                f"    FUZZY MATCH REJECTED: '{bk.title}' "
+                                f"(#{bk.series_index}) vs '{r['title']}' "
+                                f"(#{r['series_index']}) — series indices differ"
+                            )
+                            continue
                         matched_row = r
                         break
             if matched_row:
