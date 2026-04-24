@@ -596,10 +596,17 @@ async def scan_books_sources(data: dict = Body(...)):
     book IDs from a Books-page selection, we resolve them to the distinct set
     of author IDs and run lookup_author on each. The frontend tooltip warns
     the user that this scans whole authors, not individual books.
+
+    `content_type`: optional "ebook" / "audiobook". When set, resolves
+    the selection's author names in the active library and then runs
+    the per-library scan over every library of that type — mirrors the
+    /authors/scan-sources pattern for cross-library scans from the
+    books multi-select.
     """
     from app.discovery.lookup import lookup_author
 
     book_ids = data.get("book_ids", [])
+    content_type = data.get("content_type")
     if not book_ids:
         return {"error": "No books specified"}
 
@@ -622,33 +629,91 @@ async def scan_books_sources(data: dict = Body(...)):
     import asyncio
     from app.routers.authors import _spawn_lookup_task
 
-    async def _runner():
-        nonlocal_state = {"scanned": 0, "errors": 0, "new": 0}
-        for row in rows:
-            aid, name = row["id"], row["name"]
-            state._lookup_progress.update({"current_author": name})
-            # Capture cumulative-so-far baseline at closure-creation
-            # time so the live new_books count climbs in real time
-            # instead of jumping per-author. See routers/authors.py for
-            # the same pattern with the same default-arg trick.
-            def _on_source(running, _baseline=nonlocal_state["new"]):
-                state._lookup_progress["new_books"] = _baseline + int(running)
-            try:
-                new_books = await lookup_author(aid, name, on_progress=_on_source)
-                nonlocal_state["new"] += int(new_books or 0)
-                nonlocal_state["scanned"] += 1
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                logger.error(f"Bulk source scan error for author {aid} ({name}): {e}")
-                nonlocal_state["errors"] += 1
-            state._lookup_progress.update({
-                "checked": nonlocal_state["scanned"] + nonlocal_state["errors"],
-                "new_books": nonlocal_state["new"],
-            })
+    if content_type is None:
+        async def _runner():
+            nonlocal_state = {"scanned": 0, "errors": 0, "new": 0}
+            for row in rows:
+                aid, name = row["id"], row["name"]
+                state._lookup_progress.update({"current_author": name})
+                def _on_source(running, _baseline=nonlocal_state["new"]):
+                    state._lookup_progress["new_books"] = _baseline + int(running)
+                try:
+                    new_books = await lookup_author(aid, name, on_progress=_on_source)
+                    nonlocal_state["new"] += int(new_books or 0)
+                    nonlocal_state["scanned"] += 1
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logger.error(f"Bulk source scan error for author {aid} ({name}): {e}")
+                    nonlocal_state["errors"] += 1
+                state._lookup_progress.update({
+                    "checked": nonlocal_state["scanned"] + nonlocal_state["errors"],
+                    "new_books": nonlocal_state["new"],
+                })
 
-    _spawn_lookup_task("bulk_books", total=len(rows), runner=_runner)
-    return {"status": "started", "total": len(rows)}
+        _spawn_lookup_task("bulk_books", total=len(rows), runner=_runner)
+        return {"status": "started", "total": len(rows)}
+
+    # Cross-library path. Resolve names from the active library (every
+    # selected book_id was visible from there), then iterate every
+    # library matching the requested content_type and scan each author
+    # by name.
+    from app.discovery.cross_library import libraries_for
+    from app.discovery.database import get_active_library, set_active_library
+
+    target_libs = libraries_for(content_type)
+    if not target_libs:
+        return {"status": "ok", "total": 0,
+                "message": f"No {content_type} libraries found."}
+    names = list({row["name"] for row in rows if row["name"]})
+    if not names:
+        raise HTTPException(404, "No matching authors found")
+    total_tasks = len(target_libs) * len(names)
+
+    async def _runner():
+        original_active = get_active_library()
+        nonlocal_state = {"scanned": 0, "errors": 0, "new": 0}
+        try:
+            for lib in target_libs:
+                slug = lib.get("slug")
+                if not slug:
+                    continue
+                if slug != get_active_library():
+                    set_active_library(slug)
+                ph = ",".join(["?" for _ in names])
+                ldb = await get_db()
+                try:
+                    lib_rows = await ldb.execute_fetchall(
+                        f"SELECT id, name FROM authors WHERE name IN ({ph})",
+                        names,
+                    )
+                finally:
+                    await ldb.close()
+                for lib_row in lib_rows:
+                    aid, name = lib_row[0], lib_row[1]
+                    state._lookup_progress.update({"current_author": name})
+                    def _on_source(running, _baseline=nonlocal_state["new"]):
+                        state._lookup_progress["new_books"] = _baseline + int(running)
+                    try:
+                        new_books = await lookup_author(aid, name, on_progress=_on_source)
+                        nonlocal_state["new"] += int(new_books or 0)
+                        nonlocal_state["scanned"] += 1
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as e:
+                        logger.error(f"Bulk source scan error for {name} in {slug}: {e}")
+                        nonlocal_state["errors"] += 1
+                    state._lookup_progress.update({
+                        "checked": nonlocal_state["scanned"] + nonlocal_state["errors"],
+                        "new_books": nonlocal_state["new"],
+                    })
+        finally:
+            if original_active and original_active != get_active_library():
+                set_active_library(original_active)
+
+    _spawn_lookup_task("bulk_books", total=total_tasks, runner=_runner)
+    return {"status": "started", "total": total_tasks,
+            "libraries": len(target_libs), "authors": len(names)}
 
 
 @router.post("/books/scan-mam")

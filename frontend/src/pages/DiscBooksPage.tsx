@@ -247,10 +247,13 @@ export default function BooksPage({
     setBusy(false);
   };
 
-  const scanSources = async () => {
+  const scanSources = async (scope?: "ebook" | "audiobook") => {
+    const scopeLabel = scope
+      ? `\n\nScope: ${scope === "audiobook" ? "every audiobook library" : "every ebook library"}.`
+      : "";
     if (
       !confirm(
-        `Run a source-plugin scan for the unique authors of ${sel.size} selected book(s)?\n\nNote: source plugins look up by author, so this will scan the WHOLE author for each unique author in your selection — not just the selected books.`,
+        `Run a source-plugin scan for the unique authors of ${sel.size} selected book(s)?\n\nNote: source plugins look up by author, so this will scan the WHOLE author for each unique author in your selection — not just the selected books.${scopeLabel}`,
       )
     )
       return;
@@ -258,7 +261,7 @@ export default function BooksPage({
     try {
       const r = await api.post<ScanSourcesResponse>(
         "/discovery/books/scan-sources",
-        { book_ids: [...sel] },
+        { book_ids: [...sel], ...(scope ? { content_type: scope } : {}) },
       );
       toast.info(
         `Source scan started — ${r.total || 0} authors. Track progress on the Dashboard.`,
@@ -545,9 +548,9 @@ export default function BooksPage({
               <>
                 <Btn
                   size="sm"
-                  onClick={scanSources}
+                  onClick={() => scanSources()}
                   disabled={busy}
-                  title="Scans the unique authors of the selected books — note that source plugins lookup by author, not by individual book"
+                  title="Scans the unique authors of the selected books in the active library"
                   style={{
                     background: t.grn + "22",
                     color: t.grnt,
@@ -555,6 +558,19 @@ export default function BooksPage({
                   }}
                 >
                   {busy ? "…" : ""} Scan Sources
+                </Btn>
+                <Btn
+                  size="sm"
+                  onClick={() => scanSources("audiobook")}
+                  disabled={busy}
+                  title="Scan these books' authors across every audiobook library"
+                  style={{
+                    background: t.pur + "22",
+                    color: t.purt,
+                    border: `1px solid ${t.pur}44`,
+                  }}
+                >
+                  Scan Audio
                 </Btn>
                 {mamOn ? (
                   <Btn
