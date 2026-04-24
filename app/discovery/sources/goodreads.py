@@ -73,6 +73,38 @@ def _is_set_from_series(series_text: str) -> bool:
     return bool(re.search(r'#\d+\s*[-–]\s*\d+', series_text))
 
 
+def _series_from_title_paren(title: str) -> tuple[Optional[str], Optional[float]]:
+    """Extract (series_name, series_index) from a trailing "(Series #N)".
+
+    Goodreads increasingly ships book titles with the series appended
+    in parens — "Right of Retribution 3 (Right of Retribution #3)".
+    When the structured seriesTitle div is missing or unparseable,
+    this fallback pulls the same info straight from the title.
+
+    Accepts both `#3` and bare `3` after the comma/hash separator
+    so rare variants like "Some Series, 3" also parse. Only matches
+    a trailing paren group so the "Otherlife Dreams: The Selfless
+    Hero Trilogy" kind of subtitle doesn't get mis-parsed as a
+    series.
+
+    Returns `(None, None)` when no trailing pattern matches.
+    """
+    if not title:
+        return None, None
+    m = re.search(
+        r"\(([^()]+?)\s*[,#]\s*#?([\d.]+)\s*\)\s*$",
+        title,
+    )
+    if not m:
+        return None, None
+    name = m.group(1).strip()
+    try:
+        idx = float(m.group(2))
+    except ValueError:
+        idx = None
+    return (name or None), idx
+
+
 def _pick_author_from_book_search(
     html: str, query_name: str
 ) -> Optional[AuthorResult]:
@@ -270,6 +302,25 @@ class GoodreadsSource(BaseSource):
                         if idx > 0:
                             series_text = series_text[:idx].strip()
                             break
+
+            # Title-pattern fallback: Goodreads increasingly ships book
+            # titles with the series appended in parens — e.g.
+            # "Right of Retribution 3 (Right of Retribution #3)". When
+            # the seriesTitle div is missing or unparseable, extract
+            # name + index from the title's trailing "(<series> #<n>)"
+            # pattern. Runs BEFORE the series_text branch so the
+            # primary (structured) path still overrides when available.
+            if not series_text:
+                tsrs = soup.find("h1", {"data-testid": "bookTitle"})
+                title_text = (
+                    tsrs.get_text(strip=True) if tsrs
+                    else (soup.title.get_text(strip=True) if soup.title else "")
+                )
+                fallback_name, fallback_idx = _series_from_title_paren(title_text)
+                if fallback_name:
+                    details["series_name"] = fallback_name
+                    if fallback_idx is not None:
+                        details["series_index"] = fallback_idx
 
             if series_text:
                 # Check for set indicators: multiple series entries or range like #1-6

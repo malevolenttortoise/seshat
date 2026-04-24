@@ -57,6 +57,31 @@ _RX_SERIES_TAIL = re.compile(
 _RX_SERIES_PUNCT = re.compile(r'[^\w\s]')
 
 
+def _pick_hardcover_cover(book: dict, edition: dict) -> Optional[str]:
+    """Pick the best cover URL from a Hardcover book + edition.
+
+    Prefer the edition's `cached_image` (most specific to the exact
+    printing we matched on), fall back to the book-level
+    `cached_image` when the edition's is null. Hardcover populates
+    `edition.image` inconsistently — older editions, print-only ones,
+    and some imports lack it even though the book's canonical image
+    is set. Without this fallback every such book stayed coverless
+    until another source filled it in, even though Hardcover had
+    the data the whole time.
+
+    Each image field may be a `{"url": ...}` dict (current schema)
+    or a bare string URL (older API revisions). Both shapes handled.
+    """
+    for img in (edition.get("image"), book.get("image")):
+        if isinstance(img, dict):
+            url = img.get("url")
+            if url:
+                return url
+        elif isinstance(img, str) and img:
+            return img
+    return None
+
+
 def _norm_series(name: str) -> str:
     if not name:
         return ""
@@ -137,6 +162,7 @@ fragment BookData on books {
   book_series { position series { name id } }
   tags: cached_tags
   canonical_id
+  image: cached_image
   contributions { author { name id } }
 }
 fragment EditionData on editions {
@@ -591,12 +617,7 @@ class HardcoverSource(BaseSource):
                     on_new_candidate()
 
                 edition = book.get("editions", [{}])[0] if book.get("editions") else {}
-                cover = None
-                cached_img = edition.get("image")
-                if cached_img and isinstance(cached_img, dict):
-                    cover = cached_img.get("url")
-                elif cached_img and isinstance(cached_img, str):
-                    cover = cached_img
+                cover = _pick_hardcover_cover(book, edition)
 
                 # Language: `code3` is an ISO 639-2 3-letter code
                 # ("eng"). Map "eng"/"en" → "English" so downstream
