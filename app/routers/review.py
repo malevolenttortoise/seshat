@@ -424,6 +424,25 @@ async def re_enrich(review_id: int, body: SaveRequest) -> ReviewItem:
 
         merged["enriched"] = result.to_dict()
 
+        # Promote a longer enriched description to the top-level
+        # `description` field. The UI renders the main card from the
+        # top-level fields, not from `enriched.*`, so without this
+        # step a re-enrich that pulled a richer Goodreads description
+        # would have no visible effect unless the user had already
+        # cleared the existing text.
+        #
+        # Longest-wins matches the enricher's own merge policy: the
+        # first source to populate description is often a truncated
+        # preview (MAM's ~150-char excerpt, Amazon card blurb),
+        # while later sources (Goodreads, Hardcover) carry the full
+        # back-of-book text. Only description gets this treatment —
+        # title / authors / isbn / etc. stay where the user left
+        # them so custom edits survive re-enrich.
+        enriched_desc = result.description or ""
+        current_desc = str(merged.get("description") or "")
+        if enriched_desc and len(enriched_desc) > len(current_desc):
+            merged["description"] = enriched_desc
+
         # Download the fresh cover into the review staging dir so the
         # UI can show it without re-running the whole staging pass.
         # Without this the enriched metadata carries `cover_url` but
