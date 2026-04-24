@@ -167,6 +167,10 @@ async def _author_detail_for_slug(slug: str, aid: int) -> Optional[dict]:
         if not r:
             return None
         a = dict(r)
+        # `HAVING author_book_count > 0` drops series where every book by
+        # this author is hidden. Without it the tile still renders as
+        # "(0/0)" on the detail page after a user hides the last visible
+        # book in a source-scan-populated series.
         a["series"] = [dict(s) for s in await (await db.execute(
             f"""SELECT s.*,
                 COUNT(DISTINCT CASE WHEN {HF} AND COALESCE(b.is_omnibus,0)=0 THEN b.id END) as book_count,
@@ -177,7 +181,9 @@ async def _author_detail_for_slug(slug: str, aid: int) -> Optional[dict]:
             FROM series s
             JOIN books b ON s.id=b.series_id
             WHERE s.id IN (SELECT DISTINCT series_id FROM books WHERE author_id=? AND series_id IS NOT NULL)
-            GROUP BY s.id ORDER BY s.name""",
+            GROUP BY s.id
+            HAVING author_book_count > 0
+            ORDER BY s.name""",
             (aid, aid, aid, aid)
         )).fetchall()]
         standalone = [
