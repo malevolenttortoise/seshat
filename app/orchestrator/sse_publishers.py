@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import Iterable
 
 from app.clients.base import TorrentInfo
+from app.mam.user_status import UserStatus
 from app.orchestrator import sse_broadcast
 
 
@@ -134,10 +135,59 @@ async def publish_client_status(reachable: bool) -> None:
     await sse_broadcast.publish("client-status", {"reachable": reachable})
 
 
+# ─── mam-stats ─────────────────────────────────────────────
+
+# Previously-published values keyed by username (not token, so the
+# MAM audit log doesn't have a cookie fingerprint). None = never
+# published; changes re-publish. Retrying the same 60s user-status
+# poll shouldn't re-fire the event if nothing moved.
+_last_mam_stats: tuple[float, int, float, int] | None = None
+
+
+def _mam_stats_key(s: UserStatus) -> tuple[float, int, float, int]:
+    """Fields we diff for change detection.
+
+    Ratio rounds to 1 decimal — MAM ratios run into the thousands,
+    so sub-0.1 jitter shouldn't spam events. Seedbonus is whole
+    because fractional spend is uncommon. Wedges + upload buffer
+    are integer fields already.
+    """
+    return (
+        round(s.ratio, 1),
+        int(s.seedbonus),
+        float(s.upload_buffer_bytes),
+        s.wedges,
+    )
+
+
+async def publish_mam_stats(status: UserStatus) -> None:
+    """Publish `mam-stats` on changes to the user's economic fields.
+
+    Fires from two places today:
+      * `get_user_status` after a successful jsonLoad.php refresh.
+      * `bonus_buy` callers, after `update_cache_from_buy` warms the
+        cache from a fresh buy response — this gives the UI an
+        immediate post-action update without waiting for the next
+        periodic poll.
+    """
+    global _last_mam_stats
+    key = _mam_stats_key(status)
+    if _last_mam_stats == key:
+        return
+    _last_mam_stats = key
+    await sse_broadcast.publish("mam-stats", {
+        "ratio": status.ratio,
+        "seedbonus": status.seedbonus,
+        "upload_buffer_bytes": status.upload_buffer_bytes,
+        "wedges": status.wedges,
+    })
+
+
 # ─── Test hooks ────────────────────────────────────────────
 
 def reset_for_tests() -> None:
-    """Clear the module-global snapshot + reachability between tests."""
-    global _client_reachable
+    """Clear the module-global state between tests."""
+    global _client_reachable, _last_mam_stats
     _last_snapshot.clear()
     _client_reachable = None
+    _last_mam_stats = None

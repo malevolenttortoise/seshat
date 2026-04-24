@@ -8,6 +8,7 @@ import asyncio
 import pytest
 
 from app.clients.base import TorrentInfo
+from app.mam.user_status import UserStatus
 from app.orchestrator import sse_broadcast, sse_publishers
 
 
@@ -154,5 +155,69 @@ class TestPublishClientStatus:
             event_type, data = await asyncio.wait_for(q.get(), timeout=1)
             assert event_type == "client-status"
             assert data == {"reachable": False}
+        finally:
+            sse_broadcast.unregister(q)
+
+
+# ─── publish_mam_stats ────────────────────────────────────────
+
+def _status(**overrides) -> UserStatus:
+    defaults = dict(
+        ratio=1000.0, wedges=5, seedbonus=5000.0, classname="Power User",
+        username="u", uid=1,
+        uploaded_bytes=10_000_000_000, downloaded_bytes=5_000_000_000,
+        upload_buffer_bytes=5_000_000_000,
+    )
+    defaults.update(overrides)
+    return UserStatus(**defaults)
+
+
+class TestPublishMamStats:
+    async def test_first_call_publishes(self):
+        q = sse_broadcast.register()
+        try:
+            await sse_publishers.publish_mam_stats(_status(ratio=2500.5))
+            event_type, data = await asyncio.wait_for(q.get(), timeout=1)
+            assert event_type == "mam-stats"
+            assert data["ratio"] == 2500.5
+            assert data["seedbonus"] == 5000.0
+            assert data["wedges"] == 5
+            assert data["upload_buffer_bytes"] == 5_000_000_000
+        finally:
+            sse_broadcast.unregister(q)
+
+    async def test_unchanged_stats_suppressed(self):
+        q = sse_broadcast.register()
+        try:
+            await sse_publishers.publish_mam_stats(_status())
+            await asyncio.wait_for(q.get(), timeout=1)
+            # Re-publish identical status — drops.
+            await sse_publishers.publish_mam_stats(_status())
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(q.get(), timeout=0.1)
+        finally:
+            sse_broadcast.unregister(q)
+
+    async def test_seedbonus_change_publishes(self):
+        q = sse_broadcast.register()
+        try:
+            await sse_publishers.publish_mam_stats(_status(seedbonus=5000.0))
+            await asyncio.wait_for(q.get(), timeout=1)
+            await sse_publishers.publish_mam_stats(_status(seedbonus=7500.0))
+            event_type, data = await asyncio.wait_for(q.get(), timeout=1)
+            assert event_type == "mam-stats"
+            assert data["seedbonus"] == 7500.0
+        finally:
+            sse_broadcast.unregister(q)
+
+    async def test_sub_tenth_ratio_jitter_is_suppressed(self):
+        q = sse_broadcast.register()
+        try:
+            await sse_publishers.publish_mam_stats(_status(ratio=2500.51))
+            await asyncio.wait_for(q.get(), timeout=1)
+            # Both 2500.51 and 2500.53 round to 2500.5 — no second event.
+            await sse_publishers.publish_mam_stats(_status(ratio=2500.53))
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(q.get(), timeout=0.1)
         finally:
             sse_broadcast.unregister(q)

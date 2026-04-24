@@ -370,6 +370,18 @@ async def _execute(
         except Exception:
             # Cache warming is best-effort; never let it take down a buy.
             _log.exception("bonus buy %s: cache warm failed (non-fatal)", log_label)
+        # Mirror the post-buy economic state to SSE subscribers so the
+        # UI reflects the action immediately instead of waiting for the
+        # next user-status poll. Read the cache back (the warm just set
+        # it) and pass it through the diff-gated publisher.
+        try:
+            from app.mam.user_status import _cache, _cache_key
+            from app.orchestrator.sse_publishers import publish_mam_stats
+            cached = _cache.get(_cache_key(token or ""))
+            if cached is not None:
+                await publish_mam_stats(cached[1])
+        except Exception:
+            _log.exception("bonus buy %s: mam-stats SSE publish failed (non-fatal)", log_label)
 
     _log.info(
         "bonus buy %s succeeded (new seedbonus: %s)",

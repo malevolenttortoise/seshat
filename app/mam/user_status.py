@@ -208,6 +208,14 @@ async def get_user_status(
         status.wedges,
         status.classname,
     )
+    # Fan economic-field deltas out to SSE subscribers. Transition-gated
+    # inside the publisher so steady-state polls don't re-fire the
+    # event every 60s. Best-effort — never raise out of a status fetch.
+    try:
+        from app.orchestrator.sse_publishers import publish_mam_stats
+        await publish_mam_stats(status)
+    except Exception:
+        _log.exception("mam-stats SSE publish failed (non-fatal)")
     return status
 
 
