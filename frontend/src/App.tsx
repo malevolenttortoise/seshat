@@ -10,6 +10,7 @@ import { ThemeProvider, useTheme, useThemeControls } from "./theme";
 import { Spin } from "./components/Spin";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import Toaster from "./components/Toaster";
+import { OfflineBanner } from "./components/OfflineBanner";
 import { SseEventsProvider } from "./providers/SseEventsProvider";
 
 // Pipeline pages
@@ -401,6 +402,7 @@ export default function App() {
   return (
     <ThemeProvider>
       <SseEventsProvider>
+        <OfflineBanner />
         <SeshatApp />
         <Toaster />
       </SseEventsProvider>
