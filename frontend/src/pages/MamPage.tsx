@@ -14,6 +14,7 @@ import { Btn } from "../components/Btn";
 import { Section } from "../components/Section";
 import { Spin } from "../components/Spin";
 import { useVisibleInterval } from "../hooks/useVisibleInterval";
+import { useVisibleEventSource } from "../hooks/useVisibleEventSource";
 import { api } from "../api";
 import { fmtBytes } from "../lib/format";
 import {
@@ -76,7 +77,27 @@ export default function MamPage() {
   }
 
   useEffect(() => { load(); }, []);
-  useVisibleInterval(load, 60_000);
+  // Fallback poll at 5 minutes — the SSE `mam-stats` push delivers
+  // the live updates, but a periodic refresh reconciles fields the
+  // push doesn't cover (cookie_age_seconds, last_validated_at)
+  // and acts as a safety net if the stream were ever to desync.
+  useVisibleInterval(load, 300_000);
+
+  // Live mam-stats: patch the economic fields in place so the UI
+  // reflects ratio/seedbonus/wedges immediately after a buy or on
+  // the next 60s server-side user-status refresh. We intentionally
+  // don't overwrite the static fields (username, uid, classname) —
+  // those come from jsonLoad.php and don't change between buys.
+  useVisibleEventSource({
+    "mam-stats": (e) => {
+      setStatus((prev) => prev ? {
+        ...prev,
+        ratio: e.ratio,
+        seedbonus: e.seedbonus,
+        wedges: e.wedges,
+      } : prev);
+    },
+  });
 
   async function refresh() {
     setBusy(true);

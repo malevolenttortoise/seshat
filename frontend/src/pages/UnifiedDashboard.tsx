@@ -5,13 +5,15 @@
 // (Hermes, absorbing the old MAM Activity row), Quick Actions + Tools across
 // the bottom, and a stats rail on the right that wraps under the actions bar
 // on narrow viewports.
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { useTheme } from "../theme";
 import type { Theme } from "../theme";
 import { Spin } from "../components/Spin";
 import { fmtBytes, fmtDuration, fmtNum, fmtRatio, pct } from "../lib/format";
 import { useVisibleInterval } from "../hooks/useVisibleInterval";
+import { useVisibleEventSource } from "../hooks/useVisibleEventSource";
+import { toast } from "../lib/toast";
 import type { MamStatusResponse, NavFn, ScanProgress } from "../types";
 
 interface Props {
@@ -60,6 +62,8 @@ interface MamUserStatus extends MamStatusResponse {
   classname?: string;
   ratio?: number;
   wedges?: number;
+  seedbonus?: number;
+  upload_buffer_bytes?: number;
   uploaded_bytes?: number;
   downloaded_bytes?: number;
   cookie_configured?: boolean;
@@ -320,6 +324,48 @@ export default function UnifiedDashboard({ onNav }: Props) {
     syncingSlug !== null;
   const pollMs = anyRunning ? 3000 : POLL * 1000;
   useVisibleInterval(refresh, pollMs);
+
+  // SSE subscriptions — push-driven updates that complement the
+  // periodic refresh without replacing it. The /scan-status +
+  // /budget + /grabs endpoints still drive the bulk of the UI;
+  // SSE layers live ratio/seedbonus/wedge deltas on top, a
+  // client-reachable flag, and routes backend toast events
+  // straight into the frontend's existing toast stack.
+  const lastClientReachable = useRef<boolean | null>(null);
+  useVisibleEventSource({
+    "mam-stats": (e) => {
+      setMam((prev) => ({
+        enabled: prev?.enabled ?? true,
+        validation_ok: prev?.validation_ok,
+        stats: prev?.stats,
+        ...prev,
+        ratio: e.ratio,
+        seedbonus: e.seedbonus,
+        wedges: e.wedges,
+        upload_buffer_bytes: e.upload_buffer_bytes,
+      }));
+    },
+    "client-status": (e) => {
+      // Only toast transitions AFTER the first event — otherwise
+      // every tab refresh toasts "qBittorrent reachable" on page
+      // load because the backend's transition-gate fires for the
+      // first subscriber of the process.
+      const prev = lastClientReachable.current;
+      lastClientReachable.current = e.reachable;
+      if (prev === null || prev === e.reachable) return;
+      if (e.reachable) {
+        toast.success("qBittorrent reachable");
+      } else {
+        toast.warn("qBittorrent unreachable — check logs");
+      }
+    },
+    toast: (e) => {
+      // Route backend-initiated notifications into the same toast
+      // stack manual actions use. No dedupe — the backend throttles
+      // where it makes sense (buffer-gate ntfy 6h window, etc.).
+      toast[e.level](e.message);
+    },
+  });
   useVisibleInterval(() => setCd((c) => Math.max(0, c - 1)), 1000);
 
   // Responsive dashboard grid. Above 1500px the Seshat Stats column
