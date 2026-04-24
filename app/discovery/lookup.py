@@ -663,6 +663,36 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
             if isbn and len(isbn) >= 10:
                 rows_by_isbn[isbn] = r
 
+        # Same-series-position prefilter: `(series_id, series_index)` →
+        # row. Used to dedup incoming books against existing ones that
+        # share a slot in the same series but carry a different title
+        # convention ("Remnant II" existing, "Remnant Book 2" incoming).
+        # Without this the fuzzy title match fails on the low-similarity
+        # pair and the new row inserts as a duplicate.
+        rows_by_series_pos: dict[tuple[int, float], dict] = {}
+        for r in rows:
+            if r["series_id"] is not None and r["series_index"] is not None:
+                rows_by_series_pos[(r["series_id"], float(r["series_index"]))] = r
+
+        # Incoming series-name → existing series_id lookup. Populated
+        # from the series table for this author + linked authors so
+        # the same-series-position dedup above can resolve `sr.name`
+        # to a numeric id without calling `_ensure_series` (which
+        # would eagerly upsert the series row — wrong in `owned_only`
+        # mode, where we intentionally defer series creation).
+        author_series_id_by_name: dict[str, int] = {}
+        for sr_row in await (await db.execute(
+            f"SELECT id, name FROM series WHERE author_id IN ({id_ph})",
+            all_author_ids,
+        )).fetchall():
+            s_name = sr_row["name"]
+            if not s_name:
+                continue
+            author_series_id_by_name[s_name.lower()] = sr_row["id"]
+            norm = _norm_consensus_series(s_name)
+            if norm:
+                author_series_id_by_name.setdefault(norm, sr_row["id"])
+
         # Series names for this author — used by the omnibus guard to
         # distinguish "BookTitle: SeriesName" (omnibus) from
         # "BookTitle: Subtitle" (dedup candidate).
@@ -886,6 +916,31 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                     if clean_isbn in rows_by_isbn:
                         matched_row = rows_by_isbn[clean_isbn]
                         logger.debug(f"    ISBN MERGE: '{bk.title}' → '{matched_row['title']}' (isbn={clean_isbn})")
+                # Same-series-position merge — strong signal that's
+                # independent of title. Two books sharing `(series_id,
+                # series_index)` are the same book; catches
+                # "Remnant II" vs "Remnant Book 2" where fuzzy title
+                # match fails because the conventions differ too much.
+                # Runs BEFORE the fuzzy fallback so the stronger signal
+                # wins before we consult title similarity at all.
+                if matched_row is None and bk.series_index is not None:
+                    existing_sid = (
+                        author_series_id_by_name.get(sr.name.lower())
+                        or author_series_id_by_name.get(
+                            _norm_consensus_series(sr.name)
+                        )
+                    )
+                    if existing_sid is not None:
+                        pos_key = (existing_sid, float(bk.series_index))
+                        candidate = rows_by_series_pos.get(pos_key)
+                        if candidate is not None:
+                            matched_row = candidate
+                            logger.debug(
+                                f"    SAME-SERIES-POSITION MERGE: "
+                                f"'{bk.title}' → '{matched_row['title']}' "
+                                f"(series_id={existing_sid}, "
+                                f"index={bk.series_index})"
+                            )
                 if matched_row is None:
                     for r in rows:
                         if _fuzzy_match(bk.title, r["title"]):

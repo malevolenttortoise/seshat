@@ -586,6 +586,84 @@ async def _dedupe_author_rows(db) -> int:
     return deleted
 
 
+async def _dedupe_same_series_position(db) -> int:
+    """Collapse book rows that occupy the same `(series_id, series_index)`.
+
+    The Remnant case: Mark owns "Remnant II" at series_index=2, and a
+    source scan inserted "Remnant Book 2" also at series_index=2 as a
+    separate book row. Both are the same book — just different title
+    conventions — but they co-exist because Seshat's book-dedup was
+    driven by fuzzy title match and those titles don't collide
+    ("remnant book 2" vs "remnant ii" has low similarity).
+
+    Winner selection:
+      1. OWNED (owned=1) beats NEW (owned=0) — keep the user's actual
+         library row.
+      2. Titles without "Book N"/"Bk N" suffix win — matches the
+         convention the canonical source rendered. "Remnant II" beats
+         "Remnant Book 2".
+      3. Stable tiebreak on lowest id.
+
+    book_series_suggestions.book_id has ON DELETE CASCADE, so the
+    loser's suggestion rows auto-drop. work_links in the pipeline DB
+    become dangling but get reconciled by the next works-matcher
+    run — same as every other book-delete path in discovery.
+
+    The displayed "X of Y" series totals are live-COUNT'd in the
+    series endpoint, so they self-correct once losers are deleted.
+    `series.total_books` isn't consumed anywhere currently, so we
+    skip maintaining it here.
+
+    Inert on healthy databases. Returns the number of rows collapsed.
+    """
+    rows = await (await db.execute(
+        "SELECT id, title, author_id, series_id, series_index, owned "
+        "FROM books WHERE series_id IS NOT NULL AND series_index IS NOT NULL"
+    )).fetchall()
+
+    groups: dict[tuple[int, int, float], list[dict]] = defaultdict(list)
+    for r in rows:
+        key = (r["author_id"], r["series_id"], float(r["series_index"]))
+        groups[key].append({
+            "id": r["id"],
+            "title": r["title"] or "",
+            "owned": int(r["owned"] or 0),
+        })
+
+    # Detect "Book N" / "Bk N" suffixes so we prefer the canonical
+    # title variant. Trailing whitespace tolerated; number may be
+    # decimal (rare — "Book 2.5" novellas).
+    book_n_suffix_re = re.compile(
+        r"\s+(book|bk)\s+\d+(\.\d+)?\s*$", re.IGNORECASE,
+    )
+
+    def _score(m: dict) -> tuple[int, int, int]:
+        title_score = 0 if book_n_suffix_re.search(m["title"]) else 1
+        return (m["owned"], title_score, -m["id"])
+
+    deleted = 0
+    for (_author_id, _series_id, _idx), members in groups.items():
+        if len(members) < 2:
+            continue
+        scored = sorted(members, key=_score, reverse=True)
+        winner = scored[0]
+        losers = scored[1:]
+        for loser in losers:
+            await db.execute(
+                "DELETE FROM books WHERE id = ?", (loser["id"],)
+            )
+            deleted += 1
+            _db_logger.info(
+                f"  Merged book '{loser['title']}' (id={loser['id']}) → "
+                f"'{winner['title']}' (id={winner['id']}) "
+                f"[series_id={_series_id}, index={_idx}]"
+            )
+
+    if deleted:
+        await db.commit()
+    return deleted
+
+
 async def _dedupe_intra_author_series(db) -> int:
     """Collapse series rows under the same author whose names normalize equal.
 
@@ -783,6 +861,19 @@ async def init_db(slug=None):
             _db_logger.info(
                 f"Series dedupe collapsed {collapsed} duplicate "
                 f"intra-author rows"
+            )
+
+        # ── Step 5.5: Same-series-position book dedupe ─────────────
+        # Collapses duplicate book rows sharing the same
+        # (author_id, series_id, series_index) — the Remnant case
+        # where "Remnant II" and "Remnant Book 2" both live at index
+        # 2. Runs AFTER the series dedup so any series merges that
+        # just happened feed their books into this pass's grouping.
+        collapsed_books = await _dedupe_same_series_position(db)
+        if collapsed_books:
+            _db_logger.info(
+                f"Book-position dedupe collapsed {collapsed_books} "
+                f"duplicate same-series-index rows"
             )
     finally:
         await db.close()
