@@ -10,7 +10,10 @@ export interface SearchBarProps {
 export function SearchBar({ value, onChange, placeholder = "Search..." }: SearchBarProps) {
   const t = useTheme();
   return (
-    <div style={{ position: "relative", flex: 1, maxWidth: 340 }}>
+    <div
+      className="seshat-search"
+      style={{ position: "relative", flex: 1, maxWidth: 340 }}
+    >
       <input
         value={value}
         onChange={e => onChange(e.target.value)}

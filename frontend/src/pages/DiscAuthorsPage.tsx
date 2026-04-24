@@ -375,6 +375,7 @@ export default function AuthorsPage({ onNav }: { onNav: NavFn }) {
             ))}
           </div>
           <div
+            className="page-header-row"
             style={{
               display: "flex",
               alignItems: "center",
@@ -405,7 +406,7 @@ export default function AuthorsPage({ onNav }: { onNav: NavFn }) {
                   : `${aus.length} total`}
               </span>
             </h1>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <div className="page-header-controls" style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <SearchBar
                 value={q}
                 onChange={(v) => {

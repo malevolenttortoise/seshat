@@ -642,6 +642,7 @@ export default function UnifiedDashboard({ onNav }: Props) {
         }}
       >
         <div
+          className="dash-stack"
           style={{
             display: "flex",
             justifyContent: "space-between",
@@ -649,7 +650,7 @@ export default function UnifiedDashboard({ onNav }: Props) {
             gap: 12,
           }}
         >
-          <div style={{ flex: 1 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
             <div style={hdr(t.jade)}>
               <Dot color={t.jade} /> Hermes
             </div>
@@ -721,6 +722,7 @@ export default function UnifiedDashboard({ onNav }: Props) {
           </div>
           {mam?.username && (
             <div
+              className="dash-no-minwidth"
               style={{
                 background: t.bg3,
                 borderRadius: 10,
@@ -987,7 +989,7 @@ export default function UnifiedDashboard({ onNav }: Props) {
             flexWrap: "wrap",
           }}
         >
-          <div style={{ flex: 2, minWidth: 280 }}>
+          <div className="dash-no-minwidth" style={{ flex: 2, minWidth: 280 }}>
             <div style={{ ...sectionHdr }}>Discovery</div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               <QBtn
@@ -1021,6 +1023,7 @@ export default function UnifiedDashboard({ onNav }: Props) {
             </div>
           </div>
           <div
+            className="dash-no-minwidth"
             style={{
               flex: 2,
               minWidth: 280,
@@ -1058,6 +1061,7 @@ export default function UnifiedDashboard({ onNav }: Props) {
             </div>
           </div>
           <div
+            className="dash-no-minwidth"
             style={{
               flex: 1,
               minWidth: 240,
@@ -1302,13 +1306,14 @@ function LibrarySection({
           }}
         />
       </div>
-      <div style={{ display: "flex", gap: 10, alignItems: "stretch" }}>
+      <div className="dash-stack" style={{ display: "flex", gap: 10, alignItems: "stretch" }}>
         <div
           style={{
             display: "grid",
             gridTemplateColumns: "1fr 1fr 1fr",
             gap: 8,
             flex: 1,
+            minWidth: 0,
           }}
         >
           <MiniBox
@@ -1330,6 +1335,7 @@ function LibrarySection({
           />
         </div>
         <div
+          className="dash-no-minwidth"
           style={{
             borderLeft: `1px solid ${t.border}`,
             paddingLeft: 10,

@@ -812,7 +812,7 @@ export default function MAMPage({ onNav }: { onNav: NavFn }) {
         }}
       >
         <div
-          className="bp-controls"
+          className="bp-controls page-header-row"
           style={{
             display: "flex",
             alignItems: "center",
@@ -824,7 +824,7 @@ export default function MAMPage({ onNav }: { onNav: NavFn }) {
             {total} books
           </div>
           <div
-            className="bp-right"
+            className="bp-right page-header-controls"
             style={{
               display: "flex",
               gap: 8,

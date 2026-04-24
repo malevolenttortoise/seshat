@@ -364,6 +364,7 @@ export default function BooksPage({
 
         {/* Row 1: Title + Search/Sort/Filters */}
         <div
+          className="page-header-row"
           style={{
             display: "flex",
             alignItems: "center",
@@ -391,7 +392,7 @@ export default function BooksPage({
                 : "books"}
             </span>
           </h1>
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <div className="page-header-controls" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <SearchBar
               value={q}
               onChange={(v) => {

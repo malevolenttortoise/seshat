@@ -74,6 +74,78 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
     flex-wrap: wrap !important;
     justify-content: flex-start !important;
   }
+
+  /* ─── Dashboard widget internals ───────────────────────────
+   * Several dashboard widgets render a `space-between` flex with
+   * a left content area and a right meta panel (Hermes header +
+   * user-stats pill, LibrarySection's mini-box grid + links
+   * column, etc). On phones the right panel pushes the widget
+   * past the viewport; opt-in className `.dash-stack` flips
+   * those to vertical stacks. */
+  .dash-stack {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 10px !important;
+  }
+  /* Drop fixed minWidths on inline pills/cards inside dashboard
+   * widgets so they shrink to fit phone widths instead of pinning
+   * a desktop dimension. */
+  .dash-no-minwidth {
+    min-width: 0 !important;
+  }
+  /* Force full-width children on dashboard sub-cards on phones —
+   * default `text-align: right` becomes left so the contents read
+   * naturally when the card is full-width. */
+  .dash-flex-full > * {
+    width: 100% !important;
+    text-align: left !important;
+  }
+  /* Reset right-align text inside dash-no-minwidth pills when they
+   * span full width on mobile — the right-align was correct beside
+   * a left content area, but reads weird stacked. */
+  .dash-no-minwidth {
+    text-align: left !important;
+  }
+  /* Strip border-left + padding-left on stacked dashboard cards
+   * since the visual separator becomes meaningless when the card
+   * is below (not beside) its sibling. */
+  .dash-stack > .dash-no-minwidth,
+  .dash-stack > *,
+  .dash-no-minwidth {
+    border-left: none !important;
+    padding-left: 0 !important;
+    min-width: 0 !important;
+  }
+
+  /* ─── Page header bars (search / sort / view / select) ────
+   * Most discovery pages render a sticky header with [title h1]
+   * on the left and [search + 3-4 selects + view-toggle + select-
+   * mode button] on the right via `justify-content: space-between`.
+   * That doesn't fit on phones — title is large and the controls
+   * box wraps to a second line, but the OUTER flex still tries
+   * to put both side-by-side. Stack on mobile, full-width controls
+   * row underneath the title. */
+  .page-header-row {
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 8px !important;
+  }
+  .page-header-row > h1 {
+    font-size: 20px !important;
+  }
+  /* SearchBar caps at 340px on desktop but on mobile we want it
+   * to fill the row. The component is `flex: 1` already; the
+   * cap is what's holding it back. */
+  .seshat-search {
+    max-width: none !important;
+    flex-basis: 100% !important;
+  }
+  .page-header-controls {
+    flex-wrap: wrap !important;
+  }
+  .page-header-controls > * {
+    flex-shrink: 1 !important;
+  }
 }
 
 /* Default mobile-tap target sizing — buttons in dense bars are
