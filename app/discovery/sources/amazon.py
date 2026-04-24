@@ -169,6 +169,13 @@ class AmazonSource(BaseSource):
         # Normalized owned titles for quick matching
         owned_norm = {_quick_norm(t) for t in owned_titles}
 
+        # Pen-name aliases — callers (lookup.py's _try_source wiring)
+        # set `_linked_author_names` on the source instance before the
+        # scan. Accept books bylined under any linked name so scanning
+        # Randi Darren finds books attributed to William D. Arand too.
+        linked_names = getattr(self, "_linked_author_names", []) or []
+        accept_authors = [author_name] + list(linked_names)
+
         on_book = getattr(self, "_on_book", None)
         on_new_candidate = getattr(self, "_on_new_candidate", None)
 
@@ -191,7 +198,9 @@ class AmazonSource(BaseSource):
             if not html:
                 break
 
-            page_asins = _extract_search_results(html, author_name)
+            page_asins = _extract_search_results(
+                html, author_name, accept_authors=accept_authors,
+            )
             if not page_asins:
                 break
 
@@ -262,7 +271,9 @@ class AmazonSource(BaseSource):
             if not detail_html:
                 continue
 
-            book = _parse_detail_page(detail_html, asin)
+            book = _parse_detail_page(
+                detail_html, asin, expected_authors=accept_authors,
+            )
             if not book:
                 continue
 
@@ -307,27 +318,139 @@ def _count_result_asins(html: str) -> int:
     return len(re.findall(r'data-asin="[A-Z0-9]{10}"', html))
 
 
-def _extract_search_results(html: str, author_name: str = "") -> list[tuple[str, str]]:
+def _extract_card_authors(card) -> list[str]:
+    """Extract author names from a search-result card.
+
+    Amazon's result cards carry attribution in a couple of shapes:
+      * `<a>` inside a ".a-color-secondary" wrapper following the
+        "by" label (most common)
+      * plain text "by Author Name" in the card's lower row
+
+    Returns every candidate author name we can find — the caller
+    then uses `authors_match` to decide whether any of them refer
+    to the searched-for author. Robust against Amazon's HTML
+    variations and returns an empty list when attribution isn't
+    rendered at all (e.g. compact grid layouts).
+    """
+    authors: list[str] = []
+    # Anchor-style links in the card's secondary-text area
+    for a in card.select("a.a-link-normal"):
+        href = a.get("href", "")
+        # Contributor links have a stable URL pattern. Ignore other
+        # `a.a-link-normal` links (which also cover the title itself,
+        # price, rating, etc.).
+        if "/e/" in href or "field-author=" in href:
+            text = a.get_text(strip=True)
+            if text:
+                authors.append(text)
+    if authors:
+        return authors
+
+    # Plain-text fallback: look for "by X[, Y]" pattern in the card's
+    # combined text. Splits on commas + "and" to capture co-authors.
+    text = card.get_text(" ", strip=True)
+    m = re.search(
+        r"\bby\s+([^|•·\n]+?)(?:\s+\||\s+•|\s+·|\s+\(|\s+\d\.\d|$)",
+        text, re.IGNORECASE,
+    )
+    if m:
+        byline = m.group(1)
+        for part in re.split(r",\s*|\s+and\s+", byline):
+            part = part.strip()
+            if part and len(part) > 1:
+                authors.append(part)
+    return authors
+
+
+def _extract_detail_authors(soup) -> list[str]:
+    """Extract author names from an Amazon product detail page.
+
+    Looks at the #bylineInfo block — the "by <author>" line under the
+    title on the product page. Each contributor is an anchor with
+    role text ("(Author)", "(Foreword)", "(Translator)", etc.) next
+    to it; we keep only names whose role is empty or marked Author.
+    Translators / forewords / editors are deliberately excluded —
+    otherwise a book like "Kingdom Revival: Forward by Randy Clark"
+    would match when the query is "Randy <anything>".
+    """
+    byline = soup.select_one("#bylineInfo")
+    if not byline:
+        return []
+    authors: list[str] = []
+    # Each contributor is wrapped in a span; role text follows in a
+    # sibling span with class "contribution" or similar.
+    for span in byline.select("span.author, div.author, span.contributor"):
+        name_el = span.select_one("a") or span
+        name = name_el.get_text(strip=True)
+        if not name:
+            continue
+        role_el = span.select_one(".contribution") or span.select_one(
+            ".a-color-secondary"
+        )
+        role = (role_el.get_text(" ", strip=True).lower() if role_el else "")
+        # Accept only primary Author role or no explicit role. Excludes
+        # "(Foreword)", "(Translator)", "(Editor)", "(Illustrator)",
+        # "(Narrator)", etc.
+        if role and "author" not in role:
+            continue
+        authors.append(name)
+    if authors:
+        return authors
+
+    # Fallback: plain byline text (some layouts skip the span markup).
+    text = byline.get_text(" ", strip=True)
+    m = re.match(r"(?i)by\s+(.+?)(?:\s+\(|$)", text)
+    if m:
+        for part in re.split(r",\s*|\s+and\s+", m.group(1)):
+            part = part.strip()
+            if part:
+                authors.append(part)
+    return authors
+
+
+def _extract_search_results(
+    html: str,
+    author_name: str = "",
+    accept_authors: list[str] | None = None,
+) -> list[tuple[str, str]]:
     """Extract (asin, title) tuples from an Amazon search results page.
 
     Uses BeautifulSoup to parse the search result cards. Each card
-    has a data-asin attribute and a nested title span. When author_name
-    is provided, filters out results where the card's author attribution
-    doesn't match (prevents false positives from Amazon returning books
-    by other authors in search results).
+    has a data-asin attribute and a nested title span.
+
+    Author validation (when `author_name` is set):
+      * Extract contributor anchors from the card via
+        `_extract_card_authors`.
+      * Accept iff any extracted author matches the query (or any
+        name in `accept_authors`) under `authors_match` — the
+        normalized + fuzzy comparator, so "William Arand" and
+        "William D. Arand" and "W.D. Arand" all match.
+      * If the card has NO discoverable author attribution (Amazon
+        sometimes renders compact cards that omit the byline), the
+        card is accepted for detail-page verification rather than
+        rejected up front. The detail-page author gate downstream
+        does the real filtering — the search filter's job is to
+        cut obvious noise, not be the authority.
+
+    `accept_authors` lets callers include pen-name aliases so a
+    scan of "Randi Darren" accepts books bylined "William D. Arand"
+    (the real author) and vice versa.
     """
     from bs4 import BeautifulSoup
+    from app.metadata.author_names import authors_match
 
     soup = BeautifulSoup(html, "lxml")
     results = []
     seen = set()
-    author_lower = author_name.lower().strip() if author_name else ""
-    # Split author name into parts for flexible matching:
-    # "William D. Arand" → ["william", "arand"] (skip initials/dots)
-    author_parts = [
-        p for p in re.sub(r'[^\w\s]', '', author_lower).split()
-        if len(p) > 2
-    ] if author_lower else []
+
+    # Build the acceptable-authors list once. None check for backwards
+    # compat with the unit tests that call this without the kwarg.
+    author_candidates: list[str] = []
+    if author_name:
+        author_candidates.append(author_name)
+    for extra in accept_authors or []:
+        if extra and extra not in author_candidates:
+            author_candidates.append(extra)
 
     # Primary: data-asin cards in the main results container
     for card in soup.select("[data-asin]"):
@@ -347,14 +470,25 @@ def _extract_search_results(html: str, author_name: str = "") -> list[tuple[str,
         if not title:
             continue
 
-        # Author validation: check if the card mentions the target author.
-        # Amazon shows "by Author Name" in the card text below the title.
-        # Skip results where the author doesn't appear at all.
-        if author_parts:
-            card_text = card.get_text(" ", strip=True).lower()
-            if not all(part in card_text for part in author_parts):
-                logger.debug(f"    SKIP (wrong author): '{title}' — no '{author_name}' in card text")
-                continue
+        # Author validation via extracted names + authors_match.
+        if author_candidates:
+            card_authors = _extract_card_authors(card)
+            if card_authors:
+                # Attribution found — accept iff any matches via
+                # normalized + fuzzy comparison.
+                matched = any(
+                    authors_match(candidate, ca)
+                    for candidate in author_candidates
+                    for ca in card_authors
+                )
+                if not matched:
+                    logger.debug(
+                        f"    SKIP (wrong author): '{title}' — card "
+                        f"authors {card_authors!r} don't match "
+                        f"'{author_name}' (or pen-name aliases)"
+                    )
+                    continue
+            # No attribution on the card → defer to detail-page gate.
 
         seen.add(asin)
         results.append((asin, title))
@@ -378,11 +512,22 @@ def _extract_search_results(html: str, author_name: str = "") -> list[tuple[str,
     return results
 
 
-def _parse_detail_page(html: str, asin: str) -> Optional[BookResult]:
+def _parse_detail_page(
+    html: str,
+    asin: str,
+    expected_authors: list[str] | None = None,
+) -> Optional[BookResult]:
     """Parse an Amazon product detail page into a BookResult.
 
     Extracts title, series info, publication date, page count, ISBN,
     description, cover URL, and language from the product page HTML.
+
+    When `expected_authors` is provided, the #bylineInfo block is
+    parsed for contributor names and compared via `authors_match`.
+    If none match, returns None — prevents Amazon from adding books
+    whose ASIN survived the search filter but whose actual byline is
+    a completely different author (the "Dr. William Li" /
+    "Kingdom Revival" pollution from earlier UAT).
     """
     from bs4 import BeautifulSoup
 
@@ -397,6 +542,33 @@ def _parse_detail_page(html: str, asin: str) -> Optional[BookResult]:
     title = title_el.get_text(strip=True) if title_el else ""
     if not title:
         return None
+
+    # Author gate — reject early, before any other parsing work.
+    if expected_authors:
+        from app.metadata.author_names import authors_match
+
+        detail_authors = _extract_detail_authors(soup)
+        if not detail_authors:
+            # No discoverable byline on the detail page — conservative
+            # default is to reject. If Amazon couldn't attribute it,
+            # we shouldn't claim it either.
+            logger.debug(
+                f"    SKIP (no byline): detail page for {asin} "
+                f"('{title[:60]}') has no recognizable author info"
+            )
+            return None
+        matched = any(
+            authors_match(exp, da)
+            for exp in expected_authors
+            for da in detail_authors
+        )
+        if not matched:
+            logger.debug(
+                f"    SKIP (wrong author on detail): '{title[:60]}' "
+                f"(asin={asin}) — detail authors {detail_authors!r} "
+                f"don't match {expected_authors!r}"
+            )
+            return None
 
     # ── RPI carousel cards — structured metadata ──
     rpi = {}

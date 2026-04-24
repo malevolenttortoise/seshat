@@ -1926,6 +1926,22 @@ async def _lookup_author_inner(author_id: int, author_name: str, full_scan: bool
             logger.info(f"  Pen-name expansion: {author_name} linked to {len(linked_ids)-1} other author(s)")
         # IDs of linked authors (excluding self) — passed to _merge_result
         pen_linked = [i for i in linked_ids if i != author_id]
+        # Resolve linked author IDs → display names so sources can
+        # accept books bylined under pen-name aliases. Amazon and ibdb
+        # set these on the source via `_linked_author_names` before
+        # calling get_author_books; a scan of "Randi Darren" then
+        # accepts results attributed to "William D. Arand" (the real
+        # author) and vice versa.
+        pen_name_rows = []
+        if pen_linked:
+            ph = ",".join("?" * len(pen_linked))
+            pen_name_rows = await (await db.execute(
+                f"SELECT name FROM authors WHERE id IN ({ph})",
+                pen_linked,
+            )).fetchall()
+        linked_author_names = [
+            r["name"] for r in pen_name_rows if r["name"]
+        ]
 
         id_placeholders = ",".join("?" * len(linked_ids))
         rows = await (await db.execute(
@@ -2075,6 +2091,10 @@ async def _lookup_author_inner(author_id: int, author_name: str, full_scan: bool
             break
 
         source = spec.getter()
+        # Inject pen-name aliases on every source — sources that care
+        # (amazon, ibdb) read this attribute off the instance to widen
+        # their author-byline gate. Harmless on sources that don't.
+        source._linked_author_names = linked_author_names
         # Per-source pre-flight (Hardcover is the only one that needs it).
         if spec.name == "hardcover":
             source.update_api_key(_hc_key)
