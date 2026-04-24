@@ -357,6 +357,17 @@ MIGRATIONS = [
     "ALTER TABLE series ADD COLUMN audiobookshelf_id TEXT",
     "CREATE INDEX IF NOT EXISTS idx_books_abs ON books(audiobookshelf_id)",
     "CREATE INDEX IF NOT EXISTS idx_books_asin ON books(asin)",
+    # Author-row dedup — Calibre can hold two separate author records
+    # for the same person (e.g. "A. K. DuBoff" calibre_id=254 +
+    # "A K DuBoff" calibre_id=1179) when books were imported at
+    # different times with different punctuation. The Calibre UI
+    # hides the duplicates but the metadata.db keeps both, and sync
+    # used to mirror that into two separate Seshat rows. The new
+    # `normalized_name` column (via `normalize_author_name`) groups
+    # those variants so calibre_sync's upsert treats them as one.
+    # Indexed because the sync upsert hits it per-author per-sync.
+    "ALTER TABLE authors ADD COLUMN normalized_name TEXT",
+    "CREATE INDEX IF NOT EXISTS idx_authors_normalized_name ON authors(normalized_name)",
 ]
 
 
@@ -439,6 +450,35 @@ def _norm_series_name(name: str) -> str:
         n = nn
     n = _RX_DEDUPE_PUNCT.sub(' ', n).lower()
     return re.sub(r'\s+', ' ', n).strip()
+
+
+async def _backfill_normalized_author_names(db) -> int:
+    """Populate `authors.normalized_name` for any rows missing it.
+
+    Runs after the migration that adds the column. On a fresh DB the
+    column exists and is populated on every INSERT; this helper only
+    matters for upgraded DBs that already had authors before the
+    migration ran, and for any legacy code path that still inserts
+    without setting the column. Returns the number of rows touched.
+    """
+    from app.metadata.author_names import normalize_author_name
+
+    rows = await (await db.execute(
+        "SELECT id, name FROM authors WHERE normalized_name IS NULL OR normalized_name = ''"
+    )).fetchall()
+    touched = 0
+    for r in rows:
+        norm = normalize_author_name(r["name"] or "")
+        if not norm:
+            continue
+        await db.execute(
+            "UPDATE authors SET normalized_name = ? WHERE id = ?",
+            (norm, r["id"]),
+        )
+        touched += 1
+    if touched:
+        await db.commit()
+    return touched
 
 
 async def _dedupe_intra_author_series(db) -> int:
@@ -601,6 +641,17 @@ async def init_db(slug=None):
                 if "already exists" not in str(e).lower():
                     _db_logger.warning(f"Index creation failed: {e}")
         await db.commit()
+
+        # ── Step 4.5: Backfill authors.normalized_name ─────────────
+        # Post-migration, ensure every existing author row has a
+        # non-null normalized_name so calibre_sync's normalized lookup
+        # hits them on the next sync. No-op on fresh DBs (column
+        # populated at INSERT time) and on already-backfilled DBs.
+        touched = await _backfill_normalized_author_names(db)
+        if touched:
+            _db_logger.info(
+                f"Backfilled normalized_name on {touched} author row(s)"
+            )
 
         # ── Step 5: Idempotent intra-author series dedupe ──────────
         # Collapses any historical residue where the same author has

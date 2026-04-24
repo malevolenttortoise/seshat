@@ -127,6 +127,33 @@ def _parse_name_tokens(name: str) -> list[tuple[str, bool]]:
     return parsed
 
 
+def pick_canonical_display_name(existing: str, incoming: str) -> str:
+    """Decide which punctuation variant to keep as the stored display name.
+
+    Invariant: both inputs are expected to normalize to the same form.
+    Used by `calibre_sync` when two Calibre author rows map to the
+    same Seshat author (same normalized name but different
+    punctuation), and by the one-time dedup pass when merging pre-
+    existing duplicates.
+
+    Heuristic (option 4a — most punctuation wins): the name with more
+    periods wins. Matches external-source conventions (Goodreads
+    renders `"A. K. DuBoff"`, not `"A K DuBoff"`) and is what a
+    reader would consider "more formal". Ties keep the existing
+    stored name so subsequent syncs don't thrash the row on every
+    call.
+    """
+    if not existing:
+        return incoming
+    if not incoming:
+        return existing
+    incoming_periods = incoming.count(".")
+    existing_periods = existing.count(".")
+    if incoming_periods > existing_periods:
+        return incoming
+    return existing
+
+
 def author_name_variants(name: str) -> list[str]:
     """Expand `name` into ordered punctuation variants for search retries.
 

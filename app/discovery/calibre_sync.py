@@ -234,6 +234,21 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
         progress.pop("completed_at", None)
 
         # Pass 1: upsert authors
+        # Lookup keys off `normalized_name` instead of `name` so two
+        # Calibre author rows with punctuation drift (e.g. "A. K. DuBoff"
+        # at calibre_id=254 and "A K DuBoff" at calibre_id=1179) collapse
+        # into ONE Seshat row. Calibre's UI hides such duplicates but
+        # the underlying metadata.db keeps both; without this collapse
+        # we'd recreate them as two Seshat authors every sync.
+        #
+        # When an existing row matches, `pick_canonical_display_name`
+        # picks the more-punctuated variant as the stored display name
+        # ("A. K. DuBoff" beats "A K DuBoff") — matches Goodreads'
+        # convention and is what source scans expect.
+        from app.metadata.author_names import (
+            normalize_author_name,
+            pick_canonical_display_name,
+        )
         author_map = {}  # calibre_author_id -> our_id
         for book in calibre_data["books"]:
             for author in book["authors"]:
@@ -241,19 +256,27 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
                 if cal_id in author_map:
                     continue
 
+                incoming_name = author["name"]
+                norm = normalize_author_name(incoming_name)
                 row = await (await db.execute(
-                    "SELECT id FROM authors WHERE name = ?", (author["name"],)
+                    "SELECT id, name FROM authors WHERE normalized_name = ?",
+                    (norm,),
                 )).fetchone()
                 if row:
                     author_map[cal_id] = row["id"]
+                    canonical = pick_canonical_display_name(
+                        row["name"], incoming_name,
+                    )
                     await db.execute(
-                        "UPDATE authors SET calibre_id = ?, sort_name = ? WHERE id = ?",
-                        (cal_id, author["sort"], row["id"])
+                        "UPDATE authors SET name = ?, sort_name = ?, "
+                        "calibre_id = ?, normalized_name = ? WHERE id = ?",
+                        (canonical, author["sort"], cal_id, norm, row["id"]),
                     )
                 else:
                     cur = await db.execute(
-                        "INSERT INTO authors (name, sort_name, calibre_id) VALUES (?, ?, ?)",
-                        (author["name"], author["sort"], cal_id)
+                        "INSERT INTO authors (name, sort_name, calibre_id, "
+                        "normalized_name) VALUES (?, ?, ?, ?)",
+                        (incoming_name, author["sort"], cal_id, norm),
                     )
                     author_map[cal_id] = cur.lastrowid
 

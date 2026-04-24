@@ -10,6 +10,7 @@ from app.metadata.author_names import (
     author_name_variants,
     authors_match,
     normalize_author_name,
+    pick_canonical_display_name,
 )
 
 
@@ -148,3 +149,46 @@ class TestAuthorNameVariants:
         # render identically), the list stays deduped.
         out = author_name_variants("A Smith")
         assert len(out) == len(set(out))
+
+
+# ─── pick_canonical_display_name ──────────────────────────────
+
+class TestPickCanonicalDisplayName:
+    def test_more_periods_wins(self):
+        # Option 4a heuristic — the more-punctuated form is canonical.
+        assert (
+            pick_canonical_display_name("A K DuBoff", "A. K. DuBoff")
+            == "A. K. DuBoff"
+        )
+
+    def test_more_periods_wins_regardless_of_order(self):
+        # Reverse argument order — existing wins if it has more periods.
+        assert (
+            pick_canonical_display_name("A. K. DuBoff", "A K DuBoff")
+            == "A. K. DuBoff"
+        )
+
+    def test_tie_keeps_existing(self):
+        # Equal period count — keep the existing stored name so we
+        # don't thrash the row on every sync.
+        assert (
+            pick_canonical_display_name("A K DuBoff", "A K DuBoff")
+            == "A K DuBoff"
+        )
+        assert (
+            pick_canonical_display_name("A.K. DuBoff", "A. K. DuBoff")
+            == "A.K. DuBoff"
+        )
+
+    def test_empty_existing_returns_incoming(self):
+        assert pick_canonical_display_name("", "A. K. DuBoff") == "A. K. DuBoff"
+
+    def test_empty_incoming_returns_existing(self):
+        assert pick_canonical_display_name("A. K. DuBoff", "") == "A. K. DuBoff"
+
+    def test_plain_names_tie_keeps_existing(self):
+        # No periods in either — tie — existing wins.
+        assert (
+            pick_canonical_display_name("Brandon Sanderson", "brandon sanderson")
+            == "Brandon Sanderson"
+        )
