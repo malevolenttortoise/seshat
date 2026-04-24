@@ -221,3 +221,42 @@ class TestPublishMamStats:
                 await asyncio.wait_for(q.get(), timeout=0.1)
         finally:
             sse_broadcast.unregister(q)
+
+
+# ─── publish_toast ────────────────────────────────────────────
+
+class TestPublishToast:
+    async def test_valid_levels_pass_through(self):
+        q = sse_broadcast.register()
+        try:
+            for level in ("success", "info", "warn", "error"):
+                await sse_publishers.publish_toast(level, f"msg-{level}")
+                event_type, data = await asyncio.wait_for(q.get(), timeout=1)
+                assert event_type == "toast"
+                assert data == {"level": level, "message": f"msg-{level}"}
+        finally:
+            sse_broadcast.unregister(q)
+
+    async def test_invalid_level_coerces_to_info(self):
+        q = sse_broadcast.register()
+        try:
+            await sse_publishers.publish_toast("critical", "boom")
+            event_type, data = await asyncio.wait_for(q.get(), timeout=1)
+            assert event_type == "toast"
+            assert data == {"level": "info", "message": "boom"}
+        finally:
+            sse_broadcast.unregister(q)
+
+    async def test_every_publish_fires(self):
+        # Unlike client-status / mam-stats, toasts don't dedupe — the
+        # caller explicitly decides to notify, so two identical
+        # messages should both surface.
+        q = sse_broadcast.register()
+        try:
+            await sse_publishers.publish_toast("info", "hi")
+            await sse_publishers.publish_toast("info", "hi")
+            a = await asyncio.wait_for(q.get(), timeout=1)
+            b = await asyncio.wait_for(q.get(), timeout=1)
+            assert a == b == ("toast", {"level": "info", "message": "hi"})
+        finally:
+            sse_broadcast.unregister(q)

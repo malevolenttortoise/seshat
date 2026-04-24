@@ -918,6 +918,21 @@ async def _record_buffer_gate_block(
             announce.torrent_id,
         )
 
+    # In-browser toast — always fire for gate blocks. Unlike ntfy's
+    # per-6h throttle (phone spam protection), a toast is ephemeral
+    # and per-open-tab. If the user is actively watching the
+    # dashboard they should see every block in real time.
+    try:
+        from app.orchestrator.sse_publishers import publish_toast
+        label = announce.torrent_name or f"tid={announce.torrent_id}"
+        await publish_toast(
+            "warn",
+            f"Buffer gate blocked {label}: needs {size_gb:.2f} GB, "
+            f"buffer {buffer_gb:.2f} GB",
+        )
+    except Exception:
+        _log.exception("buffer-gate toast publish failed (non-fatal)")
+
     # ntfy throttle: fire at most once per rolling 6h window per
     # trigger type. The first block after a restart always notifies
     # (sentinel 0), because "feed went quiet" after a restart is

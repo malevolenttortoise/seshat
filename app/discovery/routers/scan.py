@@ -254,9 +254,23 @@ async def trigger_lookup(content_type: str | None = None):
                 )
             except Exception:
                 logger.debug("source-scan notify failed", exc_info=True)
+            try:
+                from app.orchestrator.sse_publishers import publish_toast
+                await publish_toast(
+                    "success",
+                    f"Source scan complete: {cumulative_new} new books "
+                    f"across {cumulative_checked} author(s)",
+                )
+            except Exception:
+                logger.debug("source-scan toast failed", exc_info=True)
         except Exception as e:
             logger.error(f"Author scan error: {e}")
             state._lookup_progress.update({"running": False, "status": f"error: {e}"})
+            try:
+                from app.orchestrator.sse_publishers import publish_toast
+                await publish_toast("error", f"Source scan failed: {e}")
+            except Exception:
+                logger.debug("source-scan error toast failed", exc_info=True)
         finally:
             if original and original != get_active_library():
                 set_active_library(original)

@@ -403,6 +403,23 @@ async def _record_buy_outcome(
         user_bonus_after=result.new_seedbonus,
     )
 
+    # Toast only fires for scheduled auto-buys. Manual buys go through
+    # the economy router, which returns the outcome synchronously —
+    # the router's own UI surface is already showing a response toast
+    # and a second one would be noise.
+    if trigger == economy_audit.TRIGGER_SCHEDULED:
+        try:
+            from app.orchestrator.sse_publishers import publish_toast
+            label = "VIP" if action == economy_audit.ACTION_VIP else "upload credit"
+            dry_prefix = "[dry-run] " if result.dry_run else ""
+            await publish_toast(
+                "success",
+                f"{dry_prefix}Auto-buy: {label} {amount}"
+                + (f" (cost {int(cost)} BP)" if cost else ""),
+            )
+        except Exception:
+            _log.exception("auto-buy toast publish failed (non-fatal)")
+
     # Dry-run simulated buys skip the timestamp bump — otherwise
     # toggling dry-run off would leave a phantom lockout where the
     # scheduler thinks we "just bought" 10 minutes ago.

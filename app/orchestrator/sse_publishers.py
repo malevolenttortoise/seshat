@@ -183,6 +183,31 @@ async def publish_mam_stats(status: UserStatus) -> None:
     })
 
 
+# ─── toast ─────────────────────────────────────────────────
+
+# Valid toast levels, matching the frontend's `lib/toast.ts` vocabulary.
+# Any out-of-band value gets coerced to "info" on publish so the UI
+# always has a known level to render.
+_TOAST_LEVELS = {"success", "info", "warn", "error"}
+
+
+async def publish_toast(level: str, message: str) -> None:
+    """Push an ephemeral in-browser notification to every subscriber.
+
+    Complementary to the existing ntfy path: ntfy is durable push to
+    the user's phone, toast is a transient flash while they have the
+    tab open. Both fire for meaningful background events (grab
+    injected, scan complete, buffer gate tripped, bonus-buy outcome)
+    so the user sees them regardless of which surface they're on.
+
+    `level` maps to the frontend's four toast kinds — anything else
+    coerces to "info".
+    """
+    if level not in _TOAST_LEVELS:
+        level = "info"
+    await sse_broadcast.publish("toast", {"level": level, "message": message})
+
+
 # ─── Test hooks ────────────────────────────────────────────
 
 def reset_for_tests() -> None:
