@@ -28,10 +28,12 @@ widget never flickers through "skipped translator", "skipped foreign",
 etc.
 """
 import asyncio, logging, re, json
+from collections import Counter
 from datetime import datetime
 from typing import Optional
 from bs4 import BeautifulSoup
 from app.discovery.sources.base import BaseSource, AuthorResult, BookResult, SeriesResult
+from app.metadata.author_names import author_name_variants, authors_match
 
 logger = logging.getLogger("seshat.discovery.goodreads")
 BASE = "https://www.goodreads.com"
@@ -69,6 +71,61 @@ def _is_future(d: str) -> bool:
 def _is_set_from_series(series_text: str) -> bool:
     """Detect if series info indicates a box set/collection (e.g. '#1-6', '#1-7')."""
     return bool(re.search(r'#\d+\s*[-–]\s*\d+', series_text))
+
+
+def _pick_author_from_book_search(
+    html: str, query_name: str
+) -> Optional[AuthorResult]:
+    """Extract the most plausible author from a Goodreads book-search page.
+
+    Counts `(author_name, author_id)` pairs across the `a.authorName`
+    anchors on the page, ranks by frequency, and returns the top-ranked
+    pair that passes `authors_match` against `query_name`. Returns
+    `None` when there are no anchors or when no top-ranked pair is a
+    plausible name match.
+
+    Author-page image is best-effort: scan the anchor's row for an
+    `img` with a non-`nophoto` src. If the page layout hides it, the
+    result still returns with `image_url=None`.
+    """
+    soup = BeautifulSoup(html, "lxml")
+    anchors = soup.select("a.authorName")
+    if not anchors:
+        return None
+
+    counts: Counter[tuple[str, str]] = Counter()
+    images: dict[tuple[str, str], str] = {}
+    for a in anchors:
+        nm = a.get_text(strip=True)
+        href = a.get("href") or ""
+        m = re.search(r"/author/show/(\d+)", href)
+        if not m or not nm:
+            continue
+        key = (nm, m.group(1))
+        counts[key] += 1
+        if key not in images:
+            parent = a.find_parent("tr") or a.find_parent("div")
+            if parent:
+                img_el = parent.select_one("img")
+                if img_el:
+                    src = img_el.get("src") or ""
+                    if src and "nophoto" not in src:
+                        images[key] = src
+
+    if not counts:
+        return None
+
+    # Walk most-common first; accept the first that passes the
+    # name-match gate. If none do, there's no confident result on this
+    # page — return None so the caller can try the next variant.
+    for (name, author_id), _count in counts.most_common():
+        if authors_match(name, query_name):
+            return AuthorResult(
+                name=name,
+                external_id=author_id,
+                image_url=images.get((name, author_id)),
+            )
+    return None
 
 
 class GoodreadsSource(BaseSource):
@@ -261,31 +318,50 @@ class GoodreadsSource(BaseSource):
         return details
 
     async def search_author(self, author_name: str) -> Optional[AuthorResult]:
-        try:
-            r = await self._get(f"{BASE}/search", params={"q": author_name, "search_type": "authors"})
-            soup = BeautifulSoup(r.text, "lxml")
-            links = soup.select("a.authorName")
-            if not links:
-                return None
-            for link in links:
-                nm = link.get_text(strip=True)
-                if nm.lower() == author_name.lower():
-                    m = re.search(r"/author/show/(\d+)", link.get("href", ""))
-                    img = None
-                    parent = link.find_parent("tr") or link.find_parent("div")
-                    if parent:
-                        img_el = parent.select_one("img")
-                        if img_el:
-                            img = img_el.get("src")
-                            if img and "nophoto" in img:
-                                img = None
-                    return AuthorResult(name=nm, external_id=m.group(1) if m else None, image_url=img)
-            first = links[0]
-            m = re.search(r"/author/show/(\d+)", first.get("href", ""))
-            return AuthorResult(name=first.get_text(strip=True), external_id=m.group(1) if m else None)
-        except Exception as e:
-            logger.error(f"Goodreads search error '{author_name}': {e}")
-            return None
+        """Find an author's Goodreads ID via the book-search endpoint.
+
+        Goodreads migrated `/search?search_type=authors` to client-side
+        React rendering in early 2026. Scraping that page now yields an
+        empty result shell (nav chrome + title tag only; author rows
+        load via AJAX). We pivot to the book-search endpoint, which
+        remains server-rendered:
+
+          1. Query `/search?search_type=books&q=<name>`.
+          2. Each result row carries an `a.authorName` anchor linking
+             to `/author/show/{id}`. Count (name, id) pairs across the
+             page; the author that wrote the books the query matched
+             dominates the distribution.
+          3. Gate the most-common pair through `authors_match` so we
+             don't confidently return the wrong author when Goodreads'
+             ranker returns adjacent-namespace results.
+
+        If the first query returns no match (Goodreads' ranker is
+        punctuation-sensitive — `"A K Duboff"` returns Amy DuBoff,
+        `"A.K. Duboff"` returns A.K. DuBoff), retry with up to three
+        punctuation variants from `author_name_variants`. Variant
+        retries only fire when the first query already failed, so the
+        common case stays one HTTP request.
+        """
+        for variant in author_name_variants(author_name):
+            try:
+                r = await self._get(
+                    f"{BASE}/search",
+                    params={"q": variant, "search_type": "books"},
+                )
+            except Exception as e:
+                logger.error(f"Goodreads search error for variant '{variant}': {e}")
+                continue
+
+            result = _pick_author_from_book_search(r.text, author_name)
+            if result is not None:
+                if variant != author_name:
+                    logger.info(
+                        f"  Goodreads: matched '{author_name}' via variant '{variant}' "
+                        f"→ '{result.name}' (id={result.external_id})"
+                    )
+                return result
+
+        return None
 
     async def get_author_books(self, author_id: str, existing_titles: set = None, owned_titles: list = None, owned_only: bool = False, start_at: int = 0) -> Optional[AuthorResult]:
         """Scrape an author's full book list and visit per-book detail pages.
