@@ -53,10 +53,11 @@ class AddResult:
 class TorrentInfo:
     """Snapshot of one torrent as reported by the client.
 
-    Fields are deliberately the intersection of what we actually use
-    downstream — name, category, state, seeding_time, save_path —
-    rather than mirroring qBit's full schema. Adding a field here
-    means a real consumer needs it.
+    Fields are the intersection of what we actually use downstream —
+    adding a field here means a real consumer needs it. The trailing
+    progress/size group is used by the SSE `torrent-progress` feed;
+    clients that don't report them (Transmission, Deluge, rTorrent)
+    leave them at the defaults.
     """
 
     hash: str
@@ -67,6 +68,10 @@ class TorrentInfo:
     seeding_seconds: int   # how long this torrent has been seeding
     save_path: str
     added_on: int          # unix timestamp
+    progress: float = 0.0  # 0.0-1.0 download completion
+    dlspeed: int = 0       # current download rate, bytes/sec
+    eta: int = 0           # seconds until complete (qBit: 8640000 = inf)
+    size: int = 0          # total torrent size, bytes
 
 
 class TorrentClient(Protocol):

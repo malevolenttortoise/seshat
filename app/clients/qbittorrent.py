@@ -510,6 +510,10 @@ def _parse_torrent(raw: dict) -> TorrentInfo:
         seeding_seconds=int(raw.get("seeding_time", 0) or 0),
         save_path=str(raw.get("save_path", "")),
         added_on=int(raw.get("added_on", 0) or 0),
+        progress=float(raw.get("progress", 0.0) or 0.0),
+        dlspeed=int(raw.get("dlspeed", 0) or 0),
+        eta=int(raw.get("eta", 0) or 0),
+        size=int(raw.get("size", 0) or 0),
     )
 
 

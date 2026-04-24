@@ -64,6 +64,10 @@ class TickResult:
     queue_pops_submitted: int
     queue_pops_failed: int
     error: Optional[str] = None
+    # True iff the qBit call this tick returned successfully with
+    # an authenticated session. Used by the SSE `client-status`
+    # publisher in `run_loop`.
+    qbit_reachable: bool = True
 
 
 async def tick(deps: DispatcherDeps) -> TickResult:
@@ -92,6 +96,7 @@ async def tick(deps: DispatcherDeps) -> TickResult:
             queue_pops_submitted=0,
             queue_pops_failed=0,
             error=f"{type(e).__name__}: {e}",
+            qbit_reachable=False,
         )
     finally:
         await db.close()
@@ -102,6 +107,17 @@ async def _tick_inner(deps: DispatcherDeps, db) -> TickResult:
     qbit_torrents = await deps.qbit.list_torrents(category=deps.qbit_category)
     qbit_seen = len(qbit_torrents)
     snapshot = {t.hash: t.seeding_seconds for t in qbit_torrents if t.hash}
+
+    # Fan out `torrent-progress` events to any SSE subscribers. Only
+    # torrents whose progress/state/dlspeed actually changed since the
+    # last tick get an event (first tick after process start emits all
+    # active torrents — fine, that paints the initial UI). Guarded
+    # against raising out of the tick; SSE delivery is best-effort.
+    try:
+        from app.orchestrator import sse_publishers
+        await sse_publishers.publish_torrent_progress(qbit_torrents)
+    except Exception:
+        _log.exception("torrent-progress SSE publish failed (non-fatal)")
 
     # Count manual/Autobrr adds — any torrent in the watched category
     # that doesn't have a ledger row AND hasn't yet reached the
@@ -249,6 +265,11 @@ async def _tick_inner(deps: DispatcherDeps, db) -> TickResult:
         queue_pops_attempted=pops_attempted,
         queue_pops_submitted=pops_submitted,
         queue_pops_failed=pops_failed,
+        # Session is live IFF the client flagged itself authenticated
+        # during this tick. Empty-category installs will still report
+        # reachable=True because list_torrents doesn't reset the flag
+        # on a successful 200.
+        qbit_reachable=bool(getattr(deps.qbit, "_logged_in", True)),
     )
 
 
@@ -406,6 +427,16 @@ async def run_loop(
     consecutive_auth_failures = 0
     while True:
         result = await tick(deps)
+        # Push the client-status transition BEFORE the rest of the loop
+        # body so even a `continue` (auth backoff) still notifies the UI
+        # that qBit went offline. The publisher transition-gates itself
+        # so steady-state reachable=True isn't re-broadcast every tick.
+        try:
+            from app.orchestrator import sse_publishers
+            await sse_publishers.publish_client_status(result.qbit_reachable)
+        except Exception:
+            _log.exception("client-status SSE publish failed (non-fatal)")
+
         if result.queue_pops_submitted or result.seedtime_released or result.removed_released:
             _log.info(
                 f"budget watcher tick: qbit_seen={result.qbit_torrents_seen} "
