@@ -14,6 +14,9 @@ import { fmtBytes, fmtDuration, fmtNum, fmtRatio, pct } from "../lib/format";
 import { useVisibleInterval } from "../hooks/useVisibleInterval";
 import { useVisibleEventSource } from "../hooks/useVisibleEventSource";
 import { useSseEvents } from "../providers/SseEventsProvider";
+import { useViewport } from "../hooks/useViewport";
+import { useMobileCodepath } from "../components/mobile";
+import MobileUnifiedDashboard from "./MobileUnifiedDashboard";
 import type { MamStatusResponse, NavFn, ScanProgress } from "../types";
 
 interface Props {
@@ -130,6 +133,16 @@ interface LibraryLink {
 }
 
 export default function UnifiedDashboard({ onNav }: Props) {
+  // Phone + iPad render the mobile-native variant. Desktop falls
+  // through to the existing 2-3 column grid layout below.
+  const vp = useViewport();
+  if (useMobileCodepath(vp)) {
+    return <MobileUnifiedDashboard onNav={onNav} />;
+  }
+  return <DesktopUnifiedDashboard onNav={onNav} />;
+}
+
+function DesktopUnifiedDashboard({ onNav }: Props) {
   const t = useTheme();
   const [d, setD] = useState<DashboardStats | null>(null);
   const [health, setHealth] = useState<HealthResponse | null>(null);
