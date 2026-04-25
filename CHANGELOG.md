@@ -7,14 +7,184 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
-## [Unreleased] — 1.4.0 candidate
+## [2.0.0] — 2026-04-24
 
-Audiobook integration. Adds Audiobookshelf as a first-class library
-backend alongside Calibre, with cross-library work linking so the same
-book in both libraries surfaces as one entity in discovery views. The
-MAM pipeline now grabs audiobooks and routes them to Audiobookshelf via
-a new sink. Settings consolidated and the Dashboard redesigned to
-accommodate two library backends.
+Major release. Three tiers of MouseSearch-port work (MAM economy bundle,
+SSE live torrent polling, PWA), a full mobile-responsive pass, audiobook
+integration, plus Phase 4-6 UX polish + template download paths +
+documentation. Net effect: Seshat is now a polished single-package
+discovery + acquisition platform with first-class audiobook support, real-
+time pipeline visibility, and an installable PWA.
+
+### Major features
+
+- **MAM economy bundle (Tier 1).** VIP auto-buy + upload-credit auto-
+  buy (3 triggers: ratio floor, periodic, on-demand) + pre-download
+  buffer gate + per-grab personal-FL flag + per-grab wedge offer. Live
+  policy controls, audited spend log, dashboard pills. Wired through a
+  hardened `bonus_buy.py` against the live MAM v1 API (verified call
+  shapes documented in code).
+
+- **SSE live torrent polling (Tier 2).** Backend qBit-monitor loop
+  diffs `list_torrents` snapshots and broadcasts `torrent-progress`,
+  `client-status`, `mam-stats`, `toast` events through a per-client
+  `asyncio.Queue` fanout (`sse_broadcast.py`). New `/api/v1/events`
+  endpoint via `sse-starlette`. Frontend `useVisibleEventSource` hook
+  + `SseEventsProvider` context replace the polling intervals on
+  DiscMAMPage + BookSidebar. Visibility-API auto-pause + reconnect
+  with exponential backoff. Toast events route to `lib/toast.ts`
+  directly. Late-connecting tabs receive a state replay via
+  `seed_new_subscriber()` so client-status + MAM stats render
+  immediately instead of waiting for the next change event.
+
+- **Progressive Web App (Tier 3).** `vite-plugin-pwa` + workbox.
+  Manifest, service worker, runtime caching strategies (covers
+  cache-first 7d, MAM status / lists stale-while-revalidate, SSE
+  network-only, default API network-first), `useNetworkStatus` hook
+  + sticky offline banner, custom install prompt with 30-second
+  delay + 30-day dismissal sticky in localStorage. Service worker
+  silently no-ops on plain-HTTP origins; PWA layer auto-activates
+  once Seshat sits behind HTTPS.
+
+- **Mobile responsive pass.** `useViewport` hook, `MobileNavDrawer`
+  slide-out, hamburger nav at ≤700px, alphabet sidebar hidden on
+  mobile, BookSidebar becomes 100vw fullscreen sheet, Dashboard
+  collapses to single-column stack, BList table scrolls horizontally
+  inside an `overflow-x:auto` wrapper, iOS 16px-input zoom fix,
+  `.author-header` + `.author-controls` reflow via CSS media queries.
+  Internal-overflow second pass: `.dash-stack`, `.dash-no-minwidth`,
+  `.page-header-row`, `.page-header-controls`, `.seshat-search`
+  classNames + media queries to fix widget-internal layouts that
+  the structural pass left desktop-squished. Ground-up mobile
+  redesign queued as a future project.
+
+- **Audiobook integration.** Audiobookshelf as a first-class library
+  backend alongside Calibre. New `app/library_apps/audiobookshelf.py`
+  + `app/discovery/audiobookshelf_sync.py` (3-pass sync). Audnexus +
+  Audible metadata sources for audiobook-specific fields (narrator,
+  duration, ASIN, abridged). Cross-library `work_links` collapse the
+  same book across both libraries to one entity. Per-author format
+  preferences (ebook-only / audiobook-only / both). Format tabs on
+  cross-library views. Audiobook MAM pipeline grabs route via a
+  dedicated `AudiobookshelfSink`. Multi-file audiobook staging fix.
+  Per-author / per-library scan + clear actions with `content_type`
+  filtering. Audiobook-aware enricher with separate priority list.
+
+- **Custom download-folder templates (Phase 5).** New `template`
+  mode for `download_folder_structure` with `{author}`, `{series}`,
+  `{title}` tokens. Empty segments are dropped automatically — a
+  standalone book in `{author}/{series}/{title}` lands in
+  `{author}/{title}` without manual conditionals. Setting
+  `download_folder_template` (string, default empty = matches legacy
+  "author" mode). 13 new tests cover normalization, FS-safe char
+  stripping, doubled-slash collapse, unknown-token handling, and
+  end-to-end template rendering.
+
+### UX polish
+
+- **ClearMenu dropdown.** Consolidated 3-5 inline Clear buttons
+  (Clear Source / Clear Ebook Src / Clear Audio Src / Clear MAM /
+  Clear Both) into a single split-button dropdown across Authors /
+  Author detail / Books / MAM page. Variant-tinted rows + trailing
+  scope hints + click-outside / Escape close.
+
+- **Approve / Remove MAM buttons.** New action row on BookSidebar
+  for "Possible" MAM matches — Approve flips status to Found
+  against the existing URL, Remove clears it and marks Not Found.
+  Closes the sidebar immediately on click + refreshes parent in
+  background, so the click feels instant.
+
+- **Skeleton card loaders** on book grids during initial fetch.
+  Pulse animation, matches BCard's flex shape so the layout
+  doesn't reshuffle when real cards land.
+
+- **Hover-lift on book cards.** Subtle `translateY(-2px)` + drop
+  shadow on hover (desktop only via `(hover: hover) and
+  (pointer: fine)` so touch devices don't get sticky-elevated cards
+  after every tap).
+
+- **Cover backdrop in BookSidebar.** Blurred-self backdrop layer +
+  gradient fade so covers feel embedded in the sidebar instead of
+  floating on a flat surface.
+
+- **PhotoSwipe cover lightbox.** Click any cover in the sidebar →
+  fullscreen lightbox with zoom, pan, swipe-to-close, keyboard nav.
+  Code-split via dynamic import so the ~80KB only loads on first
+  click.
+
+- **Native lazy-load + fade-in covers.** Off-screen cover requests
+  defer until scroll. Loaded covers fade in 350ms instead of popping.
+  On long Library pages, drops first-paint cover fetches from
+  hundreds to ~12 (visible viewport).
+
+### Discovery quality
+
+Bug fixes that landed during Tier 1-3 UAT and weren't gated to a
+specific tier. Each driven by a real production failure:
+
+- **Hardcover edition filter respects content_type.** GraphQL
+  `reading_format_id` was hardcoded to `[1, 4]` (physical + ebook),
+  silently excluding audiobook editions. Audiobook scans now query
+  with `[2]`. `exclude_audiobooks` setting also gated off for
+  audiobook scans.
+
+- **MAM scanner per-book commit.** Was committing every 10 books;
+  with rate_mam=2s the writer transaction stayed open for ~20s
+  between commits and user clicks (Hide / Dismiss / Approve MAM /
+  Save) queued behind it for the 30s SQLite busy_timeout. Per-book
+  commit drops hold time to milliseconds.
+
+- **Goodreads `_series_from_title_paren` fallback.** Detail-page
+  parser missed `(Series Name #N)` in the title when the structured
+  seriesTitle div was missing or unparseable, leading the merge
+  layer to URL-backfill onto a different book. Fallback now extracts
+  the series + index from the trailing parenthetical.
+
+- **Pen-name title→series scope.** `_title_to_series_pass` queried
+  `series WHERE author_id=?` and missed series rows owned by linked
+  pen-name authors, leaving title-matched standalones unlinked.
+  Now queries `series.id IN (SELECT series_id FROM books WHERE
+  author_id=?)` to follow pen-name links.
+
+- **Goodreads URL-backfill cover drop.** `existing_titles` check
+  used substring containment, treating "Monster's Mercy" as known
+  because "Monster's Mercy 2" was owned, then emitted a minimal
+  BookResult with a NULL cover_url. Tightened to exact normalized
+  equality + added `list_cover` to the backfill BookResult.
+
+- **Hardcover cover fallback.** `edition.image` was sometimes null
+  when `book.image` had the data; new `_pick_hardcover_cover` helper
+  prefers edition image with a book-level fallback.
+
+- **Amazon + ibdb author byline gates.** Amazon's search-card filter
+  required all tokens as substrings, rejecting legit hits, while the
+  detail page had zero author verification. ibdb's `score_match` was
+  called with `title=title` making the title component trivially
+  1.0. Both replaced with the shared `authors_match()` helper.
+
+- **Author name normalization.** New `app/metadata/author_names.py`
+  consolidates "A.K. DuBoff" / "A K Duboff" / "AK Duboff" handling —
+  diacritic strip, period strip, single-letter merge. Used by
+  `authors_match()` + `author_name_variants()` for query retries.
+
+- **Same-series-position dedup.** `_title_to_series_pass` now
+  deduplicates on `(author_id, series_id, series_index)` when
+  assigning indices to standalones, with OWNED > non-Book-N >
+  lowest-id winner selection. Catches "Remnant II" + "Remnant Book 2"
+  collisions that fuzzy title match misses.
+
+- **Cover proxy + URL fallback.** `/api/discovery/covers/{bid}` got
+  a third resolution path (`_proxy_cover_url`) that streams remote
+  cover URLs for Goodreads / Hardcover / Amazon / ibdb books with
+  no local cover_path or ABS ID. Realistic User-Agent so CDNs
+  don't 403.
+
+### Audiobook integration (originally 1.4.0 candidate)
+
+The major new-features section that was sitting in Unreleased. Rolled
+into 2.0.0 — these never shipped under a separate version tag.
+
+
 
 ### Added
 
