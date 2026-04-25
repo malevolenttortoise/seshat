@@ -12,9 +12,21 @@ import { Btn } from "../components/Btn";
 import { Load } from "../components/Load";
 import { BList } from "../components/BookViews";
 import { BookSidebar } from "../components/BookSidebar";
+import { useViewport } from "../hooks/useViewport";
+import { useMobileCodepath } from "../components/mobile";
+import MobileHiddenPage from "./MobileHiddenPage";
 import type { NavFn, Book, BooksResponse, BookAction } from "../types";
 
-export default function HiddenPage({ onNav }: { onNav: NavFn }) {
+export default function HiddenPage(props: { onNav: NavFn }) {
+  // Mobile codepath catches phones, iPads, and any touch device.
+  const vp = useViewport();
+  if (useMobileCodepath(vp)) {
+    return <MobileHiddenPage {...props} />;
+  }
+  return <DesktopHiddenPage {...props} />;
+}
+
+function DesktopHiddenPage({ onNav }: { onNav: NavFn }) {
   const t = useTheme();
   const [bks, setBks] = useState<Book[]>([]);
   const [ld, setLd] = useState(true);

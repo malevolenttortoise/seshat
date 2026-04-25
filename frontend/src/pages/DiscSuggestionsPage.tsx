@@ -14,6 +14,9 @@ import { Btn } from "../components/Btn";
 import { Spin } from "../components/Spin";
 import { Load } from "../components/Load";
 import { usePersist } from "../hooks/usePersist";
+import { useViewport } from "../hooks/useViewport";
+import { useMobileCodepath } from "../components/mobile";
+import MobileSuggestionsPage from "./MobileSuggestionsPage";
 import type { NavFn } from "../types";
 
 // One row from /api/discovery/series-suggestions. Matches the
@@ -76,7 +79,16 @@ function fmtSeriesValue(
   return idx != null ? `${name} #${idx}` : name;
 }
 
-export default function SuggestionsPage({ onNav }: { onNav: NavFn }) {
+export default function SuggestionsPage(props: { onNav: NavFn }) {
+  // Mobile codepath catches phones, iPads, and any touch device.
+  const vp = useViewport();
+  if (useMobileCodepath(vp)) {
+    return <MobileSuggestionsPage {...props} />;
+  }
+  return <DesktopSuggestionsPage {...props} />;
+}
+
+function DesktopSuggestionsPage({ onNav }: { onNav: NavFn }) {
   const t = useTheme();
   const [status, setStatus] = useState<string>("pending");
   const [fmt, setFmt] = usePersist<string>("sg_fmt", "all");
