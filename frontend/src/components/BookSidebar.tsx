@@ -596,17 +596,55 @@ export function BookSidebar({
       </div>
 
       {hasCover ? (
-        <img
-          src={coverSrc}
-          alt=""
+        // Cover with blurred-self backdrop + gradient fade. The
+        // background layer is the same cover image scaled up and
+        // blurred, which matches whatever the cover's dominant tones
+        // are. The gradient fades from transparent at the top
+        // (lets the blurred backdrop show through) to bg2 at the
+        // bottom (clean handoff into the metadata rows below).
+        <div
           style={{
-            width: "100%",
-            maxHeight: 300,
-            objectFit: "contain",
+            position: "relative",
             borderRadius: 8,
+            overflow: "hidden",
             background: t.bg4,
           }}
-        />
+        >
+          <div
+            aria-hidden="true"
+            style={{
+              position: "absolute",
+              inset: 0,
+              backgroundImage: `url(${coverSrc})`,
+              backgroundSize: "cover",
+              backgroundPosition: "center",
+              filter: "blur(28px) saturate(1.1)",
+              transform: "scale(1.15)",
+              opacity: 0.55,
+            }}
+          />
+          <div
+            aria-hidden="true"
+            style={{
+              position: "absolute",
+              inset: 0,
+              background: `linear-gradient(180deg, transparent 0%, transparent 55%, ${t.bg2} 100%)`,
+            }}
+          />
+          <img
+            src={coverSrc}
+            alt=""
+            style={{
+              position: "relative",
+              display: "block",
+              margin: "0 auto",
+              maxWidth: "100%",
+              maxHeight: 300,
+              objectFit: "contain",
+              zIndex: 1,
+            }}
+          />
+        </div>
       ) : null}
 
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
