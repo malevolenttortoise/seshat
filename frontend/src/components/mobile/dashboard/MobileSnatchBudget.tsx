@@ -11,17 +11,21 @@ import { fmtDuration, fmtNum } from "../../../lib/format";
 import { RADIUS, scaleFor } from "../tokens";
 
 export interface BudgetEntry {
-  grab_id?: number;
+  grab_id?: number | null;
   torrent_name?: string;
   source?: string;
   seeding_seconds?: number;
   remaining_seconds?: number;
 }
 
+// `next_release_seconds` is nullable on the wire (API returns null
+// when no torrent is currently waiting to release into the budget),
+// so accept both null and undefined here. Same shape both desktop
+// dashboards consume.
 export interface BudgetData {
   budget_used?: number;
   budget_cap?: number;
-  next_release_seconds?: number;
+  next_release_seconds?: number | null;
   ledger_active?: number;
   qbit_extras?: number;
   queue_size?: number;

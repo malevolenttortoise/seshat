@@ -11,6 +11,9 @@ import { Btn } from "../components/Btn";
 import { Spin } from "../components/Spin";
 import { Load } from "../components/Load";
 import { toast } from "../lib/toast";
+import { useViewport } from "../hooks/useViewport";
+import { useMobileCodepath } from "../components/mobile";
+import MobileDiscDashboard from "./MobileDiscDashboard";
 import type {
   Library,
   NavFn,
@@ -100,7 +103,17 @@ interface ScansUpdatedDetail {
   scans?: ScanProgress[];
 }
 
-export default function Dashboard({
+export default function Dashboard(props: DashboardProps) {
+  // Phones, iPads, and any touch device land on the mobile variant.
+  // Desktop falls through to the existing layout below.
+  const vp = useViewport();
+  if (useMobileCodepath(vp)) {
+    return <MobileDiscDashboard {...props} />;
+  }
+  return <DesktopDiscDashboard {...props} />;
+}
+
+function DesktopDiscDashboard({
   onNav,
   libs = [],
   activeLib = "",

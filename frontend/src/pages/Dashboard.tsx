@@ -9,6 +9,9 @@ import { api } from "../api";
 import { useTheme } from "../theme";
 import { fmtNum, fmtBytes, fmtRatio, fmtDuration } from "../lib/format";
 import { useVisibleInterval } from "../hooks/useVisibleInterval";
+import { useViewport } from "../hooks/useViewport";
+import { useMobileCodepath } from "../components/mobile";
+import MobilePipelineDashboard from "./MobilePipelineDashboard";
 
 interface DashboardProps { onNav: (page: string) => void; }
 
@@ -51,7 +54,16 @@ const _cache: {
 
 const POLL_INTERVAL = 30;
 
-export default function Dashboard({ onNav }: DashboardProps) {
+export default function Dashboard(props: DashboardProps) {
+  // Mobile codepath catches phones, iPads, and any touch device.
+  const vp = useViewport();
+  if (useMobileCodepath(vp)) {
+    return <MobilePipelineDashboard {...props} />;
+  }
+  return <DesktopPipelineDashboard {...props} />;
+}
+
+function DesktopPipelineDashboard({ onNav }: DashboardProps) {
   const t = useTheme();
   const [reviewCount, setReviewCount] = useState<number | null>(_cache.reviewCount);
   const [tentativeCount, setTentativeCount] = useState<number | null>(_cache.tentativeCount);
