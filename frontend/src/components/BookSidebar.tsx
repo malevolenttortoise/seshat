@@ -597,17 +597,22 @@ export function BookSidebar({
       </div>
 
       {hasCover ? (
-        // Cover with blurred-self backdrop + gradient fade. The
-        // background layer is the same cover image scaled up and
-        // blurred, which matches whatever the cover's dominant tones
-        // are. The gradient fades from transparent at the top
-        // (lets the blurred backdrop show through) to bg2 at the
-        // bottom (clean handoff into the metadata rows below).
-        // Click on the foreground cover opens a PhotoSwipe lightbox
-        // for full-size view + zoom + pan.
+        // Cover slot — fixed 2:3 portrait aspect ratio with the cover
+        // letterboxed inside via object-fit:contain. Predictable size
+        // regardless of the cover's natural aspect (some self-pubs
+        // ship horizontal banner covers; some series ship 1:1
+        // squares). Banner covers get clean letterboxing with the
+        // blurred-self backdrop filling the empty space; standard 2:3
+        // portrait covers fill the slot edge-to-edge.
+        //
+        // Click the foreground cover → PhotoSwipe lightbox for full-
+        // size zoom/pan/pinch.
         <div
           style={{
             position: "relative",
+            width: "100%",
+            aspectRatio: "2 / 3",
+            maxHeight: 480,
             borderRadius: 8,
             overflow: "hidden",
             background: t.bg4,
@@ -643,10 +648,10 @@ export function BookSidebar({
             }}
             title="Click to enlarge"
             style={{
-              position: "relative",
-              display: "block",
+              position: "absolute",
+              inset: 0,
               width: "100%",
-              height: "auto",
+              height: "100%",
               objectFit: "contain",
               zIndex: 1,
               cursor: "zoom-in",
