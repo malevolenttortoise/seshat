@@ -142,7 +142,11 @@ class DispatcherDeps:
 
     # Download folder organization.
     qbit_download_path: str = ""
-    download_folder_structure: str = "monthly"  # "monthly" | "yearly" | "author" | "flat"
+    download_folder_structure: str = "monthly"  # "monthly" | "yearly" | "author" | "flat" | "template"
+    # Format string used when `download_folder_structure == "template"`.
+    # Tokens: {author}, {series}, {title}. Empty defaults to "{author}"
+    # (matches legacy "author" mode). See app/orchestrator/download_folders.py.
+    download_folder_template: str = ""
 
     # Path translation between qBit and Seshat containers.
     # qBit reports paths like "/data/[mam-complete]" but Seshat
@@ -268,6 +272,8 @@ async def inject_grab(
     torrent_name: str = "",
     category: str = "",
     author_blob: str = "",
+    series_name: str = "",
+    book_title: str = "",
     raw_line: str = "manual_inject",
     force_fl_wedge: bool = False,
 ) -> DispatchResult:
@@ -300,6 +306,8 @@ async def inject_grab(
         torrent_name=torrent_name or f"manual_inject_{torrent_id}",
         category=category,
         author_blob=author_blob,
+        series_name=series_name,
+        book_title=book_title,
     )
     # Synthetic "allow" decision so the audit row reflects that this
     # was a manual override (reason `manual_inject` rather than the
@@ -680,6 +688,9 @@ async def _dispatch_with_decision(
                 deps.qbit_download_path,
                 deps.download_folder_structure,
                 author_name=announce.author_blob,
+                series_name=announce.series_name,
+                book_title=announce.book_title,
+                template=deps.download_folder_template,
             )
             if save_path:
                 # Translate qBit-namespace path → local-namespace path,

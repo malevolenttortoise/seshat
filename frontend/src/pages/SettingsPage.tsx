@@ -523,8 +523,22 @@ export default function SettingsPage() {
               <option value="yearly">[YYYY] Yearly</option>
               <option value="author">By Author</option>
               <option value="flat">Flat (no subfolders)</option>
+              <option value="template">Custom template</option>
             </select>
           </SF>
+          {(s.download_folder_structure as string) === "template" ? (
+            <SF
+              label="Folder Template"
+              desc='Format string for download subfolders. Tokens: {author}, {series}, {title}. Empty = same as "By Author". Empty segments are dropped (a standalone book in "{author}/{series}/{title}" lands in "{author}/{title}"). Discovery-driven grabs supply all three; raw IRC announces only have {author}.'
+            >
+              <input
+                value={(s.download_folder_template as string) || ""}
+                onChange={e => upd("download_folder_template", e.target.value)}
+                placeholder="{author}/{series}/{title}"
+                style={{ ...ist, width: 320, fontFamily: "monospace" }}
+              />
+            </SF>
+          ) : null}
         </>}
 
         {section === "sinks" && <>

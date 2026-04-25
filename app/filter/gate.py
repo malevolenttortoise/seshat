@@ -72,6 +72,14 @@ class Announce:
     author_blob: str = ""
     title: str = ""
     description: str = ""
+    # Phase 5 (download-folder template tokens). Distinct from the
+    # `title` fallback above: those are filter-internal scraped from
+    # the announce text. These are clean book metadata supplied by
+    # callers that have it (Discovery's send-to-pipeline). Empty for
+    # raw IRC announces — template segments referencing them will be
+    # dropped by the renderer rather than producing junk paths.
+    series_name: str = ""
+    book_title: str = ""
     info_url: str = ""
     size: str = ""
     filetype: str = ""

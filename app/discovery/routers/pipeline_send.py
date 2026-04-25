@@ -141,6 +141,13 @@ async def send_to_pipeline(data: dict = Body(...)):
                 torrent_name=(r["title"] or "").strip(),
                 category=(r["mam_category"] or "").strip(),
                 author_blob=author,
+                # Phase 5: pass clean book metadata so download-folder
+                # template-mode (`{author}/{series}/{title}`) renders
+                # with the real values instead of the noisy torrent
+                # filename. Empty for standalones — the template
+                # renderer drops the {series} segment cleanly.
+                series_name=(r["series_name"] or "").strip(),
+                book_title=(r["title"] or "").strip(),
                 raw_line=f"discovery:{r['mam_torrent_id']}",
                 force_fl_wedge=use_wedge_override,
             )

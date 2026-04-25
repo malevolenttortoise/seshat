@@ -420,10 +420,17 @@ DEFAULT_SETTINGS = {
     "notify_weekly_digest": True,
     # Download folder structure options.
     # "monthly" = [YYYY-MM]/ subfolders (default)
-    # "yearly"  = [YYYY]/ subfolders
-    # "author"  = Author Name/ subfolders
-    # "flat"    = all in root download path
+    # "yearly"   = [YYYY]/ subfolders
+    # "author"   = Author Name/ subfolders
+    # "flat"     = all in root download path
+    # "template" = user-defined nesting (see download_folder_template)
     "download_folder_structure": "monthly",
+    # Phase 5 — format string for `download_folder_structure="template"`.
+    # Tokens: {author}, {series}, {title}. Empty defaults to "{author}",
+    # which matches the legacy "author" mode exactly. Empty segments
+    # (e.g. {series} on a standalone book) are dropped, not left as
+    # empty directories. See app/orchestrator/download_folders.py.
+    "download_folder_template": "",
     # Emergency export folder: if the configured sink (CWA/Calibre)
     # is unreachable after multiple retries, books are dumped here
     # so they're not lost. The user can manually import them later.

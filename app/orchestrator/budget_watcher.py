@@ -337,10 +337,15 @@ async def _resubmit_queued_grab(
             ensure_folder_exists,
             translate_path,
         )
+        # Queued retries operate on raw IRC announce data — series +
+        # title aren't known at this point. Template-mode segments
+        # referencing {series}/{title} drop out as empty per the
+        # template renderer's contract; {author} resolves normally.
         save_path = compute_download_folder(
             deps.qbit_download_path,
             deps.download_folder_structure,
             author_name=grab.author_blob if grab else "",
+            template=deps.download_folder_template,
         )
         if save_path:
             local_save_path = translate_path(
