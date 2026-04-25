@@ -638,6 +638,9 @@ export function BookSidebar({
             src={coverSrc}
             alt=""
             onClick={() => openCoverLightbox(coverSrc)}
+            onLoad={(e) => {
+              (e.currentTarget as HTMLImageElement).style.opacity = "1";
+            }}
             title="Click to enlarge"
             style={{
               position: "relative",
@@ -648,6 +651,8 @@ export function BookSidebar({
               objectFit: "contain",
               zIndex: 1,
               cursor: "zoom-in",
+              opacity: 0,
+              transition: "opacity 0.35s ease-out",
             }}
           />
         </div>
