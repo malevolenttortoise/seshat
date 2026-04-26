@@ -180,26 +180,10 @@ function SeshatApp() {
   const [page, setPage] = useState(loadSavedPage);
   const [pageArg, setPageArg] = useState<string | number | null>(loadSavedPageArg);
   const [section, setSection] = useState<Section>(loadSavedSection);
-  // Navigation history stack — enables a "Back" affordance on mobile
-  // pages. In-memory only; F5 resets it (which is fine — back from a
-  // freshly-loaded page should fall back to the hamburger nav).
-  // Capped to prevent an unbounded grow when the user pings between
-  // pages a lot.
-  const [navHistory, setNavHistory] = useState<
-    { page: string; arg: string | number | null }[]
-  >([]);
 
   const nav = (p: string, arg?: string | number | null) => {
-    const resolvedArg = arg ?? null;
-    // Push the current page onto history before moving away — but
-    // only when we're actually changing pages (avoid duplicate
-    // entries from re-clicks on the active nav item).
-    setNavHistory((prev) =>
-      page === p && pageArg === resolvedArg
-        ? prev
-        : [...prev, { page, arg: pageArg }].slice(-30),
-    );
     setPage(p);
+    const resolvedArg = arg ?? null;
     setPageArg(resolvedArg);
     try {
       localStorage.setItem("seshat_page", p);
@@ -207,23 +191,6 @@ function SeshatApp() {
         localStorage.removeItem("seshat_page_arg");
       } else {
         localStorage.setItem("seshat_page_arg", String(resolvedArg));
-      }
-    } catch { /* */ }
-    window.scrollTo(0, 0);
-  };
-
-  const navBack = () => {
-    if (navHistory.length === 0) return;
-    const last = navHistory[navHistory.length - 1];
-    setNavHistory((prev) => prev.slice(0, -1));
-    setPage(last.page);
-    setPageArg(last.arg);
-    try {
-      localStorage.setItem("seshat_page", last.page);
-      if (last.arg === null || last.arg === undefined) {
-        localStorage.removeItem("seshat_page_arg");
-      } else {
-        localStorage.setItem("seshat_page_arg", String(last.arg));
       }
     } catch { /* */ }
     window.scrollTo(0, 0);
@@ -469,7 +436,7 @@ function SeshatApp() {
         className="seshat-main"
         style={{ maxWidth: maxW, margin: "0 auto", padding: "24px 16px" }}
       >
-        <NavigationProvider value={{ navBack, canGoBack: navHistory.length > 0 }}>
+        <NavigationProvider value={{ nav }}>
           <ErrorBoundary>
             {renderPage(page, pageArg, nav)}
           </ErrorBoundary>

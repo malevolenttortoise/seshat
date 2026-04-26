@@ -104,7 +104,7 @@ export default function MobileSuggestionsPage({ onNav }: { onNav: NavFn }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <MobileBackButton />
+      <MobileBackButton to="dashboard" label="Dashboard" />
       <div>
         <h1
           style={{

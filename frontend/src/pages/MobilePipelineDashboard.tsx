@@ -151,7 +151,7 @@ export default function MobilePipelineDashboard({ onNav }: DashboardProps) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <MobileBackButton />
+      <MobileBackButton to="dashboard" label="Dashboard" />
       {error && (
         <div
           style={{

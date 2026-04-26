@@ -1,24 +1,33 @@
-// Back button for mobile pages. Reads the navigation history from
-// useNavigation() and renders nothing when there's no history — so
-// dashboards (where the user typically lands first) don't show a
-// back arrow that would lead nowhere.
-//
-// Drop this at the top of every mobile page; it self-hides when
-// not applicable.
+// Hierarchical back button. Each mobile page declares its parent
+// page via the `to` prop, so the back path is always predictable
+// (Author Detail → Authors, Library → Dashboard, etc.) regardless
+// of how the user got there. Pages that are themselves a "root"
+// (the unified dashboard) omit the button entirely or pass no `to`.
 import { useTheme } from "../../theme";
 import { useNavigation } from "../../providers/NavigationProvider";
 import { TAP, RADIUS } from "./tokens";
 
-export function MobileBackButton() {
-  const t = useTheme();
-  const { navBack, canGoBack } = useNavigation();
+export interface MobileBackButtonProps {
+  // Target page to navigate to when tapped. Omit to hide the button
+  // entirely — useful on root pages like the dashboard.
+  to?: string;
+  // Optional arg (page-specific id, slug, etc.). Most parent pages
+  // don't need one — the user lands back on a list view.
+  arg?: string | number | null;
+  // Override the visible label. Defaults to "Back".
+  label?: string;
+}
 
-  if (!canGoBack) return null;
+export function MobileBackButton({ to, arg, label = "Back" }: MobileBackButtonProps) {
+  const t = useTheme();
+  const { nav } = useNavigation();
+
+  if (!to) return null;
 
   return (
     <button
-      onClick={navBack}
-      aria-label="Back"
+      onClick={() => nav(to, arg)}
+      aria-label={label}
       style={{
         display: "inline-flex",
         alignItems: "center",
@@ -36,7 +45,7 @@ export function MobileBackButton() {
       }}
     >
       <span style={{ fontSize: 18, lineHeight: 1 }}>‹</span>
-      <span>Back</span>
+      <span>{label}</span>
     </button>
   );
 }

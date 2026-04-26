@@ -88,7 +88,7 @@ export default function MobileAuthorsPage({ onNav }: { onNav: NavFn }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <MobileBackButton />
+      <MobileBackButton to="dashboard" label="Dashboard" />
       {/* Title + count */}
       <div
         style={{

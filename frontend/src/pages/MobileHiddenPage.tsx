@@ -46,7 +46,7 @@ export default function MobileHiddenPage({ onNav }: { onNav: NavFn }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <MobileBackButton />
+      <MobileBackButton to="dashboard" label="Dashboard" />
       <div
         style={{
           display: "flex",

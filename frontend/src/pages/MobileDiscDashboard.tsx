@@ -144,7 +144,7 @@ export default function MobileDiscDashboard({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <MobileBackButton />
+      <MobileBackButton to="dashboard" label="Dashboard" />
       {/* Library switcher — only shown when there's more than one library. */}
       {libs.length > 1 && switchLib && (
         <select

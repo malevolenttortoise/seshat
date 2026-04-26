@@ -148,7 +148,7 @@ export default function MobileBooksPage({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <MobileBackButton />
+      <MobileBackButton to="dashboard" label="Dashboard" />
       {/* Page title + count */}
       <div
         style={{

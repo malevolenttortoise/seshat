@@ -1,20 +1,20 @@
-// Navigation context — exposes `navBack()` and `canGoBack` to any
-// component that needs them.
+// Navigation context — exposes the App-level `nav()` function so
+// in-page UI (the mobile back button, future deep-link triggers,
+// etc.) can navigate without prop drilling.
 //
-// App.tsx maintains the in-memory history stack and wraps the page
-// tree in <NavigationProvider value={{ navBack, canGoBack }}>. Mobile
-// page components consume via useNavigation(); a no-op default lets
-// components import the hook safely outside the provider.
+// App.tsx wraps the page tree in <NavigationProvider value={{ nav }}>.
+// A no-op default lets components import the hook safely outside the
+// provider (e.g. test renders).
 import { createContext, useContext, type ReactNode } from "react";
 
+export type NavFn = (page: string, arg?: string | number | null) => void;
+
 export interface NavigationApi {
-  navBack: () => void;
-  canGoBack: boolean;
+  nav: NavFn;
 }
 
 const NavCtx = createContext<NavigationApi>({
-  navBack: () => {},
-  canGoBack: false,
+  nav: () => {},
 });
 
 export function NavigationProvider({

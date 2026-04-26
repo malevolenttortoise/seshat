@@ -405,7 +405,7 @@ export default function MobileAuthorDetailPage({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <MobileBackButton />
+      <MobileBackButton to="disc-authors" label="Authors" />
       {/* Hero card */}
       <div
         style={{
