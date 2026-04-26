@@ -15,6 +15,9 @@ import { Section } from "../components/Section";
 import { Spin } from "../components/Spin";
 import { api } from "../api";
 import { useTheme } from "../theme";
+import { useViewport } from "../hooks/useViewport";
+import { useMobileCodepath } from "../components/mobile";
+import MobilePipelineAuthorsPage from "./MobilePipelineAuthorsPage";
 
 type ListName = "allowed" | "ignored" | "tentative_review";
 
@@ -45,6 +48,12 @@ const TAB_LABELS: Record<ListName, string> = {
 const PAGE_SIZE = 100;
 
 export default function AuthorsPage() {
+  const vp = useViewport();
+  if (useMobileCodepath(vp)) return <MobilePipelineAuthorsPage />;
+  return <DesktopAuthorsPage />;
+}
+
+function DesktopAuthorsPage() {
   const theme = useTheme();
   const [tab, setTab] = useState<ListName>("allowed");
   const [counts, setCounts] = useState<Record<ListName, number> | null>(null);

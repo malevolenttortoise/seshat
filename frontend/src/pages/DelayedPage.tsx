@@ -11,6 +11,9 @@ import { Section } from "../components/Section";
 import { Spin } from "../components/Spin";
 import { api } from "../api";
 import { useTheme } from "../theme";
+import { useViewport } from "../hooks/useViewport";
+import { useMobileCodepath } from "../components/mobile";
+import MobileDelayedPage from "./MobileDelayedPage";
 
 interface DelayedItem {
   filename: string;
@@ -25,6 +28,12 @@ interface DelayedListResponse {
 }
 
 export default function DelayedPage() {
+  const vp = useViewport();
+  if (useMobileCodepath(vp)) return <MobileDelayedPage />;
+  return <DesktopDelayedPage />;
+}
+
+function DesktopDelayedPage() {
   const theme = useTheme();
   const [data, setData] = useState<DelayedListResponse | null>(null);
   const [error, setError] = useState<string | null>(null);

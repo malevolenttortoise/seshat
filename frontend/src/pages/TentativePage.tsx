@@ -18,6 +18,9 @@ import { Section } from "../components/Section";
 import { Spin } from "../components/Spin";
 import { api } from "../api";
 import { useTheme } from "../theme";
+import { useViewport } from "../hooks/useViewport";
+import { useMobileCodepath } from "../components/mobile";
+import MobileTentativePage from "./MobileTentativePage";
 
 interface TentativeItem {
   id: number;
@@ -39,6 +42,12 @@ interface TentativeListResponse {
 }
 
 export default function TentativePage() {
+  const vp = useViewport();
+  if (useMobileCodepath(vp)) return <MobileTentativePage />;
+  return <DesktopTentativePage />;
+}
+
+function DesktopTentativePage() {
   const theme = useTheme();
   const [items, setItems] = useState<TentativeItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);

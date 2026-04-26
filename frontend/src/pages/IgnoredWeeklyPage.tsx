@@ -9,6 +9,9 @@ import { Section } from "../components/Section";
 import { Spin } from "../components/Spin";
 import { api } from "../api";
 import { useTheme } from "../theme";
+import { useViewport } from "../hooks/useViewport";
+import { useMobileCodepath } from "../components/mobile";
+import MobileIgnoredWeeklyPage from "./MobileIgnoredWeeklyPage";
 
 interface TorrentEntry {
   torrent_name: string;
@@ -23,6 +26,12 @@ interface AuthorGroup {
 }
 
 export default function IgnoredWeeklyPage() {
+  const vp = useViewport();
+  if (useMobileCodepath(vp)) return <MobileIgnoredWeeklyPage />;
+  return <DesktopIgnoredWeeklyPage />;
+}
+
+function DesktopIgnoredWeeklyPage() {
   const theme = useTheme();
   const [groups, setGroups] = useState<AuthorGroup[] | null>(null);
   const [error, setError] = useState<string | null>(null);

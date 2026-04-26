@@ -21,6 +21,9 @@ import { Spin } from "../components/Spin";
 import { api } from "../api";
 import { useTheme } from "../theme";
 import { useVisibleInterval } from "../hooks/useVisibleInterval";
+import { useViewport } from "../hooks/useViewport";
+import { useMobileCodepath } from "../components/mobile";
+import MobileReviewPage from "./MobileReviewPage";
 
 interface ReviewItem {
   id: number;
@@ -72,6 +75,12 @@ interface ReviewListResponse {
 }
 
 export default function ReviewPage() {
+  const vp = useViewport();
+  if (useMobileCodepath(vp)) return <MobileReviewPage />;
+  return <DesktopReviewPage />;
+}
+
+function DesktopReviewPage() {
   const theme = useTheme();
   const [items, setItems] = useState<ReviewItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
