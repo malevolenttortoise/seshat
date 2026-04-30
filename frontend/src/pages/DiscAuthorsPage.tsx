@@ -129,6 +129,12 @@ function DesktopAuthorsPage({ onNav }: { onNav: NavFn }) {
       return n;
     });
 
+  // Adds the currently-visible page slice to the selection without
+  // wiping cross-page selections. Click on each page to accumulate
+  // a multi-page selection.
+  const selectAllVisible = () =>
+    setSel((p) => new Set([...p, ...visible.map((a) => a.id)]));
+
   const reload = () => {
     setLd(true);
     const params = new URLSearchParams({ search: q, sort, content_type: fmt });
@@ -507,7 +513,7 @@ function DesktopAuthorsPage({ onNav }: { onNav: NavFn }) {
         </div>
 
         {/* Selection bar */}
-        {selMode && sel.size > 0 && (
+        {selMode && (
           <div
             style={{
               display: "flex",
@@ -522,119 +528,137 @@ function DesktopAuthorsPage({ onNav }: { onNav: NavFn }) {
             }}
           >
             <span style={{ fontSize: 13, fontWeight: 600, color: t.text2 }}>
-              {sel.size} selected
+              {sel.size} author{sel.size === 1 ? "" : "s"} selected
             </span>
-            <Btn
-              size="sm"
-              onClick={() => scanSources()}
-              disabled={scanning || clearing || linking}
-              title="Source scan using the active library's content type"
-              style={{
-                background: t.grn + "22",
-                color: t.grnt,
-                border: `1px solid ${t.grn}44`,
-              }}
-            >
-              Scan Sources
-            </Btn>
-            <Btn
-              size="sm"
-              onClick={() => scanSources("audiobook")}
-              disabled={scanning || clearing || linking}
-              title="Scan these authors across every audiobook library"
-              style={{
-                background: t.pur + "22",
-                color: t.purt,
-                border: `1px solid ${t.pur}44`,
-              }}
-            >
-              Scan Audio
-            </Btn>
-            {mamOn && (
-              <Btn
-                size="sm"
-                onClick={scanMam}
-                disabled={scanning || clearing || linking}
-                style={{
-                  background: t.accent + "22",
-                  color: t.accent,
-                  border: `1px solid ${t.accent}44`,
-                }}
-              >
-                Scan MAM
-              </Btn>
-            )}
-            {sel.size >= 2 && (
+            {sel.size > 0 && (
               <>
-                <span
-                  style={{ width: 1, height: 20, background: t.border }}
-                />
                 <Btn
                   size="sm"
-                  onClick={() => linkAuthors("pen_name")}
-                  disabled={linking}
+                  onClick={() => scanSources()}
+                  disabled={scanning || clearing || linking}
+                  title="Source scan using the active library's content type"
                   style={{
-                    background: t.purb || t.bg4,
+                    background: t.grn + "22",
+                    color: t.grnt,
+                    border: `1px solid ${t.grn}44`,
+                  }}
+                >
+                  Scan Sources
+                </Btn>
+                <Btn
+                  size="sm"
+                  onClick={() => scanSources("audiobook")}
+                  disabled={scanning || clearing || linking}
+                  title="Scan these authors across every audiobook library"
+                  style={{
+                    background: t.pur + "22",
                     color: t.purt,
                     border: `1px solid ${t.pur}44`,
                   }}
                 >
-                  Link Pen Names
+                  Scan Audio
                 </Btn>
-                <Btn
-                  size="sm"
-                  onClick={() => linkAuthors("co_author")}
-                  disabled={linking}
-                  style={{
-                    background: t.cyan + "22",
-                    color: t.cyant,
-                    border: `1px solid ${t.cyan}44`,
-                  }}
-                >
-                  Link Co-Authors
-                </Btn>
+                {mamOn && (
+                  <Btn
+                    size="sm"
+                    onClick={scanMam}
+                    disabled={scanning || clearing || linking}
+                    style={{
+                      background: t.accent + "22",
+                      color: t.accent,
+                      border: `1px solid ${t.accent}44`,
+                    }}
+                  >
+                    Scan MAM
+                  </Btn>
+                )}
+                {sel.size >= 2 && (
+                  <>
+                    <span
+                      style={{ width: 1, height: 20, background: t.border }}
+                    />
+                    <Btn
+                      size="sm"
+                      onClick={() => linkAuthors("pen_name")}
+                      disabled={linking}
+                      style={{
+                        background: t.purb || t.bg4,
+                        color: t.purt,
+                        border: `1px solid ${t.pur}44`,
+                      }}
+                    >
+                      Link Pen Names
+                    </Btn>
+                    <Btn
+                      size="sm"
+                      onClick={() => linkAuthors("co_author")}
+                      disabled={linking}
+                      style={{
+                        background: t.cyan + "22",
+                        color: t.cyant,
+                        border: `1px solid ${t.cyan}44`,
+                      }}
+                    >
+                      Link Co-Authors
+                    </Btn>
+                  </>
+                )}
+                <span style={{ width: 1, height: 20, background: t.border }} />
+                <ClearMenu
+                  disabled={clearing}
+                  options={[
+                    {
+                      label: "Clear Source",
+                      hint: "active library",
+                      onClick: () => clearData("source"),
+                    },
+                    {
+                      label: "Clear Source",
+                      hint: "all ebook libraries",
+                      variant: "ebook",
+                      onClick: () => clearData("source", "ebook"),
+                    },
+                    {
+                      label: "Clear Source",
+                      hint: "all audiobook libraries",
+                      variant: "audio",
+                      onClick: () => clearData("source", "audiobook"),
+                    },
+                    ...(mamOn
+                      ? [
+                          {
+                            label: "Clear MAM",
+                            divider: true,
+                            onClick: () => clearData("mam"),
+                          },
+                          {
+                            label: "Clear Both (Source + MAM)",
+                            variant: "danger" as const,
+                            onClick: () => clearData("both"),
+                          },
+                        ]
+                      : []),
+                  ]}
+                />
+                <span style={{ width: 1, height: 20, background: t.border }} />
               </>
             )}
-            <span style={{ width: 1, height: 20, background: t.border }} />
-            <ClearMenu
-              disabled={clearing}
-              options={[
-                {
-                  label: "Clear Source",
-                  hint: "active library",
-                  onClick: () => clearData("source"),
-                },
-                {
-                  label: "Clear Source",
-                  hint: "all ebook libraries",
-                  variant: "ebook",
-                  onClick: () => clearData("source", "ebook"),
-                },
-                {
-                  label: "Clear Source",
-                  hint: "all audiobook libraries",
-                  variant: "audio",
-                  onClick: () => clearData("source", "audiobook"),
-                },
-                ...(mamOn
-                  ? [
-                      {
-                        label: "Clear MAM",
-                        divider: true,
-                        onClick: () => clearData("mam"),
-                      },
-                      {
-                        label: "Clear Both (Source + MAM)",
-                        variant: "danger" as const,
-                        onClick: () => clearData("both"),
-                      },
-                    ]
-                  : []),
-              ]}
-            />
-            <Btn size="sm" onClick={() => setSel(new Set())}>
-              Deselect
+            <Btn
+              size="sm"
+              onClick={selectAllVisible}
+              disabled={scanning || clearing || linking}
+            >
+              Select All on Page
             </Btn>
+            {sel.size > 0 && (
+              <Btn
+                size="sm"
+                onClick={() => setSel(new Set())}
+                disabled={scanning || clearing || linking}
+              >
+                Deselect All
+              </Btn>
+            )}
           </div>
         )}
 

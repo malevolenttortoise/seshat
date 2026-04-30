@@ -115,7 +115,10 @@ function DesktopBooksPage({
       else n.add(id);
       return n;
     });
-  const selectAllVisible = () => setSel(new Set(bks.map((b) => b.id)));
+  // Adds the currently-visible page slice to the selection without
+  // wiping cross-page selections — click on each page to accumulate.
+  const selectAllVisible = () =>
+    setSel((p) => new Set([...p, ...bks.map((b) => b.id)]));
   const closeSb = () => {
     if (!sb) return;
     setSbClosing(true);

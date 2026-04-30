@@ -194,7 +194,10 @@ function DesktopMAMPage({ onNav }: { onNav: NavFn }) {
       else n.add(id);
       return n;
     });
-  const selectAllVisible = () => setSel(new Set(books.map((b) => b.id)));
+  // Adds the currently-visible page slice to the selection without
+  // wiping cross-page selections — click on each page to accumulate.
+  const selectAllVisible = () =>
+    setSel((p) => new Set([...p, ...books.map((b) => b.id)]));
 
   // Helper: refresh the three section counts + unscanned from the
   // /discovery/mam/status endpoint. Called on mount and after every
