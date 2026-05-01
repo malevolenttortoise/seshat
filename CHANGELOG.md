@@ -7,6 +7,85 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [2.2.3] — 2026-05-01
+
+Patch release. Three small UAT-driven fixes — two UI papercuts on the
+Authors view and one resource-saver on the source-scan path that
+follows from how Mark has been using Hidden during his A→Z scan
+walkthrough.
+
+### UI — author detail header counts only this author's books in shared series
+
+The header metric on the author detail page was reducing over
+`series.book_count` (every book in the series) when computing total /
+missing / progress-bar fill. For shared series like Halo (38 books
+spread across Eric Nylund, William C. Dietz, Greg Bear, etc.) that
+inflated the per-author total by every book NOT attributed to the
+author. Result: Greg Bear's detail page showed "3 owned, 35 missing"
+with a ~5% completion bar even though all 3 of his Halo entries were
+owned. The browse-page Authors row showed the correct numbers
+because it pulled from the cached author aggregate.
+
+Backend already returned the per-author count as
+`series.author_book_count` (computed in `authors.py`'s detail SQL).
+Sum that instead, with `book_count` fallback for any single-author
+series where the field is absent. `series.owned_count` and
+`series.missing_count` were already author-scoped, so owned/missing
+were correct — only the total was wrong.
+
+### Discovery — Hidden books skip source-scan metadata refresh and detail fetches
+
+Hidden has gradually become Mark's intentional "don't track this
+book at all" signal — already filtered from UI counts, MAM scans,
+and the scheduled MAM loop. Source scans (Re-sync, Full, the
+scheduled lookup) were the last hold-out: they still issued
+detail-page fetches AND fired UPDATE statements against hidden rows
+on every author scan, wasting network + DB time on books the user
+had explicitly trashed.
+
+Now treated as a true garbage bin: hidden rows stay in the
+dedup-title set so source results still can't reinsert them as
+fresh unhidden duplicates, but every source-driven write path is
+suppressed.
+
+- `_lookup_author_inner` builds a `hidden_titles` subset alongside
+  `existing_titles`. In `full_scan` mode `_try_source` passes
+  `hidden_titles` (instead of `set()`) so hidden books fall into
+  the URL-backfill fast path and never trigger a detail-page
+  fetch. Non-hidden books still hit the slow DETAIL path — the
+  whole point of full_scan is preserved.
+- `_merge_result` SELECTs `hidden`. A new `_is_hidden` guard
+  short-circuits BEFORE both `_update_existing` call sites
+  (series-book and standalone-book paths), so URL merge / series
+  promotion / omnibus-flag promotion / full_scan metadata refresh /
+  per-source-id COALESCE — the entire UPDATE — never runs against
+  hidden rows. The series-collector recording is also skipped on
+  this path so consensus suggestions stop firing for hidden books.
+- `_title_to_series_pass` filters its standalone candidates to
+  `hidden=0` so the post-scan title→series linker stops promoting
+  hidden books into series after a scan.
+
+Un-hiding a book restores prior behavior automatically — the next
+scan picks it up like any other known row.
+
+### UI — Authors page remembers pagination across detail-page navigation
+
+Letter / sort / search / format chip on the Authors page were
+already sessionStorage-persisted via `usePersist`, so a round-trip
+through an author's detail page restored the surrounding filter
+context. Page number wasn't — it was plain `useState`. Result:
+clicking into an author on page 2 of "B" and hitting "Back to
+Authors" landed on page 1 of "B" instead of page 2, forcing a
+re-page-forward.
+
+Switched `pg` to `usePersist<number>("ap_pg", 1)` on both desktop
+and mobile authors pages. The `Math.min(pg, totalPages)` clamp at
+the read site handles stale stored pages (e.g. dataset shrunk
+between visits). Existing reset-to-1 hooks on filter / sort / query
+changes still fire normally.
+
+---
+
 ## [2.2.2] — 2026-04-30
 
 Patch release. Mark's A→Z author UAT walkthrough kept surfacing
