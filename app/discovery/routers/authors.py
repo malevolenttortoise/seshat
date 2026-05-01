@@ -787,35 +787,52 @@ async def scan_authors_sources(data: dict = Body(...)):
     if not names:
         raise HTTPException(404, "No matching authors found")
 
-    total_tasks = len(target_libs) * len(names)
+    # Pre-resolve per-library matches so the dashboard's progress
+    # total reflects ACTUAL author scans, not the optimistic
+    # names×libraries product. A name in `names` that isn't an
+    # author in a given library (e.g. an audiobook-only author
+    # appearing in an ebook-content_type scan) is filtered here
+    # — the scan loop later sees only matched rows and the user-
+    # facing count matches what'll actually run. Same SQL the
+    # loop used to do per-iteration; we just hoist it.
+    pre_resolved: list[tuple[dict, list]] = []
+    ph = ",".join(["?" for _ in names])
+    for lib in target_libs:
+        slug = lib.get("slug")
+        if not slug:
+            continue
+        try:
+            ldb = await get_db(slug)
+        except Exception as e:
+            logger.warning(f"scan-sources: cannot open lib {slug}: {e}")
+            continue
+        try:
+            lib_rows = await ldb.execute_fetchall(
+                f"SELECT id, name FROM authors WHERE name IN ({ph}) "
+                f"ORDER BY sort_name",
+                names,
+            )
+        finally:
+            await ldb.close()
+        pre_resolved.append((lib, list(lib_rows)))
+
+    total_tasks = sum(len(rows) for _, rows in pre_resolved)
+    if total_tasks == 0:
+        return {"status": "ok", "total": 0,
+                "requested": len(names),
+                "message": "No matching authors in target libraries."}
 
     async def _runner():
         from app.discovery.database import set_active_library
         original_active = get_active_library()
         nonlocal_state = {"scanned": 0, "errors": 0, "new": 0}
         try:
-            for lib in target_libs:
+            for lib, lib_rows in pre_resolved:
                 slug = lib.get("slug")
                 if not slug:
                     continue
                 if slug != get_active_library():
                     set_active_library(slug)
-                # Resolve each name to the library-local ID then scan.
-                # ORDER BY sort_name so each library's scan progresses
-                # alphabetically by last name. Match the active-library
-                # path's ordering (added in the same commit) so the
-                # dashboard scan progress reads the same regardless of
-                # which path the user triggered.
-                ph = ",".join(["?" for _ in names])
-                db = await get_db()
-                try:
-                    lib_rows = await db.execute_fetchall(
-                        f"SELECT id, name FROM authors WHERE name IN ({ph}) "
-                        f"ORDER BY sort_name",
-                        names,
-                    )
-                finally:
-                    await db.close()
                 for row in lib_rows:
                     aid, name = row[0], row[1]
                     state._lookup_progress.update({"current_author": name})
@@ -848,6 +865,7 @@ async def scan_authors_sources(data: dict = Body(...)):
 
     _spawn_lookup_task("bulk_authors", total=total_tasks, runner=_runner)
     return {"status": "started", "total": total_tasks,
+            "requested": len(names),
             "libraries": len(target_libs), "authors": len(names)}
 
 

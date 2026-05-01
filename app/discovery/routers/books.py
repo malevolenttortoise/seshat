@@ -689,27 +689,48 @@ async def scan_books_sources(data: dict = Body(...)):
     names = list({row["name"] for row in rows if row["name"]})
     if not names:
         raise HTTPException(404, "No matching authors found")
-    total_tasks = len(target_libs) * len(names)
+
+    # Pre-resolve per-library matches so the dashboard's progress total
+    # reflects ACTUAL author scans rather than the optimistic
+    # names×libraries product. Mirrors the same hoist in
+    # /authors/scan-sources — see that handler's comment.
+    pre_resolved: list[tuple[dict, list]] = []
+    ph = ",".join(["?" for _ in names])
+    for lib in target_libs:
+        slug = lib.get("slug")
+        if not slug:
+            continue
+        try:
+            ldb = await get_db(slug)
+        except Exception as e:
+            logger.warning(f"books/scan-sources: cannot open lib {slug}: {e}")
+            continue
+        try:
+            lib_rows = await ldb.execute_fetchall(
+                f"SELECT id, name FROM authors WHERE name IN ({ph}) "
+                f"ORDER BY sort_name",
+                names,
+            )
+        finally:
+            await ldb.close()
+        pre_resolved.append((lib, list(lib_rows)))
+
+    total_tasks = sum(len(rows_) for _, rows_ in pre_resolved)
+    if total_tasks == 0:
+        return {"status": "ok", "total": 0,
+                "requested": len(names),
+                "message": "No matching authors in target libraries."}
 
     async def _runner():
         original_active = get_active_library()
         nonlocal_state = {"scanned": 0, "errors": 0, "new": 0}
         try:
-            for lib in target_libs:
+            for lib, lib_rows in pre_resolved:
                 slug = lib.get("slug")
                 if not slug:
                     continue
                 if slug != get_active_library():
                     set_active_library(slug)
-                ph = ",".join(["?" for _ in names])
-                ldb = await get_db()
-                try:
-                    lib_rows = await ldb.execute_fetchall(
-                        f"SELECT id, name FROM authors WHERE name IN ({ph})",
-                        names,
-                    )
-                finally:
-                    await ldb.close()
                 for lib_row in lib_rows:
                     aid, name = lib_row[0], lib_row[1]
                     state._lookup_progress.update({"current_author": name})
@@ -734,6 +755,7 @@ async def scan_books_sources(data: dict = Body(...)):
 
     _spawn_lookup_task("bulk_books", total=total_tasks, runner=_runner)
     return {"status": "started", "total": total_tasks,
+            "requested": len(names),
             "libraries": len(target_libs), "authors": len(names)}
 
 
