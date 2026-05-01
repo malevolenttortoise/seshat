@@ -68,7 +68,7 @@ function DesktopAuthorsPage({ onNav }: { onNav: NavFn }) {
   const [vm, setVm] = usePersist<ViewMode>("ap_vm", "list");
   const [letter, setLetter] = usePersist<string>("ap_letter", "");
   const [fmt, setFmt] = usePersist<string>("ap_fmt", "all");
-  const [pg, setPg] = useState(1);
+  const [pg, setPg] = usePersist<number>("ap_pg", 1);
   const [selMode, setSelMode] = useState(false);
   // sel is keyed by `${library_slug}:${id}` (or just `${id}` for the
   // active-library path) so cross-library authors with the same numeric

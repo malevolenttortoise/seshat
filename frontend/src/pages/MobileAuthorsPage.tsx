@@ -42,7 +42,7 @@ export default function MobileAuthorsPage({ onNav }: { onNav: NavFn }) {
   const [q, setQ] = usePersist<string>("ap_q", "");
   const [sort, setSort] = usePersist<string>("ap_sort", "name");
   const [fmt, setFmt] = usePersist<string>("ap_fmt", "all");
-  const [pg, setPg] = useState(1);
+  const [pg, setPg] = usePersist<number>("ap_pg", 1);
   const [mamOn, setMamOn] = useState(false);
   const [sortSheet, setSortSheet] = useState(false);
 
