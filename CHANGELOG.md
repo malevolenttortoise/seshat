@@ -7,6 +7,45 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [2.2.5] — 2026-05-03
+
+Hot-fix release. v2.2.4 left a latent crash on the
+`/discovery/books/{bid}` PUT path: the BookSidebar edit form sends
+`series_index: ""` when the user clears the series-number field
+(intended as "blank means I don't know the position / it's an
+omnibus collection"), and the backend wrote it to SQLite verbatim.
+A REAL column accepting a TEXT empty string is fine on write — but
+the next container restart blows up at startup when
+`_dedupe_same_series_position` reads the row and runs
+`float(r["series_index"])`:
+
+    ValueError: could not convert string to float: ''
+    ERROR:    Application startup failed. Exiting.
+
+The trace surfaced via FastAPI's lifespan-merge spam (one frame per
+mounted router, because every router contributes a lifespan that
+the merger nests). The actual culprit was a single line in
+`init_db`'s startup-migration chain.
+
+### Discovery — startup-migration scrub for empty series_index
+
+`_dedupe_same_series_position` now runs a one-time
+`UPDATE books SET series_index = NULL WHERE TRIM(...)=''` pass
+before grouping. Idempotent; no-op on healthy DBs. Unsticks the
+container without touching the user's actual series data — the
+empty string conveyed no information anyway, so coercing to NULL
+matches the intended "no position known" semantics.
+
+### Discovery — boundary coercion in update_book
+
+The PUT `/api/discovery/books/{bid}` handler now coerces
+empty/whitespace `series_index` to `None` before writing. Stops new
+bad rows from going in and matches every other code path
+(`lookup.py`, `calibre_sync.py`, source modules) that already
+treats absent series-position as NULL.
+
+---
+
 ## [2.2.4] — 2026-05-03
 
 Patch release. Two UAT-driven fixes from Mark's continued A→Z hide

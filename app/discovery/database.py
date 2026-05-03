@@ -771,6 +771,20 @@ async def _dedupe_same_series_position(db) -> int:
 
     Inert on healthy databases. Returns the number of rows collapsed.
     """
+    # Normalize any empty-string series_index to NULL before reading.
+    # The PUT /books/{bid} edit path could store '' when the user
+    # cleared the series-number input while setting a series name
+    # (the omnibus-only case Mark hit on 2026-05-03). v2.2.5 added a
+    # boundary coercion in `update_book`, but pre-existing DB rows
+    # still need this one-time scrub or `float(r["series_index"])`
+    # below crashes init_db for every library.
+    await db.execute(
+        "UPDATE books SET series_index = NULL "
+        "WHERE series_index IS NOT NULL "
+        "AND TRIM(CAST(series_index AS TEXT)) = ''"
+    )
+    await db.commit()
+
     rows = await (await db.execute(
         "SELECT id, title, author_id, series_id, series_index, owned "
         "FROM books WHERE series_id IS NOT NULL AND series_index IS NOT NULL"

@@ -432,7 +432,16 @@ async def update_book(bid: int, data: dict = Body(...)):
         fields = []; vals = []
         for k in ["title", "description", "pub_date", "expected_date", "isbn", "cover_url", "series_index", "source_url"]:
             if k in data:
-                fields.append(f"{k}=?"); vals.append(data[k])
+                v = data[k]
+                # series_index is REAL — empty string from the
+                # BookSidebar's "blank means standalone-in-series /
+                # omnibus" input would land as TEXT and break every
+                # downstream `float(series_index)` (init_db dedupe,
+                # cross-library sort, etc.). Coerce to None at the
+                # boundary instead.
+                if k == "series_index" and isinstance(v, str) and not v.strip():
+                    v = None
+                fields.append(f"{k}=?"); vals.append(v)
         # Handle MAM URL — validate format and update status
         if "mam_url" in data:
             mam_url = (data["mam_url"] or "").strip()
