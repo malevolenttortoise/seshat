@@ -7,6 +7,46 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [2.2.6] — 2026-05-03
+
+UAT-driven fix surfaced after v2.2.5 stabilized the container. Mark
+hit "Save does nothing" on the BookSidebar edit form. Latent bug
+since the AthenaScout→Seshat merge (Phase 2 port at dd22c43); MAM
+scan running today happened to push a book into the state that
+exposes it.
+
+### Discovery — book edit no longer 400s on system-stored search URLs
+
+`check_book` writes a `/tor/browse.php?...` search URL into
+`books.mam_url` when it returns `STATUS_NOT_FOUND`, so the user
+can click through to MAM's search page and verify manually. The
+`update_book` PUT handler then validated `mam_url` against a strict
+torrent-URL regex (`/t/<id>`) on every save — even when the user
+hadn't touched the field. Combined with the BookSidebar form
+re-sending every field on every save, this rejected edits to
+unrelated fields (title, series, etc.) with a 400.
+
+Diff-aware now: the handler reads the current `mam_url`, compares
+to the incoming value, and only validates / writes when the user
+actually changed it. Two side benefits:
+
+- An empty form field on a never-scanned row used to fall through
+  to the "explicitly cleared" branch and stomp `mam_status` to
+  `'not_found'` even though the user touched nothing. That can no
+  longer happen.
+- Search URLs already in the DB stay put without round-tripping
+  through validation.
+
+### UI — BookSidebar Save surfaces errors via toast
+
+`saveEdit` used to silently swallow API errors with `catch {}`,
+which is what made the 400 above look like "the button does
+nothing." Now toasts the server error message (or a generic
+fallback) so the next time something rejects a save, the user sees
+why.
+
+---
+
 ## [2.2.5] — 2026-05-03
 
 Hot-fix release. v2.2.4 left a latent crash on the

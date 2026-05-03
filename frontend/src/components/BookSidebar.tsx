@@ -384,8 +384,14 @@ export function BookSidebar({
       await api.put(`/discovery/books/${book.id}`, ef);
       setEditing(false);
       if (onEdit) await onEdit();
-    } catch {
-      /* ignore — user sees no change, can retry */
+    } catch (e) {
+      // Surface the failure — we used to swallow this and the user
+      // saw "the button does nothing" on validation errors (the
+      // 2026-05-03 mam_url 400-on-search-URL bug masquerading as a
+      // dead Save button). Toast the server message when there is
+      // one, otherwise a generic fallback.
+      const msg = (e as Error).message || "Save failed";
+      toast.error(msg);
     }
     setSaving(false);
   };

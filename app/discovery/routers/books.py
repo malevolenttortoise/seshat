@@ -442,20 +442,42 @@ async def update_book(bid: int, data: dict = Body(...)):
                 if k == "series_index" and isinstance(v, str) and not v.strip():
                     v = None
                 fields.append(f"{k}=?"); vals.append(v)
-        # Handle MAM URL — validate format and update status
+        # Handle MAM URL — validate format and update status. The
+        # BookSidebar form re-sends every field on every save, so we
+        # only act when the incoming value actually differs from
+        # what's already stored. Two reasons:
+        #   1. The MAM scan stores a `/tor/browse.php?...` search URL
+        #      on `mam_status='not_found'` so the user can click
+        #      through to verify. Re-validating that on every save
+        #      would 400-out edits to unrelated fields (title,
+        #      series, etc.) and leave the user staring at a button
+        #      that "does nothing."
+        #   2. An empty form field on a never-scanned row would
+        #      otherwise trip the "explicitly cleared" branch and
+        #      stomp `mam_status` to `'not_found'` even though the
+        #      user touched nothing.
+        # Diff-aware: validation + side-effects only fire when the
+        # user genuinely changed the URL.
         if "mam_url" in data:
-            mam_url = (data["mam_url"] or "").strip()
-            if mam_url:
-                mam_match = re.match(r'https?://(?:www\.)?myanonamouse\.net/t/(\d+)', mam_url)
-                if not mam_match:
-                    raise HTTPException(400, "Invalid MAM URL. Expected format: https://www.myanonamouse.net/t/123456")
-                torrent_id = int(mam_match.group(1))
-                fields.extend(["mam_url=?", "mam_status=?", "mam_torrent_id=?"])
-                vals.extend([mam_url, "found", torrent_id])
-            else:
-                # Explicitly cleared → mark as "not_found" (not just null)
-                fields.extend(["mam_url=?", "mam_status=?", "mam_torrent_id=?"])
-                vals.extend([None, "not_found", None])
+            incoming = (data["mam_url"] or "").strip()
+            current_row = await (await db.execute(
+                "SELECT mam_url FROM books WHERE id=?", (bid,)
+            )).fetchone()
+            current = ((current_row["mam_url"] if current_row else "") or "").strip()
+            if incoming != current:
+                if incoming:
+                    mam_match = re.match(r'https?://(?:www\.)?myanonamouse\.net/t/(\d+)', incoming)
+                    if not mam_match:
+                        raise HTTPException(400, "Invalid MAM URL. Expected format: https://www.myanonamouse.net/t/123456")
+                    torrent_id = int(mam_match.group(1))
+                    fields.extend(["mam_url=?", "mam_status=?", "mam_torrent_id=?"])
+                    vals.extend([incoming, "found", torrent_id])
+                else:
+                    # Explicitly cleared — null the URL and mark
+                    # not_found so the row stops claiming it has a
+                    # MAM match.
+                    fields.extend(["mam_url=?", "mam_status=?", "mam_torrent_id=?"])
+                    vals.extend([None, "not_found", None])
         if "is_unreleased" in data:
             fields.append("is_unreleased=?"); vals.append(1 if data["is_unreleased"] else 0)
         # Handle series assignment — find or create series by name
