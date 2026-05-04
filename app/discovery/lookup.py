@@ -1037,27 +1037,44 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
             async def _ensure_series(_sr=sr):
                 """Upsert the series row on first call; return cached id thereafter.
 
-                Lookup order on the SELECT side matters:
-                  1. Exact LOWER(name) match — fast path for the common
-                     case where the source's name already matches what's
-                     stored.
+                Lookup order:
+                  1. Author-scoped (current author + pen-name partners)
+                     exact LOWER(name) match. Replaces the prior global
+                     lookup that caused cross-author collisions
+                     (Cressman/Savarovsky "The Last Paladin").
                   2. Normalized-name match against this author's existing
-                     series. This collapses canonical-form variants like
+                     series. Collapses canonical-form variants like
                      "Mistborn" vs "The Mistborn Saga" into a single row
                      instead of accumulating duplicates over time.
 
+                Pen-name partners are picked up via `pen_name_links` so
+                Darren and Arand still share the "Incubus Inc." row.
+                Unrelated authors with the same series name now get
+                their own per-author rows.
+
                 First-source-wins on the stored name: if a later scan
                 brings a more canonical name, it still links to the
-                existing row but does NOT rename it. The user can
-                rename via the Series page if they want a different
-                canonical form.
+                existing row but does NOT rename it.
                 """
                 nonlocal sid
                 if sid is not None:
                     return sid
+                # Author-scoped lookup (current author + pen-name partners)
+                related = {author_id}
+                pn_rows = await (await db.execute(
+                    "SELECT canonical_author_id, alias_author_id "
+                    "FROM pen_name_links "
+                    "WHERE canonical_author_id = ? OR alias_author_id = ?",
+                    (author_id, author_id),
+                )).fetchall()
+                for r in pn_rows:
+                    related.add(r["canonical_author_id"])
+                    related.add(r["alias_author_id"])
+                placeholders = ",".join("?" * len(related))
                 row = await (await db.execute(
-                    "SELECT id FROM series WHERE LOWER(name) = LOWER(?)",
-                    (_sr.name,),
+                    f"SELECT id FROM series WHERE LOWER(name) = LOWER(?) "
+                    f"AND author_id IN ({placeholders})",
+                    (_sr.name, *related),
                 )).fetchone()
                 if row:
                     sid = row["id"]
@@ -1070,8 +1087,8 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                     target_norm = _norm_consensus_series(_sr.name)
                     if target_norm:
                         author_series = await (await db.execute(
-                            "SELECT id, name FROM series WHERE author_id = ?",
-                            (author_id,),
+                            f"SELECT id, name FROM series WHERE author_id IN ({placeholders})",
+                            tuple(related),
                         )).fetchall()
                         for ar in author_series:
                             if _norm_consensus_series(ar["name"]) == target_norm:
@@ -1635,6 +1652,336 @@ async def _title_to_series_pass(author_id: int):
                 f"slot collision(s)) for author_id={author_id}"
             )
         return linked
+    finally:
+        await db.close()
+
+
+# ─── Orphan series promotion ──────────────────────────────────
+# Sources sometimes return entire series as a string of standalones
+# (no series_index tag). The Warden Locke canary: 9 books titled
+# "Player Slayer: Spicy Gamelit Fantasy Episode N" and 4 books with
+# the literal "(Manassassin #N)" parenthetical, all cataloged as
+# standalones because no source asserted a series. `_title_to_series_pass`
+# can't help — it only links to series that already exist.
+#
+# This pass detects clusters of standalones with shared prefixes plus
+# per-book volume markers and bootstraps new series from them. Two
+# signal arms:
+#
+#   1. **Parenthetical** — title contains literal "(<SeriesName> #<N>)".
+#      Strongest signal; the source already named the series, the
+#      parser just dropped it. Zero FP risk: someone wrote that
+#      annotation deliberately.
+#
+#   2. **Prefix + volume marker** — title is "<Prefix>" or
+#      "<Prefix> N" or "<Prefix>: ... Episode N" / "Book N" /
+#      "Volume N" / "Vol N" / "Part N" / "Chapter N". Cluster by
+#      prefix; promote when ≥ 2 cluster members carry an explicit
+#      number. The numeric-marker requirement keeps coincidental
+#      prefix matches ("The Final Empire" vs "The Final Hour") out.
+#
+# Members that fall into both arms are credited to the parenthetical
+# arm (stronger signal). Members of a valid cluster that lack an
+# explicit number default to index 1 ("Dungeon Depot" alongside
+# "Dungeon Depot 2/3").
+
+_RX_PAREN_SERIES_REF = re.compile(
+    r'\(([^()#]+?)\s*#(\d+(?:\.\d+)?)\)',
+)
+_RX_TRAILING_PAREN = re.compile(r'\s*\([^()]*\)\s*')
+_RX_VOLUME_MARKER_SUBTITLE = re.compile(
+    r'\b(?:episode|book|bk|vol|vol\.|volume|part|chapter|ep|tome|installment)'
+    r'\s+#?(\d+(?:\.\d+)?)\b',
+    re.IGNORECASE,
+)
+_RX_PREFIX_TRAILING_NUM = re.compile(
+    r'^(.+?)\s+#?(\d+(?:\.\d+)?)\s*$',
+)
+# Same as above but strips a volume-marker word ("Book", "Vol", "Volume",
+# "Part", "Episode", "Chapter") when it's attached to the prefix rather
+# than the subtitle. Without this, "The Last Legend Reborn Book 2: ..."
+# extracts "The Last Legend Reborn Book" as the series name (Borgy60
+# canary). Tried before the bare-trailing-number form.
+_RX_PREFIX_VOLUME_MARKER = re.compile(
+    r'^(.+?)\s+(?:book|bk|vol\.?|volume|part|episode|ep|chapter|tome|installment)'
+    r'\s+#?(\d+(?:\.\d+)?)\s*$',
+    re.IGNORECASE,
+)
+
+_MIN_PREFIX_LEN = 4  # short prefixes ("X 1" / "II 2") are too generic
+
+
+def _extract_series_signal(title: str) -> tuple[str, float | None] | None:
+    """Extract (series_name, index) from a standalone title.
+
+    Returns None when no signal is found. Index may be None when only
+    a prefix is present (no explicit volume number) — caller decides
+    whether to default to 1 based on whether the cluster has other
+    explicit-index members.
+
+    Order matters:
+      1. Parenthetical "(SeriesName #N)" → use directly.
+      2. Strip parentheticals, split on first colon. Subtitle search
+         for volume markers ("Episode 4", "Book 2", "Volume III"…).
+      3. Subtitle had no marker → try trailing number on the prefix
+         itself ("Manassassin 2" → prefix "Manassassin", idx 2).
+      4. No colon → trailing number on the whole cleaned title.
+      5. Otherwise → prefix-only signal with idx=None (singleton
+         clusters won't promote; multi-member clusters default to 1).
+    """
+    if not title:
+        return None
+
+    # Arm 1: parenthetical
+    m = _RX_PAREN_SERIES_REF.search(title)
+    if m:
+        sname = m.group(1).strip()
+        if len(sname) >= _MIN_PREFIX_LEN:
+            return (sname, float(m.group(2)))
+
+    # Arm 2: prefix + volume marker. Strip ALL parentheticals first
+    # so they don't pollute prefix parsing for borderline cases.
+    cleaned = _RX_TRAILING_PAREN.sub(' ', title).strip()
+    cleaned = re.sub(r'\s+', ' ', cleaned)
+
+    def _strip_prefix_marker(p: str) -> tuple[str, float | None]:
+        """Strip a trailing volume-marker word + number from a prefix.
+
+        Tries volume-marker form first ('… Book 2', '… Vol 3') so we
+        keep the marker word out of the series name, then falls back
+        to bare trailing number ('Manassassin 2'). Returns
+        (base, idx_or_None).
+        """
+        pm = _RX_PREFIX_VOLUME_MARKER.match(p)
+        if pm:
+            return (pm.group(1).strip(), float(pm.group(2)))
+        pm = _RX_PREFIX_TRAILING_NUM.match(p)
+        if pm:
+            return (pm.group(1).strip(), float(pm.group(2)))
+        return (p, None)
+
+    if ':' in cleaned:
+        prefix, subtitle = cleaned.split(':', 1)
+        prefix = prefix.strip()
+        subtitle = subtitle.strip()
+
+        # Subtitle volume marker first — strongest signal. Strip any
+        # trailing volume marker / number off the prefix too so a
+        # source emitting "Player Slayer 4: ... Episode 4" still
+        # extracts "Player Slayer" as the base.
+        sm = _RX_VOLUME_MARKER_SUBTITLE.search(subtitle)
+        if sm:
+            base, _ = _strip_prefix_marker(prefix)
+            if len(base) >= _MIN_PREFIX_LEN:
+                return (base, float(sm.group(1)))
+
+        # No subtitle marker → try volume-marker / trailing number on
+        # the prefix itself. "The Last Legend Reborn Book 2: subtitle"
+        # → ("The Last Legend Reborn", 2.0). "Manassassin 2: subtitle"
+        # → ("Manassassin", 2.0).
+        base, idx = _strip_prefix_marker(prefix)
+        if idx is not None and len(base) >= _MIN_PREFIX_LEN:
+            return (base, idx)
+
+        # Bare prefix ("Dungeon Depot: Slice of Life ...")
+        if len(prefix) >= _MIN_PREFIX_LEN:
+            return (prefix, None)
+        return None
+
+    # No colon — try volume-marker / trailing number on full title
+    base, idx = _strip_prefix_marker(cleaned)
+    if idx is not None and len(base) >= _MIN_PREFIX_LEN:
+        return (base, idx)
+
+    return None
+
+
+async def _resolve_position_collision(
+    db, author_id: int, sid: int, idx: float, incoming_id: int, incoming_title: str
+) -> tuple[bool, int]:
+    """Shared dedup helper for series-position collisions.
+
+    Used by both `_title_to_series_pass` (existing inline implementation
+    duplicated here for `_orphan_series_promotion_pass`). Compares the
+    incoming book against any existing book at (sid, idx) and decides
+    a winner using (owned, non-Book-N title, lowest id).
+
+    Returns (incoming_wins, deduped_count).
+      - incoming_wins=True  → caller should link incoming at idx (the
+        existing row was deleted).
+      - incoming_wins=False → caller should drop incoming (existing
+        row already deleted nothing; incoming was deleted here).
+      - deduped_count is 1 when a row was deleted, else 0.
+    """
+    existing = await (await db.execute(
+        "SELECT id, title, owned FROM books "
+        "WHERE author_id = ? AND series_id = ? "
+        "AND series_index = ? AND id != ?",
+        (author_id, sid, idx, incoming_id),
+    )).fetchone()
+    if existing is None:
+        return (True, 0)
+
+    ex_owned = int(existing["owned"] or 0)
+    ex_has_book_n = bool(_RX_BOOK_N_SUFFIX.search(existing["title"] or ""))
+    in_has_book_n = bool(_RX_BOOK_N_SUFFIX.search(incoming_title or ""))
+    ex_score = (ex_owned, 0 if ex_has_book_n else 1, -existing["id"])
+    in_score = (0, 0 if in_has_book_n else 1, -incoming_id)
+
+    if ex_score >= in_score:
+        await db.execute("DELETE FROM books WHERE id = ?", (incoming_id,))
+        logger.info(
+            f"    ORPHAN→SERIES DEDUP: dropped '{incoming_title}' "
+            f"(id={incoming_id}) — position already held by "
+            f"'{existing['title']}' (id={existing['id']}, owned={ex_owned}) "
+            f"in series_id={sid} #{idx}"
+        )
+        return (False, 1)
+    else:
+        await db.execute("DELETE FROM books WHERE id = ?", (existing["id"],))
+        logger.info(
+            f"    ORPHAN→SERIES DEDUP: '{incoming_title}' "
+            f"(id={incoming_id}) replaces '{existing['title']}' "
+            f"(id={existing['id']}) at series_id={sid} #{idx}"
+        )
+        return (True, 1)
+
+
+async def _ensure_series_for_author(
+    db, name: str, author_id: int, total_books: int | None = None
+) -> int:
+    """Author-scoped series upsert with pen-name fallback.
+
+    Replaces the global `LOWER(name) = LOWER(?)` lookup that caused
+    cross-author collisions (the John Cressman vs Roman Savarovsky
+    "The Last Paladin" case). Lookup order:
+
+      1. This author's own series with a matching name.
+      2. Pen-name partner's series (canonical ↔ alias via
+         `pen_name_links`) — preserves the Darren/Arand "Incubus Inc."
+         sharing.
+      3. Otherwise, INSERT a new author-scoped row even if an
+         unrelated author owns the same name globally.
+    """
+    related = {author_id}
+    rows = await (await db.execute(
+        "SELECT canonical_author_id, alias_author_id FROM pen_name_links "
+        "WHERE canonical_author_id = ? OR alias_author_id = ?",
+        (author_id, author_id),
+    )).fetchall()
+    for r in rows:
+        related.add(r["canonical_author_id"])
+        related.add(r["alias_author_id"])
+
+    placeholders = ",".join("?" * len(related))
+    row = await (await db.execute(
+        f"SELECT id FROM series WHERE LOWER(name) = LOWER(?) "
+        f"AND author_id IN ({placeholders})",
+        (name, *related),
+    )).fetchone()
+    if row:
+        await db.execute(
+            "UPDATE series SET last_lookup_at = ? WHERE id = ?",
+            (time.time(), row["id"]),
+        )
+        return row["id"]
+
+    cur = await db.execute(
+        "INSERT INTO series (name, author_id, total_books, last_lookup_at) "
+        "VALUES (?, ?, ?, ?)",
+        (name, author_id, total_books, time.time()),
+    )
+    return cur.lastrowid
+
+
+async def _orphan_series_promotion_pass(author_id: int) -> int:
+    """Bootstrap series from clusters of standalones with shared prefixes.
+
+    Runs after `_title_to_series_pass`. Detects two signal types
+    (parenthetical "(SeriesName #N)" and prefix+volume-marker), groups
+    by canonical series name, and promotes clusters of ≥ 2 members
+    where ≥ 2 carry an explicit numeric index.
+
+    Skips:
+      - Owned books (user's curated metadata wins).
+      - Hidden books (garbage bin — once hidden, stays hidden).
+      - Books already flagged as omnibus (those route to the omnibus
+        sub-row, not a numbered position).
+
+    The collision-aware `_ensure_series_for_author` keeps two unrelated
+    authors who use the same series name from collapsing into one row
+    (Cressman/Savarovsky "The Last Paladin" case).
+    """
+    db = await get_db()
+    try:
+        rows = await (await db.execute(
+            "SELECT id, title FROM books "
+            "WHERE author_id = ? AND series_id IS NULL "
+            "AND hidden = 0 AND owned = 0 "
+            "AND COALESCE(is_omnibus, 0) = 0",
+            (author_id,),
+        )).fetchall()
+        if len(rows) < 2:
+            return 0
+
+        # Build clusters keyed by lowercased series-name signal.
+        # Also skip rows whose titles match `_is_omnibus` — handles the
+        # transient state right after a regex update where the column
+        # is still 0 but the title is omnibus-shaped (the startup
+        # backfill flips them on next restart, but a scan can run
+        # before that).
+        clusters: dict[str, list[tuple[int, str, str, float | None]]] = {}
+        for r in rows:
+            if _is_omnibus(r["title"]):
+                continue
+            sig = _extract_series_signal(r["title"])
+            if sig is None:
+                continue
+            sname, idx = sig
+            clusters.setdefault(sname.lower(), []).append(
+                (r["id"], r["title"], sname, idx)
+            )
+
+        promoted = 0
+        deduped = 0
+        for key, members in clusters.items():
+            if len(members) < 2:
+                continue
+            with_idx = [m for m in members if m[3] is not None]
+            if len(with_idx) < 2:
+                continue
+
+            # Pick the most-frequently-used cased name as canonical.
+            from collections import Counter
+            canonical = Counter(m[2] for m in members).most_common(1)[0][0]
+            sid = await _ensure_series_for_author(db, canonical, author_id)
+
+            for book_id, title, _, idx in members:
+                final_idx = idx if idx is not None else 1.0
+                incoming_wins, dedup_n = await _resolve_position_collision(
+                    db, author_id, sid, final_idx, book_id, title
+                )
+                deduped += dedup_n
+                if incoming_wins:
+                    await db.execute(
+                        "UPDATE books SET series_id = ?, series_index = ? "
+                        "WHERE id = ?",
+                        (sid, final_idx, book_id),
+                    )
+                    promoted += 1
+                    logger.info(
+                        f"    ORPHAN→SERIES PROMOTE: '{title}' "
+                        f"(id={book_id}) → '{canonical}' #{final_idx}"
+                    )
+
+        if promoted or deduped:
+            await db.commit()
+            logger.info(
+                f"  Orphan-series promotion: promoted {promoted} "
+                f"standalone(s) into new series (and dedup'd "
+                f"{deduped} collision(s)) for author_id={author_id}"
+            )
+        return promoted
     finally:
         await db.close()
 
@@ -2570,6 +2917,13 @@ async def _lookup_author_inner(author_id: int, author_name: str, full_scan: bool
     # known series name and link them. Runs after all sources so
     # series created by any source are available for matching.
     await _title_to_series_pass(author_id)
+
+    # Bootstrap series from clusters of standalones that share a
+    # prefix and per-book numeric markers. Catches the Warden Locke
+    # case where every source returned "Player Slayer: ... Episode N"
+    # books as standalones with no series tag — the title→series pass
+    # can't help because the series doesn't exist yet.
+    await _orphan_series_promotion_pass(author_id)
 
     # Compute consensus and write pending suggestions for any per-book
     # disagreement that meets the 2+ sources threshold. Runs after all
