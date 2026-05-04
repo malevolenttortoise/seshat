@@ -7,6 +7,101 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [2.2.7] — 2026-05-04
+
+UAT-driven discovery improvements from Mark's continuing
+author-by-letter walkthrough.
+
+### Discovery — broader omnibus / collection detection
+
+`_RX_OMNIBUS` was missing several real-world collection patterns,
+leaving books "hanging at the end" of numbered series instead of
+routing to the Omnibus / Collections sub-row. New arms:
+
+- `Full Series` (literal, in subtitle or parenthetical)
+- `Volume Set` anywhere
+- `boxed set` (was only `box set`)
+- `N-Book Collection / Set / Bundle / Omnibus` ("3-Book Boxed Set",
+  "6-Book Collection")
+- Widened `complete <terminator>` list (`anthology`, `stories`,
+  `novellas`, `novels`, `chronicles`, `short fiction`, `graphic
+  novel series`)
+- Widened "complete X X X..." inter-word window from 1 to 1-5 +
+  added more terminators (`collection`, `anthology`, `edition`,
+  `set`, `bundle`, `tales`)
+- Generic `: The Complete ...` subtitle (accepts the rare single-
+  book FP — Mark prefers occasional over-flagging since FPs can be
+  promoted back to a numbered entry manually)
+- `(complete)` parenthetical anywhere — series-status annotation
+  some sources pull into the title field
+
+The existing startup `_backfill_omnibus_flag` reapplies the new
+regex to `is_omnibus=0` rows on container restart, so no data
+migration is needed — the upgrade is automatic.
+
+Live-DB projection: 52 unflagged missing rows flip on next
+backfill (0 owned — zero risk to the library).
+
+### Discovery — orphan-series promotion (Warden Locke canary)
+
+Some authors have entire series that every source returns as
+standalones with no `series_index` tag. The Warden Locke case: 9
+"Player Slayer: ... Episode N" books, 4 "Manassassin N (Manassassin
+#N)" books, 3 "Soulless Rising N (Soulless Rising #N)" books — all
+cataloged as standalones because no source asserted a series.
+`_title_to_series_pass` only links to series that already exist,
+so it couldn't help.
+
+New `_orphan_series_promotion_pass` runs after
+`_title_to_series_pass` and bootstraps series from clusters of
+standalones with shared prefixes plus per-book numeric markers.
+Two signal arms:
+
+- **Parenthetical** — title contains literal `(SeriesName #N)`.
+  Strongest signal; the source already named the series, the
+  parser just dropped it.
+- **Prefix + volume marker** — `<Prefix>: ... Episode N` /
+  `Book N` / `Volume N` / `Vol N` / `Part N` / `Chapter N`, or
+  `<Prefix> N`, or `<Prefix> Book N: subtitle` (volume marker
+  stripped from prefix so the series name doesn't end in "Book"
+  — Borgy60 canary: "The Last Legend Reborn Book 2: subtitle"
+  correctly yields series "The Last Legend Reborn", not "...
+  Reborn Book").
+
+Clusters need ≥ 2 members with explicit numeric indices to
+promote. Bare-prefix members ("Dungeon Depot: Slice of Life ...")
+default to index 1. Owned, hidden, and `_is_omnibus`-matching
+rows are skipped (the title-shape check protects against stale
+`is_omnibus=0` columns from rows inserted before the latest regex
+update).
+
+Live-DB projection: 52 books promoted across 8 authors on next
+scan. 0 owned books touched.
+
+### Discovery — author-scoped `_ensure_series` (collision fix)
+
+The John Cressman / Roman Savarovsky "The Last Paladin" collision:
+both authors had a series with the same name, and the global
+`LOWER(name) = LOWER(?)` lookup in `_ensure_series` collapsed them
+into one row. Mark had to rename Savarovsky's manually to break
+them apart.
+
+`_ensure_series` is now author-scoped. Lookup checks (current
+author + pen-name partners via `pen_name_links`) before falling
+back to INSERT. Pen-name sharing is preserved (Darren and Arand
+still share the "Incubus Inc." row). Unrelated authors with the
+same series name now get their own per-author rows automatically.
+
+The `series.UNIQUE(name, author_id)` composite already supported
+this — the bug was just that the lookup wasn't scoping. With the
+fix, Mark can rename Savarovsky's series back to "The Last
+Paladin" and it'll coexist with Cressman's row indefinitely.
+
+Existing collisions (already-collapsed rows) still need manual
+splits; this fix is forward-only.
+
+---
+
 ## [2.2.6] — 2026-05-03
 
 UAT-driven fix surfaced after v2.2.5 stabilized the container. Mark
