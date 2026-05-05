@@ -13,11 +13,15 @@ enrichment, and Calibre delivery — all from a single unified interface.
 
 *Named after the Egyptian goddess of writing, libraries, and record-keeping.*
 
-[![Docker Image](https://img.shields.io/badge/ghcr.io-seshat-blue?style=flat-square&logo=docker)](https://github.com/mnbaker117/seshat/pkgs/container/seshat)
+[![GitHub release](https://img.shields.io/github/v/release/mnbaker117/seshat?style=flat-square&logo=github)](https://github.com/mnbaker117/seshat/releases/latest)
+[![Build](https://img.shields.io/github/actions/workflow/status/mnbaker117/seshat/docker-publish.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=build)](https://github.com/mnbaker117/seshat/actions/workflows/docker-publish.yml)
+[![License](https://img.shields.io/github/license/mnbaker117/seshat?style=flat-square)](LICENSE)
+[![Image size (slim)](https://ghcr-badge.egpl.dev/mnbaker117/seshat/size?tag=latest-slim&label=image%20%28slim%29&style=flat-square)](https://github.com/mnbaker117/seshat/pkgs/container/seshat)
+
 [![Python](https://img.shields.io/badge/python-3.12-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![React](https://img.shields.io/badge/react-18-61DAFB?style=flat-square&logo=react)](https://react.dev/)
-[![Tests](https://img.shields.io/badge/tests-625_passing-brightgreen?style=flat-square)](tests/)
-[![License](https://img.shields.io/github/license/mnbaker117/seshat?style=flat-square)](LICENSE)
+[![Last commit](https://img.shields.io/github/last-commit/mnbaker117/seshat?style=flat-square)](https://github.com/mnbaker117/seshat/commits/main)
+[![Image size (full)](https://ghcr-badge.egpl.dev/mnbaker117/seshat/size?tag=latest&label=image%20%28full%29&style=flat-square)](https://github.com/mnbaker117/seshat/pkgs/container/seshat)
 
 </div>
 
