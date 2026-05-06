@@ -7,6 +7,90 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [2.2.12] — 2026-05-06
+
+Two discovery-correctness fixes from Mark's continuing UAT. Both
+manifested through the same canary: renaming Roman Savarovsky's
+"The Last Paladin" series in Calibre back to its real name (after
+a manual rename to break the v2.2.6-era collision with John
+Cressman's same-named series) silently re-merged both authors'
+books onto a single Seshat series row, AND surfaced an unrelated
+"Book" series row containing four of Savarovsky's standalones
+("Guardian's Journey (Book #1/#3)", "The Last Paladin
+(Book #4/#9)").
+
+### Discovery — calibre_sync's series fast-path is now author-scoped
+
+`calibre_sync.py:309` looked up incoming Calibre series by global
+`LOWER(name)` before falling back to the per-author normalized
+match. The block's own comment claimed cross-author hits were
+"deliberately ignored" — but the implementation contradicted the
+comment. v2.2.7 fixed the same pattern in
+`_ensure_series_for_author` for the source-scan path; the Calibre
+sync path was missed. So renaming Savarovsky's Calibre series back
+to "The Last Paladin" caused the next sync to find Cressman's row
+globally and assign Savarovsky's books to it.
+
+The lookup is now author-scoped (`LOWER(name) = LOWER(?) AND
+author_id = ?`). The Pass-2 normalized fallback was already
+author-scoped, so this just brings the fast path in line. The
+`series.UNIQUE(name, author_id)` composite already supports
+per-author rows. New `tests/discovery/test_calibre_sync_series_dedup.py`
+covers the Cressman/Savarovsky case + same-author idempotency.
+
+### Discovery — `_extract_series_signal` rejects volume-marker series names
+
+`_RX_PAREN_SERIES_REF` matches `(<name> #N)`. The `<name>` group
+required only `len >= _MIN_PREFIX_LEN` (4). "Book", "Volume",
+"Episode", "Chapter" are all exactly 4+ chars, so titles like
+"Guardian's Journey (Book #1)" extracted `("Book", 1.0)` instead of
+recognizing "(Book #N)" as a positional marker without a series
+name. Four Savarovsky standalones across two real series clustered
+into a single fictitious "Book" series row, plus another real-world
+hit on Morgan Rice's "Born of Dragons (Age of the Sorcerers—Book
+Three)" / "Turned" pair.
+
+New `_VOLUME_MARKER_WORDS` denylist (book, bk, vol, vol., volume,
+part, episode, ep, chapter, tome, installment) applied at three
+return sites:
+1. Arm 1 (parenthetical) — rejects volume-marker-only names AND
+   captures the index as `volume_hint` for the bare-prefix arm
+   below. So "Guardian's Journey (Book #3): subtitle" now yields
+   `("Guardian's Journey", 3.0)` instead of `("Book", 3.0)`.
+2. `_strip_prefix_marker` — won't return "Book" as a base from
+   `_RX_PREFIX_TRAILING_NUM` matches against e.g. "Book 4".
+3. Arm 2 bare-prefix and no-colon paths thread `volume_hint`
+   through, so the colon and no-colon variants both extract a real
+   series name + the captured index.
+
+5 new positive parametrize cases (the 4 Savarovsky titles +
+"Some Saga (Volume #2)"), 3 new negative cases ("Book 4",
+"Volume 3", "(Book #1)").
+
+### Data — one-off splits and bogus series cleanup
+
+Live-DB projection applied at release time:
+
+- `seshat_calibre-library.db`: series id=609 "The Last Paladin"
+  reattributed to John Cressman (author 580); Savarovsky's
+  previously-quarantined row id=1735 renamed back to "The Last
+  Paladin" (author 549); Savarovsky's books moved from id=609 to
+  id=1735.
+- `seshat_books.db`: series id=609 reattributed to Cressman (571);
+  new row inserted for Savarovsky (540) with id=1868; Savarovsky's
+  books moved over.
+- Bogus `name='Book'` series rows id=2799 (Savarovsky, 4 books)
+  and id=2714 (Morgan Rice, 2 books) deleted; their books detached
+  to standalone for the next discovery scan to re-cluster via the
+  fixed logic.
+
+Forward-only — earlier collapsed cross-author rows still need
+manual splits if any others surface in continuing UAT. The
+`UNIQUE(name, author_id)` composite means a fresh manual rename
+in Calibre is now safe to undo.
+
+---
+
 ## [2.2.11] — 2026-05-05
 
 Repo owner rename. The GitHub account hosting Seshat moved from
