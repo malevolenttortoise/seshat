@@ -17,7 +17,7 @@
 
 services:
   seshat:
-    image: ghcr.io/mnbaker117/seshat:latest
+    image: ghcr.io/malevolenttortoise/seshat:latest
     # Or build from source:
     # build: .
     container_name: seshat

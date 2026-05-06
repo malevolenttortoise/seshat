@@ -19,10 +19,10 @@ Unraid, and the first-boot configuration walkthrough.
 
 ```bash
 # Pull the image
-docker pull ghcr.io/mnbaker117/seshat:latest
+docker pull ghcr.io/malevolenttortoise/seshat:latest
 
 # Get the example compose file
-curl -O https://raw.githubusercontent.com/mnbaker117/seshat/main/docker-compose.example.yml
+curl -O https://raw.githubusercontent.com/malevolenttortoise/seshat/main/docker-compose.example.yml
 mv docker-compose.example.yml docker-compose.yml
 ```
 
@@ -46,14 +46,14 @@ Open `http://your-server:8789` in a browser.
 ## Option B: Unraid
 
 1. In the Unraid web UI, go to **Docker** → **Add Container**
-2. Set **Repository** to `ghcr.io/mnbaker117/seshat:latest`
+2. Set **Repository** to `ghcr.io/malevolenttortoise/seshat:latest`
 3. Set **Name** to `Seshat`
 4. Set **Network Type** to `Bridge`
 5. Add a **Port** mapping: Host `8789` → Container `8789` (TCP)
 6. Add **Path** mappings for each volume (see table above)
 7. Optionally set:
    - **Web UI**: `http://[IP]:[PORT:8789]`
-   - **Icon URL**: `https://raw.githubusercontent.com/mnbaker117/seshat/main/icon.png`
+   - **Icon URL**: `https://raw.githubusercontent.com/malevolenttortoise/seshat/main/icon.png`
 8. Click **Apply**
 
 The image pulls from GHCR (public, no authentication needed).

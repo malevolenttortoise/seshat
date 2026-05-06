@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <Container version="2">
   <Name>Seshat</Name>
-  <Repository>ghcr.io/mnbaker117/seshat:latest</Repository>
+  <Repository>ghcr.io/malevolenttortoise/seshat:latest</Repository>
   <Branch>
     <Tag>latest</Tag>
     <TagDescription>Latest stable release</TagDescription>
@@ -9,8 +9,8 @@
   <Registry/>
   <Network>bridge</Network>
   <Privileged>false</Privileged>
-  <Support>https://github.com/mnbaker117/seshat/issues</Support>
-  <Project>https://github.com/mnbaker117/seshat</Project>
+  <Support>https://github.com/malevolenttortoise/seshat/issues</Support>
+  <Project>https://github.com/malevolenttortoise/seshat</Project>
   <Overview>
     Seshat is a self-hosted book discovery and acquisition platform. It scans your Calibre library against multiple metadata sources, searches a private tracker for missing titles, and automates the full pipeline from IRC announce monitoring through torrent management, metadata enrichment, and Calibre delivery — all from a single unified interface.
 
@@ -23,7 +23,7 @@
   <Category>MediaApp:Books</Category>
   <WebUI>http://[IP]:[PORT:8789]</WebUI>
   <TemplateURL/>
-  <Icon>https://raw.githubusercontent.com/mnbaker117/seshat/main/icon.png</Icon>
+  <Icon>https://raw.githubusercontent.com/malevolenttortoise/seshat/main/icon.png</Icon>
   <ExtraParams/>
   <PostArgs/>
   <Description>

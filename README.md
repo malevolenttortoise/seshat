@@ -13,15 +13,15 @@ enrichment, and Calibre delivery — all from a single unified interface.
 
 *Named after the Egyptian goddess of writing, libraries, and record-keeping.*
 
-[![GitHub release](https://img.shields.io/github/v/release/mnbaker117/seshat?style=flat-square&logo=github)](https://github.com/mnbaker117/seshat/releases/latest)
-[![Build](https://img.shields.io/github/actions/workflow/status/mnbaker117/seshat/docker-publish.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=build)](https://github.com/mnbaker117/seshat/actions/workflows/docker-publish.yml)
-[![License](https://img.shields.io/github/license/mnbaker117/seshat?style=flat-square)](LICENSE)
-[![Image size (slim)](https://ghcr-badge.egpl.dev/mnbaker117/seshat/size?tag=latest-slim&label=image%20%28slim%29&style=flat-square)](https://github.com/mnbaker117/seshat/pkgs/container/seshat)
+[![GitHub release](https://img.shields.io/github/v/release/malevolenttortoise/seshat?style=flat-square&logo=github)](https://github.com/malevolenttortoise/seshat/releases/latest)
+[![Build](https://img.shields.io/github/actions/workflow/status/malevolenttortoise/seshat/docker-publish.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=build)](https://github.com/malevolenttortoise/seshat/actions/workflows/docker-publish.yml)
+[![License](https://img.shields.io/github/license/malevolenttortoise/seshat?style=flat-square)](LICENSE)
+[![Image size (slim)](https://ghcr-badge.egpl.dev/malevolenttortoise/seshat/size?tag=latest-slim&label=image%20%28slim%29&style=flat-square)](https://github.com/malevolenttortoise/seshat/pkgs/container/seshat)
 
 [![Python](https://img.shields.io/badge/python-3.12-blue?style=flat-square&logo=python)](https://www.python.org/)
 [![React](https://img.shields.io/badge/react-18-61DAFB?style=flat-square&logo=react)](https://react.dev/)
-[![Last commit](https://img.shields.io/github/last-commit/mnbaker117/seshat?style=flat-square)](https://github.com/mnbaker117/seshat/commits/main)
-[![Image size (full)](https://ghcr-badge.egpl.dev/mnbaker117/seshat/size?tag=latest&label=image%20%28full%29&style=flat-square)](https://github.com/mnbaker117/seshat/pkgs/container/seshat)
+[![Last commit](https://img.shields.io/github/last-commit/malevolenttortoise/seshat?style=flat-square)](https://github.com/malevolenttortoise/seshat/commits/main)
+[![Image size (full)](https://ghcr-badge.egpl.dev/malevolenttortoise/seshat/size?tag=latest&label=image%20%28full%29&style=flat-square)](https://github.com/malevolenttortoise/seshat/pkgs/container/seshat)
 
 </div>
 
@@ -80,7 +80,7 @@ rail on the right, Quick Actions across the bottom.
 ```yaml
 services:
   seshat:
-    image: ghcr.io/mnbaker117/seshat:latest
+    image: ghcr.io/malevolenttortoise/seshat:latest
     container_name: seshat
     ports:
       - "8789:8789"
@@ -108,8 +108,8 @@ Two image tags ship from each commit:
 
 | Tag | Size | Use when |
 |---|---|---|
-| `ghcr.io/mnbaker117/seshat:latest` | ~860MB | You want the **direct Calibre sink** (`calibredb add`). Bundles Calibre's official binary build. |
-| `ghcr.io/mnbaker117/seshat:latest-slim` | ~200MB | You ingest via the **CWA**, **ABS**, or **file-folder** sinks and don't need direct calibredb access. Saves ~660MB. |
+| `ghcr.io/malevolenttortoise/seshat:latest` | ~860MB | You want the **direct Calibre sink** (`calibredb add`). Bundles Calibre's official binary build. |
+| `ghcr.io/malevolenttortoise/seshat:latest-slim` | ~200MB | You ingest via the **CWA**, **ABS**, or **file-folder** sinks and don't need direct calibredb access. Saves ~660MB. |
 
 If you select the Calibre sink in Settings on the slim image, the
 sink will fail with a clear "calibredb not found" error pointing

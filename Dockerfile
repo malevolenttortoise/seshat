@@ -1,8 +1,8 @@
 # Seshat — production Docker image (full Calibre).
 #
 # Two image variants are published per push:
-#   - ghcr.io/mnbaker117/seshat:latest        ← built from this Dockerfile
-#   - ghcr.io/mnbaker117/seshat:latest-slim   ← built from Dockerfile.slim,
+#   - ghcr.io/malevolenttortoise/seshat:latest        ← built from this Dockerfile
+#   - ghcr.io/malevolenttortoise/seshat:latest-slim   ← built from Dockerfile.slim,
 #                                               no Calibre, ~225MB. Pick this
 #                                               one if you ingest via CWA, ABS,
 #                                               or the file-folder sink and

@@ -234,7 +234,7 @@ class HardcoverSource(BaseSource):
     name = "hardcover"
     default_headers = {
         "Content-Type": "application/json",
-        "User-Agent": "Seshat/1.0 (https://github.com/mnbaker117/seshat)",
+        "User-Agent": "Seshat/1.0 (https://github.com/malevolenttortoise/seshat)",
     }
     default_timeout = 30.0
 

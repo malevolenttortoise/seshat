@@ -159,7 +159,7 @@ class TestRuntimeLibFailureDetection:
         )
         assert "calibredb add" in out
         assert "qt.qpa.plugin" in out
-        assert "github.com/mnbaker117/seshat/issues" in out
+        assert "github.com/malevolenttortoise/seshat/issues" in out
         # Hint about the libgl1 trade-off should be there so users
         # know how to escape if they're hitting it.
         assert "libgl1" in out

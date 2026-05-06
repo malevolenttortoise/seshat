@@ -7,7 +7,7 @@ If you believe you've found a security vulnerability in Seshat, please
 
 Instead, report it privately via GitHub Security Advisories:
 
-1. Go to the [Security tab](https://github.com/mnbaker117/seshat/security/advisories/new)
+1. Go to the [Security tab](https://github.com/malevolenttortoise/seshat/security/advisories/new)
 2. Click **Report a vulnerability**
 3. Fill out the form with as much detail as you can provide
 
@@ -48,5 +48,5 @@ Seshat is a self-hosted application. The security model assumes:
 
 ## Supported versions
 
-Only the latest `main` / `ghcr.io/mnbaker117/seshat:latest` image is
+Only the latest `main` / `ghcr.io/malevolenttortoise/seshat:latest` image is
 supported. There is no backport policy for older tagged releases.
