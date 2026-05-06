@@ -16,6 +16,7 @@ works the same for both library types.
 """
 from __future__ import annotations
 
+import json
 import logging
 import time
 from typing import Optional
@@ -24,6 +25,123 @@ from app.discovery.database import get_db, _norm_series_name
 from app import state
 
 logger = logging.getLogger("seshat.discovery.audiobookshelf_sync")
+
+# v2.3 dual-source-of-truth: user-editable fields routed through
+# auto-flow-vs-review-queue on every ABS sync. Mirrors calibre_sync's
+# `_DIFFABLE_FIELDS` shape but with audiobook-specific columns
+# (narrator, duration_sec, abridged, asin, audio_formats) instead of
+# tags/rating/formats. Structural fields (author_id, series_id, owned,
+# audiobookshelf_id, source) are not in this list — they always
+# write through directly.
+_DIFFABLE_ABS_FIELDS = [
+    ("title", "title"),
+    ("series_index", "series_index"),
+    ("isbn", "isbn"),
+    ("asin", "asin"),
+    ("description", "description"),
+    ("language", "language"),
+    ("publisher", "publisher"),
+    ("pub_date", "pub_date"),
+    ("narrator", "narrator"),
+    ("duration_sec", "duration_sec"),
+    ("abridged", "abridged"),
+    ("audio_formats", "audio_formats"),
+]
+
+
+def _normalize_abs_value(field: str, value):
+    """Normalize an ABS-emitted value to match its books-column form.
+
+    ABS's `abridged` flag comes through as bool/int/None from the API
+    flatten layer. The books column stores it as INTEGER NOT NULL
+    DEFAULT 0 (mirrors the existing INSERT's `1 if ... else 0`),
+    so we coerce here for the diff comparison to be apples-to-apples.
+    """
+    if field == "abridged":
+        return 1 if value else 0
+    return value
+
+
+async def _write_abs_snapshot(db, book_id: int, book: dict) -> None:
+    """INSERT OR REPLACE the books_abs_snapshot row for this book.
+
+    Like the Calibre snapshot helper, the ABS snapshot is a frozen
+    reproduction of what ABS says NOW. Always overwrites on every
+    sync. authors_json is denormalized (no FK into our authors table)
+    because the snapshot represents ABS's POV.
+    """
+    authors_json = (
+        json.dumps([{"id": None, "name": a} for a in book.get("authors") or []])
+        if book.get("authors") else None
+    )
+    await db.execute("""
+        INSERT OR REPLACE INTO books_abs_snapshot
+        (book_id, title, authors_json, series_name, series_index,
+         narrator, duration_sec, abridged, asin, description, tags,
+         cover_path, language, publisher, audio_formats, pubdate, synced_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        book_id, book.get("title"), authors_json,
+        book.get("series_name"), book.get("series_index"),
+        book.get("narrator"), book.get("duration_sec"),
+        _normalize_abs_value("abridged", book.get("abridged")),
+        book.get("asin"), book.get("description"),
+        None,  # tags — ABS doesn't currently expose tags via flatten
+        None,  # cover_path — covers fetched via API on demand
+        book.get("language"), book.get("publisher"),
+        book.get("audio_formats"), book.get("pub_date"),
+        time.time(),
+    ))
+
+
+async def _apply_abs_diff(db, book_id: int, book: dict) -> tuple[int, int]:
+    """Per-field diff between ABS's incoming values and the Seshat-live
+    books row, routed by `user_edited_fields`. Mirrors
+    `calibre_sync._apply_calibre_diff` semantics; see that helper for
+    the full rule. Returns `(auto_flowed_count, queued_count)`.
+    """
+    row = await (await db.execute(
+        "SELECT title, series_index, isbn, asin, description, language, "
+        "publisher, pub_date, narrator, duration_sec, abridged, "
+        "audio_formats, user_edited_fields "
+        "FROM books WHERE id = ?",
+        (book_id,),
+    )).fetchone()
+    if not row:
+        return (0, 0)
+
+    try:
+        user_edited = set(json.loads(row["user_edited_fields"] or "[]"))
+    except (ValueError, TypeError):
+        user_edited = set()
+
+    now = time.time()
+    auto_flowed = 0
+    queued = 0
+    for col_name, abs_key in _DIFFABLE_ABS_FIELDS:
+        new_val = _normalize_abs_value(col_name, book.get(abs_key))
+        cur_val = row[col_name]
+        if new_val == cur_val:
+            continue
+        if col_name in user_edited:
+            await db.execute("""
+                INSERT OR REPLACE INTO metadata_review_queue
+                (book_id, field, old_value, new_value, source, proposed_at)
+                VALUES (?, ?, ?, ?, 'abs', ?)
+            """, (
+                book_id, col_name,
+                None if cur_val is None else str(cur_val),
+                None if new_val is None else str(new_val),
+                now,
+            ))
+            queued += 1
+        else:
+            await db.execute(
+                f"UPDATE books SET {col_name} = ? WHERE id = ?",
+                (new_val, book_id),
+            )
+            auto_flowed += 1
+    return (auto_flowed, queued)
 
 
 async def sync_audiobookshelf(library: dict) -> dict:
@@ -190,32 +308,19 @@ async def sync_audiobookshelf(library: dict) -> dict:
             )).fetchone()
 
             if existing:
+                # v2.3: structural fields write through directly;
+                # user-editable metadata routes per `user_edited_fields`.
+                # Snapshot mirrors ABS's POV regardless.
                 await db.execute(
-                    """
-                    UPDATE books SET
-                        title=?, author_id=?, series_id=?, series_index=?,
-                        isbn=?, asin=?, owned=1,
-                        description=COALESCE(?, description),
-                        language=?, publisher=?,
-                        narrator=?, duration_sec=?, abridged=?, audio_formats=?,
-                        pub_date=?
-                    WHERE id=?
-                    """,
-                    (
-                        book["title"], our_author_id, our_series_id, book["series_index"],
-                        book["isbn"], book["asin"],
-                        book["description"],
-                        book["language"], book["publisher"],
-                        book["narrator"], book["duration_sec"],
-                        1 if book["abridged"] else 0,
-                        book["audio_formats"],
-                        book["pub_date"],
-                        existing["id"],
-                    ),
+                    "UPDATE books SET author_id=?, series_id=?, owned=1 "
+                    "WHERE id=?",
+                    (our_author_id, our_series_id, existing["id"]),
                 )
+                await _apply_abs_diff(db, existing["id"], book)
+                await _write_abs_snapshot(db, existing["id"], book)
                 progress["books_updated"] += 1
             else:
-                await db.execute(
+                cur = await db.execute(
                     """
                     INSERT INTO books (
                         title, author_id, series_id, series_index,
@@ -235,6 +340,7 @@ async def sync_audiobookshelf(library: dict) -> dict:
                         book["audio_formats"],
                     ),
                 )
+                await _write_abs_snapshot(db, cur.lastrowid, book)
                 books_new += 1
                 progress["books_new"] += 1
 
