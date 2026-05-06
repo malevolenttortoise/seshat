@@ -96,20 +96,30 @@ async def list_delayed() -> DelayedListResponse:
     return DelayedListResponse(path=str(folder), items=_scan(folder))
 
 
+def _validate_filename(filename: str) -> re.Match[str]:
+    """Reject any filename that isn't a single safe component matching
+    the expected `<grab_id>_<mam_id>.torrent` shape. Runs before any
+    filesystem call so a malformed value can't escape the delayed
+    folder via traversal segments."""
+    if "/" in filename or "\\" in filename or "\x00" in filename:
+        raise HTTPException(400, "invalid filename")
+    m = _FILENAME_RX.match(filename)
+    if not m:
+        raise HTTPException(400, f"filename {filename} doesn't match expected pattern")
+    return m
+
+
 @router.post("/{filename}/reinject", response_model=ReinjectResponse)
 async def reinject(filename: str) -> ReinjectResponse:
     if state.dispatcher is None:
         raise HTTPException(503, "dispatcher not initialized")
 
+    m = _validate_filename(filename)
     folder = _get_delayed_path()
     fpath = folder / filename
 
     if not fpath.exists():
         raise HTTPException(404, f"{filename} not found in delayed folder")
-
-    m = _FILENAME_RX.match(filename)
-    if not m:
-        raise HTTPException(400, f"filename {filename} doesn't match expected pattern")
 
     mam_id = m.group(2)
     result = await inject_grab(
@@ -134,6 +144,7 @@ async def reinject(filename: str) -> ReinjectResponse:
 
 @router.delete("/{filename}", response_model=SimpleOk)
 async def delete_delayed(filename: str) -> SimpleOk:
+    _validate_filename(filename)
     folder = _get_delayed_path()
     fpath = folder / filename
     if not fpath.exists():

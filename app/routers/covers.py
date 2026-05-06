@@ -44,10 +44,10 @@ async def serve_cover(cover_path: str):
 
     target = Path(cover_path).resolve()
 
-    # Security: target must be under one of the allowed roots
-    if not any(
-        str(target).startswith(str(root)) for root in allowed_roots
-    ):
+    # Security: target must be under one of the allowed roots.
+    # is_relative_to() avoids the prefix-match edge case where a sibling
+    # directory like /data/staging-evil would slip past startswith("/data/staging").
+    if not any(target.is_relative_to(root) for root in allowed_roots):
         raise HTTPException(403, "Cover path not in allowed directory")
 
     if not target.exists() or not target.is_file():

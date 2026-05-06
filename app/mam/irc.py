@@ -431,10 +431,15 @@ class IrcClient:
         # newline-in-channel-name is a real bug class.
         clean = line.replace("\r", "").replace("\n", "")
         # Don't log auth payloads at INFO — they contain credentials.
-        if clean.upper().startswith("AUTHENTICATE ") and clean != "AUTHENTICATE PLAIN":
+        upper = clean.upper()
+        if upper.startswith("AUTHENTICATE ") and clean != "AUTHENTICATE PLAIN":
             _log.debug("IRC > AUTHENTICATE <redacted>")
-        elif clean.upper().startswith("PRIVMSG NICKSERV"):
+        elif upper.startswith("PRIVMSG NICKSERV"):
             _log.debug("IRC > PRIVMSG NickServ <redacted>")
+        elif upper.startswith("PASS "):
+            _log.debug("IRC > PASS <redacted>")
+        elif upper.startswith("OPER "):
+            _log.debug("IRC > OPER <redacted>")
         else:
             _log.debug(f"IRC > {clean}")
         self._writer.write((clean + "\r\n").encode("utf-8", errors="replace"))
