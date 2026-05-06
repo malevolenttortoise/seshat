@@ -19,6 +19,7 @@ Sync surfaces progress via `state._library_sync_progress` so the
 unified Dashboard widget can show "Syncing 142/675 — The Final Empire"
 the same way it shows MAM/source scan progress.
 """
+import json
 import sqlite3
 import time
 import logging
@@ -35,6 +36,134 @@ logger = logging.getLogger("seshat.discovery.calibre_sync")
 # single strings for logging or grouping.
 SEP = "|||"
 FIELD_SEP = ":::"
+
+# v2.3 dual-source-of-truth: the user-editable fields that participate
+# in auto-flow-vs-review-queue routing on every Calibre sync. Tuples
+# are (books_column, calibre_book_dict_key) — they differ for pubdate
+# vs books.pub_date.
+#
+# Structural fields (author_id, series_id, owned, calibre_id, source)
+# are NOT in this list — they always write through directly because
+# they're identity fields, not metadata-the-user-might-curate.
+_DIFFABLE_FIELDS = [
+    ("title", "title"),
+    ("series_index", "series_index"),
+    ("isbn", "isbn"),
+    ("cover_path", "cover_path"),
+    ("description", "description"),
+    ("tags", "tags"),
+    ("rating", "rating"),
+    ("language", "language"),
+    ("publisher", "publisher"),
+    ("formats", "formats"),
+    ("pub_date", "pubdate"),
+]
+
+
+async def _write_calibre_snapshot(
+    db, book_id: int, book: dict, series_name: str | None,
+) -> None:
+    """INSERT OR REPLACE the books_calibre_snapshot row for this book.
+
+    The snapshot is a frozen reproduction of what Calibre's metadata.db
+    says NOW. Always overwrites on every sync — the snapshot belongs
+    to Calibre, not the user.
+
+    `series_name` is denormalized (no FK into our series table) because
+    the snapshot represents Calibre's POV, independent of how Seshat
+    resolves series identity (per-author vs shared). Author info is
+    similarly denormalized as a JSON array.
+    """
+    authors_json = (
+        json.dumps([
+            {"id": a["id"], "name": a["name"], "sort": a.get("sort")}
+            for a in book["authors"]
+        ])
+        if book.get("authors") else None
+    )
+    rating = book.get("rating")
+    # Calibre stores ratings 0-10 (half-star integer); our `books`
+    # column uses REAL. Snapshot mirrors Calibre's int form.
+    rating_int = int(round(rating)) if rating is not None else None
+    await db.execute("""
+        INSERT OR REPLACE INTO books_calibre_snapshot
+        (book_id, title, authors_json, series_name, series_index, isbn,
+         cover_path, description, tags, rating, language, publisher,
+         formats, pubdate, synced_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        book_id, book.get("title"), authors_json, series_name,
+        book.get("series_index"), book.get("isbn"),
+        book.get("cover_path"), book.get("description"),
+        book.get("tags"), rating_int, book.get("language"),
+        book.get("publisher"), book.get("formats"), book.get("pubdate"),
+        time.time(),
+    ))
+
+
+async def _apply_calibre_diff(db, book_id: int, book: dict) -> tuple[int, int]:
+    """Per-field diff between Calibre's incoming values and the
+    Seshat-live `books` row, routed by `user_edited_fields`.
+
+    For each diffable field where Calibre's value differs from the
+    current books row:
+      - If the field IS in `user_edited_fields` → enqueue a row in
+        `metadata_review_queue` with source='calibre'. UPSERT on
+        `(book_id, field, source)` so a fresh proposal replaces the
+        prior pending one rather than piling up.
+      - Else → auto-flow: UPDATE the books column directly.
+
+    Returns `(auto_flowed_count, queued_count)`.
+
+    Skips the field entirely when Calibre's value equals the current
+    one — the no-op case is the common one on incremental syncs.
+    """
+    row = await (await db.execute(
+        "SELECT title, series_index, isbn, cover_path, description, tags, "
+        "rating, language, publisher, formats, pub_date, user_edited_fields "
+        "FROM books WHERE id = ?",
+        (book_id,),
+    )).fetchone()
+    if not row:
+        return (0, 0)
+
+    try:
+        user_edited = set(json.loads(row["user_edited_fields"] or "[]"))
+    except (ValueError, TypeError):
+        user_edited = set()
+
+    now = time.time()
+    auto_flowed = 0
+    queued = 0
+    for col_name, calibre_key in _DIFFABLE_FIELDS:
+        new_val = book.get(calibre_key)
+        cur_val = row[col_name]
+        if new_val == cur_val:
+            continue
+        # Cover-path edge: Calibre may emit None on a sync where the
+        # cover hasn't been computed yet (rare, but seen). Don't blow
+        # away an existing cover with NULL silently — skip the diff.
+        if col_name == "cover_path" and new_val is None and cur_val is not None:
+            continue
+        if col_name in user_edited:
+            await db.execute("""
+                INSERT OR REPLACE INTO metadata_review_queue
+                (book_id, field, old_value, new_value, source, proposed_at)
+                VALUES (?, ?, ?, ?, 'calibre', ?)
+            """, (
+                book_id, col_name,
+                None if cur_val is None else str(cur_val),
+                None if new_val is None else str(new_val),
+                now,
+            ))
+            queued += 1
+        else:
+            await db.execute(
+                f"UPDATE books SET {col_name} = ? WHERE id = ?",
+                (new_val, book_id),
+            )
+            auto_flowed += 1
+    return (auto_flowed, queued)
 
 
 def _read_calibre_db(calibre_path: str, library_path: str = None) -> dict:
@@ -453,18 +582,27 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
                 (book["book_id"],)
             )).fetchone()
 
+            # Calibre's series name for the snapshot. Independent of
+            # how we resolved Seshat's series_id (per-author vs shared).
+            cal_series_name = (
+                book["series"][0]["name"] if book["series"] else None
+            )
+
             if row:
-                await db.execute("""
-                    UPDATE books SET title=?, author_id=?, series_id=?,
-                    series_index=?, isbn=?, owned=1, cover_path=?,
-                    description=COALESCE(?,description), tags=?, rating=?,
-                    language=?, publisher=?, formats=?
-                    WHERE id=?
-                """, (book["title"], our_author_id, our_series_id,
-                      series_index, book["isbn"], book["cover_path"],
-                      book["description"], book["tags"], book["rating"],
-                      book["language"], book["publisher"], book["formats"],
-                      row["id"]))
+                # v2.3: structural fields (identity-tier) are written
+                # through directly. User-editable metadata fields go
+                # through the auto-flow-vs-review-queue helper which
+                # routes per `user_edited_fields`. Snapshot table
+                # mirrors Calibre's POV regardless.
+                await db.execute(
+                    "UPDATE books SET author_id=?, series_id=?, owned=1 "
+                    "WHERE id=?",
+                    (our_author_id, our_series_id, row["id"]),
+                )
+                await _apply_calibre_diff(db, row["id"], book)
+                await _write_calibre_snapshot(
+                    db, row["id"], book, cal_series_name
+                )
                 progress["books_updated"] += 1
                 logger.debug(f"  Calibre: updated '{book['title']}' (calibre_id={book['book_id']}, tags={book['tags']}, rating={book['rating']})")
             else:
@@ -494,25 +632,34 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
 
                 if len(merge_candidates) == 1:
                     target_id = merge_candidates[0]["id"]
+                    # v2.3 merge path: convert the Missing/source-discovered
+                    # row into a Calibre row by setting structural fields
+                    # (owned=1, calibre_id, source='calibre', series_id),
+                    # then route Calibre's metadata fields through the
+                    # diff helper. Pre-existing source-scan values that
+                    # the user manually edited are preserved via the
+                    # user_edited_fields gate.
                     await db.execute("""
-                        UPDATE books SET title=?, series_id=?, series_index=?,
-                        isbn=?, owned=1, calibre_id=?, source='calibre',
-                        cover_path=?,
-                        description=COALESCE(?,description), tags=?, rating=?,
-                        language=?, publisher=?, formats=?
+                        UPDATE books SET author_id=?, series_id=?,
+                        owned=1, calibre_id=?, source='calibre'
                         WHERE id=?
-                    """, (book["title"], our_series_id, series_index,
-                          book["isbn"], book["book_id"], book["cover_path"],
-                          book["description"], book["tags"], book["rating"],
-                          book["language"], book["publisher"], book["formats"],
-                          target_id))
+                    """, (our_author_id, our_series_id,
+                          book["book_id"], target_id))
+                    await _apply_calibre_diff(db, target_id, book)
+                    await _write_calibre_snapshot(
+                        db, target_id, book, cal_series_name
+                    )
                     progress["books_updated"] += 1
                     logger.info(
                         f"  Calibre: merged Missing row id={target_id} with "
                         f"new Calibre book_id={book['book_id']} ('{book['title']}')"
                     )
                 else:
-                    await db.execute("""
+                    # New Calibre book — INSERT the books row with
+                    # Calibre values (no diff routing; nothing to
+                    # diff against). Snapshot mirrors. user_edited_fields
+                    # defaults to '[]' via the column default.
+                    cur = await db.execute("""
                         INSERT INTO books (title, author_id, series_id, series_index,
                         isbn, calibre_id, source, owned, pub_date, cover_path,
                         description, tags, rating, language, publisher, formats)
@@ -522,6 +669,10 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
                           book["pubdate"], book["cover_path"],
                           book["description"], book["tags"], book["rating"],
                           book["language"], book["publisher"], book["formats"]))
+                    new_book_id = cur.lastrowid
+                    await _write_calibre_snapshot(
+                        db, new_book_id, book, cal_series_name
+                    )
                     books_new += 1
                     progress["books_new"] += 1
                     logger.debug(f"  Calibre: NEW '{book['title']}' by {book['authors'][0]['name']} (tags={book['tags']}, lang={book['language']})")
