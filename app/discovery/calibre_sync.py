@@ -281,7 +281,31 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
                     author_map[cal_id] = cur.lastrowid
 
         # Pass 2: upsert series
-        series_map = {}  # (calibre_series_id, our_author_id) -> our_id
+        #
+        # First, aggregate which Seshat author_ids contribute to each
+        # Calibre series id. A single Calibre series with books from
+        # 2+ authors is a genuinely shared series (Halo, Star Wars
+        # Legends) and gets a single shared row (author_id=NULL).
+        # Distinct Calibre series ids that happen to share a name
+        # remain per-author (Cressman/Savarovsky "The Last Paladin"
+        # case — they have different Calibre ids).
+        cal_series_authors: dict[int, set[int]] = {}
+        for book in calibre_data["books"]:
+            if not book["series"] or not book["authors"]:
+                continue
+            primary_cal_id = book["authors"][0]["id"]
+            our_author_id = author_map.get(primary_cal_id)
+            if not our_author_id:
+                continue
+            for s in book["series"]:
+                cal_series_authors.setdefault(s["id"], set()).add(our_author_id)
+
+        # series_map keys: (calibre_series_id, our_author_id) for
+        # per-author series, OR (calibre_series_id, None) for shared
+        # series. Using None deliberately so Pass 3's lookup can find
+        # the shared row regardless of which author the book belongs
+        # to.
+        series_map = {}
         for book in calibre_data["books"]:
             if not book["series"] or not book["authors"]:
                 continue
@@ -291,49 +315,109 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
                 continue
 
             for s in book["series"]:
-                key = (s["id"], our_author_id)
+                cal_sid = s["id"]
+                contributors = cal_series_authors.get(cal_sid, set())
+                is_shared = len(contributors) >= 2
+
+                key = (cal_sid, None if is_shared else our_author_id)
                 if key in series_map:
                     continue
 
-                # Lookup order matters:
-                #   1. Exact LOWER(name) match scoped to THIS author
-                #      — fast path for the common case where Calibre's
-                #      series name already matches what we have stored.
-                #   2. Normalized-name match scoped to THIS author —
-                #      catches drift like "The Witcher" vs "Witcher
-                #      Series" without the lazy upsert in lookup.py
-                #      having to clean up after us.
-                # Cross-author hits are deliberately ignored: two
-                # authors who happen to share a series name are
-                # different physical series (Cressman/Savarovsky "The
-                # Last Paladin"). The `series.UNIQUE(name, author_id)`
-                # composite supports per-author rows.
-                row = await (await db.execute(
-                    "SELECT id FROM series WHERE LOWER(name) = LOWER(?) AND author_id = ?",
-                    (s["name"], our_author_id)
-                )).fetchone()
-                if row:
-                    series_map[key] = row["id"]
-                else:
-                    target_norm = _norm_series_name(s["name"])
-                    matched = None
-                    if target_norm:
-                        author_series = await (await db.execute(
-                            "SELECT id, name FROM series WHERE author_id = ?",
-                            (our_author_id,),
-                        )).fetchall()
-                        for ar in author_series:
-                            if _norm_series_name(ar["name"]) == target_norm:
-                                matched = ar["id"]
-                                break
-                    if matched is not None:
-                        series_map[key] = matched
+                # Lookup target row.
+                #
+                # Shared (is_shared=True): look for an existing
+                # author_id IS NULL row by name; if not found, INSERT
+                # with author_id=NULL. We also opportunistically
+                # collapse pre-v2.3 per-author rows (legacy split
+                # state) into the new shared row by re-pointing books
+                # later — done via Pass 3's series_map assignment +
+                # an explicit cleanup at the end of Pass 2.
+                #
+                # Per-author (is_shared=False): identical to the
+                # pre-v2.3 author-scoped lookup that prevented the
+                # Cressman/Savarovsky merge.
+                if is_shared:
+                    row = await (await db.execute(
+                        "SELECT id FROM series WHERE LOWER(name) = LOWER(?) "
+                        "AND author_id IS NULL",
+                        (s["name"],)
+                    )).fetchone()
+                    if row:
+                        series_map[key] = row["id"]
                     else:
                         cur = await db.execute(
-                            "INSERT INTO series (name, author_id) VALUES (?, ?)",
-                            (s["name"], our_author_id)
+                            "INSERT INTO series (name, author_id) VALUES (?, NULL)",
+                            (s["name"],)
                         )
                         series_map[key] = cur.lastrowid
+                else:
+                    row = await (await db.execute(
+                        "SELECT id FROM series WHERE LOWER(name) = LOWER(?) AND author_id = ?",
+                        (s["name"], our_author_id)
+                    )).fetchone()
+                    if row:
+                        series_map[key] = row["id"]
+                    else:
+                        target_norm = _norm_series_name(s["name"])
+                        matched = None
+                        if target_norm:
+                            author_series = await (await db.execute(
+                                "SELECT id, name FROM series WHERE author_id = ?",
+                                (our_author_id,),
+                            )).fetchall()
+                            for ar in author_series:
+                                if _norm_series_name(ar["name"]) == target_norm:
+                                    matched = ar["id"]
+                                    break
+                        if matched is not None:
+                            series_map[key] = matched
+                        else:
+                            cur = await db.execute(
+                                "INSERT INTO series (name, author_id) VALUES (?, ?)",
+                                (s["name"], our_author_id)
+                            )
+                            series_map[key] = cur.lastrowid
+
+        # Cleanup: any per-author rows that have been superseded by a
+        # shared row this sync should be merged into the shared row
+        # so books from earlier scans get re-pointed. Delete the
+        # per-author rows AFTER re-pointing their books — the FK on
+        # books.series_id is RESTRICT-by-default in SQLite without
+        # ON DELETE CASCADE on this relationship.
+        for cal_sid, contributors in cal_series_authors.items():
+            if len(contributors) < 2:
+                continue
+            shared_id = series_map.get((cal_sid, None))
+            if shared_id is None:
+                continue
+            # Find the (just-upserted) row's name to match by-name on
+            # legacy per-author rows. Calibre's series name is the
+            # authoritative one here.
+            shared_row = await (await db.execute(
+                "SELECT name FROM series WHERE id = ?", (shared_id,)
+            )).fetchone()
+            if not shared_row:
+                continue
+            shared_name = shared_row["name"]
+            # Re-point books on per-author rows with the same
+            # (case-insensitive) name to the shared row. Limit the
+            # re-pointing to authors who contribute to this Calibre
+            # series so we don't sweep up unrelated same-named series
+            # (the Cressman/Savarovsky guard).
+            placeholders = ",".join("?" * len(contributors))
+            old_rows = await (await db.execute(
+                f"SELECT id FROM series WHERE LOWER(name) = LOWER(?) "
+                f"AND author_id IN ({placeholders}) AND id != ?",
+                (shared_name, *contributors, shared_id)
+            )).fetchall()
+            for old in old_rows:
+                await db.execute(
+                    "UPDATE books SET series_id = ? WHERE series_id = ?",
+                    (shared_id, old["id"])
+                )
+                await db.execute(
+                    "DELETE FROM series WHERE id = ?", (old["id"],)
+                )
 
         # Pass 3: upsert books
         for i, book in enumerate(calibre_data["books"]):
@@ -355,7 +439,13 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
             series_index = book["series_index"]
             if book["series"]:
                 first_series = book["series"][0]
-                key = (first_series["id"], our_author_id)
+                cal_sid = first_series["id"]
+                # Shared series: key uses None for author. Per-author:
+                # uses our_author_id. Mirrors Pass 2's keying.
+                if len(cal_series_authors.get(cal_sid, set())) >= 2:
+                    key = (cal_sid, None)
+                else:
+                    key = (cal_sid, our_author_id)
                 our_series_id = series_map.get(key)
 
             row = await (await db.execute(
