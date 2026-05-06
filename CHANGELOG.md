@@ -7,6 +7,29 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [2.2.9] — 2026-05-05
+
+Documentation and licensing release ahead of public visibility. No
+runtime behavior changes — the image is functionally identical to
+2.2.8.
+
+### Changed
+
+- License switched from MIT to Apache License 2.0. Apache 2.0 keeps
+  Seshat fully open source while adding two protections MIT lacks:
+  explicit attribution requirements (so "rename and resell" forks
+  become a license violation) and a trademark clause covering the
+  Seshat name and logo. Patent grant included.
+- New `NOTICE` file at the repo root, required by Apache 2.0 §4(d)
+  for downstream attribution.
+- README badge row reworked for public release: dynamic GitHub
+  release tag, CI build status, last-commit date, and GHCR image
+  size badges (slim + full) replace the static placeholders. The
+  static `tests-625_passing` badge was removed in favor of the live
+  build status, which won't go stale as the test count grows.
+
+---
+
 ## [2.2.8] — 2026-05-05
 
 Bug fix: the Hermes Dashboard widget went blank and the MAM Status
