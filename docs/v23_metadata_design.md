@@ -312,14 +312,14 @@ real Calibre/ABS sync corrects the snapshot.
 - No book sidebar UI changes yet — Seshat-live displayed everywhere
   as today.
 
-**Source-scan rule (deferred to v2.3.3)**: rewriting `_merge_result`
+**Source-scan rule (deferred to v2.3.4)**: rewriting `_merge_result`
 to "write-through-on-empty + queue-on-populated" without the UI to
 review queued items would accumulate unread queue rows that the user
 can't act on. The owned-Calibre branch already implements the spirit
 (per-field COALESCE-fill rules preserve user data), and the unowned
 branch's full-overwrite has no curated data to protect. Net effect:
-shipping the rule without the UI is risk without reward. v2.3.3
-lands both together — see the v2.3.3 phasing section below for the
+shipping the rule without the UI is risk without reward. v2.3.4
+lands both together — see the v2.3.4 phasing section below for the
 "Source-scan write rule rewrite" line item, which is exactly this
 `_merge_result` change.
 
@@ -335,14 +335,14 @@ UAT, before the larger UI work:
 The originally-planned v2.3.1 (Metadata Manager UI + per-field pull)
 moved to v2.3.2 to keep the patch release small and shippable.
 
-**v2.3.2** — Scan quality + Series UX rebuild + source URL editor
-(~1.5-2 weeks):
+**v2.3.2 (shipped 2026-05-06)** — Scan quality + source URL editor:
 
-The "scan-and-organize" release. Improves the per-source URL backfill
-behavior, gives the user a friendly way to manage source URLs per
-book, and rebuilds the Series Manager UX. No dual-storage UI yet —
-that lands in v2.3.3 alongside the source-scan write rule. These
-ship separately so each can be validated in isolation.
+The "scan-quality" release. Improves the per-source URL backfill
+behavior and gives the user a friendly way to manage source URLs
+per book. The Series Manager UX rebuild was originally planned to
+ship here too but moved to v2.3.3 — the scan-quality work is a
+coherent shippable unit on its own and the Series rebuild benefits
+from independent UAT.
 
 **Mandatory-source detail-fetch logic (the "Quarks and Qi" fix).**
 Today the per-author `existing_titles` set fast-paths every source
@@ -400,12 +400,34 @@ JSON. New friendlier UX:
   - IBDB / Google Books: keep as-is (their URL shapes are already
     canonical).
 
-**Series Manager UX rebuild** (carried from earlier plan):
-- Drop the vague "promote / demote" verbs with author-list membership
-  semantics. The user's mental model is "this series has these
-  authors", not "merge these rows together". The current per-row
-  checkbox + bulk-Promote-to-shared button feels unclear in practice;
-  drop it.
+**Scan-mode taxonomy** — codified contract for how each scan
+entry point treats existing data. v2.3.2 verified that all entry
+points behave per this table:
+
+| Entry point | Scope | Behavior |
+|---|---|---|
+| Command Center "Source Scan" | All authors | Incremental — URL-backfill on books that already have non-mandatory URLs; DETAIL fetch on books missing a mandatory source's URL; full DETAIL on any book with 0 URLs. Discover any new books on each author's source pages. |
+| Author detail "Re-sync" | One author | Same shape as Command Center, scoped to one author. |
+| Author detail "Full Scan" | One author | **Full re-fetch.** Every book (owned, missing, hidden) gets a fresh DETAIL fetch on every enabled source. Mandatory flag ignored — everything is full-detail. Updates source URLs and re-merges all metadata. |
+| Author page multi-select "Scan Sources" / "Scan Audio" | Selected authors | Same shape as Command Center, scoped to the selected authors. |
+| Command Center "Full Re-scan" (v2.3.2 addendum) | All authors | `run_full_rescan` — same shape as Author "Full Scan", but spans every author. Used rarely; primarily for post-disaster recovery or schema-bump backfills. |
+
+A library with completely cleared source data is a degenerate case:
+every book has 0 URLs, so the incremental modes naturally do
+full-DETAIL on every book — effectively a full scan without needing
+to be invoked as one. No special-casing required.
+
+In v2.3.4+, the same scan-mode shapes apply but writes route
+through the dual-storage flow (Seshat-live + queue diffs for review)
+instead of the current direct-write to `books`.
+
+**v2.3.3** — Series Manager UX rebuild (~1-1.5 weeks):
+
+- Drop the vague "promote / demote" verbs in favor of author-list
+  membership semantics. The user's mental model is "this series has
+  these authors", not "merge these rows together". The current
+  per-row checkbox + bulk-Promote-to-shared button feels unclear in
+  practice; drop it.
 - Per-row "Manage members" action opens a modal with:
   - Current author list (computed via
     `SELECT DISTINCT author_id FROM books WHERE series_id = X`).
@@ -426,27 +448,7 @@ JSON. New friendlier UX:
   low-level escape hatches + auto-detect path callers but are no
   longer user-facing.
 
-**Scan-mode taxonomy** — codified contract for how each scan
-entry point treats existing data. v2.3.2 implementation must
-respect these distinctions consistently:
-
-| Entry point | Scope | Behavior |
-|---|---|---|
-| Command Center "Source Scan" | All authors | Incremental — URL-backfill on books that already have non-mandatory URLs; DETAIL fetch on books missing a mandatory source's URL; full DETAIL on any book with 0 URLs. Discover any new books on each author's source pages. |
-| Author detail "Re-sync" | One author | Same shape as Command Center, scoped to one author. |
-| Author detail "Full Scan" | One author | **Full re-fetch.** Every book (owned, missing, hidden) gets a fresh DETAIL fetch on every enabled source. Mandatory flag ignored — everything is full-detail. Updates source URLs and re-merges all metadata. |
-| Author page multi-select "Scan Sources" / "Scan Audio" | Selected authors | Same shape as Command Center, scoped to the selected authors. |
-
-A library with completely cleared source data is a degenerate case:
-every book has 0 URLs, so the incremental modes naturally do
-full-DETAIL on every book — effectively a full scan without needing
-to be invoked as one. No special-casing required.
-
-In v2.3.3+, the same scan-mode shapes apply but writes route
-through the dual-storage flow (Seshat-live + queue diffs for review)
-instead of the current direct-write to `books`.
-
-**v2.3.3** — Metadata Manager UI + dual-storage UI + source-scan
+**v2.3.4** — Metadata Manager UI + dual-storage UI + source-scan
 write rule (~1.5-2 weeks):
 
 - **Compare panel** in book sidebar — per-field side-by-side Seshat
@@ -463,13 +465,13 @@ write rule (~1.5-2 weeks):
   queue-on-populated for Goodreads/Hardcover/Kobo/IBDB. Lands
   alongside the UI so reviewer noise has somewhere to go.
 
-**v2.3.4** — push-back (~1 week + research):
+**v2.3.5** — push-back (~1 week + research):
 - ABS push-back via PATCH API.
 - Calibre push-back via calibredb (full image).
 - CWA push-back research; ship if feasible, otherwise document
   as slim-image limitation.
 
-Total estimate: ~4-5 weeks from v2.3.2 onward, validated
+Total estimate: ~3-4 weeks from v2.3.3 onward, validated
 incrementally.
 
 ## Open questions / decisions log
@@ -491,5 +493,6 @@ incrementally.
 | 2026-05-06 | Source URL editor UX (book sidebar) | Replace free-text JSON edit with a labeled-input-per-source list + "X" remove buttons + a single "+" add field. Each source class gets a `parse_url()` method that canonicalizes pasted URLs (e.g. strip Goodreads slug, normalize Amazon to /dp/<ASIN>). UI tries each enabled source in priority order until one matches the pasted URL. |
 | 2026-05-06 | Scan-mode taxonomy | Four entry points enumerated. Three are "incremental" (Command Center, Author detail Re-sync, Author multi-select Scan Sources/Audio) and behave identically modulo scope: URL-backfill on non-mandatory sources, DETAIL on mandatory-but-missing, full-DETAIL on books with 0 URLs. The fourth (Author detail Full Scan) ignores the mandatory flag and re-fetches everything. Cleared-source-data state degenerates naturally into full-DETAIL via the 0-URLs branch — no special handling. |
 | 2026-05-06 | v2.3.2 vs v2.3.3 split | v2.3.2 = scan quality + source URL editor + Series UX rebuild (validated in isolation, no dual-storage UI yet). v2.3.3 = Compare panel + Metadata Manager UI + sidebar populates user_edited_fields + source-scan write rule. v2.3.4 = push-back. Smaller, more incrementally-validatable releases beat one big v2.3.2. |
+| 2026-05-06 | v2.3.2 narrowed further; +1 slot for everything else | v2.3.2 ships scan-quality (mandatory-source detail-fetch + per-source `existing_titles` gating) + source URL editor + scan-mode taxonomy verification only. Series Manager UX rebuild moves from v2.3.2 to v2.3.3 (it's a UX-only release; benefits from independent UAT). Metadata Manager UI moves to v2.3.4. Push-back to v2.3.5. Each release is smaller and more focused; the scan-quality work is the most user-visible change so it ships first. |
 
 Update this table as decisions evolve during implementation.

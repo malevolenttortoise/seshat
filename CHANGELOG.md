@@ -7,6 +7,138 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [2.3.2] — 2026-05-06
+
+The "scan-quality" release. Two user-visible improvements + one
+tighter contract on how source scans are gated. Series Manager UX
+rebuild moves to v2.3.3 — the scan-quality work is a coherent
+shippable unit and the Series rebuild benefits from independent UAT.
+
+### Discovery — mandatory-source detail-fetch (the "Quarks and Qi" fix)
+
+Pre-v2.3.2 the per-author `existing_titles` set fast-pathed every
+source on every known book — including sources that had no URL for
+that book. Result: a book with a Kobo URL only would be silently
+fast-pathed by Goodreads, which never tried again to find a
+Goodreads match. Mark's "Quarks and Qi" by J.L. Williams was the
+canary: in his library, no Goodreads URL despite Goodreads having a
+matching page at `/book/show/246416427`.
+
+New per-source `mandatory: bool` flag in `metadata_sources` settings
++ `is_source_mandatory(settings, name)` accessor. In
+`_lookup_author_inner`:
+
+- Compute `per_source_titles_with_url: dict[str, set[str]]` and
+  `titles_with_any_url: set[str]` from each book's `source_url`
+  JSON.
+- Per source in the scan loop:
+  - **`full_scan` mode** → existing behavior unchanged.
+  - **Mandatory source** (incremental) →
+    `per_source_titles_with_url[source]`. Books missing this
+    source's URL trigger DETAIL fetch every scan until matched.
+  - **Non-mandatory source** (incremental) → `titles_with_any_url`.
+    Pre-v2.3.2 behavior preserved for supplementary sources where
+    DETAIL on every unmatched book would be wasted effort.
+- Mirrored in the multi-retry loop so retries inherit the same
+  per-source gating.
+
+Defaults: `mandatory=true` on the primary tier (Goodreads /
+Hardcover for ebook; Audible / Hardcover for audiobook).
+`mandatory=false` everywhere else. Settings → Metadata Sources panel
+gains a "Mandatory" checkbox column with a tooltip explaining the
+trade-off. `is_source_mandatory` falls back to the ship-with default
+when an upgraded settings.json (pre-v2.3.2) lacks the field on
+existing entries — keeps users behaving correctly without an
+explicit migration write. MAM's checkbox is locked off (it's not
+part of the source-scan registry).
+
+Bounds worst-case scan cost: `mandatory_count × books` rather than
+`total_sources × books`. End state stable — once mandatory sources
+have URLs for a book, behavior settles back to today's
+fast-path-everywhere.
+
+### Discovery — source URL editor UX
+
+Editing source URLs used to require hand-writing the
+`{"goodreads": "...", "hardcover": "..."}` JSON in a free-text
+field — a known papercut. Replaced with a structured editor in the
+book sidebar:
+
+- Each existing source URL gets a labeled row (Goodreads,
+  Hardcover, Kobo, …) with the URL shown read-only + an "✕" remove
+  button. Removing immediately calls
+  `DELETE /api/discovery/books/{bid}/source-urls/{source}` and
+  re-renders.
+- One always-visible "Add" row at the bottom: paste any source URL
+  + "+" button (or Enter). Backend
+  (`POST /api/discovery/books/{bid}/source-urls`) identifies which
+  source the URL belongs to + canonicalizes it before merging into
+  the book's `source_url` JSON.
+- Bad URLs surface a 400 with the backend's message inline beneath
+  the input rather than via toast — user can fix the paste in
+  place without losing what they typed.
+
+New `app/discovery/source_urls.py` module with
+`parse_url(url) -> (source_name, canonical_url) | None`.
+Canonicalization rules per source:
+
+- **Goodreads**: strips title slug, keeps `/book/show/<id>`.
+- **Hardcover**: lowercases the slug.
+- **Kobo**: drops `/<country>/<lang>/` prefix, normalizes to /us/en/.
+- **Amazon**: any regional domain → `https://www.amazon.com/dp/<ASIN>`.
+- **Audible**: any regional domain → `https://www.audible.com/pd/<ASIN>`.
+- **IBDB**: keeps `?id=<n>`, strips other query params.
+- **Google Books**: classic `/books?id=` and new `/books/edition/`
+  URL shapes both fold into the canonical form.
+
+Legacy plain-string `source_url` values (pre-v1.x format) surface
+under a "manual" pseudo-source so they remain visible + removable;
+adding any new URL silently overwrites the legacy string.
+`source_url` removed from `EditFields` so other field edits no
+longer round-trip the URL dict.
+
+### Discovery — scan-mode taxonomy verified
+
+Four scan entry points, three "incremental" + one "full":
+
+| Entry point | Scope | Mode |
+|---|---|---|
+| Command Center "Source Scan" | All authors | Incremental |
+| Author detail "Re-sync" | One author | Incremental |
+| Author detail "Full Scan" | One author | Full re-fetch |
+| Author multi-select "Scan Sources / Audio" | Selected authors | Incremental |
+
+All flow through `lookup_author(..., full_scan=...)`; the v2.3.2
+mandatory-source gating only kicks in on `full_scan=False`. Full
+scans pass `existing_titles=hidden_titles` (pre-existing behavior)
+so every non-hidden book gets DETAIL on every source regardless of
+URL presence.
+
+A fifth entry point exists internally (`run_full_rescan` —
+`full_scan=True` across every author) for post-disaster recovery /
+schema-bump backfills; documented in the design doc but not a
+common UI surface.
+
+Verified all four user-facing entry points hit the right `full_scan`
+value. No code changes required.
+
+### What's deferred
+
+- **Series Manager UX rebuild** → v2.3.3 (was originally v2.3.2).
+  Drop "promote / demote" verbs; per-row "Manage members" modal;
+  cover preview; auto-promote/demote on member-count crossing.
+- **Compare panel + Metadata Manager UI + source-scan write rule**
+  → v2.3.4 (was v2.3.3).
+- **Push-back to Calibre / ABS** → v2.3.5 (was v2.3.4). Each
+  release shifts up one slot to accommodate.
+
+### Tests
+
+44 new across `test_source_config.py` (5), `test_source_urls.py`
+(28), `test_source_url_editor.py` (11). Suite 1432 passing.
+
+---
+
 ## [2.3.1] — 2026-05-06
 
 Two fast-follow fixes after Mark's v2.2.14 rollout surfaced them.
