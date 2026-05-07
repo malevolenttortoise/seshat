@@ -309,13 +309,20 @@ async def _recompute_series_author(db, sids: Iterable[int]) -> None:
     """Recompute `series.author_id` from current membership for each
     series id passed in.
 
-    The rule:
-      - exactly 1 distinct author across the series's books →
+    The rule (counts VISIBLE books only — hidden=ignored):
+      - exactly 1 distinct author across the series's visible books →
         `series.author_id` set to that author (per-author authority)
       - 2+ distinct authors → `series.author_id = NULL` (shared)
-      - 0 books → no-op (orphaned series; we leave authority alone so
-        a freshly-emptied row doesn't silently change shape before
-        the caller gets a chance to delete it)
+      - 0 visible books → no-op (orphaned or fully-hidden series; we
+        leave authority alone so a freshly-emptied row doesn't
+        silently change shape before the caller gets a chance to
+        delete it)
+
+    Hidden books are explicitly excluded — Mark's mental model is
+    "hidden = ignore". A per-author Alice series with one hidden Bob
+    book stays per-author Alice. (If the hidden book is later
+    un-hidden, the un-hide endpoint re-runs this helper so authority
+    catches up.)
 
     Callers that mutate book→series membership pass every affected
     series id (destination + every source series the books moved off
@@ -334,7 +341,9 @@ async def _recompute_series_author(db, sids: Iterable[int]) -> None:
             "SELECT COUNT(DISTINCT author_id) AS n_authors, "
             "MIN(author_id) AS only_author, "
             "COUNT(*) AS n_books "
-            "FROM books WHERE series_id = ? AND author_id IS NOT NULL",
+            "FROM books "
+            "WHERE series_id = ? AND author_id IS NOT NULL "
+            "AND hidden = 0",
             (sid,),
         )).fetchone()
         if not row:
@@ -725,9 +734,15 @@ def _authority_label(author_id) -> str:
 async def list_series_authors(sid: int):
     """Distinct author list for a series with per-author book counts.
 
-    Drives the v2.3.3 Manage Members modal. Authors are returned even
-    if all their books are hidden — the modal needs them to support
-    the "remove author" action.
+    Drives the v2.3.3 Manage Members modal. Hidden books are excluded
+    (hidden=ignore per Mark's mental model) — an author whose only
+    contributions to this series are hidden books will not appear
+    here. The book picker in the modal also excludes hidden books
+    (`/discovery/books?include_hidden=false` is the default), so the
+    modal stays internally consistent.
+
+    Per-author book_count counts visible books only — matches what
+    the user sees on the row.
     """
     db = await get_db()
     try:
@@ -736,7 +751,7 @@ async def list_series_authors(sid: int):
             "SELECT a.id AS author_id, a.name AS name, "
             "COUNT(b.id) AS book_count "
             "FROM books b JOIN authors a ON a.id = b.author_id "
-            "WHERE b.series_id = ? "
+            "WHERE b.series_id = ? AND b.hidden = 0 "
             "GROUP BY a.id, a.name "
             "ORDER BY a.name COLLATE NOCASE ASC",
             (sid,),

@@ -187,11 +187,14 @@ function DesktopDiscDashboard({
     { label: "Authors", value: d.authors, color: t.purt, icon: "✍", nav: () => onNav("disc-authors") },
     { label: "Series", value: d.total_series, color: t.cyant, icon: "📖" },
     { label: "Upcoming", value: d.upcoming_books || 0, color: t.cyant, icon: "📅", nav: () => onNav("disc-upcoming") },
-    // Only render the Suggestions stat card when there's something to
+    // Only render the Metadata stat card when there's something to
     // review. Conditionally appended via spread so the grid layout
-    // collapses cleanly when the count is 0.
+    // collapses cleanly when the count is 0. (sugCount is sourced
+    // from /series-suggestions/count today; the Metadata Manager
+    // surfaces the v2.3.4 review-queue diffs separately. Unifying
+    // the two counts behind a single endpoint can come in v2.4.x.)
     ...(sugCount > 0
-      ? [{ label: "Suggestions", value: sugCount, color: t.accent, icon: "💡", nav: () => onNav("disc-suggestions") }]
+      ? [{ label: "Metadata", value: sugCount, color: t.accent, icon: "📋", nav: () => onNav("disc-metadata") }]
       : []),
   ];
 
@@ -202,7 +205,7 @@ function DesktopDiscDashboard({
     { label: "Upcoming", icon: "📅", pg: "upcoming" },
     ...(d.mam_enabled ? [{ label: "MAM", icon: "🔍", pg: "mam" }] : []),
     ...(sugCount > 0
-      ? [{ label: "Suggestions", icon: "💡", pg: "suggestions" }]
+      ? [{ label: "Metadata", icon: "📋", pg: "metadata" }]
       : []),
     { label: "Settings", icon: "⚙", pg: "settings" },
   ];

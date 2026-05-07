@@ -861,73 +861,123 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
         SOURCE_PRIORITY = {"mam": 1, "goodreads": 2, "amazon": 3, "hardcover": 4, "kobo": 5, "ibdb": 6, "google_books": 6, "manual": 7, "import": 7, "calibre": 0}
         
         def _is_hidden(matched_row) -> bool:
-            """Hidden = "garbage bin": skip every source-driven write. The row
-            stays in the DB so dedup still blocks fresh inserts of the same
-            title, but no UPDATE fires (URL, series, metadata, omnibus flag —
-            all suppressed). Un-hiding the book lets the next scan pick it
-            up again normally."""
+            """Hidden = "ignore" — see `_update_existing_url_only` for what
+            still gets written (source_url merge + {source}_id COALESCE-
+            fill, both additive). Metadata writes (title/author/series/
+            description/dates/etc.) and series-collector contributions
+            stay suppressed so a hidden row never participates in
+            metadata enrichment or consensus suggestions.
+
+            The motivation (v2.3.4): for prolific authors like John
+            Walker (1,069 books on Goodreads) where individual scans
+            don't match every book on the first pass, populating
+            per-source URLs on hidden rows lets future scans fast-path
+            past them via URL match instead of paying DETAIL on every
+            unmatched title. v2.2.3's "true garbage bin" stance — no
+            writes whatsoever — bounded the worst case but threw away
+            useful URL discoveries."""
             try:
                 return ("hidden" in matched_row.keys()) and (matched_row["hidden"] == 1)
             except (IndexError, KeyError):
                 return False
 
+        def _update_existing_url_only(matched_row, bk):
+            """Build a URL-only UPDATE for hidden books — only `source_url`
+            (merged additively) and `{source}_id` (COALESCE-fill) get
+            written. Returns (sql, vals) or (None, None) when there's
+            nothing to write (no URL and no external_id).
+
+            This is the v2.3.4 hidden-book write rule. Mirrors the
+            URL-write portion of `_update_existing` exactly so future
+            edits to that block stay in sync — see lines around 932-935
+            in `_update_existing`."""
+            sets: list[str] = []
+            vals: list = []
+            if bk.source_url:
+                merged = _merge_source_urls(
+                    matched_row["source_url"], source_name, bk.source_url,
+                )
+                sets.append("source_url=?")
+                vals.append(merged)
+            if bk.external_id is not None:
+                sets.append(f"{source_name}_id=COALESCE({source_name}_id,?)")
+                vals.append(bk.external_id)
+            if not sets:
+                return None, None
+            vals.append(matched_row["id"])
+            sql = f"UPDATE books SET {', '.join(sets)} WHERE id=?"
+            return sql, vals
+
+        async def _flush_queue_rows(queue_rows):
+            """UPSERT review-queue rows produced by `_update_existing`.
+
+            One row per (book, field, source). The schema's
+            UNIQUE(book_id, field, source) means re-running the same
+            source against the same book replaces prior proposals
+            rather than piling them up — keeps the Metadata Manager
+            UI from drowning in stale alternatives.
+
+            old_value/new_value are stored as TEXT — caller passes
+            whatever type the column holds; we coerce here."""
+            if not queue_rows:
+                return
+            for book_id, field, old_val, new_val, src in queue_rows:
+                await db.execute(
+                    "INSERT OR REPLACE INTO metadata_review_queue "
+                    "(book_id, field, old_value, new_value, source) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (
+                        book_id,
+                        field,
+                        None if old_val is None else str(old_val),
+                        None if new_val is None else str(new_val),
+                        src,
+                    ),
+                )
+
         def _update_existing(matched_row, bk, series_id=None):
-            """Build UPDATE for an existing book — URL merge always, series with priority, metadata in full_scan.
+            """Build UPDATE for an existing book.
 
-            Calibre source-of-truth protection: owned-Calibre books treat
-            each metadata field with a tailored rule rather than a blanket
-            lock. The user curates Calibre, so we want sources to fill
-            gaps and correct edition-specific dates without ever
-            clobbering curated content. Current rules:
-
-              cover_url        : LOCKED (Calibre cover_path is authoritative)
-              title            : LOCKED (structural — never updated by sources)
-              author_id        : LOCKED (structural — never updated by sources)
-              description      : SMART (see below)
-              pub_date         : OLDEST WINS (see below)
-              expected_date    : COALESCE-fill (only if Calibre left it null)
-              page_count       : COALESCE-fill (only if Calibre left it null)
-              isbn             : COALESCE-fill (only if Calibre left it null)
-              is_unreleased    : LOCKED (almost always False for owned books)
-              series_id/index  : priority-gated (calibre=0 always wins)
-              source_url       : merged into JSON dict (additive, never destructive)
+            Always writes (additive):
+              source_url       : merged into JSON dict
               {source}_id      : COALESCE-fill
+              series_id/index  : priority-gated (calibre=0 always wins)
+              is_omnibus       : promote-additive (0→1 only)
 
-            DESCRIPTION (smart stub-detection):
-              Calibre imports of older books often have "stub" descriptions —
-              one-sentence blurbs from a metadata source that didn't have a
-              good summary at the time. The rule is:
-                - If existing is null/empty → fill from source.
-                - If existing is < 10 words AND new is at least 3x longer
-                  in word count → overwrite (the source has a real summary).
-                - Otherwise → leave existing alone.
-              Threshold is conservative on purpose: a 9-word Calibre stub
-              upgrading to a 27-word source description is a clear win;
-              we don't want to thrash a 9-word user-curated description
-              into a 12-word source description because that's not a real
-              improvement.
+            Locked (sources never touch):
+              title, author_id
 
-            PUB_DATE (oldest wins):
-              Calibre often has edition-specific dates (a 2015 paperback
-              reprint of a 1965 novel). Source scans should be allowed to
-              correct that DOWNWARD to the original publication date, but
-              never UPWARD (a more-recent edition shouldn't displace the
-              original). Rule: if the source's pub_date is strictly older
-              (lexicographic compare on ISO YYYY-MM-DD strings, which works
-              correctly for dates) than the existing pub_date, overwrite.
-              Iterates correctly across multiple sources because each one
-              compares against the current value.
+            v2.3.4 metadata rule (full_scan only):
+              For each of {description, pub_date, expected_date,
+              cover_url, page_count, isbn} the source returned a
+              value for:
+                - existing column NULL/empty → write through.
+                - existing has a value AND incoming differs →
+                  enqueue `metadata_review_queue` row (keyed on
+                  (book_id, field, source) so re-runs replace).
+                - matches → no-op.
 
-            For unowned/missing/discovered books (`source != 'calibre'`),
-            none of this applies — the source IS the authority for those
-            rows, so the existing full-overwrite behavior continues.
+              is_unreleased stays outside the rule: binary flag,
+              not a reviewable diff. Always-overwrite-if-not-None.
+
+            Owned-Calibre data is protected by `books_calibre_snapshot`
+            — `_merge_result` writes to `books` (Seshat-live) only,
+            so populated→queue keeps the user's curated values
+            untouched until they accept in the Metadata Manager UI.
+
+            Returns (sql, vals, queue_rows). Caller executes the
+            UPDATE and passes queue_rows to `_flush_queue_rows`.
             """
             nonlocal updated_books
             sets = []; vals = []
 
             try: existing_source = matched_row["source"]
             except (IndexError, KeyError): existing_source = ""
-            is_owned_calibre = (existing_source == "calibre")
+            # `existing_source` is used by the series-priority gate
+            # below. Pre-v2.3.4 we also branched on `is_owned_calibre`
+            # for the per-field metadata rules — that branch is gone
+            # now (uniform write-through-on-empty + queue-on-populated;
+            # see the v2.3.4 block further down).
 
             if bk.source_url:
                 merged = _merge_source_urls(matched_row["source_url"], source_name, bk.source_url)
@@ -968,63 +1018,74 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                     f"    OMNIBUS PROMOTE: '{matched_row['title']}' "
                     f"(id={matched_row['id']}) → is_omnibus=1"
                 )
+            # v2.3.4 source-scan write rule (replaces the prior owned-
+            # Calibre per-field rules AND the unowned full-overwrite):
+            #
+            #   For each metadata field the source returned a value for:
+            #     - existing column is NULL/empty → write through.
+            #     - existing column has a value AND incoming differs →
+            #       enqueue `metadata_review_queue` row for the user
+            #       to accept/reject in the Metadata Manager UI.
+            #     - existing matches incoming → no-op.
+            #
+            # Uniform across owned-Calibre + unowned. Curated Calibre
+            # metadata is now protected by the dual-storage snapshot
+            # table (`books_calibre_snapshot`) — `_merge_result` writes
+            # to `books` (Seshat-live) only, so source-scan writes can't
+            # stomp Calibre data even on the populated→queue path.
+            #
+            # is_unreleased stays outside the rule: binary flag, not a
+            # reviewable diff. Existing always-overwrite-if-not-None
+            # behavior preserved. Same for cover_url-as-COALESCE — we
+            # apply the new rule to it too since users may swap covers
+            # between sources.
+            queue_rows: list[tuple] = []
             if full_scan:
-                fields_updated = []
-                if is_owned_calibre:
-                    # ── Owned-Calibre book: per-field rules ──
-
-                    # Description: smart stub-detection
-                    if bk.description:
-                        existing_desc = (matched_row["description"] or "").strip() if "description" in matched_row.keys() else ""
-                        existing_words = len(existing_desc.split()) if existing_desc else 0
-                        new_words = len(bk.description.split())
-                        # Fill if Calibre is empty, OR if Calibre is a stub
-                        # (<10 words) AND new is at least 3x longer.
-                        if existing_words == 0:
-                            sets.append("description=?"); vals.append(bk.description); fields_updated.append("description(filled)")
-                        elif existing_words < 10 and new_words >= existing_words * 3:
-                            sets.append("description=?"); vals.append(bk.description); fields_updated.append(f"description(stub→{new_words}w)")
-
-                    # pub_date: oldest wins (lexicographic compare on ISO dates)
-                    if bk.pub_date:
-                        existing_pub = matched_row["pub_date"] if "pub_date" in matched_row.keys() else None
-                        if not existing_pub:
-                            sets.append("pub_date=?"); vals.append(bk.pub_date); fields_updated.append("pub_date(filled)")
-                        elif bk.pub_date < existing_pub:
-                            sets.append("pub_date=?"); vals.append(bk.pub_date); fields_updated.append(f"pub_date({existing_pub}→{bk.pub_date})")
-
-                    # expected_date: COALESCE-fill only
-                    if bk.expected_date:
-                        existing_exp = matched_row["expected_date"] if "expected_date" in matched_row.keys() else None
-                        if not existing_exp:
-                            sets.append("expected_date=?"); vals.append(bk.expected_date); fields_updated.append("expected_date(filled)")
-
-                    # page_count + isbn: COALESCE-fill only.
-                    if bk.page_count: sets.append("page_count=COALESCE(page_count,?)"); vals.append(bk.page_count); fields_updated.append("page_count")
-                    if bk.isbn: sets.append("isbn=COALESCE(isbn,?)"); vals.append(bk.isbn); fields_updated.append("isbn")
-
-                    if fields_updated:
-                        updated_books += 1
-                        logger.debug(f"    MERGE UPDATE (owned): '{bk.title}' (id={matched_row['id']}) fields=[{','.join(fields_updated)}]")
-                    else:
-                        logger.debug(f"    MERGE NOOP (owned, all rules satisfied): '{bk.title}' (id={matched_row['id']})")
-                else:
-                    # Unowned / missing / discovered book: full overwrite
-                    # behavior. No user data to protect — the source IS the
-                    # authority for these rows.
-                    if bk.description: sets.append("description=?"); vals.append(bk.description); fields_updated.append("description")
-                    if bk.pub_date: sets.append("pub_date=?"); vals.append(bk.pub_date); fields_updated.append("pub_date")
-                    if bk.expected_date: sets.append("expected_date=?"); vals.append(bk.expected_date); fields_updated.append("expected_date")
-                    if bk.cover_url: sets.append("cover_url=COALESCE(cover_url,?)"); vals.append(bk.cover_url); fields_updated.append("cover_url")
-                    if bk.page_count: sets.append("page_count=COALESCE(page_count,?)"); vals.append(bk.page_count); fields_updated.append("page_count")
-                    if bk.isbn: sets.append("isbn=COALESCE(isbn,?)"); vals.append(bk.isbn); fields_updated.append("isbn")
-                    if bk.is_unreleased is not None: sets.append("is_unreleased=?"); vals.append(1 if bk.is_unreleased else 0)
+                REVIEW_FIELDS = (
+                    ("description", bk.description),
+                    ("pub_date", bk.pub_date),
+                    ("expected_date", bk.expected_date),
+                    ("cover_url", bk.cover_url),
+                    ("page_count", bk.page_count),
+                    ("isbn", bk.isbn),
+                )
+                fields_updated: list[str] = []
+                for field, new_val in REVIEW_FIELDS:
+                    if new_val is None:
+                        continue
+                    try:
+                        existing = matched_row[field]
+                    except (IndexError, KeyError):
+                        existing = None
+                    is_empty = existing is None or (
+                        isinstance(existing, str) and not existing.strip()
+                    )
+                    if is_empty:
+                        sets.append(f"{field}=?")
+                        vals.append(new_val)
+                        fields_updated.append(f"{field}(filled)")
+                    elif existing != new_val:
+                        queue_rows.append((
+                            matched_row["id"], field, existing, new_val, source_name,
+                        ))
+                        fields_updated.append(f"{field}(queued)")
+                    # else: existing matches incoming — no-op
+                # is_unreleased: binary flag, not reviewable. Keep
+                # existing always-overwrite-if-not-None behavior.
+                if bk.is_unreleased is not None:
+                    sets.append("is_unreleased=?")
+                    vals.append(1 if bk.is_unreleased else 0)
+                if fields_updated or queue_rows:
                     updated_books += 1
-                    logger.debug(f"    MERGE UPDATE: '{bk.title}' (id={matched_row['id']}) fields=[{','.join(fields_updated)}]")
+                    logger.debug(
+                        f"    MERGE UPDATE: '{bk.title}' "
+                        f"(id={matched_row['id']}) "
+                        f"fields=[{','.join(fields_updated)}]"
+                    )
             else:
                 logger.debug(f"    MERGE URL: '{bk.title}' (id={matched_row['id']}) ← {source_name}")
             vals.append(matched_row["id"])
-            return f"UPDATE books SET {', '.join(sets)} WHERE id=?", vals
+            return f"UPDATE books SET {', '.join(sets)} WHERE id=?", vals, queue_rows
 
         for sr in result.series:
             # ── Lazy series upsert (orphan-row prevention) ───────────
@@ -1206,16 +1267,31 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                         )
                         continue
                     if _is_hidden(matched_row):
-                        logger.debug(
-                            f"    SKIP HIDDEN: '{bk.title}' "
-                            f"(id={matched_row['id']}) — no UPDATE, no series claim"
-                        )
+                        # v2.3.4: URL-only write for hidden rows so
+                        # future scans can fast-path via URL match. No
+                        # series claim, no metadata write — preserves
+                        # the v2.2.3 "hidden = ignore for enrichment"
+                        # intent while still capturing per-source URL
+                        # ownership.
+                        sql_u, vals_u = _update_existing_url_only(matched_row, bk)
+                        if sql_u:
+                            await db.execute(sql_u, vals_u)
+                            logger.debug(
+                                f"    HIDDEN URL-FILL: '{bk.title}' "
+                                f"(id={matched_row['id']}) — {source_name} URL/id only"
+                            )
+                        else:
+                            logger.debug(
+                                f"    SKIP HIDDEN: '{bk.title}' "
+                                f"(id={matched_row['id']}) — no URL/id to fill"
+                            )
                         continue
                     # Lazy series upsert: only create the series row
                     # now that we know a real book is going to link to it.
                     sid_use = await _ensure_series()
-                    sql, vals = _update_existing(matched_row, bk, series_id=sid_use)
+                    sql, vals, queue_rows = _update_existing(matched_row, bk, series_id=sid_use)
                     await db.execute(sql, vals)
+                    await _flush_queue_rows(queue_rows)
                     # Record this source's series claim for the matched
                     # book so consensus can be computed at the end of
                     # lookup_author. We store the SOURCE's reported
@@ -1338,13 +1414,26 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                     )
                     continue
                 if _is_hidden(matched_row):
-                    logger.debug(
-                        f"    SKIP HIDDEN: '{bk.title}' "
-                        f"(id={matched_row['id']}) — no UPDATE, no series claim"
-                    )
+                    # v2.3.4: URL-only write for hidden rows (standalone
+                    # path). Same rationale as the series-books branch
+                    # above — capture per-source URL ownership without
+                    # touching metadata or series claims.
+                    sql_u, vals_u = _update_existing_url_only(matched_row, bk)
+                    if sql_u:
+                        await db.execute(sql_u, vals_u)
+                        logger.debug(
+                            f"    HIDDEN URL-FILL: '{bk.title}' "
+                            f"(id={matched_row['id']}) — {source_name} URL/id only"
+                        )
+                    else:
+                        logger.debug(
+                            f"    SKIP HIDDEN: '{bk.title}' "
+                            f"(id={matched_row['id']}) — no URL/id to fill"
+                        )
                     continue
-                sql, vals = _update_existing(matched_row, bk)
+                sql, vals, queue_rows = _update_existing(matched_row, bk)
                 await db.execute(sql, vals)
+                await _flush_queue_rows(queue_rows)
                 # Record `(None, None)` — this source thinks the book
                 # is a standalone. Surfacing "Source A says series X,
                 # Source B says standalone" disagreements is just as
@@ -2651,10 +2740,18 @@ async def _lookup_author_inner(author_id: int, author_name: str, full_scan: bool
         # and never inserts a fresh unhidden duplicate. `hidden_titles` is
         # the subset that's been hidden — used only in full_scan mode to
         # keep hidden rows on the URL-backfill path (no detail fetch)
-        # instead of forcing a refresh visit. The merge layer's
-        # `_is_hidden` guard then drops the resulting backfill UPDATE on
-        # the floor. Net effect: hidden books are a true garbage bin —
-        # known to dedup, invisible to source-driven writes.
+        # instead of forcing a refresh visit.
+        #
+        # v2.3.4: When the merge layer hits a hidden row, it now does a
+        # URL-only UPDATE (source_url merge + {source}_id COALESCE-fill)
+        # instead of dropping the write entirely. Metadata, series
+        # claims, and series-collector contributions stay suppressed.
+        # Net effect: hidden books are still ignored for metadata
+        # enrichment and dedup, but their per-source URLs accumulate
+        # across scans — letting future scans of huge-catalog authors
+        # (John Walker — 1,069 books) fast-path past hidden titles via
+        # URL match instead of paying DETAIL on every unmatched one.
+        # See `_update_existing_url_only` for the write-rule details.
         existing_titles = set()
         hidden_titles = set()
         # v2.3.2 mandatory-source gating: track per-source which titles

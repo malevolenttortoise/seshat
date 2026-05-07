@@ -86,6 +86,7 @@ from app.discovery.routers.books import router as disc_books_router
 from app.discovery.routers.authors import router as disc_authors_router
 from app.discovery.routers.series import router as disc_series_router
 from app.discovery.routers.suggestions import router as disc_suggestions_router
+from app.discovery.routers.metadata import router as disc_metadata_router
 from app.discovery.routers.scan import router as disc_scan_router
 from app.discovery.routers.mam import router as disc_mam_router
 from app.discovery.routers.libraries import router as disc_libraries_router
@@ -1051,6 +1052,7 @@ app.include_router(disc_books_router)
 app.include_router(disc_authors_router)
 app.include_router(disc_series_router)
 app.include_router(disc_suggestions_router)
+app.include_router(disc_metadata_router)
 app.include_router(disc_scan_router)
 app.include_router(disc_mam_router)
 app.include_router(disc_libraries_router)

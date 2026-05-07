@@ -1026,8 +1026,8 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
                 onClick={() => onNav("disc-mam")}
               />
               <QBtn
-                label={<><Dot color={t.pur} /> Suggestions</>}
-                onClick={() => onNav("disc-suggestions")}
+                label={<><Dot color={t.pur} /> Metadata</>}
+                onClick={() => onNav("disc-metadata")}
               />
               <QBtn
                 label={<><Dot color={t.accent} /> Works</>}
@@ -1158,10 +1158,10 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
           />
           <Tile label="Series" value={fmtNum(series)} />
           <Tile
-            label="Suggestions"
+            label="Metadata"
             value={fmtNum(ds.suggestions ?? 0)}
             color={t.pur}
-            onClick={() => onNav("disc-suggestions")}
+            onClick={() => onNav("disc-metadata")}
           />
         </div>
 

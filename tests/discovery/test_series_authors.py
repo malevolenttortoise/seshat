@@ -43,6 +43,23 @@ async def client(discovery_db):
         yield c
 
 
+@pytest.fixture
+async def book_client(discovery_db):
+    """Test client mounting both `books` and `series` routers — needed
+    for the v2.3.4 hide/unhide → series-authority recompute path,
+    where a books-router endpoint must trigger series-side updates."""
+    from app.discovery.routers import series as series_router
+    from app.discovery.routers import books as books_router
+
+    app = FastAPI()
+    app.include_router(series_router.router)
+    app.include_router(books_router.router)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as c:
+        yield c
+
+
 # ── shared helpers (kept local; the test_series_manager.py copies are
 # not exported and the duplication is small enough to be fine) ───────
 
@@ -380,3 +397,171 @@ class TestBookLevelAutoFlip:
         assert r.status_code == 200
 
         assert (await _series_row(900))["author_id"] == 101
+
+
+# ── v2.3.4: hidden books are ignored everywhere ──────────────────────
+
+
+class TestHiddenBooksRespected:
+    async def test_recompute_ignores_hidden_books(self, client):
+        # Per-author Alice series (900). Add a hidden Bob book
+        # directly to it. Then trigger any membership operation that
+        # calls _recompute_series_author — series should stay
+        # per-author Alice because Bob's book is hidden.
+        from app.discovery.database import get_db
+        await _seed_two_per_author_series()
+        db = await get_db()
+        try:
+            # Insert a hidden Bob book on series 900.
+            await db.execute(
+                "INSERT INTO books (id, title, author_id, series_id, hidden) "
+                "VALUES (3, 'Hidden Bob Book', 102, 900, 1)"
+            )
+            await db.commit()
+        finally:
+            await db.close()
+
+        # Force a recompute via a no-op-ish DELETE-detach of a book
+        # that IS on series 900 — we just need any path that calls
+        # the helper. The detach of book 1 leaves only the hidden
+        # Bob book; per the helper rule, 0 visible books → no-op,
+        # series stays per-author Alice.
+        r = await client.delete("/api/discovery/series/900/books/1")
+        assert r.status_code == 200
+        assert (await _series_row(900))["author_id"] == 101
+
+    async def test_get_authors_excludes_hidden(self, client):
+        # Shared 900 (Alice + Bob). Hide Bob's book. GET /authors
+        # should return only Alice.
+        from app.discovery.database import get_db
+        await _seed_shared_two_author()
+        db = await get_db()
+        try:
+            await db.execute(
+                "UPDATE books SET hidden = 1 WHERE id = 2"
+            )
+            await db.commit()
+        finally:
+            await db.close()
+
+        r = await client.get("/api/discovery/series/900/authors")
+        body = r.json()
+        names = [a["name"] for a in body["authors"]]
+        # Bob (Tobias S. Buckell) should NOT appear.
+        assert names == ["Eric Nylund"]
+        assert body["authors"][0]["book_count"] == 1
+
+
+# ── v2.3.4: hide / unhide / delete trigger series recompute ──────────
+
+
+class TestHideUnhideRecomputeAuthority:
+    async def test_hide_flips_shared_to_per_author(self, book_client):
+        # Shared 900 (Alice + Bob). Hiding Bob's book leaves only
+        # Alice's visible — series should flip to per-author Alice.
+        await _seed_shared_two_author()
+        r = await book_client.post("/api/discovery/books/2/hide")
+        assert r.status_code == 200
+        assert (await _series_row(900))["author_id"] == 101
+
+    async def test_unhide_flips_per_author_to_shared(self, book_client):
+        # Per-author Alice series (900). Add a hidden Bob book.
+        # Series stays per-author until unhide. Unhide → flips shared.
+        from app.discovery.database import get_db
+        await _seed_two_per_author_series()
+        db = await get_db()
+        try:
+            await db.execute(
+                "INSERT INTO books (id, title, author_id, series_id, hidden) "
+                "VALUES (3, 'Hidden Bob Book', 102, 900, 1)"
+            )
+            await db.commit()
+        finally:
+            await db.close()
+        # Pre-condition: still per-author 101.
+        assert (await _series_row(900))["author_id"] == 101
+
+        r = await book_client.post("/api/discovery/books/3/unhide")
+        assert r.status_code == 200
+        # Now 2 visible distinct authors → shared.
+        assert (await _series_row(900))["author_id"] is None
+
+    async def test_bulk_hide_flips_authority(self, book_client):
+        # Shared 900 with two visible Bob books + one Alice book.
+        # Bulk-hide both Bob books → flips back to per-author Alice.
+        from app.discovery.database import get_db
+        db = await get_db()
+        try:
+            await db.execute(
+                "INSERT INTO authors (id, name, sort_name) VALUES "
+                "(101, 'Alice', 'Alice'), "
+                "(102, 'Bob', 'Bob')"
+            )
+            await db.execute(
+                "INSERT INTO series (id, name, author_id) "
+                "VALUES (900, 'Halo', NULL)"
+            )
+            await db.execute(
+                "INSERT INTO books (id, title, author_id, series_id) "
+                "VALUES (1, 'A1', 101, 900), "
+                "(2, 'B1', 102, 900), "
+                "(3, 'B2', 102, 900)"
+            )
+            await db.commit()
+        finally:
+            await db.close()
+
+        r = await book_client.post(
+            "/api/discovery/books/bulk-hide", json={"book_ids": [2, 3]},
+        )
+        assert r.status_code == 200
+        assert (await _series_row(900))["author_id"] == 101
+
+    async def test_delete_flips_authority(self, book_client):
+        # Shared 900 (Alice + Bob, both source='goodreads' so deletable).
+        # Delete Bob's book → series flips to per-author Alice.
+        from app.discovery.database import get_db
+        db = await get_db()
+        try:
+            await db.execute(
+                "INSERT INTO authors (id, name, sort_name) VALUES "
+                "(101, 'Alice', 'Alice'), "
+                "(102, 'Bob', 'Bob')"
+            )
+            await db.execute(
+                "INSERT INTO series (id, name, author_id) "
+                "VALUES (900, 'Halo', NULL)"
+            )
+            await db.execute(
+                "INSERT INTO books (id, title, author_id, series_id, source) "
+                "VALUES (1, 'A1', 101, 900, 'goodreads'), "
+                "(2, 'B1', 102, 900, 'goodreads')"
+            )
+            await db.commit()
+        finally:
+            await db.close()
+
+        r = await book_client.delete("/api/discovery/books/2")
+        assert r.status_code == 200
+        assert (await _series_row(900))["author_id"] == 101
+
+    async def test_hide_book_not_in_series_is_safe(self, book_client):
+        # Standalone book → hide should not fail when there's no
+        # series to recompute.
+        from app.discovery.database import get_db
+        db = await get_db()
+        try:
+            await db.execute(
+                "INSERT INTO authors (id, name, sort_name) VALUES "
+                "(101, 'Alice', 'Alice')"
+            )
+            await db.execute(
+                "INSERT INTO books (id, title, author_id) "
+                "VALUES (1, 'Standalone', 101)"
+            )
+            await db.commit()
+        finally:
+            await db.close()
+
+        r = await book_client.post("/api/discovery/books/1/hide")
+        assert r.status_code == 200

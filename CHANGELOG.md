@@ -7,6 +7,201 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [2.3.4] — 2026-05-07
+
+The "Metadata Manager + dual-storage UI" release. The v2.3 dual-
+source-of-truth schema (snapshots + review queue, schema-only since
+v2.2.14) gets its UI: a Compare panel in the book sidebar shows
+Seshat-live vs Calibre snapshot vs ABS snapshot side-by-side, and a
+new top-level Metadata Manager page reviews all pending diffs from
+Calibre, ABS, source scans, and source-consensus series moves. The
+old Suggestions page retires — its surface folds into Metadata
+Manager's "Series moves" tab.
+
+Two v2.3.3 fast-follow bug fixes ride along: hidden-book filtering
+in the Series Manager queries and authority-recompute on hide /
+unhide / delete. A scan-behavior change too: hidden books now
+participate in URL-only backfill in incremental scans (mirrors
+full_scan), giving huge-catalog authors (John Walker — 1,069 books
+on Goodreads) a way to fast-path past hidden titles via per-source
+URL match.
+
+### Discovery — hidden-book correctness (v2.3.3 fast-follow)
+
+`_recompute_series_author` and `GET /series/{sid}/authors` now
+filter `b.hidden = 0`. So a per-author Alice series with one hidden
+Bob book stays per-author Alice — pre-v2.3.4 the helper counted Bob
+in the distinct-author set and wrongly flipped to shared, with Bob
+appearing in the Manage Members modal (where the book picker hides
+hidden books, leaving him with no removable interaction).
+
+Hide / unhide / delete (single + bulk-hide + bulk-delete) now route
+through `_recompute_series_author` on the affected series id(s)
+after the toggle. Without this, even with the filter fix above the
+helper's pre-computed `series.author_id` went stale on every
+hide/unhide.
+
+### Discovery — hidden-book scan behavior change
+
+Pre-v2.3.4 (per v2.2.3): hidden books were a true garbage bin in
+incremental mode — `_is_hidden` blocked every UPDATE. The merge
+layer dropped writes, including URL-only backfills. Net effect:
+hidden books accumulated zero per-source URL ownership across
+scans, forcing future scans to pay DETAIL on every unmatched title.
+
+v2.3.4 splits the `_is_hidden` short-circuit. New helper
+`_update_existing_url_only` builds a minimal UPDATE that writes only
+`source_url` (merged additively) and `{source}_id` (COALESCE-fill).
+Both `_merge_result` callsites (series-books path + standalone path)
+call it for hidden rows instead of `continue`-ing past every write.
+
+Net effect: hidden books still don't get metadata writes, series
+claims, or series-collector contributions — `hidden = ignore` for
+enrichment is preserved. But per-source URLs now accumulate, so
+subsequent scans can fast-path via URL match.
+
+### Discovery — source-scan write rule rewrite
+
+`_merge_result`'s `if full_scan:` branch is rewritten. Pre-v2.3.4
+it had two branches: owned-Calibre with per-field rules (smart
+description stub-detection, oldest pub_date, COALESCE-fill for
+expected_date / page_count / isbn) and unowned with full overwrite.
+
+v2.3.4 replaces both with a uniform write-through-on-empty +
+queue-on-populated rule applied per field across {description,
+pub_date, expected_date, cover_url, page_count, isbn}:
+
+- existing column NULL/empty → write through to `books`.
+- existing has a value AND incoming differs → enqueue
+  `metadata_review_queue` row (UPSERT on (book_id, field, source)
+  so re-running the same source against the same book replaces
+  prior proposals rather than piling up).
+- existing matches incoming → no-op.
+
+The dual-storage Calibre snapshot (`books_calibre_snapshot`) is the
+safety net for curated metadata — `_merge_result` writes to `books`
+(Seshat-live) only, so the populated→queue path keeps user-edited
+values untouched until they accept in the Metadata Manager UI.
+
+`is_unreleased` stays outside the rule (binary flag, not reviewable).
+`_update_existing` now returns `(sql, vals, queue_rows)`; both
+callsites execute the UPDATE and pass `queue_rows` to a new
+closure-scoped `_flush_queue_rows` helper.
+
+### Discovery — sidebar edits populate user_edited_fields
+
+`PUT /api/discovery/books/{bid}` (the BookSidebar save handler) now
+diff-tracks each field against the stored row before adding it to
+`books.user_edited_fields`. The form re-sends every field on every
+save, so by-presence-in-payload would falsely flag every field on
+every save — the diff makes the tracking truthful.
+
+Tracked: title, description, pub_date, expected_date, isbn,
+cover_url, series_index. `source_url` is excluded (its own dedicated
+editor handles canonicalization). The merge is set-union, idempotent
+on repeats.
+
+The next Calibre / ABS sync's `_apply_calibre_diff` /
+`_apply_abs_diff` reads this set and routes diffs on user-edited
+fields to the review queue instead of auto-flowing.
+
+### Discovery — Compare panel (book sidebar)
+
+New `GET /api/discovery/books/{bid}/compare` returns Seshat-live +
+Calibre snapshot + ABS snapshot side-by-side with per-field
+`calibre_diff` / `abs_diff` flags + `user_edited` flags +
+`*_synced_at` timestamps for the Compare panel header.
+
+New `POST /api/discovery/books/{bid}/pull` `{source, fields}` copies
+named snapshot fields into `books` and adds them to
+`user_edited_fields` (the user explicitly chose the snapshot value
+— treat as a manual edit so the next sync's auto-flow doesn't roll
+it back).
+
+Frontend: new `CompareModal.tsx` opens via a Compare button next to
+the Edit button in the BookSidebar header. Three columns (Seshat /
+Calibre / ABS), per-field "← pull from X" buttons on diff cells,
+graceful empty-row skipping for fields that are null everywhere.
+
+Field map covers the dual-storage common surface area: title,
+description, pub_date, isbn, series_index, tags, language, publisher,
+cover_path, rating, formats, narrator, duration_sec, abridged, asin,
+audio_formats.
+
+### Discovery — Metadata Manager page (replaces Suggestions)
+
+New top-level page `DiscMetadataPage.tsx` at the `disc-metadata`
+route (was `disc-suggestions`). Four tabs:
+
+- **Calibre** — `metadata_review_queue` rows where source='calibre'.
+- **ABS** — source='abs'.
+- **Source scans** — source IN (goodreads, hardcover, kobo, ibdb,
+  google_books, amazon, audible). Concurrent fetches per source,
+  merged client-side and ordered by `proposed_at`.
+- **Series moves** — pending rows from the legacy
+  `book_series_suggestions` table (the existing series-suggestions
+  endpoints stay; only the page changes).
+
+Rows on tabs 1-3 group by book — one card per book with each
+diffing field beneath, per-field accept/reject + checkbox for
+multi-select. Multi-select bar: "Accept all" / "Reject all" /
+"Clear" via the new bulk endpoint. Bulk endpoint reports per-id
+success/failure so a partial failure (e.g. a queue row's book was
+deleted concurrently) doesn't abandon the rest.
+
+A history checkbox surfaces ignored / applied series-suggestions
+(tabs 1-3 hard-delete on accept/reject, so the checkbox is a no-op
+there for now — contract is in place for a future soft-delete).
+
+Backend endpoints in new `app/discovery/routers/metadata.py`:
+`GET /queue`, `POST /queue/{qid}/apply`, `POST /queue/{qid}/dismiss`,
+`POST /queue/bulk`. Apply coerces TEXT-stored values back to numeric
+column types (REAL series_index, INTEGER page_count, etc.) before
+writing.
+
+`DiscSuggestionsPage.tsx` and `MobileSuggestionsPage.tsx` deleted.
+The `disc-suggestions` route id swapped to `disc-metadata` across
+App.tsx, the WIDE_PAGES set, the discovery nav, and four dashboard
+files (UnifiedDashboard, DiscDashboard, MobileUnifiedDashboard,
+MobileDiscDashboard). Stat cards renamed "Suggestions" → "Metadata"
+(icon 💡 → 📋).
+
+### Tests
+
+54 new across 5 files:
+
+- `test_series_authors.py` (+7) — hidden books filtered out of
+  Series Manager queries; hide/unhide/delete trigger authority
+  recompute (single + bulk variants); standalone-book hide is safe.
+- `test_hidden_url_only.py` (+6) — URL-only writes on hidden books
+  in both `_merge_result` paths (series + standalone); URL merge
+  stays additive across sources; visible-book regression guard
+  for incremental + full_scan modes.
+- `test_source_scan_queue.py` (+10) — write-through on NULL /
+  whitespace existing values; queue on populated-and-differs; no-op
+  on match; mixed routing (one scan can write some fields and queue
+  others); UPSERT on rerun; different sources get separate rows;
+  owned-Calibre books follow the same uniform rule (regression
+  guard on the dropped per-field branch); incremental still writes
+  URL/id only; is_unreleased stays outside the rule.
+- `test_user_edited_fields.py` (+7) — adds fields when value
+  changed; skips when unchanged; tracks multiple fields per save;
+  set-union across repeat saves; idempotent on repeat-of-same-value;
+  source_url excluded; 404 on unknown book.
+- `test_metadata_compare.py` (+24) — Compare endpoint shape
+  (Seshat-only when no snapshots; calibre_diff / abs_diff flags;
+  three-way diff; user_edited flag; empty-row skipping; 404). Pull
+  endpoint (single + multi field; user_edited marker; invalid
+  source → 400; field not pullable from this source → 400; missing
+  snapshot → 404). Queue list (book + author joined; source filter;
+  pagination). Apply / dismiss (writes + deletes; user_edited
+  marker on apply; numeric coercion; 404 on unknown id). Bulk
+  apply / dismiss; bulk partial failure reports per-id.
+
+Suite total: **1514 passing** (was 1460 on v2.3.3).
+
+---
+
 ## [2.3.3] — 2026-05-07
 
 The "Series Manager UX rebuild" release. The Series Manager page no

@@ -22,6 +22,7 @@ from app.discovery.cross_library import (
     sort_key_for,
 )
 from app.discovery.source_urls import parse_url
+from app.discovery.routers.series import _recompute_series_author
 
 logger = logging.getLogger("seshat.discovery")
 
@@ -356,14 +357,30 @@ async def get_upcoming(search: str = Query(None), sort: str = Query("date"), sor
 
 
 # ─── Book Actions ────────────────────────────────────────────
+async def _series_id_for_book(db, bid: int) -> int | None:
+    """Look up a single book's series_id. Used by hide/unhide so we
+    can recompute the affected series's authority after the toggle —
+    `_recompute_series_author` counts visible books only, so a hide
+    that drops the visible count to 1 author flips the series back
+    to per-author, and an unhide that pushes it to 2+ flips it to
+    shared."""
+    row = await (await db.execute(
+        "SELECT series_id FROM books WHERE id = ?", (bid,),
+    )).fetchone()
+    return row["series_id"] if row else None
+
+
 @router.post("/books/{bid}/hide")
 async def hide(bid: int):
     db = await get_db()
     try:
+        sid = await _series_id_for_book(db, bid)
         await db.execute("UPDATE books SET hidden=1 WHERE id=?", (bid,))
         # Clear any pending/ignored suggestion — hidden books shouldn't
         # carry stale series suggestion cards if the user re-opens them.
         await db.execute("DELETE FROM book_series_suggestions WHERE book_id=?", (bid,))
+        if sid is not None:
+            await _recompute_series_author(db, [sid])
         await db.commit()
         return {"status": "ok"}
     finally:
@@ -374,7 +391,10 @@ async def hide(bid: int):
 async def unhide(bid: int):
     db = await get_db()
     try:
+        sid = await _series_id_for_book(db, bid)
         await db.execute("UPDATE books SET hidden=0 WHERE id=?", (bid,))
+        if sid is not None:
+            await _recompute_series_author(db, [sid])
         await db.commit()
         return {"status": "ok"}
     finally:
@@ -431,6 +451,29 @@ async def dismiss(bid: int):
 async def update_book(bid: int, data: dict = Body(...)):
     db = await get_db()
     try:
+        # v2.3.4: track which fields the user actually changed so the
+        # auto-flow logic in `_apply_calibre_diff` /
+        # `_apply_abs_diff` skips them on the next sync. The
+        # BookSidebar form re-sends every field on every save, so
+        # incoming != changed-by-user — we have to diff against the
+        # stored row to know what really changed. Anything the user
+        # genuinely modified gets added to `books.user_edited_fields`
+        # (a JSON array) and stays there until the user re-clears
+        # the field or accepts a queued review-queue diff that
+        # replaces their value (Metadata Manager UI flow).
+        TRACKED_FIELDS = {
+            "title", "description", "pub_date", "expected_date",
+            "isbn", "cover_url", "series_index",
+        }
+        current_row = await (await db.execute(
+            "SELECT title, description, pub_date, expected_date, isbn, "
+            "cover_url, series_index, user_edited_fields "
+            "FROM books WHERE id=?", (bid,),
+        )).fetchone()
+        if not current_row:
+            raise HTTPException(404, f"book {bid} not found")
+        edited_now: set[str] = set()
+
         fields = []; vals = []
         for k in ["title", "description", "pub_date", "expected_date", "isbn", "cover_url", "series_index", "source_url"]:
             if k in data:
@@ -444,6 +487,13 @@ async def update_book(bid: int, data: dict = Body(...)):
                 if k == "series_index" and isinstance(v, str) and not v.strip():
                     v = None
                 fields.append(f"{k}=?"); vals.append(v)
+                # Track real changes (incoming != stored) for
+                # user_edited_fields. source_url is NOT tracked here
+                # — it's structural (per-source URL ownership) and
+                # has its own dedicated editor that does its own
+                # canonical-form comparison.
+                if k in TRACKED_FIELDS and v != current_row[k]:
+                    edited_now.add(k)
         # Handle MAM URL — validate format and update status. The
         # BookSidebar form re-sends every field on every save, so we
         # only act when the incoming value actually differs from
@@ -510,6 +560,26 @@ async def update_book(bid: int, data: dict = Body(...)):
             else:
                 # Empty series name → remove from series (make standalone)
                 fields.append("series_id=?"); vals.append(None)
+        # Merge edited_now into the stored user_edited_fields JSON
+        # array. Idempotent on repeat saves (set-union); only writes
+        # the column when the merged set actually grows. Read failures
+        # (NULL or malformed JSON) treat the existing set as empty —
+        # backward-compatible with rows that pre-date v2.2.14.
+        if edited_now:
+            try:
+                raw_uef = current_row["user_edited_fields"]
+                existing_uef = (
+                    json.loads(raw_uef) if raw_uef else []
+                )
+                if not isinstance(existing_uef, list):
+                    existing_uef = []
+            except (json.JSONDecodeError, TypeError):
+                existing_uef = []
+            merged_uef = sorted(set(existing_uef) | edited_now)
+            if set(merged_uef) != set(existing_uef):
+                fields.append("user_edited_fields=?")
+                vals.append(json.dumps(merged_uef))
+
         if not fields:
             return {"status": "no changes"}
         vals.append(bid)
@@ -878,13 +948,16 @@ async def delete_book(bid: int):
     """Delete a book entry — only non-Calibre (discovered/imported) books can be deleted."""
     db = await get_db()
     try:
-        row = await (await db.execute("SELECT id, source, owned, calibre_id FROM books WHERE id=?", (bid,))).fetchone()
+        row = await (await db.execute("SELECT id, source, owned, calibre_id, series_id FROM books WHERE id=?", (bid,))).fetchone()
         if not row:
             raise HTTPException(404, "Book not found")
         if row["calibre_id"] and row["source"] == "calibre":
             raise HTTPException(400, "Cannot delete books synced from Calibre. Remove them from Calibre instead.")
+        sid = row["series_id"]
         await db.execute("DELETE FROM book_series_suggestions WHERE book_id=?", (bid,))
         await db.execute("DELETE FROM books WHERE id=?", (bid,))
+        if sid is not None:
+            await _recompute_series_author(db, [sid])
         await db.commit()
         return {"status": "ok"}
     finally:
@@ -905,8 +978,21 @@ async def bulk_hide(data: dict = Body(...)):
     db = await get_db()
     try:
         placeholders = ",".join(["?" for _ in book_ids])
+        # Capture distinct series ids before the hide so we can
+        # recompute authority on each. Bulk-hiding all of an author's
+        # books in a 2-author shared series flips it back to
+        # per-author for the remaining contributor.
+        sid_rows = await (await db.execute(
+            f"SELECT DISTINCT series_id FROM books "
+            f"WHERE id IN ({placeholders}) AND series_id IS NOT NULL",
+            book_ids,
+        )).fetchall()
+        affected_sids = [r["series_id"] for r in sid_rows]
+
         await db.execute(f"UPDATE books SET hidden=1 WHERE id IN ({placeholders})", book_ids)
         await db.execute(f"DELETE FROM book_series_suggestions WHERE book_id IN ({placeholders})", book_ids)
+        if affected_sids:
+            await _recompute_series_author(db, affected_sids)
         await db.commit()
         return {"status": "ok", "count": len(book_ids)}
     finally:
@@ -939,7 +1025,7 @@ async def bulk_delete(data: dict = Body(...)):
         # Partition the requested IDs into deletable vs Calibre-protected
         # so we can report "deleted N, skipped M" honestly.
         rows = await (await db.execute(
-            f"SELECT id, calibre_id, source FROM books WHERE id IN ({placeholders})",
+            f"SELECT id, calibre_id, source, series_id FROM books WHERE id IN ({placeholders})",
             book_ids,
         )).fetchall()
         deletable = [
@@ -949,6 +1035,13 @@ async def bulk_delete(data: dict = Body(...)):
         skipped = len(rows) - len(deletable)
         if not deletable:
             return {"status": "ok", "deleted": 0, "skipped": skipped}
+        # Capture distinct series ids of the about-to-be-deleted rows
+        # so we can recompute authority on each after the DELETE.
+        deletable_set = set(deletable)
+        affected_sids = list({
+            r["series_id"] for r in rows
+            if r["id"] in deletable_set and r["series_id"] is not None
+        })
         del_placeholders = ",".join(["?" for _ in deletable])
         await db.execute(
             f"DELETE FROM book_series_suggestions WHERE book_id IN ({del_placeholders})",
@@ -958,6 +1051,8 @@ async def bulk_delete(data: dict = Body(...)):
             f"DELETE FROM books WHERE id IN ({del_placeholders})",
             deletable,
         )
+        if affected_sids:
+            await _recompute_series_author(db, affected_sids)
         await db.commit()
         return {"status": "ok", "deleted": cur.rowcount, "skipped": skipped}
     finally:

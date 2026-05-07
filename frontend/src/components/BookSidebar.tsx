@@ -22,6 +22,7 @@ import { Btn } from "./Btn";
 import { Spin } from "./Spin";
 import { SBRow } from "./SBRow";
 import { BufferInsufficientBanner } from "./BufferInsufficientBanner";
+import { CompareModal } from "./CompareModal";
 import { economyApi, type PreflightResponse } from "../lib/economyApi";
 import type {
   Book,
@@ -126,6 +127,7 @@ export function BookSidebar({
   const isMobile = useMobileCodepath(vp);
   const [mounted, setMounted] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [compareOpen, setCompareOpen] = useState(false);
   const [ef, setEf] = useState<EditFields>({
     title: "",
     description: "",
@@ -581,6 +583,25 @@ export function BookSidebar({
               }}
             >
               {Ic.edit}
+            </button>
+          )}
+          {!editing && (
+            <button
+              onClick={() => setCompareOpen(true)}
+              title="Compare metadata across Seshat / Calibre / ABS"
+              style={{
+                background: t.bg4,
+                border: `1px solid ${t.border}`,
+                borderRadius: 8,
+                cursor: "pointer",
+                color: t.tg,
+                padding: "8px 10px",
+                minHeight: 36,
+                fontSize: 12,
+                fontWeight: 600,
+              }}
+            >
+              Compare
             </button>
           )}
           <button
@@ -1792,6 +1813,24 @@ export function BookSidebar({
           />
         </div>
       )}
+
+      {compareOpen ? (
+        <CompareModal
+          bookId={book.id}
+          bookTitle={book.title}
+          onClose={() => setCompareOpen(false)}
+          onChanged={() => {
+            // Refresh the parent list so the sidebar's `book` prop
+            // catches up to whatever was pulled. Best-effort — the
+            // CompareModal re-fetches its own state on every action.
+            if (onEdit) {
+              Promise.resolve(onEdit()).catch(() => {
+                /* background refresh — surfaces on parent list */
+              });
+            }
+          }}
+        />
+      ) : null}
     </div>
   );
 }

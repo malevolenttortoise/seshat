@@ -485,15 +485,21 @@ the resulting distinct-author count.
   search + cover_book_id). Suite total: 1460 passing (was 1432
   on v2.3.2).
 
-**v2.3.4** — Metadata Manager UI + dual-storage UI + source-scan
-write rule (~1.5-2 weeks):
+**v2.3.4 (shipped 2026-05-07)** — Metadata Manager UI + dual-
+storage UI + source-scan write rule + hidden-book correctness:
 
 - **Compare panel** in book sidebar — per-field side-by-side Seshat
   vs Calibre snapshot vs ABS snapshot, with per-field "← pull from
   Calibre" / "← pull from ABS" actions.
-- **Metadata Manager page** replacing Suggestions — three review
-  queues (Calibre diffs, ABS diffs, source-scan diffs), bulk
-  accept/reject.
+- **Metadata Manager page** replacing the existing Suggestions page
+  AND the conceptual "Suggestions" review-queue from the design.
+  Tabbed layout — Calibre diffs, ABS diffs, source-scan field diffs,
+  and a "Series moves" tab folding in the existing
+  `series-suggestions` source-consensus auto-flow (so non-Calibre
+  source-discovered "this book belongs to series X #3" suggestions
+  still have a home). Bulk accept/reject across selected rows. The
+  old `DiscSuggestionsPage.tsx` retires; `series-suggestions` table
+  + endpoints stay (Metadata Manager reads them via the new tab).
 - **Per-field source toggle** (only if Compare panel doesn't cover
   the use case).
 - **Sidebar edit UI populates `user_edited_fields`** when the user
@@ -502,11 +508,75 @@ write rule (~1.5-2 weeks):
   queue-on-populated for Goodreads/Hardcover/Kobo/IBDB. Lands
   alongside the UI so reviewer noise has somewhere to go.
 
+- **Hidden-book Series Manager fixes (v2.3.3 fast-follow)**.
+  v2.3.3 shipped two correctness gaps that surfaced during UAT:
+  - `_recompute_series_author(db, sids)` and
+    `GET /api/discovery/series/{sid}/authors` don't filter
+    `hidden=0`, so hidden books contribute to the distinct-author
+    count and surface in the Manage Members modal. A hidden Bob
+    book on a per-author Alice series wrongly flips it to shared,
+    and the modal lists Bob in "Current authors" with no way to
+    interact (Remove would orphan the hidden book; the modal book
+    picker correctly hides hidden books, so re-adding is a dead end).
+    Fix: add `AND b.hidden = 0` to both queries.
+  - Hide / unhide doesn't trigger `_recompute_series_author` on the
+    affected book's series. So even after the filter fix above, the
+    helper's pre-computed `series.author_id` goes stale on every
+    hide/unhide. Fix: route the hide and unhide endpoints through a
+    helper that recomputes authority on the affected series id
+    after the toggle.
+
+- **Hidden-book scan behavior** — incremental URL backfill, no DETAIL.
+  Pre-v2.3.4 model (per v2.2.3 + lookup.py 2455/2649): hidden books
+  are a true garbage bin in incremental mode — `_is_hidden` blocks
+  every write. In `full_scan` mode they ride the URL-backfill fast
+  path (no detail fetch). Mark's request: extend the full_scan
+  behavior to incremental too. Hidden books should:
+  - Stay in `existing_titles` for skip-already-found ✓ (already does).
+  - Get URL-only writes from incremental scans when a source matches
+    by canonical URL — boosts future scan efficiency by populating
+    per-source URLs on the hidden row, so subsequent scans of an
+    author with a giant catalog (John Walker — 1,069 books on
+    Goodreads) can fast-path past the hidden ones via URL match
+    instead of paying DETAIL on every unmatched title.
+  - **Never** trigger DETAIL fetch — the existing v2.2.3 garbage-bin
+    intent stands. Hidden = "I've seen it, ignore the metadata."
+  Implementation: split the `_is_hidden` short-circuit into two
+  decisions — "drop metadata writes" (always) vs "drop URL-only
+  writes" (only when there's no URL to write). The full_scan branch
+  already has the right shape; mirror into the incremental branch.
+
+Total: original v2.3.4 scope + 3 hidden-book deliverables. Estimate
+extends to ~2 weeks given the bundled scope.
+
 **v2.3.5** — push-back (~1 week + research):
 - ABS push-back via PATCH API.
 - Calibre push-back via calibredb (full image).
 - CWA push-back research; ship if feasible, otherwise document
   as slim-image limitation.
+
+**Pre-tag release checklist for v2.3.5 (caps the v2.3 arc):**
+- [ ] Re-run the full backend test suite locally — should be green
+      with no skips beyond the pre-existing optional-dep ones
+      (`test_covers.py` respx, `test_sse.py` sse_starlette).
+- [ ] Browser smoke test against Mark's live container.
+- [ ] **Audit GitHub Security tab — CodeQL alerts.** Triage every
+      open alert that surfaced during the v2.3 arc. Real findings
+      get fixed in v2.3.5 (or a fast-follow). FPs get dismissed in
+      the Security tab with reasoning that references SECURITY.md
+      (mirror the v2.2.10 pattern). The v2.3 line touched a lot of
+      new query construction in `series.py` (string-built SQL with
+      `WHERE/HAVING` composition, `IN ({ph})` patterns) and new
+      file-path / cover-path handling — pay attention to
+      SQL-injection and path-traversal categories specifically.
+- [ ] **Audit GitHub Dependabot alerts.** Bump any flagged
+      dependency that's not pinned for compatibility reasons. If a
+      bump is incompatible (rare), document the deferral in the
+      Security tab dismissal.
+- [ ] After tag push, watch GitHub Actions for the
+      `:latest` + `:latest-slim` matrix build and confirm the
+      `Build:` SHA in Settings footer updates after Mark's
+      `docker pull`.
 
 Total estimate: ~3-4 weeks from v2.3.3 onward, validated
 incrementally.

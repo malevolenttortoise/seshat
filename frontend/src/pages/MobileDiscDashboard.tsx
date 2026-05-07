@@ -286,11 +286,11 @@ export default function MobileDiscDashboard({
           />
           {sugCount > 0 && (
             <MobileStatTile
-              label="Suggestions"
+              label="Metadata"
               value={fmtNum(sugCount)}
               color={t.accent}
               highlight
-              onClick={() => onNav("disc-suggestions")}
+              onClick={() => onNav("disc-metadata")}
             />
           )}
         </div>
@@ -307,7 +307,7 @@ export default function MobileDiscDashboard({
             <MobileRow title="MAM Search" leadingIcon="🔍" onClick={() => onNav("disc-mam")} />
           )}
           {sugCount > 0 && (
-            <MobileRow title="Suggestions" leadingIcon="💡" onClick={() => onNav("disc-suggestions")} />
+            <MobileRow title="Metadata" leadingIcon="💡" onClick={() => onNav("disc-metadata")} />
           )}
           <MobileRow title="Hidden" leadingIcon="🚫" onClick={() => onNav("disc-hidden")} />
         </div>

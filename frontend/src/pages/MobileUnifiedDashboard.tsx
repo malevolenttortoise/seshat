@@ -422,9 +422,9 @@ export default function MobileUnifiedDashboard({ onNav }: Props) {
             onClick={() => onNav("disc-mam")}
           />
           <MobileRow
-            title="Suggestions"
+            title="Metadata"
             leadingIcon="💡"
-            onClick={() => onNav("disc-suggestions")}
+            onClick={() => onNav("disc-metadata")}
           />
           <MobileRow
             title="Works"
