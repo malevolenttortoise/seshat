@@ -156,20 +156,42 @@ class LibraryApp(ABC):
         """
         pass
 
-    async def get_mtime(self, library: dict) -> float:
+    async def get_mtime(self, library: dict) -> float | str:
         """Return a monotonic mtime-like value for change detection.
 
-        File-based default reads `source_db_path`'s mtime. API-based
-        apps should override to fetch a *fresh* remote timestamp (e.g.
-        ABS's library `lastUpdate` via `/api/libraries`) so the
-        scheduled sync can skip unchanged libraries — async because
-        remote sources need to hit the network on each tick rather
-        than read a value cached at startup.
+        File-based default reads `source_db_path`'s mtime — but takes
+        the **max** across the SQLite triplet (`.db`, `.db-wal`,
+        `.db-shm`) when those exist. CWA / Calibre run with WAL mode
+        on by default; new writes land in `.db-wal` and only checkpoint
+        back to `.db` periodically, so `os.path.getmtime` on the main
+        file alone misses pending writes (Mark's UAT 2026-05-07: 21
+        new books in metadata.db-wal but `.db` mtime stale by
+        ~24h, scheduled sync skipped every tick).
+
+        API-based apps should override to fetch a *fresh* remote
+        timestamp (e.g. ABS's library `lastUpdate` via
+        `/api/libraries`) so the scheduled sync can skip unchanged
+        libraries — async because remote sources need to hit the
+        network on each tick rather than read a value cached at
+        startup. API overrides may return any hashable comparable
+        value (string fingerprint, float, etc.) — the `==` test in
+        `sync_all_libraries` doesn't care about the type as long as
+        equal-means-equal.
         """
         path = library.get("source_db_path")
         if not path:
             return 0.0
-        try:
-            return os.path.getmtime(path)
-        except OSError:
-            return 0.0
+        # SQLite WAL/SHM siblings: include them in the mtime check.
+        # Files that don't exist contribute nothing (suppressed by
+        # the OSError filter); a library not in WAL mode just
+        # collapses to the main `.db` mtime.
+        candidates = [path, f"{path}-wal", f"{path}-shm"]
+        max_m = 0.0
+        for p in candidates:
+            try:
+                m = os.path.getmtime(p)
+                if m > max_m:
+                    max_m = m
+            except OSError:
+                continue
+        return max_m

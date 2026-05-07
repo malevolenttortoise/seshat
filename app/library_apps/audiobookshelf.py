@@ -115,23 +115,31 @@ class AudiobookshelfApp(LibraryApp):
         """ABS covers are fetched via the API, not from a local path."""
         return None
 
-    async def get_mtime(self, library: dict) -> float:
-        """Use ABS's library `lastUpdate` for change detection.
+    async def get_mtime(self, library: dict) -> float | str:
+        """ABS change-detection signal: `f"{lastUpdate}:{numItems}"`.
 
-        Returned by `/api/libraries` for each library. Advances on every
-        scan that touched the library (add/update/remove/rescan). If the
-        value hasn't changed, we skip the sync the same way we skip
-        Calibre when `metadata.db`'s mtime hasn't moved.
+        Pre-v2.3.4.1 this returned `lastUpdate` alone. UAT 2026-05-07
+        revealed that ABS's `lastUpdate` advances on library settings
+        changes but NOT reliably when items are added — Mark added 5
+        audiobooks, ABS UI showed 113 items, but `lastUpdate` was
+        17 days stale. Scheduled sync read the same `lastUpdate` on
+        every tick and skipped, even though the library content had
+        grown.
 
-        Must hit the API on every call: the value cached on `library`
-        at discovery time is frozen at startup. Without the live fetch,
-        every tick after the first sync compared the cached startup
-        value to itself, perpetually short-circuiting the sync — Mark
-        added 66 audiobooks overnight and saw zero scheduled syncs.
+        The fix: combine `lastUpdate` with the library's total item
+        count (via `/api/libraries/{id}/items?limit=0`). Either signal
+        moving forces a re-sync. Composite returned as a string —
+        `sync_all_libraries`'s equality check doesn't care about type.
 
-        Falls back to the cached value on API failure so a transient
-        ABS outage doesn't cause a no-op sync that overwrites the
-        stored mtime with 0 and forces a full re-sync next tick.
+        Self-heals across the v2.3.4.0 → v2.3.4.1 boundary: the saved
+        `library_mtimes[slug]` is a number from before the fix; the
+        new return is a string; the `==` comparison fails; one
+        re-sync runs and stores the new string format.
+
+        Falls back to the previous return shape on API failure so a
+        transient ABS outage doesn't trigger a fake re-sync. The
+        cached `library["abs_last_update"]` is updated in-place on
+        success.
         """
         cached = library.get("abs_last_update")
         try:
@@ -158,6 +166,7 @@ class AudiobookshelfApp(LibraryApp):
             )
             return cached_f
 
+        fresh_f = cached_f
         for lib in libs:
             if lib.get("id") == lib_id:
                 fresh = lib.get("lastUpdate")
@@ -165,18 +174,30 @@ class AudiobookshelfApp(LibraryApp):
                     fresh_f = float(fresh) if fresh is not None else 0.0
                 except (TypeError, ValueError):
                     fresh_f = 0.0
-                # Update the in-memory dict so other readers see the
-                # fresh value too. `state._discovered_libraries` holds
-                # a reference to the same dict.
                 library["abs_last_update"] = fresh_f
-                return fresh_f
+                break
+        else:
+            # Library no longer exists in ABS — bail with the cached
+            # value. We don't want to wipe Seshat state on a transient
+            # API misreport.
+            return cached_f
 
-        # Library no longer exists in ABS — return cached. Caller's
-        # equality check against `library_mtimes` will treat this as
-        # "unchanged" and skip the sync, which is the right behavior:
-        # we don't want to wipe Seshat state for a transient
-        # mis-listing.
-        return cached_f
+        # Second signal: total item count via the items endpoint.
+        # `limit=0` returns metadata only — `total` is the item count.
+        # Failure here is non-fatal: degrade to lastUpdate-only (the
+        # pre-v2.3.4.1 behavior) rather than blocking the sync.
+        try:
+            page = await client.list_items(lib_id, limit=0, page=0)
+            total_items = int(page.get("total") or 0)
+        except Exception as e:
+            logger.warning(
+                "Audiobookshelf: get_mtime item-count fetch failed "
+                "(%s: %s); using lastUpdate alone",
+                type(e).__name__, e,
+            )
+            return fresh_f
+
+        return f"{fresh_f}:{total_items}"
 
 
 async def _get_abs_api_key() -> Optional[str]:

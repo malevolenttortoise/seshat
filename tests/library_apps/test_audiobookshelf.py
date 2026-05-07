@@ -218,6 +218,10 @@ class TestAudiobookshelfDiscover:
         must hit the API on every tick, otherwise scheduled syncs
         short-circuit forever after the first sync (canary: Mark added
         66 audiobooks overnight and saw zero scheduled syncs).
+
+        v2.3.4.1: return is a composite "lastUpdate:numItems" so item-
+        count changes trigger sync even when ABS doesn't bump
+        lastUpdate.
         """
         from app.library_apps import audiobookshelf as abs_mod
 
@@ -230,6 +234,9 @@ class TestAudiobookshelfDiscover:
                 {"id": "lib-book", "mediaType": "book", "folders": [],
                  "lastUpdate": 9999},
             ]}),
+            "/api/libraries/lib-book/items": (200, {
+                "results": [], "total": 113, "limit": 0, "page": 0,
+            }),
         })
         orig = httpx.AsyncClient
         monkeypatch.setattr(
@@ -243,9 +250,98 @@ class TestAudiobookshelfDiscover:
             "abs_last_update": 1234,  # stale cached value
         }
         result = await abs_mod.AudiobookshelfApp().get_mtime(lib)
-        assert result == 9999.0
-        # Cache also refreshed in place.
+        # Composite signal: lastUpdate:numItems.
+        assert result == "9999.0:113"
+        # Cache also refreshed in place (still a float so existing
+        # readers don't break).
         assert lib["abs_last_update"] == 9999.0
+
+    async def test_get_mtime_item_count_change_with_stable_lastupdate(
+        self, monkeypatch,
+    ):
+        """The v2.3.4.1 fix's reason for being. ABS's `lastUpdate`
+        bumps on settings changes but not reliably on item adds —
+        Mark's UAT 2026-05-07: 5 audiobooks added, ABS UI showed
+        113 items, but `lastUpdate` was 17 days stale. The composite
+        signal sees the item-count delta even when lastUpdate is
+        flat."""
+        from app.library_apps import audiobookshelf as abs_mod
+
+        async def fake_get_key():
+            return "tok"
+        monkeypatch.setattr(abs_mod, "_get_abs_api_key", fake_get_key)
+
+        # Two consecutive ticks: lastUpdate stays at 9999, but items
+        # grew 108 → 113.
+        items_total = {"n": 108}
+        def items_handler(request):
+            return httpx.Response(200, json={
+                "results": [], "total": items_total["n"], "limit": 0, "page": 0,
+            })
+
+        transport = _mock_transport({
+            "/api/libraries": (200, {"libraries": [
+                {"id": "lib-book", "mediaType": "book", "folders": [],
+                 "lastUpdate": 9999},
+            ]}),
+            "/api/libraries/lib-book/items": items_handler,
+        })
+        orig = httpx.AsyncClient
+        monkeypatch.setattr(
+            httpx, "AsyncClient",
+            lambda **kw: orig(transport=transport, **{k: v for k, v in kw.items() if k != "transport"}),
+        )
+
+        lib = {
+            "abs_base_url": "http://abs:13378",
+            "abs_library_id": "lib-book",
+            "abs_last_update": 9999,
+        }
+        first = await abs_mod.AudiobookshelfApp().get_mtime(lib)
+        items_total["n"] = 113  # five audiobooks added between ticks
+        second = await abs_mod.AudiobookshelfApp().get_mtime(lib)
+        # lastUpdate identical, item count changed → signals differ.
+        assert first != second
+        assert first == "9999.0:108"
+        assert second == "9999.0:113"
+
+    async def test_get_mtime_item_count_failure_degrades_to_lastupdate(
+        self, monkeypatch,
+    ):
+        """Items endpoint failing should not block the sync. Degrade
+        to the pre-v2.3.4.1 lastUpdate-only return — better one
+        non-redundant sync than no signal at all."""
+        from app.library_apps import audiobookshelf as abs_mod
+
+        async def fake_get_key():
+            return "tok"
+        monkeypatch.setattr(abs_mod, "_get_abs_api_key", fake_get_key)
+
+        def items_handler(request):
+            return httpx.Response(500, json={"error": "kaboom"})
+
+        transport = _mock_transport({
+            "/api/libraries": (200, {"libraries": [
+                {"id": "lib-book", "mediaType": "book", "folders": [],
+                 "lastUpdate": 9999},
+            ]}),
+            "/api/libraries/lib-book/items": items_handler,
+        })
+        orig = httpx.AsyncClient
+        monkeypatch.setattr(
+            httpx, "AsyncClient",
+            lambda **kw: orig(transport=transport, **{k: v for k, v in kw.items() if k != "transport"}),
+        )
+
+        lib = {
+            "abs_base_url": "http://abs:13378",
+            "abs_library_id": "lib-book",
+            "abs_last_update": 1234,
+        }
+        result = await abs_mod.AudiobookshelfApp().get_mtime(lib)
+        # Float-only fallback (no composite) — caller's float==string
+        # comparison still works to trigger one re-sync if needed.
+        assert result == 9999.0
 
     async def test_get_mtime_falls_back_to_cache_on_api_failure(self, monkeypatch):
         """Transient ABS outage → return the cached value, not 0.

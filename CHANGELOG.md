@@ -7,6 +7,71 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [2.3.4.1] — 2026-05-07
+
+Fast-follow patch — scheduled syncs weren't catching new books on
+either Calibre or ABS, even after container restart. Symptom from
+Mark's UAT (still on v2.3.3 at the time): Calibre showed 2,844
+books, Seshat showed 2,823 (21 short); ABS showed 113 audiobooks,
+Seshat showed 108 (5 short). Manual sync from Command Center worked
+fine — the mtime gate was the only broken piece.
+
+### Discovery — Calibre WAL-aware mtime
+
+`LibraryApp.get_mtime` (the file-based default Calibre uses) now
+takes the **max** mtime across the SQLite triplet (`.db`, `.db-wal`,
+`.db-shm`) instead of just the main `.db`.
+
+Calibre and CWA run with SQLite WAL mode on by default. Writes land
+in `metadata.db-wal` first and only checkpoint back to `metadata.db`
+periodically. UAT capture: Mark's `metadata.db` mtime was stale by
+~24h while `metadata.db-wal` had 4MB of pending writes including 21
+newly-added books. `os.path.getmtime(metadata.db)` returned the
+stale value, the scheduled sync compared it to the equally-stale
+saved value, and skipped on every tick. Pulling .wal/.shm into the
+max collapses to the main file's mtime when the library isn't in
+WAL mode (those siblings just don't exist), so legacy setups keep
+working unchanged.
+
+### Discovery — ABS lastUpdate + item count composite
+
+`AudiobookshelfApp.get_mtime` now returns a composite string
+`f"{lastUpdate}:{numItems}"` instead of `lastUpdate` alone. ABS's
+`lastUpdate` advances on library-settings changes but NOT reliably
+when items are added — Mark added 5 audiobooks, ABS UI showed 113
+items, but `lastUpdate` was 17 days stale. The scheduled sync read
+the same `lastUpdate` on every tick and skipped, even though the
+content had grown.
+
+The composite signal also moves when item count changes, so a
+post-add tick (lastUpdate flat, count 108 → 113) registers as
+"changed" and triggers the sync. Item count fetched via
+`/api/libraries/{id}/items?limit=0` (small response, just the
+`total` field). On items-endpoint failure, degrades to lastUpdate-
+only (the pre-v2.3.4.1 return shape) rather than blocking the sync.
+
+`sync_all_libraries`'s comparison is `current_mtime == last_mtime`
+which works for any hashable type — no caller change needed. The
+saved `library_mtimes[slug]` from before this fix is a number; the
+new return is a string; the `==` comparison fails once and triggers
+a single re-sync that stores the new format. Self-healing.
+
+### Tests
+
+8 new across 2 files:
+
+- `test_base_get_mtime.py` (+6) — main-db-only when no WAL siblings;
+  picks WAL mtime when newer; picks SHM mtime when newest; main-db
+  wins post-checkpoint; missing source_db_path → 0.0; no path → 0.0.
+- `test_audiobookshelf.py` (+2, plus updates to existing) — composite
+  signal returned; item-count change with stable lastUpdate
+  triggers a different signal; item-endpoint failure degrades to
+  lastUpdate float.
+
+Suite total: **1522 passing** (was 1514 on v2.3.4).
+
+---
+
 ## [2.3.4] — 2026-05-07
 
 The "Metadata Manager + dual-storage UI" release. The v2.3 dual-
