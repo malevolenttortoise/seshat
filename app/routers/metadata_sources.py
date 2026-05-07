@@ -45,6 +45,13 @@ class SourceEntry(BaseModel):
     ebook_scan: bool
     audiobook_enrich: bool
     audiobook_scan: bool
+    # v2.3.2: when True, source-scan keeps DETAIL-fetching books
+    # missing this source's URL even when other sources have URLs
+    # for them. See `is_source_mandatory` + `_lookup_author_inner`
+    # in `app/discovery/lookup.py`. Default False so unknown/upgraded
+    # entries decay safely; the migration seeds the right per-source
+    # default at install time.
+    mandatory: bool = False
 
 
 class PriorityLists(BaseModel):
@@ -104,12 +111,18 @@ def _state_from_settings(settings: dict) -> MetadataSourcesState:
         if not isinstance(entry, dict):
             continue
         try:
+            from app.metadata.source_config import is_source_mandatory
             sources[name] = SourceEntry(
                 rate_limit=float(entry.get("rate_limit", 1.0)),
                 ebook_enrich=bool(entry.get("ebook_enrich", False)),
                 ebook_scan=bool(entry.get("ebook_scan", False)),
                 audiobook_enrich=bool(entry.get("audiobook_enrich", False)),
                 audiobook_scan=bool(entry.get("audiobook_scan", False)),
+                # Read via the accessor so missing-field upgraded
+                # settings.json files surface the ship-with default
+                # to the panel — UI shows the user the value the
+                # backend would actually use, not always-False.
+                mandatory=is_source_mandatory(settings, name),
             )
         except Exception:
             _log.exception(

@@ -30,6 +30,11 @@ interface SourceEntry {
   ebook_scan: boolean;
   audiobook_enrich: boolean;
   audiobook_scan: boolean;
+  // v2.3.2: when checked, source-scan keeps DETAIL-fetching books
+  // missing this source's URL even when other sources have URLs
+  // for them. Defaults true on the primary tier (Goodreads /
+  // Hardcover for ebook; Audible / Hardcover for audiobook).
+  mandatory: boolean;
 }
 
 interface PriorityLists {
@@ -258,7 +263,7 @@ function SourceList({ tab, draft, setDraft, known }: {
     <div>
       <div style={{
         display: "grid",
-        gridTemplateColumns: "24px 24px 1fr 80px 80px 110px",
+        gridTemplateColumns: "24px 24px 1fr 80px 80px 90px 110px",
         alignItems: "center",
         gap: "8px 12px",
         fontSize: 11, fontWeight: 700,
@@ -271,6 +276,15 @@ function SourceList({ tab, draft, setDraft, known }: {
         <span>Source</span>
         <span style={{ textAlign: "center" }}>Enrich</span>
         <span style={{ textAlign: "center" }}>Scan</span>
+        <span
+          style={{ textAlign: "center" }}
+          title={
+            "Keeps doing full-detail searches on this source until it " +
+            "finds a match for every owned book — instead of " +
+            "fast-pathing once any other source has a URL. Default on " +
+            "for the primary tier (Goodreads / Hardcover / Audible)."
+          }
+        >Mandatory</span>
         <span style={{ textAlign: "center" }}>Rate (q/s)</span>
       </div>
 
@@ -291,7 +305,7 @@ function SourceList({ tab, draft, setDraft, known }: {
             key={name}
             style={{
               display: "grid",
-              gridTemplateColumns: "24px 24px 1fr 80px 80px 110px",
+              gridTemplateColumns: "24px 24px 1fr 80px 80px 90px 110px",
               alignItems: "center",
               gap: "8px 12px",
               padding: "8px 4px",
@@ -373,6 +387,25 @@ function SourceList({ tab, draft, setDraft, known }: {
                 checked={Boolean(entry[scanKey])}
                 disabled={locked}
                 onChange={e => !locked && setToggle(name, scanKey, e.target.checked)}
+                style={{ width: 18, height: 18, cursor: locked ? "not-allowed" : "pointer" }}
+              />
+            </div>
+
+            {/* Mandatory — v2.3.2. Locked off for MAM (it's not part
+                of the source-scan registry; mandatory has no effect
+                there). For everyone else, governs whether
+                `_lookup_author_inner` keeps DETAIL-fetching books
+                missing this source's URL on every scan. */}
+            <div style={{ display: "flex", justifyContent: "center" }} title={
+              locked
+                ? "MAM is not part of the source-scan registry; the mandatory flag has no effect."
+                : undefined
+            }>
+              <input
+                type="checkbox"
+                checked={locked ? false : Boolean(entry.mandatory)}
+                disabled={locked}
+                onChange={e => !locked && setToggle(name, "mandatory", e.target.checked)}
                 style={{ width: 18, height: 18, cursor: locked ? "not-allowed" : "pointer" }}
               />
             </div>
