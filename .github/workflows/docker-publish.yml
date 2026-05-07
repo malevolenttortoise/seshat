@@ -48,10 +48,20 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           flavor: |
             suffix=${{ matrix.suffix }},onlatest=true
+          # `type=semver` requires strict SemVer 2.0.0 (three numeric
+          # segments) and emits no tag when the ref doesn't match —
+          # which silently broke the tag-push build on v2.3.4.1/2/3/4
+          # (four segments by our loose-SemVer-within-an-arc policy;
+          # see feedback_seshat_semver_policy.md). Switching to
+          # `type=match` lets us extract the version verbatim,
+          # supporting both 3-segment (v2.3.5) and 4-segment
+          # (v2.3.4.4) tags. The two patterns emit `<full>` and
+          # `<major>.<minor>` so you still get `2.3.4.4` AND `2.3`
+          # tags pointing at the same image.
           tags: |
             type=ref,event=branch
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=match,pattern=v(\d+\.\d+\.\d+(?:\.\d+)?),group=1
+            type=match,pattern=v(\d+\.\d+),group=1
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push Docker image

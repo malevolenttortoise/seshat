@@ -7,6 +7,39 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [2.3.4.5] — 2026-05-07
+
+CI-only release. No code changes from v2.3.4.4 — this exists to
+re-trigger the docker-publish workflow after fixing it.
+
+### CI — workflow handles 4-segment version tags
+
+The docker-publish workflow used `type=semver,pattern={{version}}`
+to derive image tags from a git tag. metadata-action's semver
+parser requires strict SemVer 2.0.0 — three numeric segments — so
+4-segment tags like v2.3.4.1/2/3/4 silently emitted no version
+tags. Combined with `type=raw,value=latest,enable={{is_default_branch}}`
+(which only fires on the default branch, never on a tag push),
+the tag-push workflow run on every v2.3.4.X release was producing
+zero image tags, and `docker buildx build --push` failed with
+"tag is needed when pushing to registry". The `:latest-slim` and
+`:latest` tags still got emitted from the **branch-push** workflow
+run (which fired on the same commit), so Mark's setup using
+`:latest-slim` kept working — but no versioned `:2.3.4.X` images
+ever made it to GHCR.
+
+Switched to `type=match,pattern=v(\d+\.\d+\.\d+(?:\.\d+)?),group=1`
+plus `type=match,pattern=v(\d+\.\d+),group=1`. Both match 3-segment
+(v2.3.5) and 4-segment (v2.3.4.5) tags. With this in place, the
+v2.3.4.5 tag-push will emit `:2.3.4.5`, `:2.3.4.5-slim`, `:2.3`,
+`:2.3-slim`, and update `:latest` / `:latest-slim` from the
+branch-push run.
+
+Suite total: **1536 passing** (unchanged from v2.3.4.4 — no code
+deltas).
+
+---
+
 ## [2.3.4.4] — 2026-05-07
 
 UAT-driven multi-library safety + Compare panel polish.
