@@ -29,6 +29,43 @@ _log = logging.getLogger("seshat.notify")
 _client: Optional[httpx.AsyncClient] = None
 
 
+# Common typographic Unicode characters → ASCII fallbacks. ntfy's
+# Title header has to be ASCII (httpx rejects raw non-ASCII). Most
+# titles contain at most an em-dash or smart-quote, so a small
+# substitution table covers the realistic cases without dragging in
+# RFC 2047 encoded-word machinery. Anything that survives the
+# substitution table gets dropped by `.encode("ascii", "ignore")`
+# rather than crashing the send.
+_HEADER_FOLDS = {
+    "—": "-",   # em-dash (U+2014)
+    "–": "-",   # en-dash (U+2013)
+    "−": "-",   # minus sign (U+2212)
+    "…": "...", # ellipsis (U+2026)
+    "“": '"',   # left double quote
+    "”": '"',   # right double quote
+    "‘": "'",   # left single quote
+    "’": "'",   # right single quote
+    "•": "*",   # bullet
+    "→": "->",  # right arrow
+    "←": "<-",  # left arrow
+    " ": " ",   # non-breaking space → regular space
+}
+
+
+def _ascii_header_safe(s: str) -> str:
+    """Fold typographic punctuation to ASCII and drop anything else.
+
+    Covers the common em-dash / smart-quote / ellipsis cases that
+    show up in titles. Anything outside the fold table that's still
+    non-ASCII gets stripped rather than crashing httpx's header
+    encoder. The resulting string is always pure ASCII.
+    """
+    if not s:
+        return ""
+    out = "".join(_HEADER_FOLDS.get(ch, ch) for ch in s)
+    return out.encode("ascii", "ignore").decode("ascii")
+
+
 def _get_client() -> httpx.AsyncClient:
     global _client
     if _client is None:
@@ -110,8 +147,13 @@ async def send(
     endpoint = _resolve_endpoint(url, topic)
     if not endpoint:
         return False
+    # HTTP headers default to ASCII (latin-1 if you push it). The
+    # daily digest title contains an em-dash ("—") which crashes the
+    # whole send. Fold common typographic punctuation back to ASCII
+    # so the title still reads correctly when ntfy renders it.
+    # Bodies are sent UTF-8 in the request body so they're unaffected.
     headers = {
-        "Title": title,
+        "Title": _ascii_header_safe(title),
         "Priority": str(priority),
     }
     if tags:

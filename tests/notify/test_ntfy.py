@@ -146,6 +146,47 @@ class TestSend:
         req = _mock_ntfy_client["requests"][0]
         assert str(req.url) == "https://ntfy.sh/turtles81-autobrr-books"
 
+    async def test_em_dash_in_title_does_not_crash(self, _mock_ntfy_client):
+        """Daily digest titles contain em-dashes ("Daily digest — N
+        new books"). httpx rejects non-ASCII in headers; the v2.3.1
+        fix folds them to ASCII before sending. Pre-fix this raised
+        UnicodeEncodeError and dropped the entire notification."""
+        result = await ntfy.send(
+            url="https://ntfy.example.com",
+            topic="t",
+            title="Daily digest — 5 new books",
+            message="body",
+        )
+        assert result is True
+        req = _mock_ntfy_client["requests"][0]
+        assert req.headers["title"] == "Daily digest - 5 new books"
+
+    async def test_smart_quotes_and_ellipsis_folded(self, _mock_ntfy_client):
+        result = await ntfy.send(
+            url="https://ntfy.example.com",
+            topic="t",
+            title="“The Way” of Kings…",
+            message="m",
+        )
+        assert result is True
+        req = _mock_ntfy_client["requests"][0]
+        assert req.headers["title"] == '"The Way" of Kings...'
+
+    async def test_unmapped_unicode_dropped_not_crashed(self, _mock_ntfy_client):
+        """Characters outside the fold table (e.g. Japanese kana)
+        get stripped rather than crashing the send. Title legibility
+        degrades but the notification still goes through."""
+        result = await ntfy.send(
+            url="https://ntfy.example.com",
+            topic="t",
+            title="Book あい finished",
+            message="m",
+        )
+        assert result is True
+        req = _mock_ntfy_client["requests"][0]
+        # Japanese stripped, ASCII preserved.
+        assert req.headers["title"] == "Book  finished"
+
 
 class TestConvenienceSenders:
     async def test_notify_grab(self, _mock_ntfy_client):

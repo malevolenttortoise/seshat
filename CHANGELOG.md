@@ -7,6 +7,68 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [2.3.1] — 2026-05-06
+
+Two fast-follow fixes after Mark's v2.2.14 rollout surfaced them.
+This is a smaller patch release than the originally-planned v2.3.1
+(Compare panel + Metadata Manager UI); that work moves to v2.3.2.
+
+### Notify — daily digest no longer crashes on em-dash titles
+
+`ntfy.send` was setting the notification's `Title` HTTP header to the
+raw user-facing string. The daily digest's title contained an
+em-dash ("Daily digest — N new books"); httpx defaults headers to
+ASCII / latin-1 encoding and raised `UnicodeEncodeError`, which
+`send` swallowed at the catch-all and returned False. The whole
+notification dropped silently.
+
+New `_ascii_header_safe` helper folds common typographic
+punctuation (em-dash, en-dash, smart quotes, ellipsis, bullet,
+arrows, NBSP) to ASCII equivalents and drops anything else via
+`encode("ascii", "ignore")` rather than crashing. Bodies are still
+sent UTF-8 in the request body, so notification content is
+unaffected; only the Title header is folded. New tests cover the
+em-dash, smart-quote/ellipsis, and unmapped-character (Japanese)
+cases.
+
+### Discovery — multi-retry loop for slow Goodreads days
+
+Pre-2.3.1 the source-scan retry pass did exactly one retry per
+timed-out source, then logged "retry ALSO timed out" and moved on.
+Mark's manual scan of Eric Vall (359 books) hit this on a slow
+Goodreads day: first attempt processed ~100 books, retry got to
+~174, leaving ~185 books unscanned with the per-author budget still
+half-full.
+
+The retry pass is now a loop. Per source that timed out and
+preserved `_partial_state`:
+
+- Continues retrying as long as the per-author budget has at least
+  30 seconds left AND the prior retry advanced the index.
+- Each iteration resumes from the source's `_partial_state["index"]`
+  with `min(spec.timeout_sec, remaining_budget)` as the timeout.
+- Hard ceiling at 8 retries as a sanity guard; normally the loop
+  exits via the budget gate or via a clean source completion.
+- Stall detection: if two consecutive retries don't advance the
+  index, treats it as a soft outage rather than a slowdown and bails
+  rather than burning the rest of the budget on guaranteed timeouts.
+
+Per-author budget bumped from 15 minutes → 25 minutes
+(`PER_AUTHOR_BUDGET_SEC = 25 * 60`). Eric Vall at 3.5s/book on a
+slow Goodreads day = ~21 minutes just for Goodreads; the old 15min
+cap couldn't accommodate that even with multi-retry.
+
+### What's deferred to v2.3.2
+
+The Compare panel (per-book Seshat vs Calibre/ABS snapshot diff
+with field-level pull) and Metadata Manager page (replaces
+Suggestions, surfaces all three review queues) move to v2.3.2.
+Source-scan write rule + sidebar edit UI populating
+`user_edited_fields` move with them. Push-back to Calibre/ABS
+moves to v2.3.3.
+
+---
+
 ## [2.3.0] — 2026-05-06
 
 First minor on the v2.3 line. Activates the dual-source-of-truth

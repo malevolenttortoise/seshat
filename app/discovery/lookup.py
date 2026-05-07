@@ -278,11 +278,14 @@ def _sources_for_content_type(content_type: str) -> list[SourceSpec]:
     return SOURCES
 
 # Total wall-clock budget across all sources for a single author.
-# At 15 minutes, even worst-case (Goodreads timing out at 300s + a
-# couple of slow secondaries) leaves room. If hit, remaining sources
+# At 25 minutes (v2.3.1, up from 15), even prolific authors with
+# slow Goodreads days have headroom. Eric Vall's 359-book scan at
+# ~3.5s/book on a slow Goodreads day = ~21min just for Goodreads;
+# under the old 15min cap the multi-retry loop ran out of budget
+# before completing. If the budget is exceeded, remaining sources
 # are skipped and a warning is logged — the partial result is still
 # committed because each source's writes are independent.
-PER_AUTHOR_BUDGET_SEC = 15 * 60
+PER_AUTHOR_BUDGET_SEC = 25 * 60
 
 
 def _smart_strip_subtitle(t: str) -> str:
@@ -2867,72 +2870,107 @@ async def _lookup_author_inner(author_id: int, author_name: str, full_scan: bool
             on_progress(total)
 
     # ── Retry pass for sources that timed out and preserved state ──
-    # v1.2: currently only Goodreads participates — it's the slowest
-    # primary source and the one where a prolific author's book list
-    # can blow the 300s cap. The retry gets whatever remains of the
-    # per-author budget (capped at the source's own timeout) and picks
-    # up from where the first call left off. On a second timeout we
-    # log the "likely missed" count and move on; the Phase 1 timeout
-    # collector already surfaced the author to the Dashboard so this
-    # just adds detail for the log reader.
+    # v1.2 introduced a single retry; v2.3.1 loops it. Currently only
+    # Goodreads participates — it's the slowest primary source and the
+    # one where a prolific author's book list can blow the 300s cap.
+    # Each retry resumes from where the prior call left off via the
+    # source's `_partial_state`. We keep going while:
+    #   - the per-author budget has at least 30s left, AND
+    #   - the retry made forward progress (index advanced).
+    # If two consecutive retries make zero progress, we treat that as
+    # a soft outage rather than a slowdown and bail rather than burning
+    # the rest of the budget on guaranteed timeouts. Eric Vall's 359-
+    # book scan was the canary: pre-v2.3.1 a single retry only got us
+    # to 174/359; the loop pushes through to ~340+ when Goodreads is
+    # merely slow rather than down.
+    MAX_RETRIES = 8  # safety ceiling; loop normally exits via budget
     for spec in per_author_timed_out:
         source = spec.getter()
         partial = getattr(source, '_partial_state', None)
         if not partial:
             continue  # source doesn't support resume — nothing to retry
-        elapsed = time.monotonic() - scan_started_at
-        remaining = PER_AUTHOR_BUDGET_SEC - elapsed
-        if remaining < 30:
+
+        retry_num = 0
+        last_index = -1
+        while True:
+            partial = getattr(source, '_partial_state', None)
+            if not partial:
+                break  # source completed cleanly on the prior retry
+            elapsed = time.monotonic() - scan_started_at
+            remaining = PER_AUTHOR_BUDGET_SEC - elapsed
+            if remaining < 30:
+                reached = partial.get("index", 0)
+                missed = max(0, partial.get("total", 0) - reached)
+                logger.warning(
+                    f"  [{spec.name}] giving up on '{author_name}' — "
+                    f"processed {reached}/{partial.get('total', '?')} books "
+                    f"after {retry_num} retries; ~{missed} likely unscanned "
+                    f"(out of per-author budget)"
+                )
+                break
+
+            retry_num += 1
+            if retry_num > MAX_RETRIES:
+                logger.warning(
+                    f"  [{spec.name}] giving up on '{author_name}' after "
+                    f"{MAX_RETRIES} retries"
+                )
+                break
+
+            retry_timeout = min(spec.timeout_sec, remaining)
+            start_at = partial["index"]
+            total_books = partial.get("total", 0)
             logger.info(
-                f"  [{spec.name}] retry skipped for '{author_name}' — "
-                f"only {remaining:.0f}s left in per-author budget"
+                f"  [{spec.name}] retry {retry_num} for '{author_name}' — "
+                f"resuming from book {start_at}/{total_books} with "
+                f"{retry_timeout:.0f}s budget"
             )
-            break  # remaining sources would hit the same budget wall
-        retry_timeout = min(spec.timeout_sec, remaining)
-        start_at = partial["index"]
-        total_books = partial.get("total", 0)
-        logger.info(
-            f"  [{spec.name}] retry for '{author_name}' — resuming from "
-            f"book {start_at}/{total_books} with {retry_timeout:.0f}s budget"
-        )
-        try:
-            n = await asyncio.wait_for(
-                _try_source(
-                    source, author_name, author_id, our_titles, languages, spec.name,
-                    existing_titles=existing_titles, hidden_titles=hidden_titles,
-                    full_scan=full_scan,
-                    owned_only=owned_only, series_collector=series_collector,
-                    exclude_audiobooks=exclude_audiobooks, linked_author_ids=pen_linked,
-                    link_type_by_id=link_type_by_id,
-                    start_at=start_at,
-                ),
-                timeout=retry_timeout,
-            )
-            total += n
-            visible[0] = total
-            if on_progress:
-                on_progress(total)
-        except asyncio.TimeoutError:
-            # Second timeout: surface how far we got so the log reader
-            # has a concrete "N of M books processed" number instead of
-            # just "Goodreads timed out twice". The partial state has
-            # been updated in place during the retry, so it reflects
-            # the furthest point reached across both calls.
-            retry_partial = getattr(source, '_partial_state', None) or partial
-            reached = retry_partial.get("index", start_at)
-            missed = max(0, retry_partial.get("total", 0) - reached)
-            logger.warning(
-                f"  [{spec.name}] retry ALSO timed out for '{author_name}' — "
-                f"processed {reached}/{retry_partial.get('total', '?')} "
-                f"books total; ~{missed} likely unscanned"
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.error(
-                f"  [{spec.name}] retry raised for '{author_name}': {e}",
-                exc_info=True,
-            )
+            try:
+                n = await asyncio.wait_for(
+                    _try_source(
+                        source, author_name, author_id, our_titles, languages, spec.name,
+                        existing_titles=existing_titles, hidden_titles=hidden_titles,
+                        full_scan=full_scan,
+                        owned_only=owned_only, series_collector=series_collector,
+                        exclude_audiobooks=exclude_audiobooks, linked_author_ids=pen_linked,
+                        link_type_by_id=link_type_by_id,
+                        start_at=start_at,
+                    ),
+                    timeout=retry_timeout,
+                )
+                total += n
+                visible[0] = total
+                if on_progress:
+                    on_progress(total)
+                # Clean completion — _partial_state was cleared by the
+                # source. Loop exits on the next iteration's check.
+            except asyncio.TimeoutError:
+                # Stall detection: if the index didn't advance from the
+                # last retry, this is a soft outage, not a slowdown.
+                # Keep going only when we're making real progress.
+                new_partial = getattr(source, '_partial_state', None) or partial
+                new_index = new_partial.get("index", start_at)
+                if new_index <= last_index:
+                    reached = new_index
+                    missed = max(0, new_partial.get("total", 0) - reached)
+                    logger.warning(
+                        f"  [{spec.name}] no progress on retry {retry_num} "
+                        f"for '{author_name}' (index stuck at {reached}/"
+                        f"{new_partial.get('total', '?')}); ~{missed} likely "
+                        f"unscanned (Goodreads appears unreachable)"
+                    )
+                    break
+                last_index = new_index
+                # Loop continues to next retry attempt.
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(
+                    f"  [{spec.name}] retry {retry_num} raised for "
+                    f"'{author_name}': {e}",
+                    exc_info=True,
+                )
+                break
 
     # Clear current_book so the next author's scan widget doesn't show
     # the last book of THIS author until its first DETAIL fetch lands.
