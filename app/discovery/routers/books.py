@@ -402,12 +402,22 @@ async def unhide(bid: int):
 
 
 @router.get("/books/hidden")
-async def get_hidden(search: str = Query(None), sort: str = Query("title"), sort_dir: str = Query("asc"), page: int = Query(1, ge=1), per_page: int = Query(60, ge=1, le=5000), content_type: str = Query(None)):
-    """Hidden books. `content_type` routes cross-library when supplied."""
+async def get_hidden(search: str = Query(None), sort: str = Query("title"), sort_dir: str = Query("asc"), page: int = Query(1, ge=1), per_page: int = Query(60, ge=1, le=5000), content_type: str = Query(None), owned: bool = Query(None)):
+    """Hidden books. `content_type` routes cross-library when supplied.
+
+    `owned`: True → only owned books (catches accidental bulk-hide of
+    Calibre-owned rows; pre-v2.3.4.3 there was no way to surface them
+    on the Hidden page without scrolling past every discovered miss).
+    False → only discovered/unowned. Omit for both.
+    """
     c = ["b.hidden=1"]; p: list = []
     if search:
         c.append("(b.title LIKE ? OR a.name LIKE ? OR COALESCE(s.name,'') LIKE ?)")
         p.extend([f"%{search}%"] * 3)
+    if owned is True:
+        c.append("b.owned=1")
+    elif owned is False:
+        c.append("b.owned=0")
     w = " AND ".join(c)
 
     if content_type:

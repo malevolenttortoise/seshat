@@ -136,7 +136,7 @@ function renderPage(
     case "disc-mam":           return <DiscMAMPage onNav={nav} />;
     case "disc-metadata":      return <DiscMetadataPage />;
     case "disc-series":        return <DiscSeriesPage />;
-    case "disc-hidden":        return <DiscBooksPage title="Hidden Books" apiPath="/discovery/books/hidden" />;
+    case "disc-hidden":        return <DiscBooksPage title="Hidden Books" apiPath="/discovery/books/hidden" showOwnedFilter />;
     case "disc-importexport":  return <DiscImportExportPage />;
     case "disc-works":         return <WorksPage />;
 

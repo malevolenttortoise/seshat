@@ -7,6 +7,45 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [2.3.4.3] — 2026-05-07
+
+UAT polish — bulk-action toast grammar + Hidden page owned filter.
+
+### Discovery — bulk-hide / bulk-dismiss toast grammar
+
+The success toast read "Hided N book(s)" / "Dismissd N book(s)"
+because the handler did `${labels[kind]}d` which appended a literal
+"d" to the verb form ("Hide" → "Hided", "Dismiss" → "Dismissd").
+Fixed in both `DiscAuthorDetailPage.tsx` and
+`MobileAuthorDetailPage.tsx` by introducing a `pastLabels` map
+({ hide: "Hidden", dismiss: "Dismissed", delete: "Deleted" }) so
+the toast reads "Hidden 5 book(s)" / "Dismissed 3 book(s)" /
+"Deleted 2 book(s)" correctly.
+
+### Discovery — Hidden page `owned` filter
+
+`GET /api/discovery/books/hidden` gained an `owned` query param —
+`true` narrows to owned-and-hidden, `false` to discovered-and-
+hidden, omitted returns both. `DiscBooksPage` and `MobileBooksPage`
+gained a `showOwnedFilter` prop; when truthy, render an
+All / Owned only / Discovered only tab/chip row above the list.
+The Hidden route in `App.tsx` passes `showOwnedFilter` so the
+filter appears on the Hidden page only — Library / Missing /
+Upcoming continue to render without it.
+
+UAT canary: Mark accidentally bulk-hid 19 of his Calibre-owned
+books during multi-select. Pre-v2.3.4.3 the only way to find them
+was scrolling past every discovered miss. The Owned-only tab
+surfaces them directly so they can be un-hidden.
+
+### Tests
+
+4 new in `test_hidden_owned_filter.py` (default returns all hidden;
+owned=true narrows; owned=false narrows; combined with search).
+Suite total: **1531 passing**.
+
+---
+
 ## [2.3.4.2] — 2026-05-07
 
 Fast-follow patch from continuing v2.3.4 UAT. Two bug fixes.

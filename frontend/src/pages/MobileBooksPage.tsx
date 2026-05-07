@@ -40,6 +40,7 @@ export interface MobileBooksPageProps {
   extraParams?: Record<string, string | number | boolean>;
   showAuthor?: boolean;
   showFormatTabs?: boolean;
+  showOwnedFilter?: boolean;
 }
 
 const SORT_OPTIONS: { value: string; label: string }[] = [
@@ -63,6 +64,7 @@ export default function MobileBooksPage({
   extraParams = {},
   showAuthor = true,
   showFormatTabs = true,
+  showOwnedFilter = false,
 }: MobileBooksPageProps) {
   const t = useTheme();
   const [bks, setBks] = useState<Book[]>([]);
@@ -75,6 +77,9 @@ export default function MobileBooksPage({
   const [mamFilter, setMamFilter] = usePersist<string>(
     `bp_${title}_mam`,
     "",
+  );
+  const [ownedFilter, setOwnedFilter] = usePersist<string>(
+    `bp_${title}_owned`, "all",
   );
   const [mamOn, setMamOn] = useState(false);
   const [sb, setSb] = useState<Book | null>(null);
@@ -105,6 +110,8 @@ export default function MobileBooksPage({
       const p = new URLSearchParams(init);
       if (mamFilter) p.set("mam_status", mamFilter);
       if (showFormatTabs) p.set("content_type", fmt);
+      if (showOwnedFilter && ownedFilter === "owned") p.set("owned", "true");
+      else if (showOwnedFilter && ownedFilter === "discovered") p.set("owned", "false");
       return api
         .get<BooksResponse>(`${apiPath}?${p}`, signal)
         .then((d) => {
@@ -118,7 +125,7 @@ export default function MobileBooksPage({
         });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [q, sort, apiPath, mamFilter, fmt, showFormatTabs],
+    [q, sort, apiPath, mamFilter, fmt, showFormatTabs, showOwnedFilter, ownedFilter],
   );
 
   useEffect(() => {
@@ -215,6 +222,32 @@ export default function MobileBooksPage({
               key={opt.v}
               active={fmt === opt.v}
               onClick={() => setFmt(opt.v)}
+            >
+              {opt.label}
+            </MobileChip>
+          ))}
+        </div>
+      )}
+
+      {/* v2.3.4.3 owned filter — Hidden page only. */}
+      {showOwnedFilter && (
+        <div
+          style={{
+            display: "flex",
+            gap: 6,
+            overflowX: "auto",
+            scrollbarWidth: "none",
+          }}
+        >
+          {[
+            { v: "all", label: "All" },
+            { v: "owned", label: "✓ Owned only" },
+            { v: "discovered", label: "○ Discovered only" },
+          ].map((opt) => (
+            <MobileChip
+              key={opt.v}
+              active={ownedFilter === opt.v}
+              onClick={() => setOwnedFilter(opt.v)}
             >
               {opt.label}
             </MobileChip>

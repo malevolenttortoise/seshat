@@ -357,6 +357,8 @@ export default function MobileAuthorDetailPage({
     const ids = [...sel];
     if (ids.length === 0) return;
     const labels = { hide: "Hide", dismiss: "Dismiss", delete: "Delete" } as const;
+    // v2.3.4.3 grammar fix — past-tense for the success toast.
+    const pastLabels = { hide: "Hidden", dismiss: "Dismissed", delete: "Deleted" } as const;
     const msg =
       kind === "delete"
         ? `Delete ${ids.length} book(s)? Calibre-synced books will be skipped.`
@@ -380,7 +382,7 @@ export default function MobileAuthorDetailPage({
         toast.success(`Deleted ${r.deleted || 0} book(s)${skipMsg}`);
       } else {
         toast.success(
-          `${labels[kind]}d ${r.count ?? ids.length} book(s)`,
+          `${pastLabels[kind]} ${r.count ?? ids.length} book(s)`,
         );
       }
       setSel(new Set());

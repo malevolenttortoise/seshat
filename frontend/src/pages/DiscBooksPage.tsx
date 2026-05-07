@@ -44,6 +44,12 @@ interface BooksPageProps {
   // `content_type` query param on every fetch. Omit for pages that
   // deliberately stay active-library-scoped (e.g. Hidden).
   showFormatTabs?: boolean;
+  // v2.3.4.3: when truthy, renders an All / Owned / Discovered tab
+  // row that injects `owned=true|false` into the API params. Used by
+  // the Hidden page so users can find accidentally-hidden owned
+  // books (Mark's UAT canary: 19 owned books bulk-hidden by mistake,
+  // no way to surface them without scrolling past discovered misses).
+  showOwnedFilter?: boolean;
 }
 
 // Bulk-action response shapes. All of them may carry an `error` string
@@ -87,6 +93,7 @@ function DesktopBooksPage({
   showAuthor = true,
   exportFilter,
   showFormatTabs = true,
+  showOwnedFilter = false,
 }: BooksPageProps) {
   const t = useTheme();
   const [bks, setBks] = useState<Book[]>([]);
@@ -103,6 +110,11 @@ function DesktopBooksPage({
   const [allCollapsed, setAllCollapsed] = useState(false);
   const [showExp, setShowExp] = useState(false);
   const [mamFilter, setMamFilter] = usePersist<string>(`bp_${title}_mam`, "");
+  // v2.3.4.3: owned filter for the Hidden page. "all" → no
+  // owned param; "owned" / "discovered" → owned=true / false.
+  const [ownedFilter, setOwnedFilter] = usePersist<string>(
+    `bp_${title}_owned`, "all",
+  );
   const [mamOn, setMamOn] = useState(false);
   const [selMode, setSelMode] = useState(false);
   const [sel, setSel] = useState<Set<number>>(new Set());
@@ -153,6 +165,8 @@ function DesktopBooksPage({
       const p = new URLSearchParams(init);
       if (mamFilter) p.set("mam_status", mamFilter);
       if (showFormatTabs) p.set("content_type", fmt);
+      if (showOwnedFilter && ownedFilter === "owned") p.set("owned", "true");
+      else if (showOwnedFilter && ownedFilter === "discovered") p.set("owned", "false");
       return api
         .get<BooksResponse>(`${apiPath}?${p}`, signal)
         .then((d) => {
@@ -166,7 +180,7 @@ function DesktopBooksPage({
         });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [q, sortParam, apiPath, grp, mamFilter, fmt, showFormatTabs, perPage],
+    [q, sortParam, apiPath, grp, mamFilter, fmt, showFormatTabs, showOwnedFilter, ownedFilter, perPage],
   );
 
   useEffect(() => {
@@ -392,6 +406,15 @@ function DesktopBooksPage({
             fmt={fmt}
             setFmt={(v) => {
               setFmt(v);
+              setPg(1);
+            }}
+          />
+        ) : null}
+        {showOwnedFilter ? (
+          <OwnedFilterTabs
+            value={ownedFilter}
+            onChange={(v) => {
+              setOwnedFilter(v);
               setPg(1);
             }}
           />
@@ -749,6 +772,52 @@ function FormatTabs({
             padding: "4px 12px",
             fontSize: 13,
             fontWeight: fmt === tab.id ? 600 : 500,
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            gap: 5,
+          }}
+        >
+          {tab.icon ? <span>{tab.icon}</span> : null}
+          <span>{tab.label}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ─── Owned Filter Tabs (All / Owned / Discovered) ──────────
+// v2.3.4.3 — used by the Hidden page to surface accidentally-hidden
+// owned books. "owned" hides discovered/unowned rows; "discovered"
+// hides owned rows. "all" is the default and matches pre-v2.3.4.3
+// behavior.
+function OwnedFilterTabs({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const t = useTheme();
+  const tabs: { id: string; label: string; icon: string }[] = [
+    { id: "all", label: "All", icon: "" },
+    { id: "owned", label: "Owned only", icon: "✓" },
+    { id: "discovered", label: "Discovered only", icon: "○" },
+  ];
+  return (
+    <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
+      {tabs.map((tab) => (
+        <button
+          key={tab.id}
+          onClick={() => onChange(tab.id)}
+          style={{
+            background: value === tab.id ? t.abg : "transparent",
+            color: value === tab.id ? t.accent : t.tm,
+            border: `1px solid ${value === tab.id ? t.abr : "transparent"}`,
+            borderRadius: 6,
+            padding: "4px 12px",
+            fontSize: 13,
+            fontWeight: value === tab.id ? 600 : 500,
             cursor: "pointer",
             display: "flex",
             alignItems: "center",
