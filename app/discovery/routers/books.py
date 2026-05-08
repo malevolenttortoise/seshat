@@ -1124,6 +1124,41 @@ async def bulk_dismiss(data: dict = Body(...), slug: str | None = Query(None)):
         await db.close()
 
 
+@router.post("/books/bulk-skip-mam")
+async def bulk_skip_mam(data: dict = Body(...), slug: str | None = Query(None)):
+    """Mark a list of books as `mam_status='not_applicable'` so MAM
+    scans skip them. v2.3.7.1 — completes the Skip MAM trifecta
+    (per-book BookSidebar / per-author Authors page / per-author-
+    detail multi-select).
+
+    See `hide` for `slug` routing rationale — same cross-library
+    id-collision risk applies. The author-detail multi-select bar
+    must pass slug so a bulk-skip on an ABS author doesn't flip a
+    same-id Calibre row.
+
+    Clears mam_url / mam_torrent_id / mam_formats alongside setting
+    the status — same pattern as `/authors/skip-mam` so a stale
+    'possible' / 'not_found' search URL doesn't linger on a row the
+    user just declared irrelevant.
+    """
+    book_ids = data.get("book_ids", [])
+    if not book_ids:
+        return {"error": "No books specified"}
+    db = await get_db(slug)
+    try:
+        placeholders = ",".join(["?" for _ in book_ids])
+        cur = await db.execute(
+            f"UPDATE books SET mam_url=NULL, mam_status='not_applicable', "
+            f"mam_formats=NULL, mam_torrent_id=NULL, mam_has_multiple=0, "
+            f"mam_my_snatched=0 WHERE id IN ({placeholders})",
+            book_ids,
+        )
+        await db.commit()
+        return {"status": "ok", "count": cur.rowcount or 0}
+    finally:
+        await db.close()
+
+
 @router.post("/books/bulk-delete")
 async def bulk_delete(data: dict = Body(...), slug: str | None = Query(None)):
     """See `hide` for slug-routing rationale."""

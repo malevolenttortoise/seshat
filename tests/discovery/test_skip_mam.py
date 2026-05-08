@@ -270,3 +270,54 @@ async def test_get_mam_stats_reports_skipped(client):
     # not_applicable rows must NOT count as scanned (the user set them,
     # not the scanner).
     assert stats["total_scanned"] == 1  # only the 'found' row
+
+
+# ─── Bulk endpoint /books/bulk-skip-mam ──────────────────────────
+
+
+async def test_bulk_skip_mam_marks_selected_books(client):
+    """v2.3.7.1 — author detail multi-select bulk verb. Flips the
+    listed book_ids to 'not_applicable' and clears the URL/torrent_id
+    so a stale prior match doesn't linger."""
+    b1 = await _seed(
+        mam_url="https://www.myanonamouse.net/t/1",
+        mam_status="possible",
+        mam_torrent_id=1,
+    )
+    b2 = await _seed(mam_status="not_found")
+    b3 = await _seed(mam_status="found")  # not selected — must not flip
+
+    r = await client.post(
+        "/api/discovery/books/bulk-skip-mam",
+        json={"book_ids": [b1, b2]},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["count"] == 2
+
+    from app.discovery.database import get_db
+    db = await get_db()
+    try:
+        rows = await (await db.execute(
+            "SELECT id, mam_status, mam_url, mam_torrent_id FROM books "
+            "WHERE id IN (?, ?, ?) ORDER BY id",
+            (b1, b2, b3),
+        )).fetchall()
+    finally:
+        await db.close()
+
+    by_id = {r["id"]: dict(r) for r in rows}
+    assert by_id[b1]["mam_status"] == "not_applicable"
+    assert by_id[b1]["mam_url"] is None
+    assert by_id[b1]["mam_torrent_id"] is None
+    assert by_id[b2]["mam_status"] == "not_applicable"
+    # Untouched book stays as it was.
+    assert by_id[b3]["mam_status"] == "found"
+
+
+async def test_bulk_skip_mam_400s_on_empty(client):
+    r = await client.post(
+        "/api/discovery/books/bulk-skip-mam", json={"book_ids": []},
+    )
+    assert r.status_code == 200
+    assert r.json().get("error") == "No books specified"

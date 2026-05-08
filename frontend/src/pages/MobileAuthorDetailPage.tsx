@@ -353,15 +353,24 @@ export default function MobileAuthorDetailPage({
     return [...ids];
   };
 
-  const bulkAct = async (kind: "hide" | "dismiss" | "delete") => {
+  const bulkAct = async (kind: "hide" | "dismiss" | "delete" | "skip-mam") => {
     const ids = [...sel];
     if (ids.length === 0) return;
-    const labels = { hide: "Hide", dismiss: "Dismiss", delete: "Delete" } as const;
+    const labels = {
+      hide: "Hide", dismiss: "Dismiss", delete: "Delete",
+      "skip-mam": "Skip MAM",
+    } as const;
     // v2.3.4.3 grammar fix — past-tense for the success toast.
-    const pastLabels = { hide: "Hidden", dismiss: "Dismissed", delete: "Deleted" } as const;
+    // v2.3.7.1 adds "skip-mam" → "Marked N/A" (no clean past tense).
+    const pastLabels = {
+      hide: "Hidden", dismiss: "Dismissed", delete: "Deleted",
+      "skip-mam": "Marked N/A",
+    } as const;
     const msg =
       kind === "delete"
         ? `Delete ${ids.length} book(s)? Calibre-synced books will be skipped.`
+        : kind === "skip-mam"
+        ? `Mark ${ids.length} book(s) as Not Applicable for MAM scanning?`
         : `${labels[kind]} ${ids.length} book(s)?`;
     if (!confirm(msg)) return;
     setBusy(true);
@@ -755,6 +764,14 @@ export default function MobileAuthorDetailPage({
                 style={{ minHeight: 36, fontSize: 13 }}
               >
                 Delete
+              </MobileBtn>
+              <MobileBtn
+                variant="secondary"
+                onClick={() => bulkAct("skip-mam")}
+                disabled={busy}
+                style={{ minHeight: 36, fontSize: 13 }}
+              >
+                Skip MAM
               </MobileBtn>
             </>
           ) : null}

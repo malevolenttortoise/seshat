@@ -7,6 +7,38 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [2.3.7.1] — 2026-05-08
+
+Feature-completing fast-follow on v2.3.7. Adds the third leg of the
+Skip MAM trifecta: per-author-detail multi-select bulk verb. v2.3.7
+shipped per-book (BookSidebar Skip button) and per-author-all
+(Authors page bulk verb hits all of an author's books across every
+library). v2.3.7.1 fills the gap — selecting specific books from
+one author's detail page and bulk-N/A-ing only the selected subset.
+
+### New
+
+- `POST /api/discovery/books/bulk-skip-mam` — accepts
+  `{ book_ids: [...] }` + `?slug=` (same routing contract as
+  `/books/bulk-hide` / `/books/bulk-dismiss` / `/books/bulk-delete`).
+  Sets `mam_status='not_applicable'` and clears `mam_url` /
+  `mam_torrent_id` / `mam_formats` so a stale prior match doesn't
+  linger on a row the user just declared irrelevant.
+- "Skip MAM" verb in the multi-select bar on
+  `DiscAuthorDetailPage` and `MobileAuthorDetailPage`. Sits next to
+  Hide / Dismiss / Delete. Slug-aware via the existing
+  `slugQuery(a?.active_library_slug)` plumbing — no cross-library
+  id-collision risk.
+
+### Tests
+
+- 2 new tests in `tests/discovery/test_skip_mam.py` covering the
+  bulk endpoint's flip behavior + empty-payload rejection.
+
+Suite: 1593 passing.
+
+---
+
 ## [2.3.7] — 2026-05-08
 
 Three coordinated changes that came out of UAT after v2.3.6.1: a new

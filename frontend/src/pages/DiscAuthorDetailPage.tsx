@@ -749,17 +749,26 @@ function DesktopAuthorDetailPage({
     return [...ids];
   };
 
-  const bulkAct = async (kind: "hide" | "dismiss" | "delete") => {
+  const bulkAct = async (kind: "hide" | "dismiss" | "delete" | "skip-mam") => {
     const ids = [...sel];
     if (ids.length === 0) return;
-    const labels = { hide: "Hide", dismiss: "Dismiss", delete: "Delete" } as const;
+    const labels = {
+      hide: "Hide", dismiss: "Dismiss", delete: "Delete",
+      "skip-mam": "Skip MAM",
+    } as const;
     // Past-tense forms for the success toast — pre-v2.3.4.3 used
     // `${labels[kind]}d` which produced "Hided" / "Dismissd"
-    // (grammatically wrong on both).
-    const pastLabels = { hide: "Hidden", dismiss: "Dismissed", delete: "Deleted" } as const;
+    // (grammatically wrong on both). Skip MAM uses a different
+    // form ("Marked Not Applicable") since it doesn't tense well.
+    const pastLabels = {
+      hide: "Hidden", dismiss: "Dismissed", delete: "Deleted",
+      "skip-mam": "Marked N/A",
+    } as const;
     const msg =
       kind === "delete"
         ? `Delete ${ids.length} book(s)? Calibre-synced books will be skipped.`
+        : kind === "skip-mam"
+        ? `Mark ${ids.length} book(s) as Not Applicable for MAM scanning?`
         : `${labels[kind]} ${ids.length} book(s)?`;
     if (!confirm(msg)) return;
     setBusy(true);
@@ -1370,6 +1379,19 @@ function DesktopAuthorDetailPage({
                 }}
               >
                 Delete
+              </Btn>
+              <Btn
+                size="sm"
+                onClick={() => bulkAct("skip-mam")}
+                disabled={busy}
+                title="Mark these books as Not Applicable so MAM scans skip them"
+                style={{
+                  background: t.bg2,
+                  color: t.td,
+                  border: `1px solid ${t.borderL}`,
+                }}
+              >
+                Skip MAM
               </Btn>
               <span
                 style={{
