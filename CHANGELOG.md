@@ -7,6 +7,38 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [2.3.6.1] — 2026-05-08
+
+Hotfix on top of v2.3.6.
+
+### Discovery — "Approve MAM" button on `possible` matches now flips to `found`
+
+The BookSidebar's "Approve MAM" / "Remove MAM" decision row sends
+the existing `mam_url` back unchanged on Approve, and an empty
+string on Remove. Remove always worked (empty != stored URL → diff
+fires, status → `not_found`). Approve has been silently broken
+since v2.2.6 (2026-05-03): that release added a diff-aware
+`mam_url` check to fix a different bug — saves on unrelated
+sidebar fields were 400-ing when a `not_found` row had a stored
+search URL. The diff check correctly skipped the URL write on
+unchanged URLs, but it also skipped the side-effect that flipped
+`mam_status` from `possible` → `found`. The endpoint returned
+`{"status": "no changes"}` and the row was left as-is; users saw
+the success toast but nothing changed.
+
+Fix: an additional branch in `update_book` — when the incoming URL
+equals the stored URL AND the current status is `possible`, write
+`mam_status='found'` only. Other statuses (`found`, `not_found`,
+`NULL`) still no-op on a same-URL save, preserving the v2.2.6
+behavior that this whole gate was added for.
+
+4 new tests in `tests/discovery/test_user_edited_fields.py` cover
+the flip, the no-op for already-`found` rows, the no-op for
+`not_found` rows with stored search URLs (the v2.2.6 case), and
+the Remove flow. Suite: 1574 passing.
+
+---
+
 ## [2.3.6] — 2026-05-07
 
 Discovery hygiene release — two small behavioral changes that close

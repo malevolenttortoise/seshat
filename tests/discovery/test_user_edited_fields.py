@@ -230,3 +230,118 @@ class TestUserEditedFields:
             json={"description": "x"},
         )
         assert r.status_code == 404
+
+
+class TestApproveMamFlow:
+    """The BookSidebar's "Approve MAM" button on a `possible` match
+    re-sends the existing mam_url unchanged and expects the row to
+    flip to `mam_status='found'`. v2.2.6's diff-aware mam_url check
+    silently broke this path (no diff → no write); restored by an
+    explicit "same URL + currently 'possible' = approval" branch."""
+
+    async def _seed_possible(self, mam_url: str = "https://www.myanonamouse.net/t/123") -> int:
+        from app.discovery.database import get_db
+        from app.metadata.author_names import normalize_author_name
+        db = await get_db()
+        try:
+            await db.execute(
+                "INSERT INTO authors (id, name, sort_name, normalized_name) "
+                "VALUES (501, 'Ambiguous Author', 'Ambiguous Author', ?)",
+                (normalize_author_name("Ambiguous Author"),),
+            )
+            cur = await db.execute(
+                "INSERT INTO books (title, author_id, source, mam_url, "
+                "mam_status, mam_torrent_id) VALUES "
+                "('Possibly Theirs', 501, 'goodreads', ?, 'possible', 123)",
+                (mam_url,),
+            )
+            await db.commit()
+            return cur.lastrowid
+        finally:
+            await db.close()
+
+    async def _read_status(self, bid: int) -> tuple[str | None, str | None]:
+        from app.discovery.database import get_db
+        db = await get_db()
+        try:
+            row = await (await db.execute(
+                "SELECT mam_url, mam_status FROM books WHERE id=?", (bid,),
+            )).fetchone()
+            return (row["mam_url"], row["mam_status"])
+        finally:
+            await db.close()
+
+    async def test_same_url_on_possible_flips_to_found(self, client):
+        bid = await self._seed_possible()
+        r = await client.put(
+            f"/api/discovery/books/{bid}",
+            json={"mam_url": "https://www.myanonamouse.net/t/123"},
+        )
+        assert r.status_code == 200, r.text
+        url, status = await self._read_status(bid)
+        assert url == "https://www.myanonamouse.net/t/123"
+        assert status == "found"
+
+    async def test_same_url_on_found_is_noop(self, client):
+        # The approval branch only fires for currently-'possible' rows.
+        # Re-saving the URL on an already-'found' row must not write.
+        from app.discovery.database import get_db
+        bid = await self._seed_possible()
+        db = await get_db()
+        try:
+            await db.execute(
+                "UPDATE books SET mam_status='found' WHERE id=?", (bid,),
+            )
+            await db.commit()
+        finally:
+            await db.close()
+
+        r = await client.put(
+            f"/api/discovery/books/{bid}",
+            json={"mam_url": "https://www.myanonamouse.net/t/123"},
+        )
+        assert r.status_code == 200, r.text
+        # Status unchanged. (Body is "no changes" or "ok" depending on
+        # whether other fields would have driven a write — here, none.)
+        _, status = await self._read_status(bid)
+        assert status == "found"
+
+    async def test_same_url_on_not_found_search_url_is_noop(self, client):
+        # MAM scan stores a search URL on not_found rows so the user can
+        # click through. Re-saving a not_found row's URL (e.g. from the
+        # BookSidebar form's full-payload save on an unrelated edit)
+        # must NOT flip status to 'found'. The approval branch is gated
+        # on currently='possible'.
+        bid = await self._seed_possible(
+            mam_url="https://www.myanonamouse.net/tor/browse.php?tor%5Btext%5D=foo",
+        )
+        from app.discovery.database import get_db
+        db = await get_db()
+        try:
+            await db.execute(
+                "UPDATE books SET mam_status='not_found' WHERE id=?", (bid,),
+            )
+            await db.commit()
+        finally:
+            await db.close()
+
+        r = await client.put(
+            f"/api/discovery/books/{bid}",
+            json={"mam_url": "https://www.myanonamouse.net/tor/browse.php?tor%5Btext%5D=foo"},
+        )
+        assert r.status_code == 200, r.text
+        _, status = await self._read_status(bid)
+        assert status == "not_found"
+
+    async def test_clearing_url_on_possible_marks_not_found(self, client):
+        # The "Remove MAM" button — payload is mam_url="" — should
+        # still flip status to 'not_found' regardless of current status.
+        bid = await self._seed_possible()
+        r = await client.put(
+            f"/api/discovery/books/{bid}",
+            json={"mam_url": ""},
+        )
+        assert r.status_code == 200, r.text
+        url, status = await self._read_status(bid)
+        assert url is None
+        assert status == "not_found"

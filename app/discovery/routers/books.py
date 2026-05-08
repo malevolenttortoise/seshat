@@ -570,9 +570,10 @@ async def update_book(bid: int, data: dict = Body(...), slug: str | None = Query
             # row of just `mam_url`, which was harmless until the
             # outer reader needed other columns. v2.3.4.2 fast-follow.
             mam_row = await (await db.execute(
-                "SELECT mam_url FROM books WHERE id=?", (bid,)
+                "SELECT mam_url, mam_status FROM books WHERE id=?", (bid,)
             )).fetchone()
             current = ((mam_row["mam_url"] if mam_row else "") or "").strip()
+            current_status = mam_row["mam_status"] if mam_row else None
             if incoming != current:
                 if incoming:
                     mam_match = re.match(r'https?://(?:www\.)?myanonamouse\.net/t/(\d+)', incoming)
@@ -587,6 +588,19 @@ async def update_book(bid: int, data: dict = Body(...), slug: str | None = Query
                     # MAM match.
                     fields.extend(["mam_url=?", "mam_status=?", "mam_torrent_id=?"])
                     vals.extend([None, "not_found", None])
+            elif incoming and current_status == "possible":
+                # BookSidebar's "Approve MAM" button sends the existing
+                # URL back unchanged to confirm a 'possible' match as
+                # 'found'. Without this branch, the diff-aware check
+                # above treats it as a no-op (returns "no changes")
+                # and the status never flips. Pre-v2.2.6 this worked
+                # implicitly because every PUT wrote mam_status as a
+                # side-effect of touching mam_url; v2.2.6's diff-aware
+                # fix (don't 400 unrelated saves on stored not_found
+                # search URLs) silently broke the approval path since
+                # the URL is identical on both sides of the click.
+                fields.append("mam_status=?")
+                vals.append("found")
         if "is_unreleased" in data:
             fields.append("is_unreleased=?"); vals.append(1 if data["is_unreleased"] else 0)
         # Handle series assignment — find or create series by name
