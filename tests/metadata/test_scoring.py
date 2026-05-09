@@ -5,8 +5,11 @@ The enricher's accept decision is downstream of these functions, so
 making sure the boundary cases behave sanely is the easiest way to
 prevent subtle match-quality regressions.
 """
+import pytest
+
 from app.metadata.scoring import (
     _extract_volume,
+    _extract_volume_range,
     author_overlap,
     score_match,
     score_match_with_breakdown,
@@ -225,3 +228,164 @@ class TestSeriesStripFallback:
         assert b["fallback_to_full_title"] is False
         assert b["series_stripped"] is False
         assert b["confidence"] >= 0.95
+
+
+class TestExtractVolumeRange:
+    @pytest.mark.parametrize(
+        "title,expected",
+        [
+            # Keyworded forms
+            ("The Demon Accords Books 1-4", (1, 4)),
+            ("Witcher Saga Volumes 1-7", (1, 7)),
+            ("Foo Vol. 1-12", (1, 12)),
+            ("Foo Vols 3-7", (3, 7)),
+            ("Foo Books 1 - 4", (1, 4)),
+            ("Foo Books #1-#4", (1, 4)),
+            ("Foo Episodes 5-10", (5, 10)),
+            ("Foo Parts 1-3", (1, 3)),
+            # Bare trailing forms
+            ("The Demon Accords 1-4", (1, 4)),
+            ("Foo (1-3)", (1, 3)),
+            ("Witcher Series 1-7", (1, 7)),
+            # En-dash / em-dash
+            ("Foo Books 1–4", (1, 4)),
+            ("Foo Books 1—4", (1, 4)),
+            ("Foo 1–4", (1, 4)),
+        ],
+    )
+    def test_positive_patterns(self, title, expected):
+        assert _extract_volume_range(title) == expected
+
+    @pytest.mark.parametrize(
+        "title",
+        [
+            # Single volumes (not ranges)
+            "Foo Book 5",
+            "Foo Volume 12",
+            "Foo Vol. 3",
+            # No range at all
+            "Foundation",
+            "The Way of Kings",
+            # Year ranges (bare trailing form bound: end <= 50)
+            "Stories 1990-2000",
+            "Foo 1995-2005",
+            # Reversed range (start >= end)
+            "Foo Books 4-1",
+            "Foo 5-3",
+            # Decimals (single volume, not a range)
+            "Foo Vol 1.5",
+            # Empty / none
+            "",
+            "   ",
+            # Mid-title hyphenation that would false-positive without trailing anchor
+            "Stop-Loss: Foo",
+            "1-800-Starship: Foo",
+            # Bare range exceeding conservative bound (end > 50)
+            "Foo 1-100",
+            # Bare range with span > 30
+            "Foo 1-40",
+        ],
+    )
+    def test_negative_patterns(self, title):
+        assert _extract_volume_range(title) is None
+
+    def test_keyworded_form_lenient_on_large_ranges(self):
+        # "Books 1-100" has explicit keyword → lenient bound (end <= 999,
+        # span <= 99). 99 span exactly hits the upper limit.
+        assert _extract_volume_range("Foo Books 1-100") == (1, 100)
+        # 100 span exceeds it
+        assert _extract_volume_range("Foo Books 1-101") is None
+
+    def test_bare_form_at_start_does_not_match(self):
+        # Anchored to title end — leading numeric ranges shouldn't match.
+        assert _extract_volume_range("1-4 Foo") is None
+
+
+class TestVolumeRangeMismatch:
+    """Short-circuit guard for bundles whose range excludes the searched volume."""
+
+    def test_volume_outside_range_returns_zero(self):
+        # Demon Accords 1-4 vs searching for Book 7 — definitively wrong.
+        b = score_match_with_breakdown(
+            record_title="The Demon Accords Books 1-4",
+            record_authors=["John Conroe"],
+            search_title="The Demon Accords: Book 7",
+            search_authors="John Conroe",
+            known_series="The Demon Accords",
+        )
+        assert b["confidence"] == 0.0
+        assert b.get("volume_range_mismatch") is True
+        assert b["candidate_range"] == [1, 4]
+        assert b["search_volume"] == 7
+
+    def test_volume_inside_range_falls_through(self):
+        # Book 2 IS in the 1-4 bundle — short-circuit must NOT fire.
+        # Falls through to normal scoring; confidence may still be modest
+        # because the bundle title doesn't strongly match the book title,
+        # but the volume_range_mismatch flag is absent.
+        b = score_match_with_breakdown(
+            record_title="The Demon Accords Books 1-4",
+            record_authors=["John Conroe"],
+            search_title="The Demon Accords: Book 2",
+            search_authors="John Conroe",
+            known_series="The Demon Accords",
+        )
+        assert b.get("volume_range_mismatch") is None
+
+    def test_volume_at_range_boundaries_falls_through(self):
+        # Inclusive bounds: start and end values are IN the range.
+        for vol in (1, 4):
+            b = score_match_with_breakdown(
+                record_title="Foo Books 1-4",
+                record_authors=["X"],
+                search_title=f"Foo: Book {vol}",
+                search_authors="X",
+            )
+            assert b.get("volume_range_mismatch") is None
+
+    def test_search_no_volume_falls_through(self):
+        # Search has no volume marker → can't compare → no short-circuit.
+        b = score_match_with_breakdown(
+            record_title="Foo Books 1-4",
+            record_authors=["X"],
+            search_title="Foo",
+            search_authors="X",
+        )
+        assert b.get("volume_range_mismatch") is None
+
+    def test_record_no_range_falls_through(self):
+        # Single-volume record vs single-volume search — uses the
+        # existing volume_mismatch path, not the range path.
+        b = score_match_with_breakdown(
+            record_title="Foo: Book 2",
+            record_authors=["X"],
+            search_title="Foo: Book 5",
+            search_authors="X",
+            known_series="Foo",
+        )
+        assert b.get("volume_range_mismatch") is None
+
+    def test_bare_trailing_range_works(self):
+        # "Demon Accords 1-4" (no keyword) vs Book 7 — bare form catches it.
+        b = score_match_with_breakdown(
+            record_title="The Demon Accords 1-4",
+            record_authors=["John Conroe"],
+            search_title="The Demon Accords: Book 7",
+            search_authors="John Conroe",
+        )
+        assert b["confidence"] == 0.0
+        assert b.get("volume_range_mismatch") is True
+
+    def test_mismatch_fires_before_series_strip(self):
+        # Range mismatch is decisive even when series matches strongly —
+        # short-circuit MUST fire before series-strip path runs.
+        b = score_match_with_breakdown(
+            record_title="The Demon Accords Books 1-4",
+            record_authors=["John Conroe"],
+            search_title="The Demon Accords: Book 9",
+            search_authors="John Conroe",
+            known_series="The Demon Accords",  # series matches
+        )
+        assert b["confidence"] == 0.0
+        assert b["series_stripped"] is False  # short-circuit ran first
+        assert b.get("volume_range_mismatch") is True

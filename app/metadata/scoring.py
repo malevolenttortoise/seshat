@@ -53,18 +53,67 @@ _VOLUME_RX = re.compile(
     re.I,
 )
 
+# Volume RANGES like "Books 1-4", "Vol. 1-12", "Volumes 3-7". Bundle
+# torrents commonly use these patterns. Used by the volume-range
+# mismatch short-circuit to definitively reject candidates whose range
+# excludes the searched book's volume.
+_VOLUME_RANGE_KEYWORDED_RX = re.compile(
+    r"\b(?:books?|volumes?|vols?|tomes?|parts?|episodes?)\b\.?\s*"
+    r"#?(\d+)(?:\.\d+)?\s*[-–—]\s*#?(\d+)(?:\.\d+)?\b",
+    re.I,
+)
+# Bare trailing range like "Demon Accords 1-4" / "Foo (1-3)" — only
+# matches at title end to avoid false positives on dates / hyphenated
+# words mid-title.
+_VOLUME_RANGE_TRAILING_RX = re.compile(
+    r"(?:\s|\()(\d+)\s*[-–—]\s*(\d+)\s*\)?\s*$",
+)
+
 
 def _extract_volume(title: str) -> int | None:
     """Return the integer volume index from a title, or None if absent.
 
     Examples: "Foo: Book 5" → 5, "Foo, Vol. 12" → 12, "Foo" → None.
     Title-range markers like "1-4" deliberately don't match (no keyword
-    prefix) — those signal bundles, which Part B handles separately.
+    prefix) — those signal bundles, handled by `_extract_volume_range`.
     """
     if not title:
         return None
     m = _VOLUME_RX.search(title)
     return int(m.group(1)) if m else None
+
+
+def _extract_volume_range(title: str) -> tuple[int, int] | None:
+    """Return (start, end) volume range from a bundle title, or None.
+
+    Catches range markers that signal multi-book torrents:
+      - "Books 1-4" / "Vol. 1-12" / "Volumes 3-7" — keyworded
+      - "Demon Accords 1-4" / "Foo (1-3)" — bare trailing range
+
+    Used by the volume-range-mismatch short-circuit in
+    `score_match_with_breakdown`: when a candidate has a range AND the
+    search has a single-volume marker OUTSIDE that range, the result
+    is definitively wrong (no need for filelist/description verification).
+
+    Bounds reject false positives:
+      - keyworded form: end <= 999, span <= 99 (lenient — keyword is
+        strong evidence)
+      - bare trailing form: end <= 50, span <= 30 (conservative — no
+        keyword to anchor; rejects year ranges like "1990-2000")
+    """
+    if not title:
+        return None
+    m = _VOLUME_RANGE_KEYWORDED_RX.search(title)
+    if m:
+        start, end = int(m.group(1)), int(m.group(2))
+        if 0 < start < end <= 999 and end - start <= 99:
+            return (start, end)
+    m = _VOLUME_RANGE_TRAILING_RX.search(title)
+    if m:
+        start, end = int(m.group(1)), int(m.group(2))
+        if 0 < start < end <= 50 and end - start <= 30:
+            return (start, end)
+    return None
 
 
 def _title_tokens(title: str) -> set[str]:
@@ -197,6 +246,37 @@ def score_match_with_breakdown(
     way it did. Keep `score_match` as a thin wrapper around this so
     there's a single source of truth.
     """
+    # Volume-range mismatch short-circuit: when the candidate is a
+    # multi-volume bundle (range in title) AND the searched book has
+    # an explicit single-volume marker OUTSIDE that range, this is
+    # definitively the wrong torrent regardless of every other signal.
+    # Fires before the series-strip path because range mismatch is
+    # decisive even when series matches — "Demon Accords: Book 7"
+    # against "Demon Accords 1-4" can't be right no matter how much
+    # the series name overlaps. Saves bundle-verification API fetches
+    # on candidates we can already reject from the title alone.
+    record_range = _extract_volume_range(record_title)
+    search_vol = _extract_volume(search_title)
+    if record_range and search_vol is not None:
+        rstart, rend = record_range
+        if not (rstart <= search_vol <= rend):
+            return {
+                "record_title": record_title,
+                "effective_record_title": record_title,
+                "search_title": search_title,
+                "series_stripped": False,
+                "title_similarity": 0.0,
+                "author_overlap": round(
+                    author_overlap(record_authors, search_authors), 4
+                ),
+                "series_boost": 0.0,
+                "raw_score": 0.0,
+                "confidence": 0.0,
+                "volume_range_mismatch": True,
+                "candidate_range": [rstart, rend],
+                "search_volume": search_vol,
+            }
+
     effective_record = record_title
     series_stripped = False
     series_boost = 0.0
