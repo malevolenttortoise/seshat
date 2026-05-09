@@ -148,6 +148,15 @@ _BUNDLE_NUMFILES_FLOOR = 5
 # the (Part B2) filelist-verification path can promote with confidence.
 _BUNDLE_PROMOTE_TS_FLOOR = 0.85
 
+# Master switch for the bundle-filelist verification path. Disabled
+# (2026-05-09) because /tor/filelist.php rejects the mam_id cookie
+# with the login page — see the project_seshat_mam_url_confidence
+# memory for the full diagnosis. Re-enabled once the parallel mbsc
+# browser-session cookie ships (Phase 2). Bundle detection + cap
+# still work without it; bundles just stay at "possible" instead of
+# auto-promoting via filelist proof.
+_FILELIST_VERIFICATION_ENABLED = False
+
 # Default delay between MAM API requests (seconds)
 DEFAULT_DELAY = 2.0
 
@@ -1398,7 +1407,8 @@ async def check_book(
         # path without needing verification.
         bundle_filelist_verified = False
         needs_filelist_check = (
-            is_bundle
+            _FILELIST_VERIFICATION_ENABLED
+            and is_bundle
             and best.get("author_matched", False)
             and ts < _BUNDLE_PROMOTE_TS_FLOOR
         )
@@ -1711,12 +1721,9 @@ async def debug_check_book(
                 bundle_check["verification_attempted"] = True
                 tid = str(item.get("id", ""))
                 if tid not in debug_filelist_cache:
-                    # Inline-fetch with diagnostic capture so the debug
-                    # endpoint can show exactly what MAM returned —
-                    # status code + first-500-chars of body — when
-                    # production filelist verification mysteriously
-                    # fails. Doesn't go through _fetch_filelist because
-                    # we want the raw response visible in the trace.
+                    # Inline-fetch (rather than going through
+                    # _fetch_filelist) so the raw status + a sample of
+                    # the response body land in the debug trace.
                     fetch_url = f"{MAM_FILELIST_URL}?torrentid={tid}"
                     bundle_check["fetch_url"] = fetch_url
                     resp = await _fetch_filelist_response(token, tid)
@@ -1726,20 +1733,7 @@ async def debug_check_book(
                     else:
                         bundle_check["fetch_http_status"] = resp.status_code
                         body = resp.text or ""
-                        # Capture more body so we can tell whether the
-                        # fileListTable is present (and our parser regex
-                        # is the issue) vs. MAM serving a totally
-                        # different page (logout, error, landing).
                         bundle_check["fetch_response_first_500_chars"] = body[:500]
-                        bundle_check["fetch_response_total_len"] = len(body)
-                        bundle_check["fetch_response_contains_filelist_table"] = (
-                            "fileListTable" in body
-                        )
-                        bundle_check["fetch_response_contains_torrent_title"] = (
-                            "Torrent title" in body
-                        )
-                        bundle_check["fetch_response_chars_500_to_3000"] = body[500:3000]
-                        bundle_check["fetch_response_last_500_chars"] = body[-500:] if len(body) > 500 else ""
                         if resp.status_code == 200 and body:
                             debug_filelist_cache[tid] = _parse_filelist_html(body)
                         else:
