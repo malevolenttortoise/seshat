@@ -470,6 +470,135 @@ async def test_auth_error_does_not_stamp_timestamp(single_library):
     assert row[0][0] == original_ts
 
 
+async def test_lock_retry_recovers_when_sync_clears_mid_update(
+    single_library, monkeypatch,
+):
+    """Regression: Mark's UAT 2026-05-09 15:08 — sync started DURING
+    check_book's network call, so the per-book pause check at the top
+    of the iteration (which fired BEFORE check_book) had seen the flag
+    as False. By the time MAM's UPDATE submitted, sync was holding the
+    writer lock; busy_timeout expired and the scan task crashed.
+
+    The fix is layered:
+      - Second pause check right before UPDATE (eliminates the big
+        check_book-window race)
+      - _execute_with_lock_retry wraps the UPDATE itself (eliminates
+        the residual sub-second race between pause check + submission)
+
+    This test exercises the retry path directly: stub db.execute to
+    raise "database is locked" once, flip the sync flag back, and
+    verify the second attempt succeeds. Without the retry, the
+    OperationalError would bubble up.
+    """
+    import sqlite3 as _sqlite3
+
+    from app import state
+    from app.discovery.sources import mam as mam_mod
+
+    saved_sync = state._library_sync_in_progress
+    saved_refs = state._source_scan_refs
+    state._source_scan_refs = 0
+    state._library_sync_in_progress = True
+
+    call_count = {"n": 0}
+
+    class FakeDb:
+        async def execute(self, *args, **kwargs):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                # First attempt — clear the sync flag (as if the
+                # sync finished just as MAM was about to write) and
+                # raise the locked error so the retry path engages.
+                # Clearing the flag here lets the pause loop exit
+                # cleanly on the retry.
+                state._library_sync_in_progress = False
+                raise _sqlite3.OperationalError("database is locked")
+            return None
+
+        async def commit(self):
+            pass
+
+    fake_db = FakeDb()
+
+    try:
+        await mam_mod._execute_with_lock_retry(
+            fake_db, "UPDATE books SET x=?", ("v",), 0, 1,
+        )
+        assert call_count["n"] == 2, (
+            f"expected 2 execute calls (locked + retry), got {call_count['n']}"
+        )
+    finally:
+        state._library_sync_in_progress = saved_sync
+        state._source_scan_refs = saved_refs
+
+
+async def test_lock_retry_reraises_after_max_attempts(
+    single_library, monkeypatch,
+):
+    """If the writer lock is held for the entire 3-attempt window —
+    e.g., a runaway sync — the helper re-raises the OperationalError
+    so the surrounding scan loop can record the failure and abort
+    cleanly instead of silently dropping the book.
+    """
+    import sqlite3 as _sqlite3
+
+    from app import state
+    from app.discovery.sources import mam as mam_mod
+
+    saved_sync = state._library_sync_in_progress
+    saved_refs = state._source_scan_refs
+    state._source_scan_refs = 0
+    # Flag stays True throughout — pause never finishes, every
+    # attempt raises locked.
+    state._library_sync_in_progress = True
+
+    class AlwaysLockedDb:
+        async def execute(self, *args, **kwargs):
+            raise _sqlite3.OperationalError("database is locked")
+
+        async def commit(self):
+            pass
+
+    # Force the pause-loop's wall-clock check to bail on the first
+    # iteration by setting the cap negative — `elapsed > -1` is True
+    # immediately, so each attempt's pause exits and proceeds to the
+    # next retry without waiting on a real-clock 20-minute window.
+    monkeypatch.setattr(mam_mod, "_MAM_PAUSE_MAX_SECONDS", -1.0)
+
+    try:
+        with pytest.raises(_sqlite3.OperationalError, match="database is locked"):
+            await mam_mod._execute_with_lock_retry(
+                AlwaysLockedDb(), "UPDATE books SET x=?", ("v",), 0, 1,
+            )
+    finally:
+        state._library_sync_in_progress = saved_sync
+        state._source_scan_refs = saved_refs
+
+
+async def test_lock_retry_does_not_swallow_other_operational_errors(
+    monkeypatch,
+):
+    """OperationalError comes in many flavors — schema mismatch, syntax
+    error, constraint violation, etc. We only retry on 'database is
+    locked'; everything else re-raises immediately so real bugs surface.
+    """
+    import sqlite3 as _sqlite3
+
+    from app.discovery.sources import mam as mam_mod
+
+    class SyntaxErrorDb:
+        async def execute(self, *args, **kwargs):
+            raise _sqlite3.OperationalError("near 'SLEECT': syntax error")
+
+        async def commit(self):
+            pass
+
+    with pytest.raises(_sqlite3.OperationalError, match="syntax error"):
+        await mam_mod._execute_with_lock_retry(
+            SyntaxErrorDb(), "SLEECT * FROM books", (), 0, 1,
+        )
+
+
 async def test_per_book_pause_for_library_sync(single_library, monkeypatch):
     """Regression: when library sync starts mid-batch, MAM scan was
     crashing with `database is locked` instead of pausing — the

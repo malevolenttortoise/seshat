@@ -33,6 +33,7 @@ import asyncio
 import json
 import logging
 import re
+import sqlite3
 import time
 from typing import Callable, Optional
 from urllib.parse import urlencode
@@ -2374,6 +2375,127 @@ async def debug_check_book(
 # Batch scanning — processes books from the DB
 # ---------------------------------------------------------------------------
 
+
+# Max wall-clock time we'll voluntarily pause MAM for concurrent writers
+# before resuming anyway. 20 minutes is a safety net for a stuck flag —
+# under normal operation a Calibre sync of even Mark's 2,855-book library
+# completes in ~80s, well below the cap.
+_MAM_PAUSE_MAX_SECONDS = 1200.0
+
+# Number of times we'll retry a per-book UPDATE that hits "database is
+# locked" (after pausing for concurrent writers each time). 3 attempts
+# spans the worst-case window where a sync starts AFTER our last pause
+# check but BEFORE our UPDATE submission — pause, retry, and we should
+# get through. If we hit attempt 3 we re-raise so the surrounding
+# scan_books_batch can record the error and abort cleanly instead of
+# silently dropping the book.
+_MAM_LOCK_RETRY_ATTEMPTS = 3
+
+
+def _concurrent_writers_active() -> bool:
+    """True when a source scan or library sync is holding the writer lock.
+
+    Used by both the per-book pause helper and the retry-on-locked path
+    so the two paths share one definition of "another writer is live".
+    """
+    return state._source_scan_refs > 0 or state._library_sync_in_progress
+
+
+async def _pause_for_concurrent_writers(db, i: int, total: int) -> None:
+    """Commit MAM's pending write + sleep-poll until concurrent writers clear.
+
+    Called from per-book hot paths in `scan_books_batch` to yield the
+    SQLite writer lock to:
+      - source scans (state._source_scan_refs > 0) — incremented by
+        lookup_author and decremented in its finally
+      - library syncs (state._library_sync_in_progress) — set by both
+        the scheduled sync_all_libraries and the manual /sync endpoint
+
+    SQLite's single-writer lock means a long MAM batch (tens of UPDATE
+    books per minute) can starve other writers past the 30s busy_timeout.
+    Calibre sync of Mark's full library takes ~80s — longer than busy_
+    timeout will absorb — so without this yield, the next MAM UPDATE
+    crashes the whole scan task with `database is locked`.
+
+    Two call sites per book (top of iteration AND right before UPDATE)
+    cover the multi-second window during check_book's network calls —
+    sync can start at any point in that window and we want to catch it
+    before MAM's UPDATE blocks on the held writer lock.
+
+    CRITICAL: commit before sleeping. Any uncommitted MAM write keeps
+    the writer lock held for the duration of the sleep, defeating the
+    yield. v1.1.9-dev3 testing confirmed this when Goodreads spent 30s
+    blocked on UPDATE authors while MAM sat paused with its last
+    UPDATE uncommitted.
+
+    20-minute cap is a safety net for a stuck flag (refcount stuck or
+    sync flag never cleared). Logs at INFO so the unified scan widget
+    user can see the yield happening.
+    """
+    if not _concurrent_writers_active():
+        return
+    await db.commit()
+    reason_parts: list[str] = []
+    if state._source_scan_refs > 0:
+        reason_parts.append(f"{state._source_scan_refs} source scan(s)")
+    if state._library_sync_in_progress:
+        reason_parts.append("library sync")
+    logger.info(
+        f"MAM [{i+1}/{total}] paused — {' + '.join(reason_parts)} in progress"
+    )
+    paused_at = asyncio.get_event_loop().time()
+    while _concurrent_writers_active():
+        if asyncio.get_event_loop().time() - paused_at > _MAM_PAUSE_MAX_SECONDS:
+            logger.warning(
+                f"MAM [{i+1}/{total}] paused {_MAM_PAUSE_MAX_SECONDS / 60:.0f}min — "
+                f"resuming anyway (refcount={state._source_scan_refs}, "
+                f"library_sync={state._library_sync_in_progress})"
+            )
+            break
+        await asyncio.sleep(1.0)
+    else:
+        logger.info(
+            f"MAM [{i+1}/{total}] resumed — concurrent writers finished"
+        )
+
+
+async def _execute_with_lock_retry(db, sql: str, params: tuple, i: int, total: int) -> None:
+    """Run a per-book write that may race with a concurrent writer.
+
+    The two pause checks in scan_books_batch (top-of-iteration + pre-
+    UPDATE) eliminate the BIG window where a long check_book network
+    call lets a sync start unnoticed. They can NOT eliminate the
+    sub-second residual race where a sync starts AFTER our last flag
+    check but BEFORE the UPDATE submission reaches SQLite — the flag
+    check is in Python while the UPDATE awaits at the C layer, and
+    asyncio can yield between them.
+
+    Catch sqlite3.OperationalError("database is locked"), pause for
+    whichever writer is holding the lock, then retry. The pause loop
+    waits up to 20 minutes per attempt; 3 attempts is generous enough
+    that we'd only hit the re-raise path in a genuine deadlock the
+    user should know about (which we do by surfacing the error).
+    """
+    for attempt in range(_MAM_LOCK_RETRY_ATTEMPTS):
+        try:
+            await db.execute(sql, params)
+            return
+        except sqlite3.OperationalError as e:
+            if "database is locked" not in str(e).lower():
+                raise
+            if attempt == _MAM_LOCK_RETRY_ATTEMPTS - 1:
+                logger.error(
+                    f"MAM [{i+1}/{total}] UPDATE locked after "
+                    f"{_MAM_LOCK_RETRY_ATTEMPTS} attempts; aborting batch"
+                )
+                raise
+            logger.warning(
+                f"MAM [{i+1}/{total}] UPDATE locked on attempt {attempt + 1}; "
+                f"pausing for concurrent writer + retrying"
+            )
+            await _pause_for_concurrent_writers(db, i, total)
+
+
 async def scan_books_batch(
     db,
     session_id: str,
@@ -2495,36 +2617,7 @@ async def scan_books_batch(
         # to prevent. v1.1.9-dev3 testing confirmed: Goodreads spent 30s
         # blocked on UPDATE authors while MAM sat paused with its last
         # UPDATE uncommitted.
-        if state._source_scan_refs > 0 or state._library_sync_in_progress:
-            await db.commit()
-            reason_parts = []
-            if state._source_scan_refs > 0:
-                reason_parts.append(
-                    f"{state._source_scan_refs} source scan(s)"
-                )
-            if state._library_sync_in_progress:
-                reason_parts.append("library sync")
-            reason = " + ".join(reason_parts)
-            logger.info(
-                f"MAM [{i+1}/{len(rows)}] paused — {reason} in progress"
-            )
-            paused_at = asyncio.get_event_loop().time()
-            while (
-                state._source_scan_refs > 0
-                or state._library_sync_in_progress
-            ):
-                if asyncio.get_event_loop().time() - paused_at > 1200:
-                    logger.warning(
-                        f"MAM [{i+1}/{len(rows)}] paused 20min — "
-                        f"resuming anyway (refcount={state._source_scan_refs}, "
-                        f"library_sync={state._library_sync_in_progress})"
-                    )
-                    break
-                await asyncio.sleep(1.0)
-            else:
-                logger.info(
-                    f"MAM [{i+1}/{len(rows)}] resumed — concurrent writers finished"
-                )
+        await _pause_for_concurrent_writers(db, i, len(rows))
 
         logger.debug(f"MAM [{i+1}/{len(rows)}] {book_title[:65]} — {author_name[:35]}")
 
@@ -2538,34 +2631,52 @@ async def scan_books_batch(
         check = await check_book(session_id, book_title, author_name, format_priority, delay, lang_ids=lang_ids, series_name=book_series or "", content_type=content_type)
         stats["scanned"] += 1
 
+        # Second pause check, RIGHT before the UPDATE. check_book's
+        # network calls take 5-10s per book — easily enough time for
+        # a sync to start mid-iteration. Without this re-check, MAM
+        # would proceed to the UPDATE while the sync holds the writer
+        # lock, then crash on busy_timeout (Mark's UAT 2026-05-09).
+        await _pause_for_concurrent_writers(db, i, len(rows))
+
         # Write result to DB. Stamp mam_last_scanned_at on
         # successful scans (any status that actually represents a
         # round-trip with MAM) but NOT on auth_error — otherwise a
         # bad cookie would mark every book as recently scanned and
         # starve the queue when auth recovers. The CASE keeps the
         # existing timestamp untouched on auth_error.
-        await db.execute("""
-            UPDATE books SET mam_url=?, mam_status=?, mam_formats=?,
-                   mam_torrent_id=?, mam_category=?, mam_has_multiple=?, mam_my_snatched=?,
-                   mam_is_bundle=?,
-                   mam_last_scanned_at=CASE
-                       WHEN ? = 'auth_error' THEN mam_last_scanned_at
-                       ELSE ?
-                   END
-            WHERE id=?
-        """, (
-            check["mam_url"],
-            check["status"],
-            check["mam_formats"],
-            check["mam_torrent_id"],
-            check.get("mam_category", "") or "",
-            1 if check["mam_has_multiple"] else 0,
-            1 if check.get("mam_my_snatched") else 0,
-            1 if check.get("mam_is_bundle") else 0,
-            check["status"],
-            time.time(),
-            book_id,
-        ))
+        #
+        # `_execute_with_lock_retry` wraps the actual UPDATE so the
+        # tiny residual race window (sync starts AFTER our pause
+        # check but BEFORE the UPDATE submission lands at SQLite)
+        # gets retried-with-pause instead of crashing the batch.
+        await _execute_with_lock_retry(
+            db,
+            """
+                UPDATE books SET mam_url=?, mam_status=?, mam_formats=?,
+                       mam_torrent_id=?, mam_category=?, mam_has_multiple=?,
+                       mam_my_snatched=?, mam_is_bundle=?,
+                       mam_last_scanned_at=CASE
+                           WHEN ? = 'auth_error' THEN mam_last_scanned_at
+                           ELSE ?
+                       END
+                WHERE id=?
+            """,
+            (
+                check["mam_url"],
+                check["status"],
+                check["mam_formats"],
+                check["mam_torrent_id"],
+                check.get("mam_category", "") or "",
+                1 if check["mam_has_multiple"] else 0,
+                1 if check.get("mam_my_snatched") else 0,
+                1 if check.get("mam_is_bundle") else 0,
+                check["status"],
+                time.time(),
+                book_id,
+            ),
+            i,
+            len(rows),
+        )
 
         if check["status"] == STATUS_FOUND:
             stats["found"] += 1
