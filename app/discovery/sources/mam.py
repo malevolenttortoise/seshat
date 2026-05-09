@@ -40,7 +40,7 @@ from urllib.parse import urlencode
 import httpx
 
 from app import state
-from app.metadata.scoring import score_match, score_match_with_breakdown
+from app.metadata.scoring import score_match_with_breakdown
 
 logger = logging.getLogger("seshat.discovery.mam")
 
@@ -122,6 +122,30 @@ STATUS_POSSIBLE = "possible"
 STATUS_NOT_FOUND = "not_found"
 STATUS_AUTH_ERROR = "auth_error"
 STATUS_ERROR = "error"
+
+# Bundle detection — multi-signal heuristic for spotting series
+# collections / box sets / omnibuses that lump multiple individual
+# books into one torrent. Used to keep low-title-similarity bundle
+# matches out of the Found tier (the URL points at a collection,
+# not at the searched-for book) and to surface a badge in the UI.
+_BUNDLE_TITLE_KEYWORDS_RX = re.compile(
+    r"\b(?:series|collection|boxset|box\s*set|omnibus|trilogy|saga|anthology|complete\s+works)\b",
+    re.I,
+)
+# numfiles ≥ this triggers the bundle flag on its own. 5 is a deliberate
+# floor: a single book with 4 formats (azw3+epub+mobi+pdf) is the
+# largest non-bundle case observed in the wild; 5+ is conservatively
+# bundle territory.
+_BUNDLE_NUMFILES_FLOOR = 5
+
+# Below this title-similarity, an auto-promote on a bundle result is
+# blocked and the result is capped at "possible". Rationale: when the
+# bundle's title strongly matches the user's calibre title (e.g. user
+# explicitly catalogued the bundle), normal promote logic should fire.
+# But when only the author matches and the title is a different book
+# inside the bundle, the URL is misleading — keep as possible until
+# the (Part B2) filelist-verification path can promote with confidence.
+_BUNDLE_PROMOTE_TS_FLOOR = 0.85
 
 # Default delay between MAM API requests (seconds)
 DEFAULT_DELAY = 2.0
@@ -872,6 +896,55 @@ async def _mam_search(
 # Result evaluation — scores all results from a search
 # ---------------------------------------------------------------------------
 
+def _is_bundle(item: dict) -> bool:
+    """Detect whether a MAM result is a multi-book bundle / collection.
+
+    Three signals; ANY one is sufficient (false-positives are mostly
+    harmless — a tagged single book just gets a "Series Bundle" badge,
+    while a missed bundle could let a wrong URL silently look correct):
+
+      1. ``numfiles`` ≥ 5  — large file counts are bundles in practice
+      2. Title contains bundle keywords (series, collection, omnibus, …)
+      3. ``series_info`` has a range index like "1-12" or "1-4"
+         (single books always have a numeric index like "5")
+    """
+    numfiles = item.get("numfiles") or 0
+    try:
+        if int(numfiles) >= _BUNDLE_NUMFILES_FLOOR:
+            return True
+    except (ValueError, TypeError):
+        pass
+
+    title = str(item.get("title") or item.get("name") or "")
+    if title and _BUNDLE_TITLE_KEYWORDS_RX.search(title):
+        return True
+
+    raw_series = item.get("series_info")
+    if raw_series:
+        try:
+            parsed = (
+                json.loads(raw_series)
+                if isinstance(raw_series, str)
+                else raw_series
+            )
+            entries = (
+                parsed.values() if isinstance(parsed, dict)
+                else parsed if isinstance(parsed, list) else []
+            )
+            for entry in entries:
+                # MAM format: ["Series Name", "<index>", numeric_index]
+                # where <index> is "5" for single books and "1-12" / "1, 3, 5"
+                # for bundles.
+                if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+                    idx = str(entry[1])
+                    if "-" in idx or "," in idx:
+                        return True
+        except (ValueError, TypeError, AttributeError):
+            pass
+
+    return False
+
+
 def _evaluate_results(
     data: list[dict],
     calibre_title: str,
@@ -958,18 +1031,24 @@ def _evaluate_results(
         mam_authors = _parse_author_info(item.get("author_info"))
 
         # Combined score: 70% title similarity + 30% author overlap
-        # + series boost when known_series matches in the MAM title
-        score_full = score_match(
+        # + series boost when known_series matches in the MAM title.
+        # Use the breakdown variant so we can capture the individual
+        # title-similarity signal — needed for the bundle promote gate
+        # below, which compares ts to a floor independent of confidence.
+        bd_full = score_match_with_breakdown(
             record_title=mam_title, record_authors=mam_authors,
             search_title=calibre_title, search_authors=authors,
             known_series=known_series,
         )
-        score_search = score_match(
+        bd_search = score_match_with_breakdown(
             record_title=mam_title, record_authors=mam_authors,
             search_title=search_title, search_authors=authors,
             known_series=known_series,
         )
-        confidence = max(score_full, score_search)
+        confidence = max(bd_full["confidence"], bd_search["confidence"])
+        title_similarity_max = max(
+            bd_full["title_similarity"], bd_search["title_similarity"]
+        )
 
         # Legacy compatibility: also compute the old percentage for the
         # match_pct field (used by _pick_best_result sorting)
@@ -995,9 +1074,14 @@ def _evaluate_results(
             "format_str": ",".join(formats) if formats else filetypes_raw.strip(),
             "match_pct": pct,
             "confidence": confidence,
+            "title_similarity": title_similarity_max,
             "author_matched": author_ok,
             "seeders": int(item.get("seeders", 0) or 0),
             "my_snatched": my_snatched,
+            # Bundle/collection torrent flag — set when numfiles, title
+            # keywords, or series-range marker indicate this is a multi-
+            # book torrent rather than a single-book release.
+            "is_bundle": _is_bundle(item),
             # Passed through to the books row so Send-to-Pipeline can
             # forward it as the grab category. MAM returns values like
             # "Ebooks - Fantasy" here — passed along as-is.
@@ -1031,7 +1115,7 @@ async def check_book(
 
     Returns dict with:
       status, mam_url, mam_torrent_id, mam_title, mam_formats, mam_has_multiple,
-      match_pct, best_format, passes_tried, search_link, error
+      mam_is_bundle, match_pct, best_format, passes_tried, search_link, error
     """
     if format_priority is None:
         format_priority = (
@@ -1051,6 +1135,7 @@ async def check_book(
         "mam_formats": None,
         "mam_has_multiple": False,
         "mam_my_snatched": False,
+        "mam_is_bundle": False,
         "match_pct": None,
         "best_format": None,
         "passes_tried": [],
@@ -1105,6 +1190,8 @@ async def check_book(
 
         pct = best["match_pct"]
         conf = best.get("confidence", pct / 100.0)
+        ts = best.get("title_similarity", 0.0)
+        is_bundle = bool(best.get("is_bundle", False))
 
         # Build candidate info
         candidate = {
@@ -1119,14 +1206,35 @@ async def check_book(
             "author_matched": best["author_matched"],
             "my_snatched": best.get("my_snatched", False),
             "category": best.get("category", "") or "",
+            "is_bundle": is_bundle,
         }
+
+        # Bundle promote-gate: confidence alone isn't enough to elevate a
+        # collection torrent to "Found" — the URL would point at a multi-
+        # book torrent rather than the searched-for single book. Require
+        # that title-similarity (not just blended confidence) clear a
+        # higher floor, OR that the user's calibre title strongly matches
+        # the bundle's own title (intentional bundle catalog entry). Part
+        # B2 will add a filelist-verification override that re-promotes
+        # a low-ts bundle when the search title appears as a filename.
+        promote_blocked_by_bundle = (
+            is_bundle
+            and conf >= MATCH_PROMOTE_SCORE
+            and ts < _BUNDLE_PROMOTE_TS_FLOOR
+        )
+        if promote_blocked_by_bundle:
+            logger.debug(
+                f"  Pass {pass_num}: BUNDLE-CAP '{best['mam_title'][:50]}' — "
+                f"conf={conf:.2f} would promote, but ts={ts:.2f} < "
+                f"{_BUNDLE_PROMOTE_TS_FLOOR} for a bundle; held as possible"
+            )
 
         # Promote to FOUND using the combined confidence score
         # (70% title similarity + 30% author overlap from scoring.py).
         # The old threshold was: pct >= 50 AND author_matched (boolean).
         # The new threshold uses the blended score which already accounts
         # for both title and author quality in one number.
-        if conf >= MATCH_PROMOTE_SCORE:
+        if conf >= MATCH_PROMOTE_SCORE and not promote_blocked_by_bundle:
             result["status"] = STATUS_FOUND
             result["passes_tried"].append(pass_num)
             result["mam_url"] = _torrent_url(best["torrent_id"])
@@ -1136,6 +1244,7 @@ async def check_book(
             result["mam_category"] = best.get("category", "") or ""
             result["mam_has_multiple"] = has_multiple
             result["mam_my_snatched"] = best.get("my_snatched", False)
+            result["mam_is_bundle"] = is_bundle
             result["match_pct"] = pct
             result["confidence"] = conf
             result["best_format"] = best.get("best_format", "")
@@ -1200,6 +1309,7 @@ async def check_book(
         result["mam_category"] = best_possible.get("category", "") or ""
         result["mam_has_multiple"] = best_possible["has_multiple"]
         result["mam_my_snatched"] = best_possible.get("my_snatched", False)
+        result["mam_is_bundle"] = best_possible.get("is_bundle", False)
         result["match_pct"] = best_possible["match_pct"]
         result["best_format"] = best_possible.get("best_format", "")
         result["passes_tried"] = [best_possible["pass"]]
@@ -1538,7 +1648,8 @@ async def scan_books_batch(
         # Write result to DB
         await db.execute("""
             UPDATE books SET mam_url=?, mam_status=?, mam_formats=?,
-                   mam_torrent_id=?, mam_category=?, mam_has_multiple=?, mam_my_snatched=?
+                   mam_torrent_id=?, mam_category=?, mam_has_multiple=?, mam_my_snatched=?,
+                   mam_is_bundle=?
             WHERE id=?
         """, (
             check["mam_url"],
@@ -1548,6 +1659,7 @@ async def scan_books_batch(
             check.get("mam_category", "") or "",
             1 if check["mam_has_multiple"] else 0,
             1 if check.get("mam_my_snatched") else 0,
+            1 if check.get("mam_is_bundle") else 0,
             book_id,
         ))
 
@@ -1748,12 +1860,14 @@ async def run_full_scan_batch(
 
         await db.execute("""
             UPDATE books SET mam_url=?, mam_status=?, mam_formats=?,
-                   mam_torrent_id=?, mam_has_multiple=?, mam_my_snatched=?
+                   mam_torrent_id=?, mam_has_multiple=?, mam_my_snatched=?,
+                   mam_is_bundle=?
             WHERE id=?
         """, (
             check["mam_url"], check["status"], check["mam_formats"],
             check["mam_torrent_id"], 1 if check["mam_has_multiple"] else 0,
             1 if check.get("mam_my_snatched") else 0,
+            1 if check.get("mam_is_bundle") else 0,
             book_id,
         ))
 

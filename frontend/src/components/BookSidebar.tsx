@@ -1473,7 +1473,8 @@ export function BookSidebar({
                 {book.mam_url &&
                 (book.mam_formats ||
                   book.mam_has_multiple ||
-                  book.mam_my_snatched) ? (
+                  book.mam_my_snatched ||
+                  book.mam_is_bundle) ? (
                   <div
                     style={{
                       display: "flex",
@@ -1524,6 +1525,21 @@ export function BookSidebar({
                         }}
                       >
                         Multiple uploads
+                      </span>
+                    ) : null}
+                    {book.mam_is_bundle ? (
+                      <span
+                        title="This MAM URL points at a series collection / bundle, not a single book"
+                        style={{
+                          fontSize: 11,
+                          padding: "1px 6px",
+                          borderRadius: 4,
+                          background: t.ylw + "22",
+                          color: t.ylwt,
+                          border: `1px solid ${t.ylw}33`,
+                        }}
+                      >
+                        Series bundle
                       </span>
                     ) : null}
                   </div>

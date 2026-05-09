@@ -761,7 +761,8 @@ async def clear_book_scan_data(data: dict = Body(...)):
         if clear_mam:
             await db.execute(
                 f"UPDATE books SET mam_url=NULL, mam_status=NULL, mam_formats=NULL, "
-                f"mam_torrent_id=NULL, mam_has_multiple=0, mam_my_snatched=0 "
+                f"mam_torrent_id=NULL, mam_has_multiple=0, mam_my_snatched=0, "
+                f"mam_is_bundle=0 "
                 f"WHERE id IN ({placeholders})",
                 book_ids,
             )
@@ -1022,13 +1023,15 @@ async def scan_books_mam(data: dict = Body(...), slug: str | None = Query(None))
                 continue
             await db.execute("""
                 UPDATE books SET mam_url=?, mam_status=?, mam_formats=?,
-                       mam_torrent_id=?, mam_has_multiple=?, mam_my_snatched=?
+                       mam_torrent_id=?, mam_has_multiple=?, mam_my_snatched=?,
+                       mam_is_bundle=?
                 WHERE id=?
             """, (
                 check["mam_url"], check["status"], check["mam_formats"],
                 check["mam_torrent_id"],
                 1 if check["mam_has_multiple"] else 0,
                 1 if check.get("mam_my_snatched") else 0,
+                1 if check.get("mam_is_bundle") else 0,
                 bid,
             ))
             stats["scanned"] += 1
@@ -1150,7 +1153,7 @@ async def bulk_skip_mam(data: dict = Body(...), slug: str | None = Query(None)):
         cur = await db.execute(
             f"UPDATE books SET mam_url=NULL, mam_status='not_applicable', "
             f"mam_formats=NULL, mam_torrent_id=NULL, mam_has_multiple=0, "
-            f"mam_my_snatched=0 WHERE id IN ({placeholders})",
+            f"mam_my_snatched=0, mam_is_bundle=0 WHERE id IN ({placeholders})",
             book_ids,
         )
         await db.commit()

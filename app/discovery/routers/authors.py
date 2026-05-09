@@ -510,7 +510,8 @@ async def _clear_authors_in_library(
     if clear_mam:
         await db.execute(
             f"UPDATE books SET mam_url=NULL, mam_status=NULL, mam_formats=NULL, "
-            f"mam_torrent_id=NULL, mam_has_multiple=0, mam_my_snatched=0 "
+            f"mam_torrent_id=NULL, mam_has_multiple=0, mam_my_snatched=0, "
+            f"mam_is_bundle=0 "
             f"WHERE author_id IN ({placeholders})",
             author_ids,
         )
@@ -888,7 +889,7 @@ async def _skip_mam_for_author_ids_in_library(
     cur = await db.execute(
         f"UPDATE books SET mam_url=NULL, mam_status='not_applicable', "
         f"mam_formats=NULL, mam_torrent_id=NULL, mam_has_multiple=0, "
-        f"mam_my_snatched=0 WHERE author_id IN ({placeholders})",
+        f"mam_my_snatched=0, mam_is_bundle=0 WHERE author_id IN ({placeholders})",
         author_ids,
     )
     return cur.rowcount or 0
@@ -1149,7 +1150,8 @@ async def scan_authors_mam(data: dict = Body(...)):
                         await db2.execute(
                             """
                             UPDATE books SET mam_url=?, mam_status=?, mam_formats=?,
-                                   mam_torrent_id=?, mam_has_multiple=?, mam_my_snatched=?
+                                   mam_torrent_id=?, mam_has_multiple=?, mam_my_snatched=?,
+                                   mam_is_bundle=?
                             WHERE id=?
                             """,
                             (
@@ -1157,6 +1159,7 @@ async def scan_authors_mam(data: dict = Body(...)):
                                 check["mam_torrent_id"],
                                 1 if check["mam_has_multiple"] else 0,
                                 1 if check.get("mam_my_snatched") else 0,
+                                1 if check.get("mam_is_bundle") else 0,
                                 bid,
                             ),
                         )

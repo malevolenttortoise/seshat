@@ -167,6 +167,7 @@ export interface Book {
   mam_torrent_id?: string | null;
   mam_has_multiple?: 0 | 1;
   mam_my_snatched?: 0 | 1;
+  mam_is_bundle?: 0 | 1;
   // Calibre linkage
   calibre_id?: number | null;
   // Audiobook-specific — populated when the book came from an ABS

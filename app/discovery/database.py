@@ -121,6 +121,7 @@ CREATE TABLE IF NOT EXISTS books (
     mam_torrent_id TEXT,
     mam_has_multiple INTEGER NOT NULL DEFAULT 0,
     mam_my_snatched INTEGER NOT NULL DEFAULT 0,
+    mam_is_bundle INTEGER NOT NULL DEFAULT 0,
     -- source_url stores a JSON dict mapping source-plugin name to URL:
     --   {"goodreads": "https://www.goodreads.com/book/show/123",
     --    "hardcover": "https://hardcover.app/books/slug", ...}
@@ -509,6 +510,11 @@ MIGRATIONS = [
     "ALTER TABLE books ADD COLUMN metadata_source_pref TEXT NOT NULL DEFAULT 'seshat'",
     "ALTER TABLE books ADD COLUMN field_source_map TEXT",
     "ALTER TABLE books ADD COLUMN user_edited_fields TEXT NOT NULL DEFAULT '[]'",
+    # mam_is_bundle: tags MAM results that are series/collection torrents
+    # (multiple books in one upload) so the UI can show a "Series Bundle"
+    # badge and the scan logic can avoid auto-promoting low-title-match
+    # bundles to "Found". See _is_bundle in app/discovery/sources/mam.py.
+    "ALTER TABLE books ADD COLUMN mam_is_bundle INTEGER NOT NULL DEFAULT 0",
 ]
 
 

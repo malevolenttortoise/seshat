@@ -748,13 +748,15 @@ async def mam_scan_single_book(book_id: int, slug: str | None = Query(None)):
         )
         await db.execute("""
             UPDATE books SET mam_url=?, mam_status=?, mam_formats=?,
-                   mam_torrent_id=?, mam_has_multiple=?, mam_my_snatched=?
+                   mam_torrent_id=?, mam_has_multiple=?, mam_my_snatched=?,
+                   mam_is_bundle=?
             WHERE id=?
         """, (
             check["mam_url"], check["status"], check["mam_formats"],
             check["mam_torrent_id"],
             1 if check["mam_has_multiple"] else 0,
             1 if check.get("mam_my_snatched") else 0,
+            1 if check.get("mam_is_bundle") else 0,
             book_id,
         ))
         await db.commit()
@@ -766,6 +768,7 @@ async def mam_scan_single_book(book_id: int, slug: str | None = Query(None)):
             "mam_formats": check["mam_formats"],
             "mam_has_multiple": check["mam_has_multiple"],
             "mam_my_snatched": check.get("mam_my_snatched", False),
+            "mam_is_bundle": check.get("mam_is_bundle", False),
             "match_pct": check.get("match_pct"),
             "best_format": check.get("best_format"),
             "passes_tried": check.get("passes_tried", []),
@@ -869,13 +872,15 @@ async def mam_scan_single_author(author_id: int, slug: str | None = None):
                     continue
                 await bdb.execute("""
                     UPDATE books SET mam_url=?, mam_status=?, mam_formats=?,
-                           mam_torrent_id=?, mam_has_multiple=?, mam_my_snatched=?
+                           mam_torrent_id=?, mam_has_multiple=?, mam_my_snatched=?,
+                           mam_is_bundle=?
                     WHERE id=?
                 """, (
                     check["mam_url"], check["status"], check["mam_formats"],
                     check["mam_torrent_id"],
                     1 if check["mam_has_multiple"] else 0,
                     1 if check.get("mam_my_snatched") else 0,
+                    1 if check.get("mam_is_bundle") else 0,
                     bid,
                 ))
                 state._mam_scan_progress["scanned"] += 1
