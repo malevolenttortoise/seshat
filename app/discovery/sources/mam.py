@@ -51,6 +51,7 @@ MAM_SEARCH_URL = "https://www.myanonamouse.net/tor/js/loadSearchJSONbasic.php"
 MAM_BROWSE_BASE = "https://www.myanonamouse.net/tor/browse.php"
 MAM_TORRENT_BASE = "https://www.myanonamouse.net/t"
 MAM_DYNIP_URL = "https://t.myanonamouse.net/json/dynamicSeedbox.php"
+MAM_FILELIST_URL = "https://www.myanonamouse.net/tor/filelist.php"
 EBOOK_CATEGORY = "14"
 AUDIOBOOK_CATEGORY = "13"
 
@@ -896,6 +897,110 @@ async def _mam_search(
 # Result evaluation — scores all results from a search
 # ---------------------------------------------------------------------------
 
+# Pulls filenames out of a MAM filelist HTML response. The response
+# is a fragment served by /tor/filelist.php with a fixed shape:
+#   <table id="fileListTable">
+#     <tr><td>path</td><td>filename.epub</td><td>size</td></tr>
+#     ...
+#   </table>
+# The middle <td> of each row is the filename. Patterns like:
+#   "John_Conroe_-_Demon_Accords_004_-_Duel_Nature.epub"
+#   "demon_accords_006_-_executable_-_john_conroe.epub"
+# are common; the parser doesn't normalize here — that happens in the
+# matcher so we keep extraction independent of comparison logic.
+_FILELIST_ROW_RX = re.compile(
+    r"<tr>\s*<td[^>]*>[^<]*</td>\s*<td[^>]*>([^<]+)</td>\s*<td[^>]*>[^<]*</td>\s*</tr>",
+    re.I | re.S,
+)
+
+
+def _parse_filelist_html(html: str) -> list[str]:
+    """Extract filenames (middle <td>) from a MAM filelist HTML fragment.
+
+    Returns an empty list on parse failure or empty response — callers
+    should treat empty as "verification couldn't run", not "verified
+    not in bundle". Title presence is unknowable without filenames.
+    """
+    if not html:
+        return []
+    return [m.group(1).strip() for m in _FILELIST_ROW_RX.finditer(html)]
+
+
+def _normalize_for_filename_match(text: str) -> str:
+    """Lower + strip extension + collapse non-word separators to spaces.
+
+    Used by both sides of the filename match: search title gets
+    normalized once, each filename gets normalized once, then we do a
+    substring check. Underscores, dashes, dots, and any other punctuation
+    all collapse to single spaces so naming variants compare equal.
+    """
+    if not text:
+        return ""
+    text = text.lower()
+    # Strip a trailing file extension if present (.epub, .mobi, etc.).
+    text = re.sub(r"\.[a-z0-9]{1,5}$", "", text)
+    # Collapse all non-alphanumeric runs to a single space.
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _filelist_contains_title(filenames: list[str], *titles: str) -> bool:
+    """True if any of the given titles appears as a substring in any
+    filename (after normalization). Multi-title support so callers can
+    try both the calibre title and a stripped/cleaned variant — they
+    only need ONE to hit for the bundle to be verified.
+    """
+    if not filenames or not titles:
+        return False
+    normalized_files = [_normalize_for_filename_match(f) for f in filenames]
+    normalized_files = [f for f in normalized_files if f]
+    if not normalized_files:
+        return False
+    for raw_title in titles:
+        title_norm = _normalize_for_filename_match(raw_title)
+        # Single-token titles are too weak — "dawn" would match
+        # "Bikini Dawn" when searching for a different "Dawn" book.
+        # Require at least 2 tokens to consider verification confident.
+        if not title_norm or len(title_norm.split()) < 2:
+            continue
+        for fn in normalized_files:
+            if title_norm in fn:
+                return True
+    return False
+
+
+async def _fetch_filelist(token: str, torrent_id: str) -> list[str]:
+    """Fetch the per-torrent filelist and return the filenames.
+
+    GET /tor/filelist.php?torrentid=<id> returns an HTML fragment with
+    a <table id="fileListTable"> whose middle <td> in each row is the
+    filename. Returns an empty list on any error — callers MUST treat
+    empty as "couldn't verify", not "verified absent".
+
+    Used by the bundle promote-cap path: when a multi-book torrent is
+    the best candidate for a single-book search and would otherwise
+    cap at "possible", a hit in the filelist promotes back to "found"
+    (the bundle URL is still correct because the user's book IS in it).
+    """
+    if not torrent_id:
+        return []
+    url = f"{MAM_FILELIST_URL}?torrentid={torrent_id}"
+    try:
+        resp = await _do_get(url, token)
+        if resp.status_code != 200 or not resp.text:
+            logger.debug(
+                f"  Filelist {torrent_id}: HTTP {resp.status_code}, "
+                f"body={len(resp.text or '')} chars — skipping verify"
+            )
+            return []
+        return _parse_filelist_html(resp.text)
+    except Exception as e:
+        # Verification is best-effort; a failed fetch shouldn't break
+        # the scan, just leave the bundle capped at "possible".
+        logger.debug(f"  Filelist {torrent_id}: fetch failed: {e}")
+        return []
+
+
 def _is_bundle(item: dict) -> bool:
     """Detect whether a MAM result is a multi-book bundle / collection.
 
@@ -1146,7 +1251,7 @@ async def check_book(
     # Track best "possible" across all passes
     best_possible = None
 
-    def _try_evaluate(pass_num: int, resp: dict, search_title: str) -> bool:
+    async def _try_evaluate(pass_num: int, resp: dict, search_title: str) -> bool:
         """
         Evaluate all results from a search pass. Returns True if cascade should stop.
         Updates result dict and best_possible as side effects.
@@ -1213,28 +1318,43 @@ async def check_book(
         # collection torrent to "Found" — the URL would point at a multi-
         # book torrent rather than the searched-for single book. Require
         # that title-similarity (not just blended confidence) clear a
-        # higher floor, OR that the user's calibre title strongly matches
-        # the bundle's own title (intentional bundle catalog entry). Part
-        # B2 will add a filelist-verification override that re-promotes
-        # a low-ts bundle when the search title appears as a filename.
+        # higher floor, OR (Part B2) that the search title appears as a
+        # filename inside the bundle (definitive proof the URL contains
+        # the user's book even though MAM's title is the collection name).
+        bundle_filelist_verified = False
         promote_blocked_by_bundle = (
             is_bundle
             and conf >= MATCH_PROMOTE_SCORE
             and ts < _BUNDLE_PROMOTE_TS_FLOOR
         )
         if promote_blocked_by_bundle:
-            logger.debug(
-                f"  Pass {pass_num}: BUNDLE-CAP '{best['mam_title'][:50]}' — "
-                f"conf={conf:.2f} would promote, but ts={ts:.2f} < "
-                f"{_BUNDLE_PROMOTE_TS_FLOOR} for a bundle; held as possible"
-            )
+            # Try to override the cap by fetching the torrent's filelist.
+            # ONE extra GET per bundle-capped result; bundles are rare
+            # enough in real libraries that the cost is bounded.
+            filenames = await _fetch_filelist(token, best["torrent_id"])
+            if filenames and _filelist_contains_title(filenames, title, search_title):
+                bundle_filelist_verified = True
+                logger.debug(
+                    f"  Pass {pass_num}: BUNDLE-VERIFIED '{best['mam_title'][:50]}' "
+                    f"— search title found in filelist; promoting to FOUND"
+                )
+            else:
+                logger.debug(
+                    f"  Pass {pass_num}: BUNDLE-CAP '{best['mam_title'][:50]}' — "
+                    f"conf={conf:.2f} would promote, but ts={ts:.2f} < "
+                    f"{_BUNDLE_PROMOTE_TS_FLOOR} for a bundle and search title "
+                    f"not found in filelist ({len(filenames)} files); held as possible"
+                )
 
         # Promote to FOUND using the combined confidence score
         # (70% title similarity + 30% author overlap from scoring.py).
         # The old threshold was: pct >= 50 AND author_matched (boolean).
         # The new threshold uses the blended score which already accounts
         # for both title and author quality in one number.
-        if conf >= MATCH_PROMOTE_SCORE and not promote_blocked_by_bundle:
+        should_promote = conf >= MATCH_PROMOTE_SCORE and (
+            not promote_blocked_by_bundle or bundle_filelist_verified
+        )
+        if should_promote:
             result["status"] = STATUS_FOUND
             result["passes_tried"].append(pass_num)
             result["mam_url"] = _torrent_url(best["torrent_id"])
@@ -1260,7 +1380,7 @@ async def check_book(
         r = await _mam_search(token, authors, title, lang_ids=lang_ids, content_type=content_type)
         await asyncio.sleep(delay)
         result["passes_tried"].append(1)
-        if _try_evaluate(1, r, title):
+        if await _try_evaluate(1, r, title):
             return result
 
         # --- Pass 2: author + core title (volume prefix stripped) ---
@@ -1268,7 +1388,7 @@ async def check_book(
         if core:
             r = await _mam_search(token, authors, core, lang_ids=lang_ids, content_type=content_type)
             await asyncio.sleep(delay)
-            if _try_evaluate(2, r, core):
+            if await _try_evaluate(2, r, core):
                 return result
 
         # --- Pass 3: author + subtitle right (part after colon) ---
@@ -1276,7 +1396,7 @@ async def check_book(
         if sub_right and sub_right != core:
             r = await _mam_search(token, authors, sub_right, lang_ids=lang_ids, content_type=content_type)
             await asyncio.sleep(delay)
-            if _try_evaluate(3, r, sub_right):
+            if await _try_evaluate(3, r, sub_right):
                 return result
 
         # --- Pass 4: author + short title (part before colon) ---
@@ -1284,14 +1404,14 @@ async def check_book(
         if short and short != title and short != core:
             r = await _mam_search(token, authors, short, lang_ids=lang_ids, content_type=content_type)
             await asyncio.sleep(delay)
-            if _try_evaluate(4, r, short):
+            if await _try_evaluate(4, r, short):
                 return result
 
         # --- Pass 5: title only (no author), loose cleaning ---
         title_only = core or sub_right or short or title
         r = await _mam_search(token, None, title_only, lang_ids=lang_ids, content_type=content_type)
         await asyncio.sleep(delay)
-        if _try_evaluate(5, r, title_only):
+        if await _try_evaluate(5, r, title_only):
             return result
 
     except _AuthError as e:

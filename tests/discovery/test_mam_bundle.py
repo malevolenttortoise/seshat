@@ -14,7 +14,27 @@ bundle when the search title appears as a filename.
 """
 from app.discovery.sources.mam import (
     _BUNDLE_PROMOTE_TS_FLOOR,
+    _filelist_contains_title,
     _is_bundle,
+    _normalize_for_filename_match,
+    _parse_filelist_html,
+)
+
+
+# Real captured response from /tor/filelist.php?torrentid=424895 — the
+# Demon Accords Series ebook bundle. Filenames use two distinct naming
+# styles in the same torrent (one author-first, one author-last), which
+# is exactly the kind of variant the normalizer + substring matcher
+# needs to handle.
+DEMON_ACCORDS_FILELIST_HTML = (
+    '<table class="tablesorter" id="fileListTable">'
+    '<thead><th>Path</th><th>Filename</th><th>Size</th></tr></thead><tbody>'
+    '<tr><td class="row1"></td><td class="row1">demon_accords_006_-_executable_-_john_conroe.epub</td><td class="row1">450.67 KiB</td></tr>'
+    '<tr><td class="row2"></td><td class="row2">demon_accords_007_-_forced_ascent_-_john_conroe.epub</td><td class="row2">435.49 KiB</td></tr>'
+    '<tr><td class="row1"></td><td class="row1">demon_accords_008_-_college_arcane_-_john_conroe.epub</td><td class="row1">455.80 KiB</td></tr>'
+    '<tr><td class="row2"></td><td class="row2">John_Conroe_-_Demon_Accords_004_-_Duel_Nature.epub</td><td class="row2">325.82 KiB</td></tr>'
+    '<tr><td class="row1"></td><td class="row1">John_Conroe_-_Demon_Accords_005_-_Fallen_Stars.epub</td><td class="row1">374.61 KiB</td></tr>'
+    '</tbody></table>'
 )
 
 
@@ -158,3 +178,100 @@ class TestBundlePromoteCap:
         # Bundle whose own title strongly matches the user's calibre
         # title (intentional bundle catalog entry) — let it promote.
         assert would_cap(True, 0.95, 0.95) is False
+
+
+class TestFilelistParser:
+    def test_extracts_filenames_from_real_response(self):
+        names = _parse_filelist_html(DEMON_ACCORDS_FILELIST_HTML)
+        assert len(names) == 5
+        assert "John_Conroe_-_Demon_Accords_004_-_Duel_Nature.epub" in names
+        assert "demon_accords_006_-_executable_-_john_conroe.epub" in names
+
+    def test_empty_html_returns_empty_list(self):
+        assert _parse_filelist_html("") == []
+        assert _parse_filelist_html(None) == []  # type: ignore[arg-type]
+
+    def test_no_table_returns_empty(self):
+        # MAM occasionally serves an error page or a redirect HTML when
+        # the torrent is gone — must not crash.
+        assert _parse_filelist_html("<html><body>not found</body></html>") == []
+
+    def test_malformed_html_returns_empty(self):
+        # Half-cut response from a truncated download.
+        assert _parse_filelist_html("<table><tr><td>") == []
+
+
+class TestNormalizeForFilenameMatch:
+    def test_strips_extension(self):
+        assert _normalize_for_filename_match("Duel_Nature.epub") == "duel nature"
+
+    def test_collapses_separators(self):
+        # Underscores, dashes, dots, multiple spaces all → single space.
+        assert _normalize_for_filename_match(
+            "John_Conroe_-_Demon_Accords_004_-_Duel_Nature.epub"
+        ) == "john conroe demon accords 004 duel nature"
+
+    def test_preserves_digits(self):
+        # Volume numbers must survive normalization — they're useful
+        # for distinguishing books in the same series.
+        assert "004" in _normalize_for_filename_match("book_004.epub")
+
+    def test_empty_input(self):
+        assert _normalize_for_filename_match("") == ""
+        assert _normalize_for_filename_match(None) == ""  # type: ignore[arg-type]
+
+
+class TestFilelistContainsTitle:
+    def setup_method(self):
+        self.filenames = _parse_filelist_html(DEMON_ACCORDS_FILELIST_HTML)
+
+    def test_title_in_filename_promotes_bundle(self):
+        # The whole point: searching for "Duel Nature" finds it inside
+        # the bundle's filelist even though the bundle's MAM title is
+        # "Demon Accords Series".
+        assert _filelist_contains_title(self.filenames, "Duel Nature") is True
+
+    def test_title_not_in_filelist(self):
+        # A book by the same author that isn't in this particular bundle.
+        assert _filelist_contains_title(self.filenames, "Some Other Book") is False
+
+    def test_alternate_naming_style(self):
+        # The Demon Accords torrent has TWO naming conventions in the
+        # same filelist; both should be matchable.
+        assert _filelist_contains_title(self.filenames, "Forced Ascent") is True
+        assert _filelist_contains_title(self.filenames, "College Arcane") is True
+
+    def test_multiple_titles_any_hit(self):
+        # When the cascade has both calibre_title and search_title (after
+        # subtitle stripping), passing both gives the user-favourable
+        # OR semantics. Ensures we don't miss a match because one variant
+        # didn't normalize cleanly.
+        assert _filelist_contains_title(
+            self.filenames,
+            "Bikini Days: An Unconventional Romance",
+            "Duel Nature",
+        ) is True
+
+    def test_single_word_title_rejected_to_avoid_false_positives(self):
+        # "Dawn" alone would substring-match "Bikini Dawn", "Dawn of Foo",
+        # etc. — too noisy. Verifier requires ≥ 2 tokens.
+        assert _filelist_contains_title(self.filenames, "Dawn") is False
+        assert _filelist_contains_title(self.filenames, "Nature") is False
+
+    def test_empty_filenames_returns_false(self):
+        assert _filelist_contains_title([], "Duel Nature") is False
+
+    def test_empty_titles_returns_false(self):
+        assert _filelist_contains_title(self.filenames) is False
+        assert _filelist_contains_title(self.filenames, "") is False
+        assert _filelist_contains_title(self.filenames, "", "") is False
+
+    def test_case_insensitive(self):
+        # Filenames in real bundles are mixed case; calibre titles too.
+        assert _filelist_contains_title(self.filenames, "DUEL NATURE") is True
+        assert _filelist_contains_title(self.filenames, "duel nature") is True
+
+    def test_punctuation_in_search_title_normalizes(self):
+        # If user's calibre title has punctuation but filename doesn't.
+        # "Duel: Nature" → "duel nature" → matches.
+        assert _filelist_contains_title(self.filenames, "Duel: Nature") is True
