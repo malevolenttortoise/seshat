@@ -333,6 +333,12 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
     slug = get_active_library() or "calibre"
     progress = state.get_lib_progress(slug)
 
+    # Initialize so the except handler below can reference sync_id
+    # safely even if the INSERT INTO sync_log itself fails (e.g.,
+    # database is locked). Previously the except did
+    # `... WHERE id=sync_id` unconditionally and crashed with
+    # UnboundLocalError, masking the original exception.
+    sync_id: int | None = None
     db = await get_db()
     try:
         cursor = await db.execute(
@@ -770,11 +776,27 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
 
     except Exception as e:
         logger.error(f"Calibre sync error: {e}", exc_info=True)
-        await db.execute(
-            "UPDATE sync_log SET finished_at=?, status='error', error=? WHERE id=?",
-            (time.time(), str(e), sync_id)
-        )
-        await db.commit()
+        # Only mark the sync_log row as errored when we actually got
+        # one inserted. If the original exception fired before sync_id
+        # was assigned, there's no row to update — and trying anyway
+        # would mask the real exception with UnboundLocalError.
+        if sync_id is not None:
+            try:
+                await db.execute(
+                    "UPDATE sync_log SET finished_at=?, status='error', error=? "
+                    "WHERE id=?",
+                    (time.time(), str(e), sync_id)
+                )
+                await db.commit()
+            except Exception:
+                # Don't let the audit-log write swallow the real
+                # error. Worst case the sync_log row stays in
+                # 'running' state — visible to the user as a stuck
+                # sync, which is preferable to silent loss.
+                logger.exception(
+                    "Failed to mark sync_log as errored — original "
+                    "error stands"
+                )
         progress.update({
             "running": False,
             "current_book": "",

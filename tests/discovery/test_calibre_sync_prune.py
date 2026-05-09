@@ -142,3 +142,41 @@ async def test_prune_leaves_non_calibre_rows_alone(discovery_db, monkeypatch):
         assert row["c"] == 1
     finally:
         await db.close()
+
+
+async def test_early_db_error_does_not_crash_except_handler(monkeypatch):
+    """When the very first INSERT (sync_log) raises, the except handler
+    must propagate the original exception cleanly — not crash with
+    UnboundLocalError because `sync_id` was never assigned.
+
+    Regression: 2026-05-09. A docker-exec sync race against uvicorn's
+    writer lock surfaced `sqlite3.OperationalError: database is locked`
+    on the sync_log INSERT, but the user saw an opaque
+    `UnboundLocalError: cannot access local variable 'sync_id' where
+    it is not associated with a value` instead — the except handler
+    referenced sync_id in its UPDATE WHERE clause. Real error masked,
+    diagnosis time wasted.
+    """
+    import sqlite3
+
+    from app.discovery import calibre_sync
+
+    class FailingDb:
+        async def execute(self, *args, **kwargs):
+            raise sqlite3.OperationalError("simulated database is locked")
+
+        async def commit(self):
+            pass
+
+        async def close(self):
+            pass
+
+    async def _fake_get_db(*args, **kwargs):
+        return FailingDb()
+
+    monkeypatch.setattr(calibre_sync, "get_db", _fake_get_db)
+
+    # Path args don't matter — the failure fires before _read_calibre_db
+    # is reached (the first sync_log INSERT raises).
+    with pytest.raises(sqlite3.OperationalError, match="simulated database is locked"):
+        await calibre_sync.sync_calibre("/nonexistent.db", "/nonexistent")

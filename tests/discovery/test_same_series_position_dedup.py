@@ -272,6 +272,173 @@ class TestMigration:
         assert second == 0
 
 
+# ─── Owned-collision guard (regression: Witcher case 2026-05-09) ──
+
+
+class TestOwnedCollisionGuard:
+    """When 2+ owned books collide on the same series position, dedup
+    must NOT delete any of them — that's lossy for what's almost always
+    a metadata error in the source library. Mark hit this when his
+    Calibre Witcher series had 'The Last Wish' and 'Blood of Elves'
+    both at series_index=1, and 'Time of Contempt' / 'Sword of Destiny'
+    both at series_index=2: every container restart silently dropped
+    one Calibre book per pair, then the next sync re-inserted it,
+    perpetual loop until the user happened to notice."""
+
+    async def test_two_owned_calibre_books_both_kept(self, discovery_db):
+        from app.discovery.database import _dedupe_same_series_position, get_db
+
+        author_id = await _insert_author("Andrzej Sapkowski")
+        series_id = await _insert_series("The Witcher", author_id)
+        a = await _insert_book(
+            "The Last Wish", author_id,
+            series_id=series_id, series_index=1.0, owned=1, source="calibre",
+        )
+        b = await _insert_book(
+            "Blood of Elves", author_id,
+            series_id=series_id, series_index=1.0, owned=1, source="calibre",
+        )
+
+        db = await get_db()
+        try:
+            deleted = await _dedupe_same_series_position(db)
+        finally:
+            await db.close()
+
+        # Neither book deleted — both remain in the library.
+        assert deleted == 0
+        rows = await _book_rows(author_id)
+        ids = sorted(r["id"] for r in rows)
+        assert ids == sorted([a, b])
+
+    async def test_three_owned_books_all_kept(self, discovery_db):
+        # Edge: a triple collision still keeps everyone. Unlikely in
+        # practice but the rule is "owned_count >= 2 → keep all".
+        from app.discovery.database import _dedupe_same_series_position, get_db
+
+        author_id = await _insert_author("Andrzej Sapkowski")
+        series_id = await _insert_series("The Witcher", author_id)
+        for title in ("Book A", "Book B", "Book C"):
+            await _insert_book(
+                title, author_id,
+                series_id=series_id, series_index=1.0, owned=1, source="calibre",
+            )
+
+        db = await get_db()
+        try:
+            deleted = await _dedupe_same_series_position(db)
+        finally:
+            await db.close()
+
+        assert deleted == 0
+        rows = await _book_rows(author_id)
+        assert len(rows) == 3
+
+    async def test_owned_calibre_plus_owned_abs_both_kept(self, discovery_db):
+        # Cross-source owned collision — same rule applies. Calibre
+        # has the ebook, ABS has the audiobook, both at series_index=1.
+        # Whether that's a metadata bug or intentional cross-format
+        # tracking, dedup-by-deletion is the wrong response.
+        from app.discovery.database import _dedupe_same_series_position, get_db
+
+        author_id = await _insert_author("Andrzej Sapkowski")
+        series_id = await _insert_series("The Witcher", author_id)
+        await _insert_book(
+            "The Last Wish (ebook)", author_id,
+            series_id=series_id, series_index=1.0, owned=1, source="calibre",
+        )
+        await _insert_book(
+            "The Last Wish (audiobook)", author_id,
+            series_id=series_id, series_index=1.0, owned=1, source="audiobookshelf",
+        )
+
+        db = await get_db()
+        try:
+            deleted = await _dedupe_same_series_position(db)
+        finally:
+            await db.close()
+
+        assert deleted == 0
+        rows = await _book_rows(author_id)
+        assert len(rows) == 2
+
+    async def test_owned_collision_does_not_block_other_groups(self, discovery_db):
+        # An owned-collision in series 'A' must not stop dedup of a
+        # legitimate single-owned-vs-unowned conflict in series 'B'.
+        from app.discovery.database import _dedupe_same_series_position, get_db
+
+        author_id = await _insert_author("Multi Series Author")
+        series_a = await _insert_series("Series A", author_id)
+        series_b = await _insert_series("Series B", author_id)
+
+        # Series A: owned-collision (kept).
+        await _insert_book(
+            "A1", author_id,
+            series_id=series_a, series_index=1.0, owned=1, source="calibre",
+        )
+        await _insert_book(
+            "A2", author_id,
+            series_id=series_a, series_index=1.0, owned=1, source="calibre",
+        )
+        # Series B: classic owned-vs-unowned (loser deleted).
+        keeper = await _insert_book(
+            "B owned", author_id,
+            series_id=series_b, series_index=1.0, owned=1, source="calibre",
+        )
+        await _insert_book(
+            "B Book 1", author_id,
+            series_id=series_b, series_index=1.0, owned=0, source="hardcover",
+        )
+
+        db = await get_db()
+        try:
+            deleted = await _dedupe_same_series_position(db)
+        finally:
+            await db.close()
+
+        # Exactly one delete — the unowned source-discovered B Book 1.
+        assert deleted == 1
+        rows = await _book_rows(author_id)
+        # 2 from series A (collision kept) + 1 from series B (winner) = 3.
+        assert len(rows) == 3
+        # Series B winner is the owned Calibre row.
+        assert any(r["id"] == keeper for r in rows)
+
+    async def test_owned_collision_emits_warning(
+        self, discovery_db, caplog
+    ):
+        # The user-visible signal that a metadata fix is needed in
+        # the source library. Without this log line, the duplicate
+        # would be invisible — books look fine in the UI; only a
+        # series-position-aware view would expose them.
+        import logging
+        from app.discovery.database import _dedupe_same_series_position, get_db
+
+        author_id = await _insert_author("Andrzej Sapkowski")
+        series_id = await _insert_series("The Witcher", author_id)
+        await _insert_book(
+            "The Last Wish", author_id,
+            series_id=series_id, series_index=1.0, owned=1, source="calibre",
+        )
+        await _insert_book(
+            "Blood of Elves", author_id,
+            series_id=series_id, series_index=1.0, owned=1, source="calibre",
+        )
+
+        db = await get_db()
+        try:
+            with caplog.at_level(logging.WARNING, logger="seshat.discovery.database"):
+                await _dedupe_same_series_position(db)
+        finally:
+            await db.close()
+
+        assert any(
+            "Series-position collision" in record.message
+            and "kept all 2" in record.message
+            for record in caplog.records
+        )
+
+
 # ─── Insert-time prevention via _merge_result ─────────────────
 
 class TestInsertTimePrevention:

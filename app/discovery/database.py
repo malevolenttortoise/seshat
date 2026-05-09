@@ -1095,6 +1095,19 @@ async def _dedupe_same_series_position(db) -> int:
          "Remnant Book 2".
       3. Stable tiebreak on lowest id.
 
+    SAFETY GUARD (added 2026-05-09 after the Witcher case): when 2+
+    candidates in the same group are OWNED (owned=1), this function
+    refuses to delete any of them and logs a warning instead.
+    Multiple owned books at the same series position is almost always
+    a metadata error in the source-of-truth library (Calibre,
+    Audiobookshelf) — e.g. Mark added "The Last Wish" and "Time of
+    Contempt" to Calibre at the same series_index values that "Blood
+    of Elves" and "Sword of Destiny" already occupied, so dedup was
+    silently dropping a real Calibre book on every container restart
+    until the next manual sync re-inserted it. Better to surface the
+    collision than data-loss-by-tiebreaker; the user fixes the
+    metadata in their library app.
+
     book_series_suggestions.book_id has ON DELETE CASCADE, so the
     loser's suggestion rows auto-drop. work_links in the pipeline DB
     become dangling but get reconciled by the next works-matcher
@@ -1149,6 +1162,26 @@ async def _dedupe_same_series_position(db) -> int:
     deleted = 0
     for (_author_id, _series_id, _idx), members in groups.items():
         if len(members) < 2:
+            continue
+        # Owned-collision guard: keep all rows when 2+ members are
+        # owned. The dedup picks ONE winner via title/id tiebreakers,
+        # and applying that to two real owned books would silently
+        # drop one of them. Surface the metadata conflict instead so
+        # the user fixes the source-of-truth library; a warning here
+        # plus the duplicate-rows-still-present state is recoverable,
+        # the deletion isn't.
+        owned_count = sum(1 for m in members if m["owned"])
+        if owned_count >= 2:
+            _db_logger.warning(
+                f"Series-position collision (kept all {len(members)} "
+                f"books): author_id={_author_id}, series_id={_series_id}, "
+                f"index={_idx} — fix the series numbering in your "
+                f"source library: "
+                + ", ".join(
+                    f"id={m['id']} '{m['title']}' (owned={m['owned']})"
+                    for m in members
+                )
+            )
             continue
         scored = sorted(members, key=_score, reverse=True)
         winner = scored[0]
