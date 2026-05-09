@@ -17,6 +17,7 @@ import pytest
 
 from app.discovery.sources.mam import (
     _BUNDLE_PROMOTE_TS_FLOOR,
+    _description_contains_title,
     _extract_mbsc,
     _fetch_filelist_response,
     _filelist_contains_title,
@@ -25,6 +26,7 @@ from app.discovery.sources.mam import (
     _is_bundle,
     _normalize_for_filename_match,
     _parse_filelist_html,
+    _strip_to_lines,
     get_current_mbsc_token,
     mark_mbsc_fresh,
     mbsc_is_stale,
@@ -684,3 +686,171 @@ class TestMbscStaleFlag:
             await mock_client.aclose()
 
         assert mbsc_is_stale() is False
+
+
+# ─── Description-based bundle verification ──────────────────
+
+
+class TestStripToLines:
+    """Description text comes back from MAM as a mix of HTML
+    (<br />, <strong>, etc.) and BBCode ([b], [size=4], [*], etc.).
+    Block-level markup must become line breaks; inline formatting
+    must vanish without affecting line structure."""
+
+    def test_html_br_becomes_newline(self):
+        result = _strip_to_lines("<strong>Title 1</strong><br />Title 2")
+        assert "Title 1" in result
+        assert "Title 2" in result
+
+    def test_strips_inline_html_tags(self):
+        result = _strip_to_lines("<strong>bold</strong> <em>italic</em>")
+        # Single line, formatting tags gone, content collapsed to one space
+        assert result == ["bold italic"]
+
+    def test_bbcode_list_marker_creates_lines(self):
+        result = _strip_to_lines("[*]First[*]Second[*]Third")
+        assert "First" in result
+        assert "Second" in result
+        assert "Third" in result
+
+    def test_bbcode_formatting_stripped(self):
+        result = _strip_to_lines("[b]bold[/b] [size=4]big[/size]")
+        assert result == ["bold big"]
+
+    def test_html_entities_decoded(self):
+        result = _strip_to_lines("foo&nbsp;bar &amp; baz &quot;q&quot;")
+        assert result == ['foo bar & baz "q"']
+
+    def test_p_div_li_become_newlines(self):
+        result = _strip_to_lines("<p>One</p><div>Two</div><li>Three</li>")
+        assert "One" in result
+        assert "Two" in result
+        assert "Three" in result
+
+    def test_real_world_demon_accords_pattern(self):
+        # Pattern Mark called out: <br /><br /><strong>Title - N</strong><br />
+        html = (
+            "<br /><br /><strong>Duel Nature - 4</strong><br />"
+            "<strong>Demon Driven - 2</strong><br />"
+        )
+        result = _strip_to_lines(html)
+        assert "Duel Nature - 4" in result
+        assert "Demon Driven - 2" in result
+
+    def test_real_world_bbcode_audiobook_listing(self):
+        # Pattern from the API docs example.
+        body = (
+            "[size=4][b]Love at Stake - Books 1-16[/b][/size]\r\n\r\n"
+            "[*] 01. How To Marry a Millionaire Vampire - Narrated by Foo - 11h35m, MP3\r\n"
+            "[*] 02. Vamps and the City - Narrated by Bar - 11h34m, MP3"
+        )
+        result = _strip_to_lines(body)
+        assert any("How To Marry a Millionaire Vampire" in l for l in result)
+        assert any("Vamps and the City" in l for l in result)
+
+    def test_empty_inputs(self):
+        assert _strip_to_lines("") == []
+        assert _strip_to_lines(None) == []
+
+
+class TestDescriptionContainsTitle:
+    """The structured-line check that gates bundle promotion when the
+    filelist signal isn't available. Conservative on false positives
+    (rejects prose mentions, recommendations, negations) and matches
+    the most common bundle-listing patterns MAM uploaders use."""
+
+    def test_real_world_strong_volume_pattern(self):
+        desc = "<br /><br /><strong>Duel Nature - 4</strong><br />"
+        assert _description_contains_title(desc, "Duel Nature") is True
+
+    def test_bbcode_list_pattern_with_narrator(self):
+        desc = (
+            "[*] 01. How To Marry a Millionaire Vampire - Narrated by Foo - 11h, MP3\r\n"
+            "[*] 02. Vamps and the City - Narrated by Bar - 11h34m, MP3"
+        )
+        assert _description_contains_title(desc, "How To Marry a Millionaire Vampire") is True
+        assert _description_contains_title(desc, "Vamps and the City") is True
+
+    def test_simple_dash_volume_marker(self):
+        desc = "<br />Duel Nature - 4<br />Demon Driven - 2<br />"
+        assert _description_contains_title(desc, "Duel Nature") is True
+        assert _description_contains_title(desc, "Demon Driven") is True
+
+    def test_book_word_volume(self):
+        desc = "<br />Duel Nature Book 4<br />"
+        assert _description_contains_title(desc, "Duel Nature") is True
+
+    def test_paren_book_volume(self):
+        desc = "<br />Duel Nature (Book 4)<br />"
+        assert _description_contains_title(desc, "Duel Nature") is True
+
+    def test_paren_year_after_title(self):
+        desc = "<br />Duel Nature (2013)<br />"
+        assert _description_contains_title(desc, "Duel Nature") is True
+
+    def test_numbered_list_no_volume_marker(self):
+        desc = "1. Duel Nature\n2. Demon Driven\n3. Brutal Asset"
+        assert _description_contains_title(desc, "Duel Nature") is True
+        assert _description_contains_title(desc, "Demon Driven") is True
+
+    def test_rejects_prose_mention(self):
+        # Recommendation prose — title appears mid-sentence with other
+        # words around it; structured-line check rejects.
+        desc = "Fans of Duel Nature will love this. Also from John Conroe."
+        assert _description_contains_title(desc, "Duel Nature") is False
+
+    def test_rejects_negation(self):
+        # We don't have semantic negation detection, but the title
+        # isn't on its own line so the structured check rejects anyway.
+        desc = "<br />This bundle does NOT include Duel Nature.<br />"
+        assert _description_contains_title(desc, "Duel Nature") is False
+
+    def test_rejects_recommendation_context(self):
+        desc = "<br />If you enjoyed Duel Nature, check out these books<br />"
+        assert _description_contains_title(desc, "Duel Nature") is False
+
+    def test_single_word_title_rejected(self):
+        # Same threshold as filelist matcher — single-token titles are
+        # too noisy to match standalone (they'd false-positive on every
+        # bundle listing that happens to contain that word).
+        desc = "<br /><strong>Dawn</strong><br />"
+        assert _description_contains_title(desc, "Dawn") is False
+
+    def test_empty_inputs(self):
+        assert _description_contains_title("", "Duel Nature") is False
+        assert _description_contains_title(None, "Duel Nature") is False
+        assert _description_contains_title("desc", "") is False
+        assert _description_contains_title("desc") is False
+
+    def test_multiple_titles_any_hit(self):
+        # OR semantics across the title alternates — same shape as
+        # _filelist_contains_title's variadic API.
+        desc = "<br /><strong>Duel Nature - 4</strong><br />"
+        assert _description_contains_title(desc, "Bikini Days", "Duel Nature") is True
+
+    def test_case_insensitive(self):
+        desc = "<br /><strong>DUEL NATURE - 4</strong><br />"
+        assert _description_contains_title(desc, "duel nature") is True
+        desc2 = "<br /><strong>duel nature - 4</strong><br />"
+        assert _description_contains_title(desc2, "DUEL NATURE") is True
+
+    def test_punctuation_in_title_normalizes(self):
+        # User's calibre title may have punctuation that the bundle
+        # listing omits (or vice versa). Normalization should handle it.
+        desc = "<br /><strong>Duel Nature - 4</strong><br />"
+        # Calibre title often has a colon for subtitle; bundle listing
+        # may not. Both should still match the core title.
+        assert _description_contains_title(desc, "Duel Nature") is True
+
+    def test_dash_title_not_confused_with_volume_marker(self):
+        # Title "Half-Elf Chronicles" contains a dash but it's part
+        # of the title, not a volume marker. The matcher should handle
+        # both forms (with and without volume suffix).
+        desc = "<br />Half-Elf Chronicles - 1<br />"
+        assert _description_contains_title(desc, "Half-Elf Chronicles") is True
+
+    def test_list_marker_followed_by_number(self):
+        # "[*] 01. Title" — both the BBCode list marker AND the
+        # numbering need stripping.
+        desc = "[*] 01. Duel Nature"
+        assert _description_contains_title(desc, "Duel Nature") is True

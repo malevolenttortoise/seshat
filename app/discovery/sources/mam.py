@@ -148,16 +148,20 @@ _BUNDLE_NUMFILES_FLOOR = 5
 # the (Part B2) filelist-verification path can promote with confidence.
 _BUNDLE_PROMOTE_TS_FLOOR = 0.85
 
-# Master switch for the bundle-filelist verification path. Production
-# fetch fires when the bundle cap path needs a tiebreaker (bundle +
-# author overlap + ts < BUNDLE_PROMOTE_TS_FLOOR). Auto-degrades to
-# Possible-with-badge when no mbsc is configured (the only request
-# shape MAM accepts on /tor/filelist.php — see _filelist_headers
-# docstring). End-to-end validated 2026-05-09 via debug-match against
-# the Demon Accords Series bundle. See project_seshat_mam_url_confidence
-# memory for the full design and the cookie-shape investigation
-# (commits 967054c + b6cb988).
-_FILELIST_VERIFICATION_ENABLED = True
+# Master switch for bundle URL verification (filelist + description
+# signals). Fires when the bundle cap path needs a tiebreaker (bundle +
+# author overlap + ts < BUNDLE_PROMOTE_TS_FLOOR). Two signals tried in
+# priority order:
+#   1. Filelist verification — definitive, requires mbsc cookie
+#      (auto-degrades to skip when mbsc not configured)
+#   2. Description verification — fallback, uses the documented Search
+#      API (TOS 1.7 approved), works without any extra setup
+# Either signal succeeding promotes the bundle to Found. End-to-end
+# validated 2026-05-09 via debug-match against the Demon Accords Series
+# bundle. See project_seshat_mam_url_confidence memory for the full
+# design history and the cookie-shape investigation (commits 967054c +
+# b6cb988).
+_BUNDLE_VERIFICATION_ENABLED = True
 
 # Default delay between MAM API requests (seconds)
 DEFAULT_DELAY = 2.0
@@ -1108,6 +1112,270 @@ def _filelist_contains_title(filenames: list[str], *titles: str) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# Description-based bundle verification
+# ---------------------------------------------------------------------------
+# Fallback signal for users who haven't configured mbsc (and therefore
+# can't use the filelist verification path). Uses the documented
+# Torrent Search JSON endpoint (on MAM's approved automation list per
+# TOS 1.7) with the `id` and `description` parameters to fetch a single
+# torrent's description, then checks whether the searched book title
+# appears as a structured list entry.
+#
+# Bundle uploaders typically format their content listings as:
+#   <br /><br /><strong>Duel Nature - 4</strong><br />
+#   [*] 01. How To Marry a Millionaire Vampire - Narrated by ...
+# We strip HTML/BBCode to a list of plain lines, then compare each
+# line (with leading numbering and trailing volume/narrator markers
+# stripped) against the searched title for an exact match. Naive
+# substring would false-positive on prose ("fans of X will love this"),
+# negations, and recommendations; the structured-line check rejects
+# all three.
+
+# Block-level HTML/BBCode that becomes a line break.
+_DESC_BLOCK_RX = re.compile(
+    r"<br\s*/?>|</?p\b[^>]*>|</?div\b[^>]*>|</?li\b[^>]*>|\[\*\]",
+    re.I,
+)
+
+# Inline HTML tags — strip without affecting line structure.
+_DESC_HTML_TAG_RX = re.compile(r"<[^>]+>")
+
+# Inline BBCode formatting tags — strip without affecting line structure.
+_DESC_BBCODE_RX = re.compile(
+    r"\[/?(?:b|i|u|s|size|color|font|center|left|right|quote|url|img|spoiler|hr)"
+    r"(?:=[^\]]*)?\]",
+    re.I,
+)
+
+# HTML entity decode (limited to the ones MAM descriptions actually use).
+_DESC_ENTITY_RX = re.compile(r"&(amp|nbsp|quot|apos|lt|gt|#\d+);", re.I)
+_DESC_ENTITY_MAP = {
+    "amp": "&",
+    "nbsp": " ",
+    "quot": '"',
+    "apos": "'",
+    "lt": "<",
+    "gt": ">",
+}
+
+
+def _strip_to_lines(text: Optional[str]) -> list[str]:
+    """Strip HTML/BBCode from a description and split into trimmed lines.
+
+    Block-level markup (<br>, <p>, <li>, [*]) becomes newlines so list
+    items surface as separate lines we can match against. Inline
+    formatting (<strong>, [b], [size=4], etc.) is dropped without
+    affecting line boundaries. HTML entities are decoded so &nbsp;
+    becomes a regular space.
+    """
+    if not text:
+        return []
+    s = _DESC_BLOCK_RX.sub("\n", text)
+    s = _DESC_HTML_TAG_RX.sub("", s)
+    s = _DESC_BBCODE_RX.sub("", s)
+
+    def _decode_entity(m: "re.Match[str]") -> str:
+        e = m.group(1)
+        if e.startswith("#"):
+            try:
+                return chr(int(e[1:]))
+            except ValueError:
+                return ""
+        return _DESC_ENTITY_MAP.get(e.lower(), "")
+
+    s = _DESC_ENTITY_RX.sub(_decode_entity, s)
+    lines: list[str] = []
+    for raw in s.split("\n"):
+        line = re.sub(r"\s+", " ", raw).strip()
+        if line:
+            lines.append(line)
+    return lines
+
+
+# Leading: optional list marker + optional numbering. Examples matched:
+#   "[*] ", "* ", "- ", "01. ", "1) ", "1: "
+_DESC_LEADING_RX = re.compile(
+    r"^[\[\(]?\*[\]\)]?\s*"
+    r"|^[*\-•]\s+"
+    r"|^\d+(?:\.\d+)?[\.\):]\s+",
+)
+
+
+def _line_match_candidates(line: str) -> list[str]:
+    """Generate progressively-stripped variants of a description line.
+
+    A bundle line might look like any of:
+      "Duel Nature"
+      "Duel Nature - 4"
+      "1. Duel Nature"
+      "[*] 01. How To Marry a Millionaire Vampire - Narrated by ... - MP3"
+      "Duel Nature (Book 4)"
+    We yield lowercased candidates progressively stripped of leading
+    numbering and trailing dash/parenthetical segments so the matcher
+    can compare any variant to the searched title.
+
+    Cap at 5 iterations of trailing strips so a pathologically dash-
+    heavy line can't loop forever.
+    """
+    if not line:
+        return []
+    s = re.sub(r"\s+", " ", line.strip().lower())
+    # Strip leading list markers / numbering — apply twice in case both
+    # are present (e.g. "[*] 01. Foo" → strip "[*]" → "01. Foo" → strip "01.").
+    for _ in range(2):
+        new = _DESC_LEADING_RX.sub("", s).strip()
+        if new == s:
+            break
+        s = new
+    if not s:
+        return []
+    candidates: list[str] = [s]
+    seen = {s}
+    current = s
+    for _ in range(5):
+        # Strip trailing parenthetical/bracketed segment (e.g. "(Book 4)",
+        # "[Tor 2024]", "(2019)").
+        new = re.sub(r"\s*[\(\[][^\)\]]*[\)\]]\s*$", "", current).strip()
+        if new and new != current:
+            current = new
+            if current not in seen:
+                candidates.append(current)
+                seen.add(current)
+            continue
+        # Strip trailing word-volume markers without a leading dash:
+        # "Book 4", "Vol. 4", "Volume 4", "#4". (Dash-separated forms
+        # like "- 4" are caught by the next branch.)
+        new = re.sub(
+            r"\s+(?:book|vol\.?|volume)\s+\d+(?:\.\d+)?\s*$|\s+#\d+\s*$",
+            "",
+            current,
+            flags=re.I,
+        ).strip()
+        if new and new != current:
+            current = new
+            if current not in seen:
+                candidates.append(current)
+                seen.add(current)
+            continue
+        # Strip trailing " - <something>" segment. Matches " - ", " – ",
+        # " — ". Use the LAST occurrence so we peel one tail-segment per
+        # iteration; multi-suffix lines like
+        # "Title - Narrated by X - 9h32m, MP3" peel cleanly.
+        last = max(
+            current.rfind(" - "),
+            current.rfind(" – "),
+            current.rfind(" — "),
+        )
+        if last > 0:
+            new = current[:last].strip()
+            if new and new != current and new not in seen:
+                candidates.append(new)
+                seen.add(new)
+                current = new
+                continue
+        break
+    return candidates
+
+
+def _description_contains_title(
+    description: Optional[str], *titles: str
+) -> bool:
+    """True if any of `titles` appears as a structured list entry in `description`.
+
+    Used by the description-based fallback for bundle URL verification
+    when filelist verification isn't available (mbsc not configured)
+    or returned no match. Bundle uploaders typically list contents in
+    the description with a structured pattern; this matches those
+    patterns while rejecting prose mentions.
+
+    Conservative on false positives — requires the line content (after
+    stripping leading numbering and trailing volume/narrator markers)
+    to EQUAL the title, not just contain it. This rejects:
+      - prose mentions ("fans of Duel Nature will love this")
+      - recommendation contexts ("if you enjoyed Duel Nature, ...")
+      - negations ("does NOT include Duel Nature")
+    Single-word titles are rejected (too noisy for standalone matching);
+    requires ≥ 2 tokens, same threshold as `_filelist_contains_title`.
+    """
+    if not description:
+        return False
+    valid_titles: set[str] = set()
+    for t in titles:
+        if not t:
+            continue
+        normalized = re.sub(r"\s+", " ", t.strip().lower())
+        if len(normalized.split()) < 2:
+            continue
+        valid_titles.add(normalized)
+    if not valid_titles:
+        return False
+    for line in _strip_to_lines(description):
+        for candidate in _line_match_candidates(line):
+            if candidate in valid_titles:
+                return True
+    return False
+
+
+async def _fetch_torrent_description(
+    token: str, torrent_id: str
+) -> Optional[str]:
+    """Fetch a single torrent's description via the documented Search API.
+
+    Uses /tor/js/loadSearchJSONbasic.php (on MAM's TOS 1.7 approved
+    automation list) with `tor.id` to scope the query and the top-level
+    `description` flag to include the description field in the response.
+    Returns the raw description string (may include HTML and/or BBCode)
+    or None on any failure — callers MUST treat None as "couldn't
+    verify" not "verified absent".
+
+    Used by the bundle URL verification path as a fallback when
+    filelist verification isn't available (mbsc not configured) or
+    returned no match. Description-mention is a weaker signal than
+    filelist-mention (uploaders can mention books that aren't in the
+    bundle in prose), so the matching helper applies a structured-line
+    check rather than naive substring.
+    """
+    if not torrent_id:
+        return None
+    try:
+        tid_int = int(torrent_id)
+    except (TypeError, ValueError):
+        return None
+    payload = json.dumps(
+        {
+            "tor": {
+                "id": tid_int,
+                "searchType": "all",
+                "searchIn": "torrents",
+                "browseFlagsHideVsShow": "0",
+                "startDate": "",
+                "endDate": "",
+                "hash": "",
+                "sortType": "default",
+                "startNumber": "0",
+            },
+            "description": "",
+            "perpage": 5,
+        }
+    )
+    try:
+        resp = await _do_post(MAM_SEARCH_URL, token, payload)
+        if resp.status_code != 200 or not resp.text:
+            return None
+        data = resp.json()
+    except Exception as e:
+        logger.debug(f"  Description fetch {torrent_id} failed: {e}")
+        return None
+    results = data.get("data") or []
+    if not results:
+        return None
+    desc = results[0].get("description")
+    if not isinstance(desc, str):
+        return None
+    return desc or None
+
+
 def _filelist_headers(mbsc_token: str, torrent_id: str) -> dict:
     """Headers for /tor/filelist.php that make MAM return the bare table.
 
@@ -1497,6 +1765,11 @@ async def check_book(
     # for the same answer. Cache is intentionally local to one check_book
     # call — no reason to keep cross-book state.
     filelist_cache: dict[str, list[str]] = {}
+    # Per-evaluation cache for description fetches — same shape as
+    # filelist_cache. A single book's evaluation may consider the same
+    # bundle across multiple cascade passes; cache so we hit the
+    # description endpoint at most once per bundle per evaluation.
+    description_cache: dict[str, Optional[str]] = {}
 
     async def _try_evaluate(pass_num: int, resp: dict, search_title: str) -> bool:
         """
@@ -1561,15 +1834,29 @@ async def check_book(
             "is_bundle": is_bundle,
         }
 
-        # Bundle filelist verification: when the best candidate is a
+        # Bundle URL verification: when the best candidate is a
         # multi-book torrent and the user's calibre title doesn't strongly
         # match the bundle's own title (e.g. searching for "Duel Nature"
         # against "Demon Accords Series"), confidence alone can't tell us
         # whether the bundle URL actually contains the searched book or
-        # is a coincidental author-only match. Fetch the bundle's filelist
-        # — a substring hit on the search title is definitive proof the
-        # URL is correct and the result should promote regardless of the
-        # blended confidence score.
+        # is a coincidental author-only match. Two signals try to verify
+        # in priority order:
+        #
+        #   1. FILELIST — fetch /tor/filelist.php and check filenames.
+        #      Most authoritative (filenames literally contain the book
+        #      title), but requires mbsc browser-session cookie.
+        #      Auto-degrades to None when mbsc isn't configured.
+        #
+        #   2. DESCRIPTION — fetch the bundle's torrent description via
+        #      the documented Search JSON API and check whether the title
+        #      appears as a structured list entry. Less authoritative
+        #      (uploaders can mention books that aren't in the bundle in
+        #      prose) but always available, and on TOS 1.7's approved
+        #      automation list. Structured-line check rejects most prose
+        #      false positives.
+        #
+        # Either succeeding promotes the bundle to Found regardless of
+        # the blended confidence score; both failing leaves the cap.
         #
         # Gate: bundle + author overlap + title-similarity below the
         # bundle floor. The author check keeps us from spending fetches
@@ -1577,47 +1864,67 @@ async def check_book(
         # title already strongly matches the bundle name (intentional
         # bundle catalog entries) since those promote via the normal
         # path without needing verification.
-        bundle_filelist_verified = False
-        needs_filelist_check = (
-            _FILELIST_VERIFICATION_ENABLED
+        bundle_contents_verified = False
+        needs_bundle_verification = (
+            _BUNDLE_VERIFICATION_ENABLED
             and is_bundle
             and best.get("author_matched", False)
             and ts < _BUNDLE_PROMOTE_TS_FLOOR
         )
-        if needs_filelist_check:
+        if needs_bundle_verification:
             tid = best["torrent_id"]
+            # Signal 1: filelist
             if tid not in filelist_cache:
                 filelist_cache[tid] = await _fetch_filelist(tid)
             filenames = filelist_cache[tid]
             if filenames and _filelist_contains_title(filenames, title, search_title):
-                bundle_filelist_verified = True
+                bundle_contents_verified = True
                 logger.debug(
-                    f"  Pass {pass_num}: BUNDLE-VERIFIED '{best['mam_title'][:50]}' "
-                    f"— search title found in filelist; promoting to FOUND"
-                )
-            else:
-                logger.debug(
-                    f"  Pass {pass_num}: BUNDLE '{best['mam_title'][:50]}' "
-                    f"— title not in filelist ({len(filenames)} files); "
-                    f"held as possible"
+                    f"  Pass {pass_num}: BUNDLE-VERIFIED-FILELIST "
+                    f"'{best['mam_title'][:50]}' — search title found in "
+                    f"filelist; promoting to FOUND"
                 )
 
+            # Signal 2: description (fallback). Skipped when filelist
+            # already verified — same outcome, no need to spend the
+            # extra API call.
+            if not bundle_contents_verified:
+                if tid not in description_cache:
+                    description_cache[tid] = await _fetch_torrent_description(token, tid)
+                description = description_cache[tid]
+                if description and _description_contains_title(
+                    description, title, search_title
+                ):
+                    bundle_contents_verified = True
+                    logger.debug(
+                        f"  Pass {pass_num}: BUNDLE-VERIFIED-DESCRIPTION "
+                        f"'{best['mam_title'][:50]}' — search title found in "
+                        f"bundle description; promoting to FOUND"
+                    )
+                else:
+                    logger.debug(
+                        f"  Pass {pass_num}: BUNDLE '{best['mam_title'][:50]}' "
+                        f"— title not in filelist ({len(filenames)} files) or "
+                        f"description; held as possible"
+                    )
+
         # The cap on confidence-driven promotes for bundles still applies
-        # when filelist verification didn't succeed — a high-confidence
-        # author-only match on a bundle whose filenames don't include
-        # the search title is exactly the false-Found we want to avoid.
+        # when neither verification signal succeeded — a high-confidence
+        # author-only match on a bundle whose contents don't include the
+        # search title is exactly the false-Found we want to avoid.
         promote_blocked_by_bundle = (
             is_bundle
             and ts < _BUNDLE_PROMOTE_TS_FLOOR
-            and not bundle_filelist_verified
+            and not bundle_contents_verified
         )
 
         # Promote to FOUND when:
-        #  - filelist verification succeeded (definitive — promote even
-        #    at low conf because the URL provably contains the book), OR
+        #  - bundle contents verification succeeded via filelist OR
+        #    description (definitive enough — promote even at low conf
+        #    because we have evidence the URL points at the right book), OR
         #  - confidence clears the regular threshold and the bundle cap
         #    isn't blocking it.
-        should_promote = bundle_filelist_verified or (
+        should_promote = bundle_contents_verified or (
             conf >= MATCH_PROMOTE_SCORE and not promote_blocked_by_bundle
         )
         if should_promote:
@@ -1798,6 +2105,8 @@ async def debug_check_book(
     # the best candidate in multiple passes only costs one HTTP. Mirrors
     # the production caching in check_book.
     debug_filelist_cache: dict[str, list[str]] = {}
+    # Same description cache pattern as production — see check_book.
+    debug_description_cache: dict[str, Optional[str]] = {}
 
     for pass_num, pass_authors, search_title in passes_to_run:
         pass_trace: dict = {
@@ -1871,9 +2180,12 @@ async def debug_check_book(
             is_bundle = _is_bundle(item)
             author_matched = _author_match(authors, item)
 
-            # Mirror the production B2.1 verification gate: bundle +
-            # author overlap + ts below the bundle floor → fetch filelist
-            # and check if the search title appears as a filename.
+            # Mirror the production verification gate: bundle + author
+            # overlap + ts below the bundle floor → try filelist fetch
+            # AND description fetch and check if the search title appears
+            # in either signal. See check_book for the full design;
+            # this trace surfaces both signals so debug-match can show
+            # exactly which one (if any) would have promoted.
             bundle_check: dict = {
                 "is_bundle": is_bundle,
                 "author_matched": author_matched,
@@ -1883,6 +2195,10 @@ async def debug_check_book(
                 "fetch_url": None,
                 "fetch_http_status": None,
                 "fetch_response_first_500_chars": None,
+                "description_fetched": False,
+                "description_length": 0,
+                "description_match": False,
+                "description_first_500_chars": None,
             }
             if (
                 is_bundle
@@ -1892,6 +2208,7 @@ async def debug_check_book(
             ):
                 bundle_check["verification_attempted"] = True
                 tid = str(item.get("id", ""))
+                # Signal 1: filelist
                 if tid not in debug_filelist_cache:
                     # Inline-fetch (rather than going through
                     # _fetch_filelist) so the raw status + a sample of
@@ -1920,20 +2237,41 @@ async def debug_check_book(
                 ):
                     bundle_check["filelist_match"] = True
 
-            # Decision now reflects what production would actually do
-            # under B2.1's verification logic, not just the conf-vs-
-            # threshold check that earlier debug versions reported.
+                # Signal 2: description (always tried in debug-match,
+                # even when filelist already matched, so the trace shows
+                # what each signal independently sees).
+                if tid not in debug_description_cache:
+                    debug_description_cache[tid] = (
+                        await _fetch_torrent_description(token, tid)
+                    )
+                desc = debug_description_cache.get(tid)
+                bundle_check["description_fetched"] = desc is not None
+                if desc:
+                    bundle_check["description_length"] = len(desc)
+                    bundle_check["description_first_500_chars"] = desc[:500]
+                    if _description_contains_title(desc, title, search_title):
+                        bundle_check["description_match"] = True
+
+            # Decision reflects what production would actually do under
+            # the dual-signal verification logic. Either signal matching
+            # is enough to promote.
+            verified = (
+                bundle_check["filelist_match"] or bundle_check["description_match"]
+            )
             if confidence < MATCH_MIN_SCORE:
                 decision = "skipped_below_min"
-            elif bundle_check["filelist_match"]:
-                decision = "would_promote_via_filelist_verification"
+            elif verified:
+                if bundle_check["filelist_match"]:
+                    decision = "would_promote_via_filelist_verification"
+                else:
+                    decision = "would_promote_via_description_verification"
             elif (
                 is_bundle
                 and ts_max < _BUNDLE_PROMOTE_TS_FLOOR
                 and confidence >= MATCH_PROMOTE_SCORE
             ):
                 # Conf would normally promote, but bundle cap blocks it
-                # (and verification didn't rescue it).
+                # (and neither verification signal rescued it).
                 decision = "bundle_capped_kept_as_possible"
             elif confidence >= MATCH_PROMOTE_SCORE:
                 decision = "would_promote_to_found"
