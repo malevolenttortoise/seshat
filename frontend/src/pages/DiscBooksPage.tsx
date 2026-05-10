@@ -453,7 +453,7 @@ function DesktopBooksPage({
       {mamScan && (mamScan.running || mamScan.status === "complete") ? (
         <div
           style={{
-            background: t.cardBg ?? t.bg,
+            background: t.bg2,
             border: `1px solid ${t.accent}`,
             borderLeft: `4px solid ${t.accent}`,
             borderRadius: 6,
