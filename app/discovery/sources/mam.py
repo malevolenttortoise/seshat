@@ -2657,6 +2657,12 @@ async def debug_check_book(
         pass_trace["raw_total_found"] = (
             resp.get("found") or resp.get("total_found") or resp.get("total")
         )
+        # Surface MAM's `error` field when present (e.g. malformed query
+        # syntax) — without this the trace only shows raw_response_keys
+        # and we can't tell "no matches" apart from "MAM rejected the
+        # query." Most relevant for the scoped-operator probe passes.
+        if "error" in resp:
+            pass_trace["raw_error"] = resp.get("error")
         data = resp.get("data") or []
         pass_trace["result_count_returned"] = len(data)
         if data:
