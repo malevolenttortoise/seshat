@@ -1467,6 +1467,40 @@ def _line_match_candidates(line: str) -> list[str]:
     return candidates
 
 
+def _description_mentions_title_loose(
+    description: Optional[str], title: str
+) -> bool:
+    """Loose substring match for single-torrent Cohort C rescue.
+
+    Different from `_description_contains_title` (structured-line check
+    used for bundle URL verification) — this accepts ANY mention with
+    word-boundary anchoring. Used when text and cover both fail but
+    the author matched and confidence is in the Possible band.
+
+    Conservative pre-filter to reduce false-positive surface:
+      - Strip subtitle (everything after first ":" or " - ")
+      - Reject if cleaned title is < 2 tokens AND < 5 chars (short
+        single words like "Raw" are too noisy; longer single words
+        like "Incarceron" are distinctive enough)
+
+    Word-boundary regex match (`\\b<title>\\b`) so "raw" doesn't match
+    "raw emotion" inside another book's description that happens to
+    appear in this torrent's body. The author-matched gate upstream
+    is the primary false-positive defense; this match adds a second.
+    """
+    if not description or not title:
+        return False
+    short = title.split(":")[0].split(" - ")[0].strip()
+    if not short:
+        return False
+    short_lower = re.sub(r"\s+", " ", short.lower())
+    if len(short_lower.split()) < 2 and len(short_lower) < 5:
+        return False
+    desc_text = " ".join(_strip_to_lines(description)).lower()
+    pattern = r"\b" + re.escape(short_lower) + r"\b"
+    return bool(re.search(pattern, desc_text))
+
+
 def _description_contains_title(
     description: Optional[str], *titles: str
 ) -> bool:
@@ -2084,6 +2118,39 @@ async def check_book(
         if not matches:
             return False
 
+        # ── Volume disambiguation (Cohort C rescue) ───────────────
+        # Use the ORIGINAL `title` (closure variable, the calibre title)
+        # for volume comparison, NOT the per-pass `search_title`. The
+        # variant passes (B2) strip trailing numbers from search_title
+        # to bridge MAM's tokenization mismatch — those stripped queries
+        # MUST still volume-disambiguate against the user's original
+        # intent. For Raw Bk1 (orig vol=None), penalize sibling-volume
+        # candidates (Raw V, Raw VI, etc.); for Right of Retribution 2
+        # (orig vol=2), drop candidates with mismatched volumes outright.
+        # Imported lazily to avoid a hard import dep at module load.
+        from app.metadata.scoring import _extract_volume as _vol_extract
+        orig_vol = _vol_extract(title)
+        for m in matches:
+            cand_vol = _vol_extract(m["mam_title"])
+            if cand_vol is not None and orig_vol is not None and cand_vol != orig_vol:
+                # Definitive: same series, different book.
+                m["confidence"] = 0.0
+                m["volume_mismatch"] = True
+            elif orig_vol is None and cand_vol is not None:
+                # Soft penalty: user searched without a volume marker,
+                # candidate has one — likely a sibling, prefer the
+                # no-volume sibling if one exists. -0.20 is enough to
+                # break ties at conf=0.40 without burying genuinely
+                # high-confidence matches.
+                m["confidence"] = max(0.0, m["confidence"] - 0.20)
+                m["volume_penalty_applied"] = True
+
+        # Re-filter against the min threshold after penalties — drops
+        # candidates whose post-penalty confidence falls below MATCH_MIN_SCORE.
+        matches = [m for m in matches if m["confidence"] >= MATCH_MIN_SCORE]
+        if not matches:
+            return False
+
         # Separate into author-confirmed and author-unconfirmed
         confirmed = [m for m in matches if m["author_matched"]]
         all_viable = confirmed if confirmed else matches
@@ -2279,17 +2346,52 @@ async def check_book(
         # promote_blocked_by_bundle.
         cover_verified = best.get("cover_signal") == "promote"
 
+        # Cohort C rescue (B3a): single-torrent description verification.
+        # When cover-pHash didn't promote AND the candidate sits in the
+        # Possible band with author matched, fetch the description and
+        # check if the searched title appears (loose substring match).
+        # Cohort C cases (right book, visually-different cover) often
+        # leave a strong title mention in the publisher's description,
+        # which gives us a positive signal cover-pHash can't provide.
+        # Gated narrowly: non-bundle, author matched, conf in Possible
+        # band, no cover promote — keeps API fetches scoped to cases
+        # that actually need rescue. TOS-allowed via documented Search
+        # API (same as bundle description path Phase 4).
+        single_torrent_description_verified = False
+        needs_single_desc_check = (
+            _BUNDLE_VERIFICATION_ENABLED
+            and not cover_verified
+            and not is_bundle
+            and best.get("author_matched", False)
+            and MATCH_MIN_SCORE <= conf < MATCH_PROMOTE_SCORE
+        )
+        if needs_single_desc_check:
+            tid = best["torrent_id"]
+            if tid not in description_cache:
+                description_cache[tid] = await _fetch_torrent_description(token, tid)
+            description = description_cache[tid]
+            if description and _description_mentions_title_loose(description, title):
+                single_torrent_description_verified = True
+                logger.debug(
+                    f"  Pass {pass_num}: COHORT-C-RESCUE-DESCRIPTION "
+                    f"'{best['mam_title'][:50]}' — title found in description; "
+                    f"promoting Possible-band candidate to FOUND"
+                )
+
         # Promote to FOUND when:
         #  - cover-pHash verification matched (definitive — same image
         #    means same upload, even when text score disagrees), OR
         #  - bundle contents verification succeeded via filelist OR
         #    description (definitive enough — promote even at low conf
         #    because we have evidence the URL points at the right book), OR
+        #  - single-torrent description verification matched (Cohort C
+        #    rescue — title mentioned in description), OR
         #  - confidence clears the regular threshold and the bundle cap
         #    isn't blocking it.
         should_promote = (
             cover_verified
             or bundle_contents_verified
+            or single_torrent_description_verified
             or (conf >= MATCH_PROMOTE_SCORE and not promote_blocked_by_bundle)
         )
         if should_promote:

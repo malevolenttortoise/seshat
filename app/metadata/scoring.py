@@ -53,6 +53,23 @@ _VOLUME_RX = re.compile(
     re.I,
 )
 
+# Trailing Roman numerals (II-XX, deliberately skipping "I" alone — too
+# easily a real word like "I, Robot"). Anchored to title end so we don't
+# match Roman characters inside titles ("X-Men", "II of III").
+_ROMAN_VOLUME_RX = re.compile(
+    r"\s+(II|III|IV|V|VI|VII|VIII|IX|X|XI|XII|XIII|XIV|XV|XVI|XVII|XVIII|XIX|XX)\s*$",
+    re.I,
+)
+# Trailing bare arabic number (1-2 digits, anchored). Mirrors what MAM
+# uploaders use as the volume marker on series like "Right of Retribution 02".
+_TRAILING_ARABIC_VOLUME_RX = re.compile(r"\s+(\d{1,2})\s*$")
+
+_ROMAN_TO_INT = {
+    "II": 2, "III": 3, "IV": 4, "V": 5, "VI": 6, "VII": 7, "VIII": 8,
+    "IX": 9, "X": 10, "XI": 11, "XII": 12, "XIII": 13, "XIV": 14,
+    "XV": 15, "XVI": 16, "XVII": 17, "XVIII": 18, "XIX": 19, "XX": 20,
+}
+
 # Volume RANGES like "Books 1-4", "Vol. 1-12", "Volumes 3-7". Bundle
 # torrents commonly use these patterns. Used by the volume-range
 # mismatch short-circuit to definitively reject candidates whose range
@@ -73,14 +90,34 @@ _VOLUME_RANGE_TRAILING_RX = re.compile(
 def _extract_volume(title: str) -> int | None:
     """Return the integer volume index from a title, or None if absent.
 
-    Examples: "Foo: Book 5" → 5, "Foo, Vol. 12" → 12, "Foo" → None.
-    Title-range markers like "1-4" deliberately don't match (no keyword
-    prefix) — those signal bundles, handled by `_extract_volume_range`.
+    Three pattern tiers, in priority order:
+      1. Keyworded: "Foo: Book 5", "Foo, Vol. 12", "Foo Volume 7"
+      2. Trailing Roman numeral: "Raw V" → 5, "Star Wars VII" → 7
+         (deliberately skips bare "I" alone — too easily a real word
+         like "I, Robot")
+      3. Trailing bare arabic: "Right of Retribution 02" → 2,
+         "Domestic Decay 2" → 2 (matches both zero-padded and bare;
+         what MAM uploaders use most commonly for series volumes)
+
+    Range markers like "1-4" deliberately don't match — those signal
+    bundles, handled by `_extract_volume_range` (separate short-circuit
+    in score_match_with_breakdown).
+
+    Examples: "Foo" → None, "Foo: Book 5" → 5, "Raw V" → 5,
+    "Right of Retribution 02" → 2, "I, Robot" → None.
     """
     if not title:
         return None
     m = _VOLUME_RX.search(title)
-    return int(m.group(1)) if m else None
+    if m:
+        return int(m.group(1))
+    m = _ROMAN_VOLUME_RX.search(title)
+    if m:
+        return _ROMAN_TO_INT[m.group(1).upper()]
+    m = _TRAILING_ARABIC_VOLUME_RX.search(title)
+    if m:
+        return int(m.group(1))
+    return None
 
 
 def _extract_volume_range(title: str) -> tuple[int, int] | None:
