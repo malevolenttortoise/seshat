@@ -60,7 +60,12 @@ def _mam_item(
 @pytest.fixture
 def patch_search(monkeypatch):
     """Monkeypatch `_mam_search` to return canned responses (same response
-    for every pass, since debug_check_book runs all 5 passes)."""
+    for every pass, since debug_check_book runs all 5 passes). Also
+    patches `_scoped_filename_search` to return an empty set so that
+    Part D filename verification stays inert in cover-focused tests
+    (the canned `_mam_search` response would otherwise be reused for
+    the scoped probe and unintentionally mark every result as
+    filename-verified)."""
     captured_calls = {"n": 0}
     canned: dict = {"resp": _make_mam_response([])}
 
@@ -68,7 +73,11 @@ def patch_search(monkeypatch):
         captured_calls["n"] += 1
         return canned["resp"]
 
+    async def _fake_scoped_filename_search(*_args, **_kwargs):
+        return set()
+
     monkeypatch.setattr(mam_mod, "_mam_search", _fake_search)
+    monkeypatch.setattr(mam_mod, "_scoped_filename_search", _fake_scoped_filename_search)
     return canned
 
 

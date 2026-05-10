@@ -222,6 +222,15 @@ _BUNDLE_PROMOTE_TS_FLOOR = 0.85
 # list. See feedback_mam_mbsc_filelist_tos.md +
 # project_seshat_filelist_future_reenable.md.
 _BUNDLE_VERIFICATION_ENABLED = True
+# Scoped filename verification (Part D). Fires ONE MAM search per book
+# scan using the inline `@(title,filenames) X @author Y` operator —
+# the existing-API alternative to filelist exposure that MAM staff
+# suggested in the 2026-05-10 forum exchange. Strongest signal in the
+# verification chain: cheaper than per-candidate cover/description
+# fetches AND more reliable than description on prose-only bundle
+# layouts (UAT 2026-05-10: 5 of 6 cases where description failed but
+# scoped filename verification succeeded). Default on.
+_FILENAME_VERIFICATION_ENABLED = True
 
 # ── Cover-image verification (Part C) ──────────────────────────
 # Multi-candidate cover-pHash ranker for MAM URL verification. When
@@ -1553,6 +1562,57 @@ def _description_contains_title(
     return False
 
 
+async def _scoped_filename_search(
+    token: str,
+    title: str,
+    authors: str,
+    content_type: str = "ebook",
+    lang_ids: Optional[list[int]] = None,
+) -> set[str]:
+    """Fire one scoped MAM search to identify torrents whose filename
+    index matches the searched title (with the author also matching).
+
+    Uses MAM's inline `@(title,filenames) X @author Y` operator — the
+    existing-API path staff suggested as the alternative to filelist
+    exposure (forum exchange 2026-05-10). Returns the set of torrent_ids
+    in the response (empty set on error or no matches; never raises
+    except on auth — same pattern as cover and description helpers).
+
+    PERIOD STRIPPING: MAM's author index stores e.g. "Michael R Hicks"
+    without the period after the initial. Our Calibre data has the
+    period. The strict `@author` operator tokenizes "R." differently
+    than "R", which causes zero-result responses on author names with
+    period-bearing initials. UAT canary: case 3 (Forged in Flame /
+    Michael R. Hicks) returned 0 with periods, 2 results without.
+    Stripping all periods is a sound transform — no real author name
+    relies on a period for identity, and MAM appears to drop them
+    when indexing.
+    """
+    author_no_periods = (authors or "").replace(".", "").strip()
+    if not title or not author_no_periods:
+        return set()
+    text_override = f"@(title,filenames) {title} @author {author_no_periods}"
+    try:
+        resp = await _mam_search(
+            token, authors, title,
+            text_override=text_override,
+            content_type=content_type,
+            lang_ids=lang_ids,
+        )
+    except _AuthError:
+        raise
+    except Exception as e:
+        logger.debug(f"Scoped filename search error for '{title[:40]}': {e}")
+        return set()
+    if not resp or not isinstance(resp.get("data"), list):
+        return set()
+    return {
+        str(item.get("id", ""))
+        for item in resp["data"]
+        if item.get("id")
+    }
+
+
 async def _fetch_torrent_description(
     token: str, torrent_id: str
 ) -> Optional[str]:
@@ -1970,6 +2030,20 @@ async def check_book(
     # carries hits across books; this in-memory cache covers the in-call
     # repeat candidates that don't need a SQLite round-trip.
     cover_phash_cache: dict[str, Optional[str]] = {}
+    # Scoped filename verification (Part D): one search per book scan,
+    # cached lazily across cascade passes. None = not yet fetched, set
+    # = fetched (possibly empty). The query is independent of which
+    # cascade pass surfaces a candidate, so one fetch covers all passes.
+    filename_verified_set: Optional[set[str]] = None
+
+    async def _ensure_filename_verified_set() -> set[str]:
+        nonlocal filename_verified_set
+        if filename_verified_set is None:
+            filename_verified_set = await _scoped_filename_search(
+                token, title, authors,
+                content_type=content_type, lang_ids=lang_ids,
+            )
+        return filename_verified_set
 
     async def _try_evaluate(pass_num: int, resp: dict, search_title: str) -> bool:
         """
@@ -2075,6 +2149,48 @@ async def check_book(
         confirmed = [m for m in matches if m["author_matched"]]
         all_viable = confirmed if confirmed else matches
 
+        # ── Scoped filename verification (Part D) ──────────────
+        # Fires ONE scoped MAM search per check_book call (cached
+        # across cascade passes via _ensure_filename_verified_set).
+        # Marks candidates whose torrent_id is in MAM's filename
+        # index for the searched title + author. Strongest signal
+        # in the verification chain — runs FIRST because:
+        #   - Cheaper than cover (1 search vs N cover fetches+hashes)
+        #   - Cheaper than description (1 search vs N desc fetches)
+        #   - More reliable than description on prose-only bundle
+        #     layouts (UAT 2026-05-10: 5 of 6 cases where
+        #     description failed but filename verification succeeded)
+        #   - Short-circuits cover for bundles using sibling-book
+        #     covers (e.g. Sorcerer's Ring bundle uses Bk1 cover,
+        #     would cover-fail but filename matches cleanly)
+        # Author-matched gate on each candidate guards against
+        # generic-collection false positives (e.g. "Authors Starting
+        # With T" bundle that legitimately contains the file but
+        # isn't the user's intended bundle).
+        filename_verified_winner = None
+        if _FILENAME_VERIFICATION_ENABLED:
+            fv_set = await _ensure_filename_verified_set()
+            for m in all_viable:
+                if (
+                    m["torrent_id"] in fv_set
+                    and m["author_matched"]
+                    and m["confidence"] >= MATCH_MIN_SCORE
+                ):
+                    m["filename_verified"] = True
+            fv_candidates = [c for c in all_viable if c.get("filename_verified")]
+            if fv_candidates:
+                filename_verified_winner = _pick_best_result(
+                    fv_candidates, format_priority,
+                )
+                if filename_verified_winner:
+                    logger.debug(
+                        f"  Pass {pass_num}: FILENAME-VERIFIED "
+                        f"'{filename_verified_winner['mam_title'][:50]}' — "
+                        f"{len(fv_candidates)} candidate(s) verified via "
+                        f"scoped @(title,filenames); cover + description "
+                        f"checks skipped"
+                    )
+
         # ── Cover-image verification (Part C) ──────────────────
         # Multi-candidate ranker: when the searched book has a cover
         # hash and the master gate is on, fetch covers for top-N
@@ -2098,7 +2214,11 @@ async def check_book(
         # _COVER_VERIFICATION_ENABLED is False, so the legacy text-only
         # cascade pays nothing.
         cover_promoter_winner = None
-        if _COVER_VERIFICATION_ENABLED and seshat_cover_phash:
+        if (
+            _COVER_VERIFICATION_ENABLED
+            and seshat_cover_phash
+            and filename_verified_winner is None
+        ):
             await _annotate_candidate_covers(
                 all_viable, seshat_cover_phash, token, cover_phash_cache,
             )
@@ -2172,10 +2292,14 @@ async def check_book(
         unique_ids = set(m["torrent_id"] for m in all_viable)
         has_multiple = len(unique_ids) > 1
 
-        # Pick best result by format preference. The cover-promoter
-        # winner (if any) takes precedence over the text-priority pick.
-        best = cover_promoter_winner or _pick_best_result(
-            all_viable, format_priority,
+        # Pick best result by format preference. Filename-verified
+        # winner takes top precedence (verification by MAM's own index
+        # is the strongest signal we have), then cover-promoter winner,
+        # then text-priority pick.
+        best = (
+            filename_verified_winner
+            or cover_promoter_winner
+            or _pick_best_result(all_viable, format_priority)
         )
         if not best:
             return False
@@ -2229,6 +2353,7 @@ async def check_book(
             and is_bundle
             and best.get("author_matched", False)
             and ts < _BUNDLE_PROMOTE_TS_FLOOR
+            and not best.get("filename_verified", False)
         )
         if needs_bundle_verification:
             tid = best["torrent_id"]
@@ -2283,6 +2408,7 @@ async def check_book(
         needs_single_desc_check = (
             _BUNDLE_VERIFICATION_ENABLED
             and not cover_verified
+            and not best.get("filename_verified", False)
             and not is_bundle
             and best.get("author_matched", False)
             and MATCH_MIN_SCORE <= conf < MATCH_PROMOTE_SCORE
@@ -2319,7 +2445,8 @@ async def check_book(
         #    Hickman et al. with ts=1.0/conf=0.7 (right at threshold)
         #    that would have text-promoted as a false-positive.
         should_promote = (
-            cover_verified
+            best.get("filename_verified", False)
+            or cover_verified
             or bundle_contents_verified
             or single_torrent_description_verified
             or (
@@ -2647,6 +2774,19 @@ async def debug_check_book(
     # debug passes only fetches once.
     debug_cover_phash_cache: dict[str, Optional[str]] = {}
 
+    # Scoped filename verification (Part D) — fire once, surface the
+    # torrent_id set in the trace so callers can see which candidates
+    # MAM's filename index marks as containing the searched title.
+    # Mirrors production check_book; the production gate
+    # `_FILENAME_VERIFICATION_ENABLED` is intentionally ignored here —
+    # debug-match always shows the signal so Mark can validate the
+    # design before flipping the production gate.
+    filename_verified_set = await _scoped_filename_search(
+        token, title, authors,
+        content_type=content_type, lang_ids=lang_ids,
+    )
+    trace["filename_verified_set"] = sorted(filename_verified_set)
+
     for pass_spec in passes_to_run:
         pass_num = pass_spec["pass_num"]
         pass_authors = pass_spec["search_author"]
@@ -2779,11 +2919,22 @@ async def debug_check_book(
             is_bundle = _is_bundle(item)
             author_matched = _author_match(authors, item)
 
+            # Filename verification (Part D): mirrors production gate.
+            # Surface as a per-result field so the trace shows which
+            # candidates MAM's filename index marks as matching.
+            tid_str = str(item.get("id", ""))
+            filename_verified = (
+                tid_str in filename_verified_set
+                and author_matched
+                and confidence >= MATCH_MIN_SCORE
+            )
+
             # Mirror the production bundle-verification gate: bundle +
             # author overlap + ts below the bundle floor → fetch
             # description and check if the search title appears as a
-            # structured list entry. (Filelist signal removed in v2.4.0
-            # per TOS — description is the sole bundle-content signal.)
+            # structured list entry. SKIP when filename verification
+            # already fired (production short-circuits the description
+            # fetch in that case to save the per-candidate API call).
             bundle_check: dict = {
                 "is_bundle": is_bundle,
                 "author_matched": author_matched,
@@ -2798,14 +2949,14 @@ async def debug_check_book(
                 and author_matched
                 and ts_max < _BUNDLE_PROMOTE_TS_FLOOR
                 and confidence >= MATCH_MIN_SCORE
+                and not filename_verified
             ):
                 bundle_check["verification_attempted"] = True
-                tid = str(item.get("id", ""))
-                if tid not in debug_description_cache:
-                    debug_description_cache[tid] = (
-                        await _fetch_torrent_description(token, tid)
+                if tid_str not in debug_description_cache:
+                    debug_description_cache[tid_str] = (
+                        await _fetch_torrent_description(token, tid_str)
                     )
-                desc = debug_description_cache.get(tid)
+                desc = debug_description_cache.get(tid_str)
                 bundle_check["description_fetched"] = desc is not None
                 if desc:
                     bundle_check["description_length"] = len(desc)
@@ -2819,11 +2970,14 @@ async def debug_check_book(
             # block cross-author false positives — Infinity canary
             # where pass 5 returned a Marvel comic at ts=1.0/conf=0.7
             # and would have promoted despite zero overlap with the
-            # source author Tabitha Lord).
-            verified = bundle_check["description_match"]
+            # source author Tabitha Lord). Filename verification takes
+            # priority over description (cheaper signal, runs first).
+            verified_via_description = bundle_check["description_match"]
             if confidence < MATCH_MIN_SCORE:
                 decision = "skipped_below_min"
-            elif verified:
+            elif filename_verified:
+                decision = "would_promote_via_filename_verification"
+            elif verified_via_description:
                 decision = "would_promote_via_description_verification"
             elif (
                 is_bundle
@@ -2864,6 +3018,7 @@ async def debug_check_book(
                 "title_similarity_max": round(ts_max, 4),
                 "author_matched": author_matched,
                 "volume_disambig": volume_disambig_note,
+                "filename_verified": filename_verified,
                 "bundle_check": bundle_check,
                 "decision": decision,
             })
