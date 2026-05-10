@@ -758,21 +758,49 @@ def _parse_author_info(raw) -> list[str]:
 
 
 def _author_match(calibre_authors: str, mam_result: dict) -> bool:
-    """Check if MAM result author plausibly matches our author string."""
+    """Check if MAM result author plausibly matches our author string.
+
+    Per-author subset matching: at least ONE individual mam_author
+    must contain ALL of our search-author tokens (or vice versa for
+    the abbreviated case). UAT 2026-05-11 canary: previously this
+    UNIONED tokens across every listed author before comparing, so
+    a 59-author mega-collection (e.g. "Fantasy-Scifi Authors Starting
+    With T") that happened to contain a "Tamora Pierce" would match
+    a search for "Pierce Scott" via the single shared token "pierce".
+    Per-author subset rules out the cross-author accidental overlap
+    while still accepting:
+      - exact matches: "Pierce Scott" vs "Pierce Scott"
+      - abbreviated MAM uploads: "Pierce Scott" vs ["Scott"]
+        (reverse subset: m_tok ⊆ cal_tok)
+      - first-name-only MAM uploads: "John Smith" vs ["John"]
+      - middle-initial differences: "Michael R Hicks" vs
+        "Michael Hicks" (single-letter "R" filtered)
+
+    Permissive defaults preserved:
+      - Empty mam_authors → True (give missing metadata the benefit
+        of the doubt — Cohort C edge case)
+      - Search author with only single-letter tokens → True (can't
+        meaningfully discriminate)
+    """
     mam_authors = _parse_author_info(mam_result.get("author_info"))
     if not mam_authors:
         return True
 
     def tokens(s: str) -> set:
         s = re.sub(r'\.', '', s.lower())
-        return set(re.findall(r'[a-z]+', s))
+        return {t for t in re.findall(r'[a-z]+', s) if len(t) > 1}
 
     cal_tok = tokens(calibre_authors)
-    mam_tok = set()
+    if not cal_tok:
+        return True
+
     for name in mam_authors:
-        mam_tok |= tokens(name)
-    overlap = {t for t in cal_tok & mam_tok if len(t) > 1}
-    return bool(overlap)
+        m_tok = tokens(name)
+        if not m_tok:
+            continue
+        if cal_tok.issubset(m_tok) or m_tok.issubset(cal_tok):
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -1609,11 +1637,22 @@ async def _scoped_filename_search(
     Stripping all periods is a sound transform — no real author name
     relies on a period for identity, and MAM appears to drop them
     when indexing.
+
+    HYPHEN-DIGIT NORMALIZATION: MAM's filename index treats `Word-N`
+    (letter-digit boundary) as a single token. Calibre titles
+    sometimes use this as a volume shorthand — UAT 2026-05-11 canary:
+    "The Redemption of Maribeth-5" returned 0 from scoped, but
+    "Maribeth 5" (space) found the bundle cleanly. The bundle's
+    filenames don't contain the literal token "Maribeth-5" anywhere.
+    Replacing `\\w-\\d` with a space lets MAM tokenize the digit
+    separately. Real letter-LETTER hyphenated titles ("X-Men",
+    "Spider-Man", "Half-Elf") are left unchanged.
     """
     author_no_periods = (authors or "").replace(".", "").strip()
     if not title or not author_no_periods:
         return set()
-    text_override = f"@(title,filenames) {title} @author {author_no_periods}"
+    title_normalized = re.sub(r"(\w)-(\d)", r"\1 \2", title)
+    text_override = f"@(title,filenames) {title_normalized} @author {author_no_periods}"
     try:
         resp = await _mam_search(
             token, authors, title,

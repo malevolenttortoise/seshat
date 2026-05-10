@@ -18,6 +18,7 @@ confirmed mbsc-tier scraping isn't on Section 1.7's approved
 automation list. See feedback_mam_mbsc_filelist_tos.md.
 """
 import httpx
+import pytest
 
 from app.discovery.sources.mam import (
     _BUNDLE_PROMOTE_TS_FLOOR,
@@ -452,3 +453,159 @@ class TestDescriptionContainsTitle:
         desc = "<p>You *must* read Duel Nature.</p>"
         assert _description_contains_title(desc, "must") is False
         assert _description_contains_title(desc, "Duel Nature") is False
+
+
+# ─── _author_match per-author subset ──────────────────────────────
+#
+# UAT 2026-05-11 canary: a 59-author mega-collection bundle
+# ("Fantasy-Scifi Authors Starting With T") was matching a search
+# for "Pierce Scott" because the listed author "Tamora Pierce"
+# shared the token "pierce". The pre-fix logic UNIONED tokens
+# across every listed author before checking overlap, so any
+# single-token coincidence with a search-author surname triggered
+# `author_matched=True`. Per-author subset matching ensures BOTH
+# search tokens have to land on a SINGLE individual author.
+
+
+class TestAuthorMatchPerAuthorSubset:
+    @staticmethod
+    def _result(authors):
+        # _parse_author_info accepts comma-separated string OR a list.
+        if isinstance(authors, list):
+            return {"author_info": ",".join(authors)}
+        return {"author_info": authors}
+
+    def test_exact_match(self):
+        from app.discovery.sources.mam import _author_match
+        assert _author_match(
+            "Pierce Scott", self._result(["Pierce Scott"]),
+        ) is True
+
+    def test_mega_collection_split_tokens_no_match(self):
+        # The UAT canary itself: search for "Pierce Scott" against a
+        # 59-author bundle whose only token-overlap is "Pierce" hiding
+        # in "Tamora Pierce". Pre-fix this returned True (false +);
+        # post-fix returns False (the two tokens come from different
+        # authors, not a single one).
+        from app.discovery.sources.mam import _author_match
+        big = ["Tamora Pierce", "Terry Brooks", "Tim Powers",
+               "Tad Williams", "T. H. White"]
+        assert _author_match(
+            "Pierce Scott", self._result(big),
+        ) is False
+
+    def test_abbreviated_mam_author_via_reverse_subset(self):
+        # MAM upload sometimes lists only the surname or first name —
+        # the reverse-subset branch keeps these legitimate matches
+        # working (m_tok ⊆ cal_tok).
+        from app.discovery.sources.mam import _author_match
+        assert _author_match(
+            "Pierce Scott", self._result(["Scott"]),
+        ) is True
+        assert _author_match(
+            "John Smith", self._result(["John"]),
+        ) is True
+
+    def test_single_letter_initial_filtered(self):
+        # "Michael R. Hicks" tokens (with periods stripped) are
+        # {michael, r, hicks} — but `r` is single-letter and gets
+        # filtered (length > 1 gate). So a MAM author "Michael Hicks"
+        # (no middle initial) still matches the search.
+        from app.discovery.sources.mam import _author_match
+        assert _author_match(
+            "Michael R. Hicks", self._result(["Michael Hicks"]),
+        ) is True
+
+    def test_empty_mam_authors_returns_true(self):
+        # Permissive default for missing metadata preserved.
+        from app.discovery.sources.mam import _author_match
+        assert _author_match("Anyone", {"author_info": ""}) is True
+        assert _author_match("Anyone", {}) is True
+
+    def test_search_author_only_initials_returns_true(self):
+        # If our search author is something pathological like just
+        # "J K" (all single-letter tokens), there's no signal to
+        # discriminate on — fall back to permissive True.
+        from app.discovery.sources.mam import _author_match
+        assert _author_match(
+            "J K", self._result(["Anyone At All"]),
+        ) is True
+
+    def test_completely_different_author_no_match(self):
+        from app.discovery.sources.mam import _author_match
+        assert _author_match(
+            "Pierce Scott", self._result(["Brandon Sanderson"]),
+        ) is False
+
+    def test_first_name_only_match(self):
+        # Edge case: MAM upload has only the first name, search has
+        # full name. Reverse-subset catches it.
+        from app.discovery.sources.mam import _author_match
+        assert _author_match(
+            "Brandon Sanderson", self._result(["Brandon"]),
+        ) is True
+
+
+# ─── _scoped_filename_search hyphen-digit normalization ────────────
+#
+# UAT 2026-05-11 canary: "The Redemption of Maribeth-5" by Chloe
+# Garner returned 0 from every scoped variant — the bundle's
+# filenames don't lexically contain the literal token "Maribeth-5"
+# (MAM tokenizes word-digit boundary as a single token). Replacing
+# `Maribeth-5` with `Maribeth 5` lets MAM index the digit
+# separately and the scoped pass surfaces the bundle. Real
+# letter-LETTER hyphenated titles (X-Men, Spider-Man, Half-Elf)
+# are left unchanged.
+
+
+class TestScopedFilenameSearchHyphenNormalization:
+    @pytest.mark.asyncio
+    async def test_hyphen_digit_replaced_with_space_in_query(self, monkeypatch):
+        from app.discovery.sources import mam as mam_mod
+        captured = {}
+
+        async def _fake_mam_search(token, authors, title, **kwargs):
+            captured["text_override"] = kwargs.get("text_override")
+            return {"data": []}
+
+        monkeypatch.setattr(mam_mod, "_mam_search", _fake_mam_search)
+        await mam_mod._scoped_filename_search(
+            "tok", "The Redemption of Maribeth-5", "Chloe Garner",
+        )
+        assert "Maribeth 5" in captured["text_override"]
+        assert "Maribeth-5" not in captured["text_override"]
+
+    @pytest.mark.asyncio
+    async def test_letter_letter_hyphen_left_unchanged(self, monkeypatch):
+        # X-Men, Spider-Man — the digit gate prevents these from
+        # being mangled.
+        from app.discovery.sources import mam as mam_mod
+        captured = {}
+
+        async def _fake_mam_search(token, authors, title, **kwargs):
+            captured["text_override"] = kwargs.get("text_override")
+            return {"data": []}
+
+        monkeypatch.setattr(mam_mod, "_mam_search", _fake_mam_search)
+        await mam_mod._scoped_filename_search(
+            "tok", "X-Men: Apocalypse", "Chris Claremont",
+        )
+        assert "X-Men" in captured["text_override"]
+
+    @pytest.mark.asyncio
+    async def test_period_stripping_still_applied(self, monkeypatch):
+        # Regression check: the existing period-strip behavior on the
+        # author segment is unchanged.
+        from app.discovery.sources import mam as mam_mod
+        captured = {}
+
+        async def _fake_mam_search(token, authors, title, **kwargs):
+            captured["text_override"] = kwargs.get("text_override")
+            return {"data": []}
+
+        monkeypatch.setattr(mam_mod, "_mam_search", _fake_mam_search)
+        await mam_mod._scoped_filename_search(
+            "tok", "Forged in Flame", "Michael R. Hicks",
+        )
+        assert "Michael R Hicks" in captured["text_override"]
+        assert "R." not in captured["text_override"]
