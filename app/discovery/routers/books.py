@@ -1014,10 +1014,12 @@ async def scan_books_mam(data: dict = Body(...), slug: str | None = Query(None))
         stats = {"scanned": 0, "found": 0, "possible": 0, "not_found": 0, "errors": 0}
         results = []
 
+        from app.discovery.cover_phash import ensure_cover_phash
         for row in rows:
             bid, btitle, aname = row["id"], row["title"], row["name"]
             try:
-                check = await mam_check_book(token, btitle, aname, format_priority, delay, lang_ids=lang_ids, content_type=ct)
+                seshat_phash = await ensure_cover_phash(db, bid, token=token)
+                check = await mam_check_book(token, btitle, aname, format_priority, delay, lang_ids=lang_ids, content_type=ct, seshat_cover_phash=seshat_phash)
             except Exception as e:
                 logger.error(f"Bulk MAM scan error on book {bid} ({btitle[:40]}): {e}")
                 stats["errors"] += 1

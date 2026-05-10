@@ -1391,6 +1391,25 @@ async def init_db(slug=None):
                 "series.author_id is now nullable (v2.3.0 migration)"
             )
 
+        # ── Step 4.45: Backfill cover_phash from cover_path ─────────
+        # Part C cover-image MAM URL verification needs each book's
+        # local cover hashed and stored once. File-based hashing is
+        # fast (Pillow + DCT pHash, ~ms per cover), so eager backfill
+        # of every Calibre cover_path is fine on startup. Idempotent —
+        # only touches rows with NULL cover_phash. Remote-fetched
+        # covers (ABS / source-discovered cover_url) populate lazily
+        # via `cover_phash.ensure_cover_phash` at MAM-scan time.
+        try:
+            from app.discovery.cover_phash import (
+                backfill_cover_phashes_from_paths,
+            )
+            await backfill_cover_phashes_from_paths(db)
+        except Exception as e:
+            # Backfill failure must not block startup — production
+            # cover verification gracefully degrades to text-only
+            # behavior when cover_phash is NULL.
+            _db_logger.warning(f"cover_phash backfill failed: {e}")
+
         # ── Step 4.5: Backfill authors.normalized_name ─────────────
         # Post-migration, ensure every existing author row has a
         # non-null normalized_name so calibre_sync's normalized lookup

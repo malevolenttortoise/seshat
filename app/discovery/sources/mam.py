@@ -250,11 +250,22 @@ _BUNDLE_VERIFICATION_ENABLED = True
 # (safe under any Cohort C rate — false-promote requires distance
 # <= 10 which only happens for same-image), demotion ships as a
 # follow-up after production data accumulates in the deadband.
-_COVER_VERIFICATION_ENABLED = False  # master gate — flip after UAT
-_COVER_DEMOTION_ENABLED = False      # separate gate — needs prod data
+_COVER_VERIFICATION_ENABLED = True   # production-enabled 2026-05-09 (v2.4.0)
+_COVER_DEMOTION_ENABLED = True       # promoter-anchored mode — see below
 _COVER_PROMOTE_DIST_MAX = 10         # pHash <= → promote (data: max(right)=6)
-_COVER_DEMOTE_DIST_MIN = 22          # pHash >= → demote (data: min(wrong)=28)
-_COVER_TOPN_CANDIDATES = 5           # only fetch covers for top-N text candidates
+_COVER_DEMOTE_DIST_MIN = 22          # pHash >= → demote (data: min(wrong)=22)
+_COVER_TOPN_CANDIDATES = 10          # bumped 5→10 after UAT showed Veil/Raw
+                                     # cases where the right candidate sat
+                                     # outside top-5 due to text-conf ties
+
+# Promoter-anchored demotion: filter cover-distant candidates ONLY when
+# at least one candidate also has a cover-promote signal. Rationale: A3
+# UAT (2026-05-09) found 3 Cohort C examples (Raw Bk1, Incarceron, MMM)
+# at distances 28-34 — squarely inside the wrong band. Aggressive
+# demotion would falsely-reject these. Anchoring to a promoter means
+# we only filter when cover-pHash has decisive positive evidence to
+# anchor the verdict; without a promoter we fall back to text-only
+# behavior (no regression on Cohort C). See project_seshat_mam_url_confidence.
 
 # Default delay between MAM API requests (seconds)
 DEFAULT_DELAY = 2.0
@@ -2036,25 +2047,27 @@ async def check_book(
                     f"distance={cover_promoter_winner.get('cover_distance')} "
                     f"<= {_COVER_PROMOTE_DIST_MAX}; replaces text winner"
                 )
-            elif _COVER_DEMOTION_ENABLED:
-                # Strip cover-rejected candidates from the pool. If
-                # demotion empties all_viable, the cascade falls through
-                # to the next pass / NotFound — same shape as "no
-                # matches survived scoring".
-                pre_demote_count = len(all_viable)
-                all_viable = [
-                    c for c in all_viable
-                    if c.get("cover_signal") != "demote"
-                ]
-                demoted_count = pre_demote_count - len(all_viable)
-                if demoted_count:
-                    logger.debug(
-                        f"  Pass {pass_num}: COVER-DEMOTE filtered "
-                        f"{demoted_count} candidate(s) (distance >= "
-                        f"{_COVER_DEMOTE_DIST_MIN})"
-                    )
-                if not all_viable:
-                    return False
+                # PROMOTER-ANCHORED DEMOTION: now that cover-pHash has
+                # positive evidence (a promoter), it's safe to filter
+                # out competing candidates whose covers are clearly
+                # different. This is the ONLY context where demotion
+                # fires — without a promoter, demote signals are
+                # ignored to protect Cohort C cases (right book whose
+                # cover happens to differ from ours, e.g. publisher
+                # rebrand). See project_seshat_mam_url_confidence.
+                if _COVER_DEMOTION_ENABLED:
+                    pre_demote_count = len(all_viable)
+                    all_viable = [
+                        c for c in all_viable
+                        if c.get("cover_signal") != "demote"
+                    ]
+                    demoted_count = pre_demote_count - len(all_viable)
+                    if demoted_count:
+                        logger.debug(
+                            f"  Pass {pass_num}: COVER-DEMOTE filtered "
+                            f"{demoted_count} candidate(s) (anchored to "
+                            f"the cover promoter)"
+                        )
 
         # Check if multiple distinct uploads exist (different torrent IDs)
         unique_ids = set(m["torrent_id"] for m in all_viable)
@@ -2907,7 +2920,13 @@ async def scan_books_batch(
         if on_progress:
             on_progress(dict(stats))
 
-        check = await check_book(session_id, book_title, author_name, format_priority, delay, lang_ids=lang_ids, series_name=book_series or "", content_type=content_type)
+        # Resolve seshat-side cover hash (lazy-compute + persist if NULL).
+        # Skipped silently on any failure — cover verification gracefully
+        # degrades to text-only behavior.
+        from app.discovery.cover_phash import ensure_cover_phash
+        seshat_phash = await ensure_cover_phash(db, book_id, token=session_id)
+
+        check = await check_book(session_id, book_title, author_name, format_priority, delay, lang_ids=lang_ids, series_name=book_series or "", content_type=content_type, seshat_cover_phash=seshat_phash)
         stats["scanned"] += 1
 
         # Second pause check, RIGHT before the UPDATE. check_book's
@@ -3156,7 +3175,10 @@ async def run_full_scan_batch(
         if on_book:
             on_book(book_title)
 
-        check = await check_book(session_id, book_title, author_name, format_priority, delay, lang_ids=lang_ids, content_type=content_type)
+        from app.discovery.cover_phash import ensure_cover_phash
+        seshat_phash = await ensure_cover_phash(db, book_id, token=session_id)
+
+        check = await check_book(session_id, book_title, author_name, format_priority, delay, lang_ids=lang_ids, content_type=content_type, seshat_cover_phash=seshat_phash)
         scanned += 1
 
         # Same auth-error-aware timestamp guard as scan_books_batch —

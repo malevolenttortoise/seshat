@@ -163,6 +163,25 @@ async def _apply_calibre_diff(db, book_id: int, book: dict) -> tuple[int, int]:
                 (new_val, book_id),
             )
             auto_flowed += 1
+            # Cover-pHash sync (Part C). When cover_path lands or
+            # changes, recompute the perceptual hash in the same row.
+            # This keeps `cover_phash` aligned with the current cover
+            # so MAM scans get accurate cover-verification signals
+            # without waiting for the next backfill pass.
+            if col_name == "cover_path" and new_val:
+                try:
+                    from app.mam.cover_hash import hash_image_file
+                    new_phash = hash_image_file(new_val)
+                    if new_phash:
+                        await db.execute(
+                            "UPDATE books SET cover_phash = ? WHERE id = ?",
+                            (new_phash, book_id),
+                        )
+                except Exception:
+                    # Hash failure is non-fatal — falls back to lazy
+                    # compute at MAM-scan time. Logged at debug in
+                    # `hash_image_file` itself.
+                    pass
     return (auto_flowed, queued)
 
 

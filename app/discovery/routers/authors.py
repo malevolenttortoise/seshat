@@ -1128,15 +1128,18 @@ async def scan_authors_mam(data: dict = Body(...)):
                     )
                     continue
                 try:
+                    from app.discovery.cover_phash import ensure_cover_phash
                     for bid, btitle, aname in books:
                         if not state._mam_scan_progress.get("running"):
                             state._mam_scan_progress.update({"status": "cancelled"})
                             break
                         state._mam_scan_progress["current_book"] = btitle[:60]
                         try:
+                            seshat_phash = await ensure_cover_phash(db2, bid, token=token)
                             check = await mam_check_book(
                                 token, btitle, aname, format_priority,
                                 delay, lang_ids=lang_ids, content_type=ct,
+                                seshat_cover_phash=seshat_phash,
                             )
                         except Exception as e:
                             logger.error(

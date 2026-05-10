@@ -237,23 +237,32 @@ class TestAnnotateCandidateCovers:
 # ─── Production gate: flag-off path is dead code ────────────────
 
 
-class TestProductionGateOff:
-    """When `_COVER_VERIFICATION_ENABLED` is False, no cover code runs.
+class TestProductionFlags:
+    """Pin the production-enabled flag values + thresholds.
 
-    This is the production state today (and the default until step 7).
-    Pin it explicitly so a future refactor can't accidentally start
-    fetching covers in production before the flag flip.
+    `_COVER_VERIFICATION_ENABLED` and `_COVER_DEMOTION_ENABLED` were
+    flipped True in v2.4.0 (2026-05-09) after the A3 UAT validated
+    promoter-anchored demotion as safe under the observed Cohort C
+    distribution (n=3, range 28-34 — overlaps wrong band). If you
+    change these defaults, re-read project_seshat_mam_url_confidence
+    memory and the threshold rationale below.
     """
 
-    def test_flag_default_is_false(self):
-        assert mam_mod._COVER_VERIFICATION_ENABLED is False
+    def test_promotion_enabled(self):
+        assert mam_mod._COVER_VERIFICATION_ENABLED is True
 
-    def test_demotion_flag_default_is_false(self):
-        assert mam_mod._COVER_DEMOTION_ENABLED is False
+    def test_demotion_enabled(self):
+        # Demotion is gated SEPARATELY but currently True; gating
+        # remains separate so future ops can pause demotion alone if
+        # ever needed (without disabling the promote signal).
+        assert mam_mod._COVER_DEMOTION_ENABLED is True
 
     def test_constants_match_validated_thresholds(self):
-        # If these change, re-validate against the 16-pair experiment
-        # in project_seshat_mam_url_confidence memory.
+        # Promote: max(right_band)=6 from A3 UAT, 10 leaves 4-bit margin.
+        # Demote: min(wrong_band)=22 from A3 UAT — but only fires when
+        # promoter-anchored, so Cohort C at distance 28-34 is safe.
+        # TopN: bumped 5→10 after Veil/Raw cases showed text-conf ties
+        # could push the right candidate outside top-5.
         assert mam_mod._COVER_PROMOTE_DIST_MAX == 10
         assert mam_mod._COVER_DEMOTE_DIST_MIN == 22
-        assert mam_mod._COVER_TOPN_CANDIDATES == 5
+        assert mam_mod._COVER_TOPN_CANDIDATES == 10

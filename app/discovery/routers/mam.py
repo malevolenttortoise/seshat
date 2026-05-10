@@ -753,12 +753,15 @@ async def mam_scan_single_book(book_id: int, slug: str | None = Query(None)):
             ct = lib_ct or "ebook"
         else:
             ct = _active_content_type()
+        from app.discovery.cover_phash import ensure_cover_phash
+        seshat_phash = await ensure_cover_phash(db, book_id, token=token)
         check = await mam_check_book(
             token, title, author,
             format_priority=s.get("audiobook_format_priority" if ct == "audiobook" else "mam_format_priority"),
             delay=s.get("rate_mam", 2),
             lang_ids=_resolve_mam_languages(s.get("languages", ["English"])),
             content_type=ct,
+            seshat_cover_phash=seshat_phash,
         )
         # Stamp mam_last_scanned_at on successful scans only — see
         # scan_books_batch for the auth_error-skip rationale.
@@ -878,13 +881,15 @@ async def mam_scan_single_author(author_id: int, slug: str | None = None):
             _set_active(slug)
         bdb = await get_db()
         try:
+            from app.discovery.cover_phash import ensure_cover_phash
             for bid, btitle in book_rows:
                 # Surface the title BEFORE the network call so the
                 # widget shows what we're waiting on, not what we just
                 # finished.
                 state._mam_scan_progress["current_book"] = btitle
+                seshat_phash = await ensure_cover_phash(bdb, bid, token=token)
                 try:
-                    check = await mam_check_book(token, btitle, author_name, format_priority, delay, lang_ids=lang_ids, content_type=scan_ct)
+                    check = await mam_check_book(token, btitle, author_name, format_priority, delay, lang_ids=lang_ids, content_type=scan_ct, seshat_cover_phash=seshat_phash)
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
