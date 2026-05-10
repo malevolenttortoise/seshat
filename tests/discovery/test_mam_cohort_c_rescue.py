@@ -97,6 +97,69 @@ class TestExtractVolumePrecedence:
         assert _extract_volume("Raw V") == 5
 
 
+class TestExtractVolumeSubtitleStrip:
+    """The 2026-05-09 fix: when the full title doesn't match any
+    volume pattern, also try the strip-subtitle form. UAT canary:
+    "Delivering Justice 2: A Men's Superhero Adventure" — trailing
+    arabic regex requires the digit at title END, but here the
+    digit is mid-title (followed by ": A Men's..."). Stripping the
+    subtitle yields "Delivering Justice 2" → vol 2.
+    """
+
+    def test_arabic_after_subtitle(self):
+        assert _extract_volume("Delivering Justice 2: A Men's Superhero Adventure") == 2
+
+    def test_roman_after_subtitle(self):
+        # Raw siblings — subtitle "A Primeval Harem" makes Roman
+        # mid-title without the strip.
+        assert _extract_volume("Raw V: A Primeval Harem") == 5
+        assert _extract_volume("Raw VIII: A Primeval Harem") == 8
+
+    def test_keyword_after_subtitle(self):
+        # "Foo Vol. 3 - Subtitle" → strip → "Foo Vol. 3" → keyword 3
+        assert _extract_volume("Foo Vol. 3 - Subtitle") == 3
+
+    def test_short_form_already_matched_no_strip_needed(self):
+        # If full title already matches, return without checking short.
+        # Pin the precedence so a future refactor doesn't accidentally
+        # shadow the result.
+        assert _extract_volume("Foo: Book 5") == 5  # full keyword wins
+
+    def test_dash_subtitle_delimiter(self):
+        assert _extract_volume("Title 7 - The Saga Continues") == 7
+
+    def test_subtitle_strip_doesnt_affect_negatives(self):
+        # Plain titles with no volume in either full or short form.
+        assert _extract_volume("Foundation: A Sci-Fi Classic") is None
+
+
+class TestExtractVolumeRangeGate:
+    """Range markers should NOT yield a single int — that misled the
+    per-candidate volume disambiguation in _try_evaluate. UAT canary:
+    bundle "Series request, Domestic Decay 2 - 5" was extracting "5"
+    via trailing arabic and falsely volume-mismatching against a
+    vol-2 search.
+    """
+
+    def test_range_returns_none(self):
+        assert _extract_volume("Series request, Domestic Decay 2 - 5") is None
+
+    def test_keyworded_range_returns_none(self):
+        assert _extract_volume("The Demon Accords Books 1-4") is None
+
+    def test_bare_trailing_range_returns_none(self):
+        assert _extract_volume("Demon Accords 1-4") is None
+
+    def test_paren_range_returns_none(self):
+        assert _extract_volume("Foo (1-3)") is None
+
+    def test_single_volume_still_works_after_range_gate(self):
+        # The range gate only fires when _extract_volume_range matches.
+        # Single-volume titles must still extract normally.
+        assert _extract_volume("Demon Accords: Book 7") == 7
+        assert _extract_volume("Foo Bar 5") == 5
+
+
 # ─── B3a: description-based loose match ─────────────────────────
 
 

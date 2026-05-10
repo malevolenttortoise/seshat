@@ -70,6 +70,12 @@ _ROMAN_TO_INT = {
     "XV": 15, "XVI": 16, "XVII": 17, "XVIII": 18, "XIX": 19, "XX": 20,
 }
 
+# Used by `_extract_volume`'s subtitle-strip fallback to skip titles
+# whose leading token is itself a Roman/numeric construct (e.g.
+# "II of III: A Story") — for those the trailing token isn't a
+# real volume marker.
+_LEADING_NUMERIC_RX = re.compile(r"^(?:[ivxIVX]+|\d+)\b")
+
 # Volume RANGES like "Books 1-4", "Vol. 1-12", "Volumes 3-7". Bundle
 # torrents commonly use these patterns. Used by the volume-range
 # mismatch short-circuit to definitively reject candidates whose range
@@ -99,24 +105,59 @@ def _extract_volume(title: str) -> int | None:
          "Domestic Decay 2" → 2 (matches both zero-padded and bare;
          what MAM uploaders use most commonly for series volumes)
 
-    Range markers like "1-4" deliberately don't match — those signal
-    bundles, handled by `_extract_volume_range` (separate short-circuit
-    in score_match_with_breakdown).
+    The full title is checked first; if no match, the strip-subtitle
+    form is checked too ("Delivering Justice 2: A Men's Superhero
+    Adventure" → strip → "Delivering Justice 2" → trailing arabic 2).
+    Catches MAM titles that include a subtitle following the volume
+    marker, plus series-sibling subtitles like "Raw V: A Primeval
+    Harem" → strip → "Raw V" → Roman 5.
+
+    Range markers like "1-4" or "2-5" deliberately don't match —
+    those are bundles handled by `_extract_volume_range` (separate
+    short-circuit in score_match_with_breakdown). Returning a single
+    int from a range would mislead per-candidate volume disambiguation
+    in `_try_evaluate` (UAT canary: bundle "Series request,
+    Domestic Decay 2 - 5" extracted "5" via trailing arabic and
+    falsely volume-mismatched against a vol-2 search).
 
     Examples: "Foo" → None, "Foo: Book 5" → 5, "Raw V" → 5,
-    "Right of Retribution 02" → 2, "I, Robot" → None.
+    "Right of Retribution 02" → 2, "I, Robot" → None,
+    "Series request, Domestic Decay 2 - 5" → None (range).
     """
     if not title:
         return None
-    m = _VOLUME_RX.search(title)
-    if m:
-        return int(m.group(1))
-    m = _ROMAN_VOLUME_RX.search(title)
-    if m:
-        return _ROMAN_TO_INT[m.group(1).upper()]
-    m = _TRAILING_ARABIC_VOLUME_RX.search(title)
-    if m:
-        return int(m.group(1))
+    # Range gate: don't extract a single int from a range marker.
+    if _extract_volume_range(title) is not None:
+        return None
+
+    def _try_one(t: str) -> int | None:
+        m = _VOLUME_RX.search(t)
+        if m:
+            return int(m.group(1))
+        m = _ROMAN_VOLUME_RX.search(t)
+        if m:
+            return _ROMAN_TO_INT[m.group(1).upper()]
+        m = _TRAILING_ARABIC_VOLUME_RX.search(t)
+        if m:
+            return int(m.group(1))
+        return None
+
+    # Try the full title first
+    v = _try_one(title)
+    if v is not None:
+        return v
+    # Fall back to the strip-subtitle form. Most volume markers sit
+    # before the subtitle delimiter, so the short form catches
+    # "Foo 2: Subtitle" → 2 and "Raw V: A Primeval Harem" → 5.
+    # Guard: skip the strip when the short form's LEADING token is
+    # itself a Roman/numeric token. Usually means the title structure
+    # is "N of M: <subtitle>" or similar where the trailing N isn't a
+    # vol marker (e.g. "II of III: A Story" would otherwise return 3).
+    short = title.split(":")[0].split(" - ")[0].strip()
+    if short and short != title and not _LEADING_NUMERIC_RX.match(short):
+        if _extract_volume_range(short) is not None:
+            return None
+        return _try_one(short)
     return None
 
 

@@ -602,6 +602,16 @@ DEFAULT_SETTINGS = {
     "verbose_logging": False,
     "dry_run": False,  # mirror of SESHAT_DRY_RUN, runtime-toggleable
     "mam_debug_match_enabled": False,
+    # Aggressive cover-pHash demotion: when True, demotion fires even
+    # without a cover-promote anchor — wrong-Possible candidates get
+    # filtered out of the pool, cascade falls through to Possible
+    # (typically) or Not Found. When False, promoter-anchored mode
+    # (only filter when at least one candidate cover-promotes — safer
+    # for Cohort C books whose right tid has visually-different cover
+    # but no other promoter exists). Default True per Mark's preference
+    # (minimize Possible-band noise, accept residual Cohort C risk
+    # given the rescue mechanisms in B3a/b that catch most cases).
+    "mam_aggressive_cover_demotion": True,
     "setup_complete": False,
 }
 

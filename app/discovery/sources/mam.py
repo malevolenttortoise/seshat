@@ -249,12 +249,29 @@ _BUNDLE_VERIFICATION_ENABLED = True
 # <= 10 which only happens for same-image), demotion ships as a
 # follow-up after production data accumulates in the deadband.
 _COVER_VERIFICATION_ENABLED = True   # production-enabled 2026-05-09 (v2.4.0)
-_COVER_DEMOTION_ENABLED = True       # promoter-anchored mode — see below
+_COVER_DEMOTION_ENABLED = True       # master demote gate
 _COVER_PROMOTE_DIST_MAX = 10         # pHash <= → promote (data: max(right)=6)
 _COVER_DEMOTE_DIST_MIN = 22          # pHash >= → demote (data: min(wrong)=22)
 _COVER_TOPN_CANDIDATES = 10          # bumped 5→10 after UAT showed Veil/Raw
                                      # cases where the right candidate sat
                                      # outside top-5 due to text-conf ties
+
+
+def _aggressive_cover_demotion_enabled() -> bool:
+    """Read the user-configurable aggressive-demotion setting.
+
+    When True, cover-pHash demotion fires even without a cover-promote
+    anchor — wrong-Possible candidates get filtered out of the pool
+    regardless of whether any candidate also promoted. Default True;
+    user can flip via Settings → Discovery → MAM.
+    """
+    from app.config import load_settings
+    try:
+        return bool(load_settings().get("mam_aggressive_cover_demotion", True))
+    except Exception:
+        # Settings access failure — fall back to safe (promoter-anchored)
+        # mode rather than risking a wrong-direction default.
+        return False
 
 # Promoter-anchored demotion: filter cover-distant candidates ONLY when
 # at least one candidate also has a cover-promote signal. Rationale: A3
@@ -2030,14 +2047,9 @@ async def check_book(
                     f"distance={cover_promoter_winner.get('cover_distance')} "
                     f"<= {_COVER_PROMOTE_DIST_MAX}; replaces text winner"
                 )
-                # PROMOTER-ANCHORED DEMOTION: now that cover-pHash has
-                # positive evidence (a promoter), it's safe to filter
-                # out competing candidates whose covers are clearly
-                # different. This is the ONLY context where demotion
-                # fires — without a promoter, demote signals are
-                # ignored to protect Cohort C cases (right book whose
-                # cover happens to differ from ours, e.g. publisher
-                # rebrand). See project_seshat_mam_url_confidence.
+                # PROMOTER-ANCHORED DEMOTION: cover-pHash has positive
+                # evidence (a promoter exists), so it's safe to filter
+                # out competing demoted candidates without risk.
                 if _COVER_DEMOTION_ENABLED:
                     pre_demote_count = len(all_viable)
                     all_viable = [
@@ -2051,6 +2063,31 @@ async def check_book(
                             f"{demoted_count} candidate(s) (anchored to "
                             f"the cover promoter)"
                         )
+            elif _COVER_DEMOTION_ENABLED and _aggressive_cover_demotion_enabled():
+                # AGGRESSIVE DEMOTION: no cover-promote anchor exists,
+                # but the user-configurable `mam_aggressive_cover_demotion`
+                # flag is on — filter out cover-demoted candidates anyway.
+                # Cleaner Possible-band noise (wrong-Possible URLs vanish)
+                # at the cost of false-rejecting Cohort C books whose
+                # right tid has visually-different cover AND no other
+                # rescue mechanism (description verification, volume
+                # tiebreak, alt-cover discovery) kicks in. Default ON
+                # per Mark's preference; user can flip via Settings →
+                # Discovery → MAM.
+                pre_demote_count = len(all_viable)
+                all_viable = [
+                    c for c in all_viable
+                    if c.get("cover_signal") != "demote"
+                ]
+                demoted_count = pre_demote_count - len(all_viable)
+                if demoted_count:
+                    logger.debug(
+                        f"  Pass {pass_num}: COVER-DEMOTE-AGGRESSIVE "
+                        f"filtered {demoted_count} candidate(s) (no "
+                        f"promoter anchor; aggressive mode enabled)"
+                    )
+                if not all_viable:
+                    return False  # falls through to next pass / NotFound
 
         # Check if multiple distinct uploads exist (different torrent IDs)
         unique_ids = set(m["torrent_id"] for m in all_viable)
@@ -2689,6 +2726,30 @@ async def debug_check_book(
                     and not r["decision"].startswith("would_promote_via")
                 ):
                     r["decision"] = "would_promote_via_cover_verification"
+
+            # Mirror production aggressive-demotion: if no candidate
+            # promoted via cover AND `mam_aggressive_cover_demotion` is
+            # on, candidates with cover_signal=demote get filtered
+            # OUT of the production pool — they end up not being the
+            # winner. In the trace, we override the decision string
+            # so the user can see which results would have been
+            # filtered. Promoter-anchored mode (when off) lets demoted
+            # candidates remain in the pool.
+            any_promoted = any(
+                (r.get("cover_check") or {}).get("signal") == "promote"
+                for r in pass_trace["results"]
+            )
+            if (
+                seshat_cover_phash
+                and not any_promoted
+                and _aggressive_cover_demotion_enabled()
+            ):
+                for r in pass_trace["results"]:
+                    if (r.get("cover_check") or {}).get("signal") == "demote":
+                        if r["decision"].startswith("would_promote"):
+                            r["decision"] = "kept_as_possible_cover_demoted_aggressive"
+                        elif r["decision"] == "kept_as_possible":
+                            r["decision"] = "filtered_out_cover_demoted_aggressive"
 
         trace["passes"].append(pass_trace)
 

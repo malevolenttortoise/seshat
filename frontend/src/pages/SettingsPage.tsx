@@ -1360,6 +1360,9 @@ function DiscMamSection({ s, upd, ist, nist }: { s: S; upd: (k: string, v: unkno
         <span style={{ fontSize: 13, color: t.textDim }}>days</span>
       </div>
     </SF>
+    <SF label="Aggressive Cover-Demote" desc='When ON, cover-pHash demotes wrong-cover candidates from the pool even when no candidate has a cover-promote signal. Cleaner Possible-band noise (wrong URLs vanish). When OFF (promoter-anchored), demotion only fires when at least one candidate also cover-promotes — safer for "Cohort C" books whose right MAM upload uses visually-different cover art (publisher rebrand etc.) and no other rescue signal kicks in. Default ON.'>
+      <STog on={(s.mam_aggressive_cover_demotion as boolean) ?? true} onToggle={() => upd("mam_aggressive_cover_demotion", !(s.mam_aggressive_cover_demotion ?? true))} label />
+    </SF>
     {/* Format priorities side-by-side — both lists are short (6-7
         rows) so stacking them wastes vertical space. Wrapped in
         a 2-column grid with a vertical separator for visual
