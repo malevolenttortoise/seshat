@@ -434,22 +434,63 @@ def _extract_core_title(title: str) -> Optional[str]:
 _RE_TRAILING_VOLUME = re.compile(r"\s+\d+\s*$")
 
 
+# Typographic / smart-quote pairs MAM treats as distinct search tokens.
+# Most common offender: ASCII `'` vs U+2019 `’` (right single quote) —
+# Warhawk's UAT case had MAM titled "Warhawk’s Amnesty" with a curly
+# apostrophe and Mark's Calibre had ASCII `'`, so the search returned
+# zero results for the source-side form.
+_TYPOGRAPHIC_PAIRS: list[tuple[str, str]] = [
+    ("'", "’"),   # straight apostrophe ↔ right single quote
+    ("‘", "'"),   # left single quote ↔ straight apostrophe
+    ('"', "”"),   # straight double ↔ right double
+    ("“", '"'),   # left double ↔ straight double
+]
+
+
 def _alternate_title_forms(title: str) -> list[str]:
     """Return alternate title forms for MAM-search variant passes.
 
-    Currently handles trailing-number stripping (Right of Retribution 2
-    → Right of Retribution; Domestic Decay 2 → Domestic Decay). Returns
-    only forms that DIFFER from the input — the caller dedupes against
-    its already-tried passes.
+    Two transformation tiers (in order):
+      1. Trailing-number stripping (Right of Retribution 2 → Right of
+         Retribution; Domestic Decay 2 → Domestic Decay) — bridges
+         MAM's zero-padding mismatch ("2" vs "02").
+      2. Typographic-punctuation swap (Warhawk's Amnesty ↔
+         Warhawk’s Amnesty; "Foo" ↔ “Foo”) — bridges
+         MAM's strict tokenization that treats ASCII vs smart-quote as
+         distinct tokens.
+
+    Returns only forms that DIFFER from the input — the caller dedupes
+    against its already-tried passes. Both tiers can apply to the same
+    title (so a "Foo's Bar 2" would yield "Foo's Bar", "Foo’s Bar 2",
+    and "Foo’s Bar") for maximum variant coverage.
     """
     if not title:
         return []
     out: list[str] = []
+    seen: set[str] = {title}
+
+    # Tier 1: trailing number
     m = _RE_TRAILING_VOLUME.search(title)
     if m:
         stripped = title[: m.start()].strip()
-        if len(stripped) >= 3 and stripped != title:
+        if len(stripped) >= 3 and stripped not in seen:
             out.append(stripped)
+            seen.add(stripped)
+
+    # Tier 2: typographic punctuation. Apply each pair in BOTH directions
+    # to whatever variants we have so far (including the original) so
+    # the swap composes with the trailing-number strip.
+    base_variants = [title] + list(out)
+    for src in base_variants:
+        for ascii_form, smart_form in _TYPOGRAPHIC_PAIRS:
+            if ascii_form in src:
+                v = src.replace(ascii_form, smart_form)
+                if v not in seen:
+                    out.append(v); seen.add(v)
+            if smart_form in src:
+                v = src.replace(smart_form, ascii_form)
+                if v not in seen:
+                    out.append(v); seen.add(v)
     return out
 
 
@@ -507,6 +548,59 @@ def _alternate_author_forms(author: str) -> list[str]:
             seen.add(v)
             deduped.append(v)
     return deduped
+
+
+def _build_variant_pass_list(
+    title: str,
+    authors: Optional[str],
+    core: Optional[str],
+    sub_right: Optional[str],
+    short: Optional[str],
+    title_only: str,
+    *,
+    cap: int = 6,
+) -> list[tuple[Optional[str], str]]:
+    """Build the (author, title) variant-pass list used by check_book passes 6+.
+
+    Shared between production `check_book` and the `debug_check_book`
+    trace surface so a UAT through debug-match shows the same passes
+    that production actually runs. Dedupes against the (authors, title)
+    pairs already covered in passes 1-5; caps at `cap` to bound the
+    worst-case explosion (3 alt_titles × 3 alt_authors + 6 simple).
+    """
+    tried_pairs: set[tuple] = {(authors, title), (None, title_only)}
+    if core:
+        tried_pairs.add((authors, core))
+    if sub_right and sub_right != core:
+        tried_pairs.add((authors, sub_right))
+    if short and short != title and short != core:
+        tried_pairs.add((authors, short))
+
+    alt_titles: list[str] = list(_alternate_title_forms(title))
+    for base in (short, core):
+        if base:
+            alt_titles.extend(
+                t for t in _alternate_title_forms(base)
+                if t not in alt_titles
+            )
+    alt_authors = _alternate_author_forms(authors or "")
+
+    variant_passes: list[tuple[Optional[str], str]] = []
+    for alt_t in alt_titles:
+        variant_passes.append((authors, alt_t))
+    for alt_a in alt_authors:
+        variant_passes.append((alt_a, title))
+        for alt_t in alt_titles:
+            variant_passes.append((alt_a, alt_t))
+
+    seen_pairs: set[tuple] = set()
+    deduped: list[tuple[Optional[str], str]] = []
+    for pair in variant_passes:
+        if pair in seen_pairs or pair in tried_pairs:
+            continue
+        seen_pairs.add(pair)
+        deduped.append(pair)
+    return deduped[:cap]
 
 
 def _build_query(authors: str, title: str) -> str:
@@ -2130,64 +2224,22 @@ async def check_book(
             return result
 
         # --- Passes 6+: alternate forms ---
-        # MAM tokenizes more strictly than we send. Two known patterns
-        # that drop the right candidate from earlier passes:
-        #   1. Trailing zero-padded volumes ("Right of Retribution 02")
-        #      vs source's bare "2" — search for nothing returns an
-        #      empty result, search without the number returns both.
-        #   2. Multi-initial authors ("JJ Cross") vs source's spaced
-        #      ("J J Cross") — combined text-token search can't bridge.
+        # MAM tokenizes more strictly than we send. Three known patterns
+        # that drop the right candidate from passes 1-5:
+        #   1. Trailing zero-padded volumes ("Right of Retribution 02"
+        #      vs source's bare "2")
+        #   2. Multi-initial authors ("JJ Cross" vs "J J Cross")
+        #   3. Typographic vs ASCII apostrophe ("Warhawk’s" vs
+        #      "Warhawk's")
         #
-        # Generate variant title/author forms and run them as additional
-        # passes. Dedupe against forms already tried in passes 1-5 so we
-        # don't burn API quota on duplicates. Cascade still short-
-        # circuits on a FOUND, so passes 6+ only run for Possible / NotFound
-        # cases — adds zero cost when text already nailed it.
-        tried_pairs: set[tuple] = {(authors, title)}
-        if core:
-            tried_pairs.add((authors, core))
-        if sub_right and sub_right != core:
-            tried_pairs.add((authors, sub_right))
-        if short and short != title and short != core:
-            tried_pairs.add((authors, short))
-        tried_pairs.add((None, title_only))
-
-        alt_titles = _alternate_title_forms(title)
-        # Also try variants of the short / core forms in case the trailing
-        # number is on a sub-form rather than the full title.
-        for base in (short, core):
-            if base:
-                alt_titles.extend(
-                    t for t in _alternate_title_forms(base)
-                    if t not in alt_titles
-                )
-        alt_authors = _alternate_author_forms(authors)
-
-        # Build the variant pass list. Order:
-        #   - alt-title with original author (catches D6 / Warhawk
-        #     trailing-number case)
-        #   - alt-author with original title (catches Veil
-        #     "JJ Cross" case)
-        #   - alt-author × alt-title compounding (catches both at once)
-        # Capped at 6 extras so we don't quintuple the API budget per
-        # book in the worst case (large initial sets × many alt titles).
-        variant_passes: list[tuple[Optional[str], str]] = []
-        for alt_t in alt_titles:
-            variant_passes.append((authors, alt_t))
-        for alt_a in alt_authors:
-            variant_passes.append((alt_a, title))
-            for alt_t in alt_titles:
-                variant_passes.append((alt_a, alt_t))
-        # Dedupe in order
-        seen_pairs: set[tuple] = set()
-        deduped_variants: list[tuple[Optional[str], str]] = []
-        for pair in variant_passes:
-            if pair in seen_pairs or pair in tried_pairs:
-                continue
-            seen_pairs.add(pair)
-            deduped_variants.append(pair)
-        deduped_variants = deduped_variants[:6]
-
+        # The variant pass list is built by `_build_variant_pass_list`
+        # (shared with debug_check_book so the trace mirrors production).
+        # Cascade still short-circuits on FOUND, so passes 6+ only run
+        # for Possible / NotFound cases — zero cost when text already
+        # nailed it.
+        deduped_variants = _build_variant_pass_list(
+            title, authors, core, sub_right, short, title_only,
+        )
         for vidx, (v_author, v_title) in enumerate(deduped_variants):
             pass_num = 6 + vidx
             r = await _mam_search(
@@ -2336,6 +2388,15 @@ async def debug_check_book(
     if short and short != title and short != core:
         passes_to_run.append((4, authors, short))
     passes_to_run.append((5, None, title_only))
+
+    # Passes 6+: variant forms (trailing-number / typographic-apostrophe
+    # / multi-initial-author). Same logic + cap as production check_book.
+    # Without this block, debug-match would silently hide the variant
+    # passes that production actually runs — a UAT wouldn't see them.
+    for vidx, (v_author, v_title) in enumerate(_build_variant_pass_list(
+        title, authors, core, sub_right, short, title_only,
+    )):
+        passes_to_run.append((6 + vidx, v_author, v_title))
 
     # Description cache mirrors production check_book — same torrent
     # surfacing in multiple debug passes only fetches once.

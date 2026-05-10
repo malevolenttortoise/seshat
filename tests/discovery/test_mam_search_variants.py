@@ -114,15 +114,58 @@ class TestKnownUatCases:
             "Right of Retribution 2"
         )
 
-    def test_warhawk_amnesty(self):
-        # Amnesty stays as-is (no trailing number); the cover-pHash
-        # path catches the wrong-stored URL via demote signal. No
-        # variant needed for this case — pin that the helper doesn't
-        # produce a spurious one.
-        assert _alternate_title_forms("Warhawk's Amnesty") == []
-
     def test_veil_jj_cross(self):
         # MAM has "JJ Cross"; Calibre has "J J Cross". Variants must
         # include the no-space form.
         variants = _alternate_author_forms("J J Cross")
         assert "JJ Cross" in variants
+
+    def test_warhawk_amnesty_typographic(self):
+        # MAM uploaded "Warhawk’s Amnesty" with U+2019 right single
+        # quote; Mark's Calibre uses ASCII apostrophe. The search
+        # treats them as distinct tokens — variant must swap.
+        variants = _alternate_title_forms("Warhawk's Amnesty")
+        assert "Warhawk’s Amnesty" in variants
+
+
+# ─── Typographic / smart-quote normalization ────────────────────
+
+
+class TestTypographicVariants:
+    def test_ascii_apostrophe_to_typographic(self):
+        # Canonical Warhawk case
+        assert "Warhawk’s Amnesty" in _alternate_title_forms(
+            "Warhawk's Amnesty"
+        )
+
+    def test_typographic_apostrophe_to_ascii(self):
+        # Reverse direction — when source has the typographic form
+        # and MAM has ASCII, swap that direction too.
+        assert "Warhawk's Amnesty" in _alternate_title_forms(
+            "Warhawk’s Amnesty"
+        )
+
+    def test_multiple_apostrophes(self):
+        # Both apostrophes should swap to typographic (the swap is
+        # global per-pair).
+        variants = _alternate_title_forms("Foo's Bar's Baz")
+        assert "Foo’s Bar’s Baz" in variants
+
+    def test_typographic_compounds_with_trailing_number(self):
+        # Title has BOTH a trailing number AND an apostrophe — should
+        # produce the trailing-stripped form, the apostrophe-swapped
+        # form, AND the both-stripped form.
+        variants = _alternate_title_forms("Foo's Bar 2")
+        assert "Foo's Bar" in variants            # trailing stripped
+        assert "Foo’s Bar 2" in variants     # apostrophe swapped
+        assert "Foo’s Bar" in variants       # both
+
+    def test_double_quotes(self):
+        variants = _alternate_title_forms('A "Special" Story')
+        # ASCII double quotes → curly variants
+        assert any("”" in v or "“" in v for v in variants)
+
+    def test_no_punctuation_no_typographic_variants(self):
+        # Plain titles get no typographic variant since they have no
+        # punctuation to swap.
+        assert _alternate_title_forms("Plain Title") == []
