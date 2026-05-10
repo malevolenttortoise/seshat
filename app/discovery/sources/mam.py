@@ -2493,7 +2493,48 @@ async def check_book(
             result["best_format"] = best.get("best_format", "")
             return True  # stop cascade
 
-        # Otherwise save as best possible so far
+        # Otherwise save as best possible so far — but ONLY if the
+        # candidate has at least one positive signal. By this point
+        # all verification paths (filename, cover, bundle_desc,
+        # single_desc) have already failed (else `should_promote`
+        # above would have returned True). Without verification, two
+        # candidate shapes are noise that should fall through to
+        # Not Found rather than surface as phantom Possibles:
+        #
+        #   - `not author_matched`: pure text token overlap from a
+        #     candidate the user's stated author doesn't match. UAT
+        #     2026-05-10 canary: 20 of 50 owned-Possibles had this
+        #     fingerprint — `conf=0.665, ts=0.950, author_matched=False`,
+        #     where the high TS came from common genre subtitle
+        #     templates ("A LitRPG Adventure", "A Progression
+        #     Fantasy Adventure") shared by unrelated books. The
+        #     subtitle is a publishing template, not a real signal.
+        #
+        #   - `volume_likely_mismatch`: Bk1 surfaced for BkN search,
+        #     conf capped at 0.65 by the third disambig branch. The
+        #     cap originally left room for cover-pHash Cohort C rescue
+        #     ("right book under different title"); if cover didn't
+        #     fire by now, the candidate IS the wrong volume and a
+        #     phantom Possible. UAT 2026-05-10: 4 of 50 owned-Possibles
+        #     (Cultivating Chaos 7, Delivering Justice 2, Human Trauma 3,
+        #     The Axe Falls 3) — Mark confirmed BkN doesn't exist on
+        #     MAM; only Bk1 was uploaded.
+        #
+        # Deliberately NOT filtering on `volume_penalty_applied` (the
+        # softer -0.20 penalty for "search has no vol, cand has one")
+        # since legitimate Bk1-search cases where Calibre lacks the
+        # volume marker would be lost.
+        if (
+            not best.get("author_matched", False)
+            or best.get("volume_likely_mismatch", False)
+        ):
+            logger.debug(
+                f"  Pass {pass_num}: NO-POSITIVE-SIGNAL — '{best['mam_title'][:50]}' "
+                f"(conf={conf:.3f}, author_matched={best.get('author_matched')}, "
+                f"vol_likely_mismatch={best.get('volume_likely_mismatch', False)}); "
+                f"not surfacing as Possible"
+            )
+            return False
         if best_possible is None or conf > best_possible.get("confidence", 0):
             best_possible = candidate
         return False
@@ -3013,6 +3054,18 @@ async def debug_check_book(
                 decision = "would_promote_to_found"
             elif confidence >= MATCH_PROMOTE_SCORE:
                 decision = "kept_as_possible_no_author_match"
+            elif (
+                not author_matched
+                or volume_disambig_note == "volume_likely_mismatch"
+            ):
+                # Mirror production no-positive-signal demotion.
+                # Production's _try_evaluate refuses to set best_possible
+                # when (not author_matched) OR (volume_likely_mismatch
+                # capped without rescue), so these candidates fall
+                # through to Not Found rather than surface as phantom
+                # Possibles. Surfacing the would-be-demote in the trace
+                # so UAT shows the production outcome accurately.
+                decision = "would_demote_to_nf_no_signal"
             else:
                 decision = "kept_as_possible"
 
