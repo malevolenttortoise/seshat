@@ -128,29 +128,8 @@ async def status() -> MamStatusResponse:
     return await _build_status()
 
 
-class MbscStatusResponse(BaseModel):
-    configured: bool
-    stale: bool
-
-
-@router.get("/mbsc-status", response_model=MbscStatusResponse)
-async def mbsc_status() -> MbscStatusResponse:
-    """Report whether the mbsc browser-session cookie is configured + healthy.
-
-    Drives the "Possibly expired" pill in Settings → MAM. `stale=True`
-    means the most recent filelist fetch came back as MAM's login page
-    — the configured mbsc was rejected (expired, IP mismatch, or
-    never valid). The pill clears when a fresh value is pasted via
-    the credentials endpoint or when a successful rotation arrives.
-    """
-    from app.discovery.sources.mam import (
-        get_current_mbsc_token,
-        mbsc_is_stale,
-    )
-    return MbscStatusResponse(
-        configured=bool(get_current_mbsc_token()),
-        stale=mbsc_is_stale(),
-    )
+# /mbsc-status endpoint was REMOVED in v2.4.0 — TOS-disallowed mbsc
+# scraping no longer ships. See feedback_mam_mbsc_filelist_tos.md.
 
 
 @router.post("/refresh", response_model=MamStatusResponse)

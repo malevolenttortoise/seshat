@@ -449,57 +449,8 @@ async def _debounced_persist_rotation() -> None:
         _log.exception("failed to persist rotated MAM cookie to encrypted store")
 
 
-# Parallel debounced-persistence state for the mbsc browser-session
-# cookie. Identical pattern to the mam_id rotation above — separate
-# pending slot, separate task, same debounce window. Two cookies, two
-# rotations, two persist budgets.
-_mbsc_rotation_pending_token: Optional[str] = None
-_mbsc_rotation_persist_task: Optional[asyncio.Task] = None
-
-
-async def _mbsc_rotation_callback(new_token: str) -> None:
-    """Persist a rotated mbsc cookie to the encrypted secret store.
-
-    Called by `app.discovery.sources.mam._handle_response_cookie` when
-    a filelist (or any other browse-tier) response carries a fresh
-    mbsc value. Same debounce-and-supersede logic as `_rotation_callback`
-    above.
-    """
-    global _mbsc_rotation_pending_token, _mbsc_rotation_persist_task
-    _mbsc_rotation_pending_token = new_token
-
-    if (
-        _mbsc_rotation_persist_task is not None
-        and not _mbsc_rotation_persist_task.done()
-    ):
-        _mbsc_rotation_persist_task.cancel()
-
-    _mbsc_rotation_persist_task = asyncio.create_task(
-        _debounced_persist_mbsc_rotation()
-    )
-
-
-async def _debounced_persist_mbsc_rotation() -> None:
-    """Wait out the debounce window, then write the latest mbsc token."""
-    try:
-        await asyncio.sleep(_ROTATION_PERSIST_DEBOUNCE_SECONDS)
-    except asyncio.CancelledError:
-        return
-
-    token = _mbsc_rotation_pending_token
-    if not token:
-        return
-
-    try:
-        from app.secrets import get_secret, set_secret
-        if await get_secret("mam_browser_session_id") == token:
-            return
-        await set_secret("mam_browser_session_id", token)
-        _log.info(
-            f"MAM mbsc cookie persisted to encrypted store ({token[:8]}...)"
-        )
-    except Exception:
-        _log.exception("failed to persist rotated mbsc cookie to encrypted store")
+# mbsc rotation machinery was REMOVED in v2.4.0 — TOS-disallowed per
+# MAM staff. See feedback_mam_mbsc_filelist_tos.md.
 
 
 def _build_irc_config(settings: dict, resolved_secrets: dict = None) -> IrcConfig:
@@ -585,23 +536,7 @@ async def lifespan(app: FastAPI):
     set_rotation_callback(_rotation_callback)
     _log.info("MAM cookie rotation handler wired")
 
-    # Seed the parallel mbsc browser-session cookie. Empty string is
-    # the "not configured" signal — every code path that needs mbsc
-    # treats absence as "skip operation, auto-degrade gracefully".
-    from app.discovery.sources.mam import (
-        set_current_mbsc_token,
-        set_mbsc_rotation_callback,
-    )
-    mbsc_cookie = resolved_secrets.get("mam_browser_session_id") or ""
-    set_current_mbsc_token(mbsc_cookie)
-    set_mbsc_rotation_callback(_mbsc_rotation_callback)
-    if mbsc_cookie:
-        _log.info("MAM mbsc rotation handler wired")
-    else:
-        _log.info(
-            "MAM mbsc not configured — bundle filelist verification "
-            "disabled (auto-degrade)"
-        )
+    # mbsc browser-session cookie wiring was REMOVED in v2.4.0 (TOS).
 
     state.dispatcher = await _build_dispatcher(settings, resolved_secrets)
     _log.info("Dispatcher initialized")
@@ -920,11 +855,6 @@ async def lifespan(app: FastAPI):
         # want that racing against the secret-store flush below or
         # the disk teardown.
         set_rotation_callback(None)
-        try:
-            from app.discovery.sources.mam import set_mbsc_rotation_callback
-            set_mbsc_rotation_callback(None)
-        except Exception:
-            pass
 
         # If there's a pending debounced rotation waiting to write,
         # cancel the timer so it doesn't sleep for 60s during an
@@ -950,31 +880,7 @@ async def lifespan(app: FastAPI):
             except Exception:
                 _log.exception("error flushing pending cookie rotation on shutdown")
 
-        # Same flush dance for the parallel mbsc rotation slot.
-        global _mbsc_rotation_persist_task
-        if (
-            _mbsc_rotation_persist_task is not None
-            and not _mbsc_rotation_persist_task.done()
-        ):
-            _mbsc_rotation_persist_task.cancel()
-            try:
-                await _mbsc_rotation_persist_task
-            except (asyncio.CancelledError, Exception):
-                pass
-            _mbsc_rotation_persist_task = None
-        if _mbsc_rotation_pending_token:
-            try:
-                from app.secrets import get_secret, set_secret
-                if await get_secret("mam_browser_session_id") != _mbsc_rotation_pending_token:
-                    await set_secret(
-                        "mam_browser_session_id",
-                        _mbsc_rotation_pending_token,
-                    )
-                    _log.info(
-                        "Flushed pending MAM mbsc rotation during shutdown"
-                    )
-            except Exception:
-                _log.exception("error flushing pending mbsc rotation on shutdown")
+        # mbsc rotation flush block was REMOVED in v2.4.0 (TOS).
 
         # Stop APScheduler before cancelling tasks so its own jobs
         # don't fire during teardown. wait=False so shutdown doesn't

@@ -52,7 +52,6 @@ MAM_SEARCH_URL = "https://www.myanonamouse.net/tor/js/loadSearchJSONbasic.php"
 MAM_BROWSE_BASE = "https://www.myanonamouse.net/tor/browse.php"
 MAM_TORRENT_BASE = "https://www.myanonamouse.net/t"
 MAM_DYNIP_URL = "https://t.myanonamouse.net/json/dynamicSeedbox.php"
-MAM_FILELIST_URL = "https://www.myanonamouse.net/tor/filelist.php"
 EBOOK_CATEGORY = "14"
 AUDIOBOOK_CATEGORY = "13"
 
@@ -207,22 +206,21 @@ _BUNDLE_NUMFILES_FLOOR = 5
 # explicitly catalogued the bundle), normal promote logic should fire.
 # But when only the author matches and the title is a different book
 # inside the bundle, the URL is misleading — keep as possible until
-# the (Part B2) filelist-verification path can promote with confidence.
+# the description-verification path can promote with confidence.
 _BUNDLE_PROMOTE_TS_FLOOR = 0.85
 
-# Master switch for bundle URL verification (filelist + description
-# signals). Fires when the bundle cap path needs a tiebreaker (bundle +
-# author overlap + ts < BUNDLE_PROMOTE_TS_FLOOR). Two signals tried in
-# priority order:
-#   1. Filelist verification — definitive, requires mbsc cookie
-#      (auto-degrades to skip when mbsc not configured)
-#   2. Description verification — fallback, uses the documented Search
-#      API (TOS 1.7 approved), works without any extra setup
-# Either signal succeeding promotes the bundle to Found. End-to-end
-# validated 2026-05-09 via debug-match against the Demon Accords Series
-# bundle. See project_seshat_mam_url_confidence memory for the full
-# design history and the cookie-shape investigation (commits 967054c +
-# b6cb988).
+# Master switch for bundle URL verification. Fires when the bundle cap
+# path needs a tiebreaker (bundle + author overlap + ts <
+# BUNDLE_PROMOTE_TS_FLOOR). The verification path fetches the bundle's
+# torrent description via the documented Search JSON API (TOS 1.7
+# approved automation list) and checks whether the searched title
+# appears as a structured list entry. A match promotes the bundle to
+# Found regardless of the blended confidence score.
+#
+# A previous filelist-based signal was REMOVED in v2.4.0 — MAM staff
+# confirmed mbsc browser-tier scraping isn't on the approved automation
+# list. See feedback_mam_mbsc_filelist_tos.md +
+# project_seshat_filelist_future_reenable.md.
 _BUNDLE_VERIFICATION_ENABLED = True
 
 # ── Cover-image verification (Part C) ──────────────────────────
@@ -243,8 +241,8 @@ _BUNDLE_VERIFICATION_ENABLED = True
 # Bundles are EXCLUDED from cover verification — MAM bundle covers
 # show the bundle's art (omnibus/series cover), not the individual
 # book's cover, so cover-pHash would always look like "wrong" for
-# legitimate bundle matches. Bundle URL verification (filelist +
-# description, the existing path) owns bundle decisions.
+# legitimate bundle matches. Bundle URL verification (description-based,
+# the existing path) owns bundle decisions.
 #
 # The two thresholds are gated SEPARATELY: promotion ships first
 # (safe under any Cohort C rate — false-promote requires distance
@@ -770,25 +768,14 @@ _current_token: Optional[str] = None
 _rotation_callback: Optional[Callable] = None
 _last_rotation_save: float = 0.0
 
-# Parallel state for the mbsc browser-session cookie. mbsc auths the
-# HTML browse endpoints (filelist.php, /t/<id>) that the long-lived
-# mam_id can't reach — see project_seshat_mam_url_confidence memory
-# for the auth-tier diagnosis. Optional: when not configured, filelist
-# verification short-circuits and bundles stay at Possible (B1's cap +
-# badge still apply). Rotation mirrors the mam_id pattern: MAM rotates
-# the value on each browser response, we capture from Set-Cookie and
-# debounce-persist to the encrypted store.
-_current_mbsc_token: Optional[str] = None
-_mbsc_rotation_callback: Optional[Callable] = None
-_last_mbsc_rotation_save: float = 0.0
-
-# Set when a filelist response comes back as MAM's login page —
-# definitive sign that the configured mbsc is rejected (expired, IP
-# mismatch, or never valid). Cleared whenever a fresh mbsc value is
-# applied (by paste-into-Settings or by a successful rotation).
-# Surfaced through GET /api/v1/mam/mbsc-status as a UI hint so Mark
-# knows to capture a fresh cookie from the browser.
-_mbsc_stale: bool = False
+# mbsc browser-session cookie state was REMOVED in v2.4.0 after MAM
+# staff confirmed mbsc-based scraping (filelist.php fetches) is not on
+# Section 1.7's approved automation list. See feedback_mam_mbsc_filelist_tos.md
+# for the staff exchange. Bundle URL verification now relies solely on
+# the description-based path (Phase 4), which uses the documented
+# Search JSON API + tor.id + description flag — explicitly TOS-allowed.
+# Future re-enable IF MAM exposes filelist via the documented API:
+# project_seshat_filelist_future_reenable.md.
 
 
 def set_current_token(token: str) -> None:
@@ -811,72 +798,6 @@ def set_rotation_callback(callback: Callable) -> None:
     """
     global _rotation_callback
     _rotation_callback = callback
-
-
-def set_current_mbsc_token(token: str) -> None:
-    """Seed the in-memory mbsc browser-session token from the secret store.
-
-    Call with empty string to indicate "not configured" — every code
-    path that needs mbsc treats empty as "skip the operation" rather
-    than producing a malformed request.
-    """
-    global _current_mbsc_token
-    _current_mbsc_token = token or None
-
-
-def get_current_mbsc_token() -> Optional[str]:
-    """Return the most recently rotated mbsc value, or None if unset."""
-    return _current_mbsc_token
-
-
-def set_mbsc_rotation_callback(callback: Optional[Callable]) -> None:
-    """Register a callback fired when mbsc rotates.
-
-    Same contract as `set_rotation_callback` for mam_id — receives the
-    new token string and persists it. Pass None to clear (used by the
-    lifespan on shutdown).
-    """
-    global _mbsc_rotation_callback
-    _mbsc_rotation_callback = callback
-
-
-def mbsc_is_stale() -> bool:
-    """True if the most recent filelist fetch was rejected as a login page.
-
-    Drives the "Possibly expired" pill in the Settings UI. Cleared by
-    `mark_mbsc_fresh()` whenever a deliberate paste arrives or a
-    rotation succeeds.
-    """
-    return _mbsc_stale
-
-
-def mark_mbsc_fresh() -> None:
-    """Clear the stale flag.
-
-    Called when a new mbsc value is applied — either via the Settings
-    PATCH/credentials POST (Mark just pasted a fresh one) or via the
-    rotation handler (MAM accepted our request and gave us a new
-    value, so we know our cookie wasn't rejected).
-    """
-    global _mbsc_stale
-    _mbsc_stale = False
-
-
-def _mark_mbsc_stale() -> None:
-    """Set the stale flag.
-
-    Called from `_fetch_filelist_response` when the response body
-    matches MAM's login-page shape. Module-private since the only
-    legit caller is the fetcher itself.
-    """
-    global _mbsc_stale
-    if not _mbsc_stale:
-        logger.warning(
-            "MAM filelist fetch returned the login page — mbsc cookie "
-            "appears to be expired or rejected; surface a fresh value "
-            "via Settings → MAM"
-        )
-    _mbsc_stale = True
 
 
 def _extract_cookie_value(
@@ -907,25 +828,16 @@ def _extract_mam_id(response: httpx.Response) -> Optional[str]:
     return _extract_cookie_value(response, "mam_id")
 
 
-def _extract_mbsc(response: httpx.Response) -> Optional[str]:
-    """Extract mbsc from a MAM response's Set-Cookie header."""
-    return _extract_cookie_value(response, "mbsc")
-
-
 async def _handle_response_cookie(response: httpx.Response) -> None:
-    """Check response for rotated mam_id / mbsc values and update state.
+    """Check response for a rotated mam_id value and update state.
 
-    Both cookies are extracted independently — MAM may rotate either,
-    both, or neither on a given response. mam_id rotates on every JSON
-    API call; mbsc rotates on browser HTML calls (filelist.php). Each
-    has its own debounced persistence callback so a flurry of rotations
-    inside the persist window collapse to a single store write.
+    mam_id rotates on every JSON API call; we capture from Set-Cookie
+    and debounce-persist to settings.json. The mbsc parallel was
+    REMOVED in v2.4.0 along with all browser-tier scraping (TOS).
     """
     global _current_token, _last_rotation_save
-    global _current_mbsc_token, _last_mbsc_rotation_save
     now = time.time()
 
-    # mam_id rotation
     new_token = _extract_mam_id(response)
     if new_token and new_token != _current_token:
         _current_token = new_token
@@ -943,21 +855,6 @@ async def _handle_response_cookie(response: httpx.Response) -> None:
                 await _rotation_callback(new_token)
             except Exception as e:
                 logger.warning(f"Cookie rotation callback failed: {e}")
-
-    # mbsc rotation. Same debounce window, separate budget. A successful
-    # rotation also implicitly clears the stale flag — MAM accepted the
-    # cookie enough to mint a new one.
-    new_mbsc = _extract_mbsc(response)
-    if new_mbsc and new_mbsc != _current_mbsc_token:
-        _current_mbsc_token = new_mbsc
-        mark_mbsc_fresh()
-        logger.debug("MAM mbsc cookie rotated")
-        if _mbsc_rotation_callback and (now - _last_mbsc_rotation_save) >= 60:
-            _last_mbsc_rotation_save = now
-            try:
-                await _mbsc_rotation_callback(new_mbsc)
-            except Exception as e:
-                logger.warning(f"mbsc rotation callback failed: {e}")
 
 
 def _get_client() -> httpx.AsyncClient:
@@ -1229,83 +1126,17 @@ async def _mam_search(
 # Result evaluation — scores all results from a search
 # ---------------------------------------------------------------------------
 
-# Pulls filenames out of a MAM filelist HTML response. The response
-# is a fragment served by /tor/filelist.php with a fixed shape:
-#   <table id="fileListTable">
-#     <tr><td>path</td><td>filename.epub</td><td>size</td></tr>
-#     ...
-#   </table>
-# The middle <td> of each row is the filename. Patterns like:
-#   "John_Conroe_-_Demon_Accords_004_-_Duel_Nature.epub"
-#   "demon_accords_006_-_executable_-_john_conroe.epub"
-# are common; the parser doesn't normalize here — that happens in the
-# matcher so we keep extraction independent of comparison logic.
-_FILELIST_ROW_RX = re.compile(
-    r"<tr>\s*<td[^>]*>[^<]*</td>\s*<td[^>]*>([^<]+)</td>\s*<td[^>]*>[^<]*</td>\s*</tr>",
-    re.I | re.S,
-)
-
-
-def _parse_filelist_html(html: str) -> list[str]:
-    """Extract filenames (middle <td>) from a MAM filelist HTML fragment.
-
-    Returns an empty list on parse failure or empty response — callers
-    should treat empty as "verification couldn't run", not "verified
-    not in bundle". Title presence is unknowable without filenames.
-    """
-    if not html:
-        return []
-    return [m.group(1).strip() for m in _FILELIST_ROW_RX.finditer(html)]
-
-
-def _normalize_for_filename_match(text: str) -> str:
-    """Lower + strip extension + collapse non-word separators to spaces.
-
-    Used by both sides of the filename match: search title gets
-    normalized once, each filename gets normalized once, then we do a
-    substring check. Underscores, dashes, dots, and any other punctuation
-    all collapse to single spaces so naming variants compare equal.
-    """
-    if not text:
-        return ""
-    text = text.lower()
-    # Strip a trailing file extension if present (.epub, .mobi, etc.).
-    text = re.sub(r"\.[a-z0-9]{1,5}$", "", text)
-    # Collapse all non-alphanumeric runs to a single space.
-    text = re.sub(r"[^a-z0-9]+", " ", text)
-    return re.sub(r"\s+", " ", text).strip()
-
-
-def _filelist_contains_title(filenames: list[str], *titles: str) -> bool:
-    """True if any of the given titles appears as a substring in any
-    filename (after normalization). Multi-title support so callers can
-    try both the calibre title and a stripped/cleaned variant — they
-    only need ONE to hit for the bundle to be verified.
-    """
-    if not filenames or not titles:
-        return False
-    normalized_files = [_normalize_for_filename_match(f) for f in filenames]
-    normalized_files = [f for f in normalized_files if f]
-    if not normalized_files:
-        return False
-    for raw_title in titles:
-        title_norm = _normalize_for_filename_match(raw_title)
-        # Single-token titles are too weak — "dawn" would match
-        # "Bikini Dawn" when searching for a different "Dawn" book.
-        # Require at least 2 tokens to consider verification confident.
-        if not title_norm or len(title_norm.split()) < 2:
-            continue
-        for fn in normalized_files:
-            if title_norm in fn:
-                return True
-    return False
+# (filelist HTML scraping helpers were REMOVED in v2.4.0 along with the
+# whole mbsc browser-tier path — TOS-disallowed per MAM staff. See
+# project_seshat_filelist_future_reenable.md for restoration design IF
+# MAM exposes filelist via the documented API in the future.)
 
 
 # ---------------------------------------------------------------------------
 # Description-based bundle verification
 # ---------------------------------------------------------------------------
-# Fallback signal for users who haven't configured mbsc (and therefore
-# can't use the filelist verification path). Uses the documented
+# Sole bundle-content verification signal in v2.4.0+ (the previous
+# filelist signal was TOS-disallowed and removed). Uses the documented
 # Torrent Search JSON endpoint (on MAM's approved automation list per
 # TOS 1.7) with the `id` and `description` parameters to fetch a single
 # torrent's description, then checks whether the searched book title
@@ -1599,136 +1430,10 @@ async def _fetch_torrent_description(
     return desc or None
 
 
-def _filelist_headers(mbsc_token: str, torrent_id: str) -> dict:
-    """Headers for /tor/filelist.php that make MAM return the bare table.
-
-    Without these headers MAM responds with the full site-chrome HTML
-    wrapper (favicons, menus, etc.) — same URL, status 200, but the
-    <table id="fileListTable"> fragment is replaced by a logged-in
-    landing page. Production-confirmed via the debug-match endpoint:
-    the curl/8.0 UA + minimal headers that work for the search API
-    triggered the wrapper response here even with Referer + jQuery
-    Accept signature added.
-
-    Switched to a browser User-Agent + the Sec-Fetch-* AJAX markers
-    a Firefox $.ajax() call would send. Each header here matches what
-    we captured from a working browser request to filelist.php; trim
-    cautiously, MAM is sensitive about the request shape:
-      - Mozilla UA — curl/8.0 alone gets the wrapper
-      - Sec-Fetch-{Dest,Mode,Site} — flags this as an XHR not a nav
-      - Referer pointing at the torrent's own page
-      - Accept "text/html, */*; q=0.01" (jQuery default)
-
-    Cookie carries ONLY `mbsc`. The browser doesn't send mam_id at
-    all (verified by inspecting Mark's MAM cookies in DevTools on
-    2026-05-09 — the only session-relevant cookie present is mbsc;
-    `mp_enabled` is just a Mixpanel tracking flag). Including mam_id
-    on the same request triggered MAM's cross-session-defense logout:
-    HTTP 302 → login.php with `Set-Cookie: mam_id=deleted; mbsc=deleted;
-    uid=deleted; Max-Age=0` — MAM treated the mam_id+mbsc combo as a
-    session-confused state and tried to terminate the session entirely.
-    See project_seshat_mam_url_confidence memory for the dig.
-    """
-    return {
-        "User-Agent": (
-            "Mozilla/5.0 (X11; Linux x86_64; rv:150.0) "
-            "Gecko/20100101 Firefox/150.0"
-        ),
-        "Accept": "text/html, */*; q=0.01",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": f"{MAM_TORRENT_BASE}/{torrent_id}",
-        "Sec-Fetch-Dest": "empty",
-        "Sec-Fetch-Mode": "cors",
-        "Sec-Fetch-Site": "same-origin",
-        "Cookie": f"mbsc={mbsc_token}",
-    }
-
-
-# Login-page markers MAM serves when the cookie set we sent isn't
-# accepted for the requested HTML endpoint. Either one is definitive
-# (data-uclass="0" = anonymous user; the title block is the rendered
-# login page itself). Used by `_fetch_filelist_response` to set the
-# stale flag for UI surfacing.
-_FILELIST_LOGIN_MARKERS = (
-    '<title>Login | My Anonamouse</title>',
-    'data-uclass="0"',
-)
-
-
-async def _fetch_filelist_response(torrent_id: str):
-    """Low-level filelist GET — returns the raw httpx.Response or None.
-
-    Split out so the debug-match endpoint can surface status code +
-    response body without parsing, while production uses the parsed
-    convenience wrapper below.
-
-    Auto-degrades when no mbsc cookie is configured: returns None
-    rather than firing a request that will reliably come back as the
-    login page (and waste the ~2s round trip). Callers already treat
-    None as "couldn't verify, leave bundle at Possible".
-    """
-    if not torrent_id:
-        return None
-    mbsc = _current_mbsc_token
-    if not mbsc:
-        # mbsc not configured → filelist verification is the dead-end
-        # path documented in the project_seshat_mam_url_confidence
-        # memory. Skip the fetch; B1 bundle cap + badge still apply.
-        return None
-    url = f"{MAM_FILELIST_URL}?torrentid={torrent_id}"
-    try:
-        client = _get_client()
-        # Note: no mam_id passed — sending mam_id on filelist requests
-        # triggers MAM's cross-session-defense logout (see
-        # _filelist_headers docstring). Filelist auths on mbsc alone.
-        resp = await client.get(
-            url,
-            headers=_filelist_headers(mbsc, torrent_id),
-            timeout=15,
-        )
-        # Sniff for login-page markers BEFORE running the rotation
-        # handler. MAM's rejection responses include deletion-pattern
-        # Set-Cookie headers (mbsc=deleted; Max-Age=0) that httpx's
-        # jar correctly drops, so the rotation handler is safe even
-        # without this guard — but a body-marker hit means MAM is
-        # actively rejecting our cookie set, and propagating ANY
-        # cookie state from this response (including a real-shaped
-        # mbsc rotation MAM might send alongside the rejection) is
-        # never the right move. Mark stale, return, skip rotation.
-        body = resp.text or ""
-        if any(marker in body for marker in _FILELIST_LOGIN_MARKERS):
-            _mark_mbsc_stale()
-            return resp
-        await _handle_response_cookie(resp)
-        return resp
-    except Exception as e:
-        logger.debug(f"  Filelist {torrent_id}: fetch failed: {e}")
-        return None
-
-
-async def _fetch_filelist(torrent_id: str) -> list[str]:
-    """Fetch the per-torrent filelist and return the filenames.
-
-    GET /tor/filelist.php?torrentid=<id> with browser-AJAX-shaped
-    headers (see _filelist_headers) returns an HTML fragment with
-    a <table id="fileListTable"> whose middle <td> in each row is the
-    filename. Returns an empty list on any error — callers MUST treat
-    empty as "couldn't verify", not "verified absent".
-
-    Used by the bundle promote-cap path: when a multi-book torrent is
-    the best candidate for a single-book search and would otherwise
-    cap at "possible", a hit in the filelist promotes back to "found"
-    (the bundle URL is still correct because the user's book IS in it).
-    """
-    resp = await _fetch_filelist_response(torrent_id)
-    if resp is None or resp.status_code != 200 or not resp.text:
-        if resp is not None:
-            logger.debug(
-                f"  Filelist {torrent_id}: HTTP {resp.status_code}, "
-                f"body={len(resp.text or '')} chars — skipping verify"
-            )
-        return []
-    return _parse_filelist_html(resp.text)
+# (filelist headers, login markers, fetch helpers were REMOVED in v2.4.0
+# along with the whole mbsc browser-tier path — TOS-disallowed per MAM
+# staff. See project_seshat_filelist_future_reenable.md for restoration
+# design IF MAM exposes filelist via the documented API in the future.)
 
 
 def _is_bundle(item: dict) -> bool:
@@ -1943,7 +1648,7 @@ async def _annotate_candidate_covers(
 
     Mutates `candidates` in place. Bundles get `cover_signal="skipped_bundle"`
     because MAM's bundle covers show the omnibus art, not the individual
-    book — bundle URL verification (filelist + description) owns those.
+    book — bundle URL verification (description-based) owns those.
 
     For non-bundles in the top-N pool: fetches each cover (cache flow:
     in-memory `cover_phash_cache` → persistent `mam_cover_hashes` table →
@@ -2070,17 +1775,12 @@ async def check_book(
     # Track best "possible" across all passes
     best_possible = None
 
-    # Per-book cache of filelist fetches keyed by torrent_id. Bundles
-    # frequently appear as the best candidate in multiple passes (1, 4,
-    # and 5 for an author with one bundle on MAM all return the same
-    # torrent), and we'd otherwise hit /tor/filelist.php once per pass
-    # for the same answer. Cache is intentionally local to one check_book
-    # call — no reason to keep cross-book state.
-    filelist_cache: dict[str, list[str]] = {}
-    # Per-evaluation cache for description fetches — same shape as
-    # filelist_cache. A single book's evaluation may consider the same
-    # bundle across multiple cascade passes; cache so we hit the
-    # description endpoint at most once per bundle per evaluation.
+    # Per-book cache of description fetches keyed by torrent_id. Bundles
+    # frequently appear as the best candidate in multiple cascade passes
+    # for the same author (passes 1, 4, 5 returning the same bundle), so
+    # cache to hit the description endpoint at most once per bundle per
+    # evaluation. Cache is intentionally local to one check_book call —
+    # no reason to keep cross-book state.
     description_cache: dict[str, Optional[str]] = {}
     # Per-evaluation cache for cover-pHash fetches. Same torrent surfacing
     # in multiple passes only fetches its cover once. The persistent
@@ -2259,24 +1959,16 @@ async def check_book(
         # match the bundle's own title (e.g. searching for "Duel Nature"
         # against "Demon Accords Series"), confidence alone can't tell us
         # whether the bundle URL actually contains the searched book or
-        # is a coincidental author-only match. Two signals try to verify
-        # in priority order:
+        # is a coincidental author-only match.
         #
-        #   1. FILELIST — fetch /tor/filelist.php and check filenames.
-        #      Most authoritative (filenames literally contain the book
-        #      title), but requires mbsc browser-session cookie.
-        #      Auto-degrades to None when mbsc isn't configured.
-        #
-        #   2. DESCRIPTION — fetch the bundle's torrent description via
-        #      the documented Search JSON API and check whether the title
-        #      appears as a structured list entry. Less authoritative
-        #      (uploaders can mention books that aren't in the bundle in
-        #      prose) but always available, and on TOS 1.7's approved
-        #      automation list. Structured-line check rejects most prose
-        #      false positives.
-        #
-        # Either succeeding promotes the bundle to Found regardless of
-        # the blended confidence score; both failing leaves the cap.
+        # DESCRIPTION verification — fetch the bundle's torrent description
+        # via the documented Search JSON API (TOS 1.7 approved automation
+        # list) and check whether the title appears as a structured list
+        # entry. Structured-line check rejects most prose-mention false
+        # positives. The previous filelist-based signal was removed in
+        # v2.4.0 per MAM staff confirmation that mbsc scraping isn't on
+        # the approved automation surface; if the documented API ever
+        # exposes filelist, see project_seshat_filelist_future_reenable.
         #
         # Gate: bundle + author overlap + title-similarity below the
         # bundle floor. The author check keeps us from spending fetches
@@ -2293,40 +1985,23 @@ async def check_book(
         )
         if needs_bundle_verification:
             tid = best["torrent_id"]
-            # Signal 1: filelist
-            if tid not in filelist_cache:
-                filelist_cache[tid] = await _fetch_filelist(tid)
-            filenames = filelist_cache[tid]
-            if filenames and _filelist_contains_title(filenames, title, search_title):
+            if tid not in description_cache:
+                description_cache[tid] = await _fetch_torrent_description(token, tid)
+            description = description_cache[tid]
+            if description and _description_contains_title(
+                description, title, search_title
+            ):
                 bundle_contents_verified = True
                 logger.debug(
-                    f"  Pass {pass_num}: BUNDLE-VERIFIED-FILELIST "
+                    f"  Pass {pass_num}: BUNDLE-VERIFIED-DESCRIPTION "
                     f"'{best['mam_title'][:50]}' — search title found in "
-                    f"filelist; promoting to FOUND"
+                    f"bundle description; promoting to FOUND"
                 )
-
-            # Signal 2: description (fallback). Skipped when filelist
-            # already verified — same outcome, no need to spend the
-            # extra API call.
-            if not bundle_contents_verified:
-                if tid not in description_cache:
-                    description_cache[tid] = await _fetch_torrent_description(token, tid)
-                description = description_cache[tid]
-                if description and _description_contains_title(
-                    description, title, search_title
-                ):
-                    bundle_contents_verified = True
-                    logger.debug(
-                        f"  Pass {pass_num}: BUNDLE-VERIFIED-DESCRIPTION "
-                        f"'{best['mam_title'][:50]}' — search title found in "
-                        f"bundle description; promoting to FOUND"
-                    )
-                else:
-                    logger.debug(
-                        f"  Pass {pass_num}: BUNDLE '{best['mam_title'][:50]}' "
-                        f"— title not in filelist ({len(filenames)} files) or "
-                        f"description; held as possible"
-                    )
+            else:
+                logger.debug(
+                    f"  Pass {pass_num}: BUNDLE '{best['mam_title'][:50]}' "
+                    f"— title not in description; held as possible"
+                )
 
         # The cap on confidence-driven promotes for bundles still applies
         # when neither verification signal succeeded — a high-confidence
@@ -2381,9 +2056,9 @@ async def check_book(
         # Promote to FOUND when:
         #  - cover-pHash verification matched (definitive — same image
         #    means same upload, even when text score disagrees), OR
-        #  - bundle contents verification succeeded via filelist OR
-        #    description (definitive enough — promote even at low conf
-        #    because we have evidence the URL points at the right book), OR
+        #  - bundle contents verification succeeded via description
+        #    (definitive enough — promote even at low conf because we
+        #    have evidence the URL points at the right book), OR
         #  - single-torrent description verification matched (Cohort C
         #    rescue — title mentioned in description), OR
         #  - confidence clears the regular threshold and the bundle cap
@@ -2662,11 +2337,8 @@ async def debug_check_book(
         passes_to_run.append((4, authors, short))
     passes_to_run.append((5, None, title_only))
 
-    # Cache filelist fetches across passes so a bundle that appears as
-    # the best candidate in multiple passes only costs one HTTP. Mirrors
-    # the production caching in check_book.
-    debug_filelist_cache: dict[str, list[str]] = {}
-    # Same description cache pattern as production — see check_book.
+    # Description cache mirrors production check_book — same torrent
+    # surfacing in multiple debug passes only fetches once.
     debug_description_cache: dict[str, Optional[str]] = {}
     # Cover-pHash cache (in-memory only — persistent cache lives in the
     # global `mam_cover_hashes` table, hit transparently via
@@ -2746,21 +2418,15 @@ async def debug_check_book(
             is_bundle = _is_bundle(item)
             author_matched = _author_match(authors, item)
 
-            # Mirror the production verification gate: bundle + author
-            # overlap + ts below the bundle floor → try filelist fetch
-            # AND description fetch and check if the search title appears
-            # in either signal. See check_book for the full design;
-            # this trace surfaces both signals so debug-match can show
-            # exactly which one (if any) would have promoted.
+            # Mirror the production bundle-verification gate: bundle +
+            # author overlap + ts below the bundle floor → fetch
+            # description and check if the search title appears as a
+            # structured list entry. (Filelist signal removed in v2.4.0
+            # per TOS — description is the sole bundle-content signal.)
             bundle_check: dict = {
                 "is_bundle": is_bundle,
                 "author_matched": author_matched,
                 "verification_attempted": False,
-                "filelist_size": 0,
-                "filelist_match": False,
-                "fetch_url": None,
-                "fetch_http_status": None,
-                "fetch_response_first_500_chars": None,
                 "description_fetched": False,
                 "description_length": 0,
                 "description_match": False,
@@ -2774,38 +2440,6 @@ async def debug_check_book(
             ):
                 bundle_check["verification_attempted"] = True
                 tid = str(item.get("id", ""))
-                # Signal 1: filelist
-                if tid not in debug_filelist_cache:
-                    # Inline-fetch (rather than going through
-                    # _fetch_filelist) so the raw status + a sample of
-                    # the response body land in the debug trace.
-                    fetch_url = f"{MAM_FILELIST_URL}?torrentid={tid}"
-                    bundle_check["fetch_url"] = fetch_url
-                    resp = await _fetch_filelist_response(tid)
-                    if resp is None:
-                        bundle_check["fetch_http_status"] = "exception_or_no_id"
-                        debug_filelist_cache[tid] = []
-                    else:
-                        bundle_check["fetch_http_status"] = resp.status_code
-                        body = resp.text or ""
-                        bundle_check["fetch_response_first_500_chars"] = body[:500]
-                        if resp.status_code == 200 and body:
-                            debug_filelist_cache[tid] = _parse_filelist_html(body)
-                        else:
-                            debug_filelist_cache[tid] = []
-                else:
-                    bundle_check["fetch_url"] = "(cached from earlier pass)"
-                filenames = debug_filelist_cache.get(tid, [])
-                bundle_check["filelist_size"] = len(filenames)
-                bundle_check["filelist_filenames_sample"] = filenames[:5]
-                if filenames and _filelist_contains_title(
-                    filenames, title, search_title
-                ):
-                    bundle_check["filelist_match"] = True
-
-                # Signal 2: description (always tried in debug-match,
-                # even when filelist already matched, so the trace shows
-                # what each signal independently sees).
                 if tid not in debug_description_cache:
                     debug_description_cache[tid] = (
                         await _fetch_torrent_description(token, tid)
@@ -2818,26 +2452,19 @@ async def debug_check_book(
                     if _description_contains_title(desc, title, search_title):
                         bundle_check["description_match"] = True
 
-            # Decision reflects what production would actually do under
-            # the dual-signal verification logic. Either signal matching
-            # is enough to promote.
-            verified = (
-                bundle_check["filelist_match"] or bundle_check["description_match"]
-            )
+            # Decision reflects what production would actually do.
+            verified = bundle_check["description_match"]
             if confidence < MATCH_MIN_SCORE:
                 decision = "skipped_below_min"
             elif verified:
-                if bundle_check["filelist_match"]:
-                    decision = "would_promote_via_filelist_verification"
-                else:
-                    decision = "would_promote_via_description_verification"
+                decision = "would_promote_via_description_verification"
             elif (
                 is_bundle
                 and ts_max < _BUNDLE_PROMOTE_TS_FLOOR
                 and confidence >= MATCH_PROMOTE_SCORE
             ):
                 # Conf would normally promote, but bundle cap blocks it
-                # (and neither verification signal rescued it).
+                # (and the description verification signal didn't fire).
                 decision = "bundle_capped_kept_as_possible"
             elif confidence >= MATCH_PROMOTE_SCORE:
                 decision = "would_promote_to_found"
@@ -2879,7 +2506,7 @@ async def debug_check_book(
         # Updates each result's `cover_check` block + extends `decision`
         # to "would_promote_via_cover_verification" when the cover
         # signal would have driven the result's promotion (and the
-        # candidate isn't already promoting via filelist/description).
+        # candidate isn't already promoting via description).
         if seshat_cover_phash and pass_trace["results"]:
             cover_pool = [
                 {

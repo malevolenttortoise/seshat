@@ -79,24 +79,6 @@ async def delete_credential(key: str) -> SimpleOk:
         raise HTTPException(400, f"Unknown secret key: {key}")
     await secrets.delete_secret(key)
     _log.info("credential %r deleted via UI", key)
-
-    # Clear in-memory mbsc state so the auto-degrade path engages
-    # immediately — otherwise the next bundle filelist verification
-    # would still fire with the just-deleted token until something
-    # else (rotation, dispatcher rebuild, restart) overwrote it.
-    # Other credentials don't have this delete-time apply hook today;
-    # extending it now would creep scope, leaving them as-is.
-    if key == "mam_browser_session_id":
-        try:
-            from app.discovery.sources.mam import (
-                set_current_mbsc_token,
-                mark_mbsc_fresh,
-            )
-            set_current_mbsc_token("")
-            mark_mbsc_fresh()
-        except Exception:
-            _log.exception("failed to clear in-memory mbsc on delete")
-
     return SimpleOk(ok=True)
 
 
@@ -113,22 +95,7 @@ async def _apply_credential(key: str, value: str) -> None:
         except Exception:
             _log.exception("failed to apply MAM cookie update")
 
-    if key == "mam_browser_session_id":
-        # Push the new mbsc token into the discovery module's in-memory
-        # state so the next bundle filelist verification sees it without
-        # waiting for a dispatcher rebuild. Mark-fresh because a paste
-        # is a deliberate refresh — assume the user just captured a
-        # working cookie from their browser and clear any stale flag
-        # so the UI pill drops immediately.
-        try:
-            from app.discovery.sources.mam import (
-                set_current_mbsc_token,
-                mark_mbsc_fresh,
-            )
-            set_current_mbsc_token(value)
-            mark_mbsc_fresh()
-        except Exception:
-            _log.exception("failed to apply MAM mbsc cookie update")
+    # mam_browser_session_id (mbsc) apply-hook was REMOVED in v2.4.0 (TOS).
 
     # Rebuild the dispatcher to pick up any credential change.
     # `_build_dispatcher` became async in v1.1.1 when filter-author

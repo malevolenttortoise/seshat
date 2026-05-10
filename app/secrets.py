@@ -42,13 +42,18 @@ _log = logging.getLogger("seshat.secrets")
 # Only genuinely sensitive values (passwords, tokens, cookies).
 SECRET_KEYS: dict[str, str] = {
     "mam_session_id": "MAM session cookie",
-    "mam_browser_session_id": "MAM browser session cookie (mbsc)",
     "mam_irc_password": "MAM IRC password",
     "qbit_password": "qBittorrent password",
     "hardcover_api_key": "Hardcover API Bearer token",
     "abs_api_key": "Audiobookshelf API Bearer token",
     "cwa_password": "Calibre-Web-Automated user password (push-back)",
 }
+# `mam_browser_session_id` (mbsc) was removed in v2.4.0 — TOS-disallowed.
+# Existing rows in the secrets table from prior versions are harmless
+# (they're never read by any code path) and will get cleared next time
+# the user manually deletes them via the (now-removed) UI row, OR they
+# stay until manual SQL cleanup. Leaving them is the safer option vs.
+# auto-purging on upgrade.
 
 
 # ─── Schema ────────────────────────────────────────────────────

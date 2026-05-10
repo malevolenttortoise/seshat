@@ -232,12 +232,12 @@ class TestCoverPromoteDecisionOverride:
                 assert "cover_verification" not in r["decision"]
 
     @pytest.mark.asyncio
-    async def test_existing_filelist_promote_not_overridden(
+    async def test_existing_description_promote_not_overridden(
         self, patch_search, patch_annotate,
     ):
-        # When a result already promoted via filelist verification,
+        # When a result already promoted via description verification,
         # a cover-promote signal must NOT change the decision string —
-        # the trace should still show the filelist attribution. We
+        # the trace should still show the description attribution. We
         # construct a candidate that would already promote via plain
         # text (high conf) so its decision is "would_promote_to_found"
         # before cover annotation runs.

@@ -438,7 +438,6 @@ export default function MobileSettingsPage() {
   const [msg, setMsg] = useState("");
   const [testNtfyResult, setTestNtfyResult] = useState<string | null>(null);
   const [testQbitResult, setTestQbitResult] = useState<string | null>(null);
-  const [mbscStale, setMbscStale] = useState(false);
 
   useEffect(() => {
     api
@@ -451,10 +450,6 @@ export default function MobileSettingsPage() {
     api
       .get<{ items: CredItem[] }>("/v1/credentials")
       .then((r) => setCreds(r.items))
-      .catch(() => {});
-    api
-      .get<{ configured: boolean; stale: boolean }>("/v1/mam/mbsc-status")
-      .then((r) => setMbscStale(!!r.stale))
       .catch(() => {});
   };
   useEffect(() => {
@@ -521,7 +516,7 @@ export default function MobileSettingsPage() {
   };
 
   const mamCreds = creds.filter((c) =>
-    ["mam_session_id", "mam_browser_session_id", "mam_irc_password"].includes(c.key),
+    ["mam_session_id", "mam_irc_password"].includes(c.key),
   );
   const qbitCreds = creds.filter((c) => c.key === "qbit_password");
   const apiCreds = creds.filter((c) => c.key === "hardcover_api_key");
@@ -696,41 +691,14 @@ export default function MobileSettingsPage() {
           const desc =
             c.key === "mam_session_id"
               ? "Browser cookie value (for the website API)"
-              : c.key === "mam_browser_session_id"
-              ? "Optional. mbsc cookie from your browser — enables bundle URL verification. Filelist scraping isn't on MAM's documented API list; use at own risk."
               : "IRC SASL password (for #announce)";
-          const showStale =
-            c.key === "mam_browser_session_id" && c.configured && mbscStale;
-          const clearable = c.key === "mam_browser_session_id";
-          const clearConfirm =
-            "Clear mbsc and disable bundle filelist verification? Bundles will stay at 'Possible' until you paste a fresh value.";
           return (
-            <div key={c.key}>
-              <MobileCredField
-                item={c}
-                onSaved={loadCreds}
-                desc={desc}
-                clearable={clearable}
-                clearConfirm={clearConfirm}
-              />
-              {showStale && (
-                <div
-                  style={{
-                    margin: "0 12px 8px",
-                    fontSize: 11,
-                    fontWeight: 600,
-                    color: t.err,
-                    padding: "2px 8px",
-                    borderRadius: 4,
-                    background: t.bg3,
-                    border: `1px solid ${t.err}`,
-                    display: "inline-block",
-                  }}
-                >
-                  Possibly expired — paste a fresh value
-                </div>
-              )}
-            </div>
+            <MobileCredField
+              key={c.key}
+              item={c}
+              onSaved={loadCreds}
+              desc={desc}
+            />
           );
         })}
       </MobileSection>

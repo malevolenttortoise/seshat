@@ -496,15 +496,10 @@ function DesktopSettingsPage() {
   const [testingNtfy, setTestingNtfy] = useState(false);
   const [ntfyResult, setNtfyResult] = useState<string | null>(null);
   const [buildSha, setBuildSha] = useState("");
-  const [mbscStale, setMbscStale] = useState(false);
 
   useEffect(() => { api.get<S>("/v1/settings").then(setS).catch(e => setMsg(`Error: ${e}`)); }, []);
   const loadCreds = () => {
     api.get<{ items: CredItem[] }>("/v1/credentials").then(r => setCreds(r.items)).catch(() => {});
-    // Refresh stale flag alongside cred list — both are surfaces of
-    // "is the mbsc cookie healthy" and any save/delete that changes
-    // configured-ness can also change staleness.
-    api.get<{ configured: boolean; stale: boolean }>("/v1/mam/mbsc-status").then(r => setMbscStale(!!r.stale)).catch(() => {});
   };
   useEffect(() => { loadCreds(); }, []);
   useEffect(() => { api.get<{ short_sha: string }>("/version").then(r => setBuildSha(r.short_sha || "")).catch(() => {}); }, []);
@@ -528,7 +523,7 @@ function DesktopSettingsPage() {
   };
 
   const uploaders = ((s.excluded_uploaders as string[]) ?? []);
-  const mamCreds = creds.filter(c => ["mam_session_id", "mam_browser_session_id", "mam_irc_password"].includes(c.key));
+  const mamCreds = creds.filter(c => ["mam_session_id", "mam_irc_password"].includes(c.key));
   const qbitCreds = creds.filter(c => c.key === "qbit_password");
   const apiCreds = creds.filter(c => c.key === "hardcover_api_key");
   const absCreds = creds.filter(c => c.key === "abs_api_key");
@@ -675,27 +670,9 @@ function DesktopSettingsPage() {
           {mamCreds.map(c => {
             const desc = c.key === "mam_session_id"
               ? 'MAM → Preferences → Security → Generate Session.'
-              : c.key === "mam_browser_session_id"
-              ? 'Optional. MAM site → DevTools → Application → Cookies → mbsc value. Enables bundle URL verification (filelist fetch) — bundles containing your searched book auto-promote to Found. Without it, bundles stay at "Possible" with the badge. Note: the filelist endpoint isn\'t on MAM\'s documented API list, so this scraping technically falls outside the approved automation surface — use at your own risk.'
               : "Password for SASL authentication.";
-            const showStale = c.key === "mam_browser_session_id" && c.configured && mbscStale;
-            const clearable = c.key === "mam_browser_session_id";
-            const clearConfirm = "Clear mbsc and disable bundle filelist verification? Bundles will stay at 'Possible' until you paste a fresh value.";
             return (
-              <div key={c.key} style={{ position: "relative" }}>
-                <CredField item={c} onSaved={loadCreds} desc={desc} clearable={clearable} clearConfirm={clearConfirm} />
-                {showStale && (
-                  <div style={{
-                    marginTop: -8, marginLeft: 12, marginBottom: 8,
-                    fontSize: 11, fontWeight: 600, color: t.err,
-                    display: "inline-block",
-                    padding: "2px 8px", borderRadius: 4,
-                    background: t.bg3, border: `1px solid ${t.err}`,
-                  }}>
-                    Possibly expired — paste a fresh value
-                  </div>
-                )}
-              </div>
+              <CredField key={c.key} item={c} onSaved={loadCreds} desc={desc} />
             );
           })}
         </>}
