@@ -2498,7 +2498,45 @@ async def check_book(
                     f"promoting Possible-band candidate to FOUND"
                 )
 
+        # Series-bundle inferred match (UAT 2026-05-11 round 3):
+        # bundle + author_matched + our search's series name appears
+        # in the bundle's MAM title → strong implicit evidence the
+        # searched book is in there. Catches the dominant pattern
+        # surfaced by the unowned-Possible UAT (50 of 56 books were
+        # series bundles like "Northern Crusade Series" / "The Divine
+        # Series" / "The Amazon's Pledge Series" titled by series
+        # name, where filename verification fails because the bundle's
+        # filenames don't lexically contain the searched book title).
+        # The volume_range_mismatch short-circuit in
+        # score_match_with_breakdown already protects against the
+        # "search Bk7, bundle is Books 1-3" failure mode (returns
+        # conf=0 earlier, so we never reach this branch with the wrong
+        # candidate).
+        series_bundle_match = (
+            bool(series_name)
+            and is_bundle
+            and best.get("author_matched", False)
+            and series_name.lower().strip() in (best.get("mam_title") or "").lower()
+        )
+
+        # Strong-text-anchor promote (UAT 2026-05-11 round 3): when
+        # title_similarity is essentially exact (>= 0.95) AND author
+        # matched, treat as evidence strong enough to promote at a
+        # lower conf threshold (>= 0.65 instead of 0.70). UAT canary:
+        # "Tenuous Defense (Mercenary Navy #3)" surfaced "Tenuous
+        # Defense" with ts=0.95, auth=True, conf=0.665 — 0.005 below
+        # the regular promote threshold despite the title being an
+        # exact match. The bundle cap (promote_blocked_by_bundle)
+        # still applies; this branch only helps singletons.
+        strong_text_anchor = (
+            best.get("title_similarity", 0.0) >= 0.95
+            and best.get("author_matched", False)
+            and conf >= 0.65
+            and not promote_blocked_by_bundle
+        )
+
         # Promote to FOUND when:
+        #  - filename verification (Part D) matched, OR
         #  - cover-pHash verification matched (definitive — same image
         #    means same upload, even when text score disagrees; safe
         #    without author_match because cover IS the truth signal), OR
@@ -2509,6 +2547,8 @@ async def check_book(
         #  - single-torrent description verification matched (Cohort C
         #    rescue — title mentioned in description; gate upstream
         #    already requires author_matched), OR
+        #  - series-bundle inferred match (Fix E, see comment above), OR
+        #  - strong-text-anchor (Fix F, see comment above), OR
         #  - confidence clears the regular threshold AND the bundle cap
         #    isn't blocking it AND the author matched. The author check
         #    is the critical addition — pass 5 (no-author search) can
@@ -2521,6 +2561,8 @@ async def check_book(
             or cover_verified
             or bundle_contents_verified
             or single_torrent_description_verified
+            or series_bundle_match
+            or strong_text_anchor
             or (
                 conf >= MATCH_PROMOTE_SCORE
                 and not promote_blocked_by_bundle
@@ -3101,12 +3143,34 @@ async def debug_check_book(
             # source author Tabitha Lord). Filename verification takes
             # priority over description (cheaper signal, runs first).
             verified_via_description = bundle_check["description_match"]
+            # Mirror production Fix E + Fix F predicates so the debug
+            # trace shows what production would actually decide.
+            series_bundle_match_dbg = (
+                bool(series_name)
+                and is_bundle
+                and author_matched
+                and series_name.lower().strip() in (mam_title or "").lower()
+            )
+            strong_text_anchor_dbg = (
+                ts_max >= 0.95
+                and author_matched
+                and confidence >= 0.65
+                # Bundle cap still applies — singleton-only branch.
+                and not (
+                    is_bundle
+                    and ts_max < _BUNDLE_PROMOTE_TS_FLOOR
+                )
+            )
             if confidence < MATCH_MIN_SCORE:
                 decision = "skipped_below_min"
             elif filename_verified:
                 decision = "would_promote_via_filename_verification"
             elif verified_via_description:
                 decision = "would_promote_via_description_verification"
+            elif series_bundle_match_dbg:
+                decision = "would_promote_via_series_bundle_match"
+            elif strong_text_anchor_dbg:
+                decision = "would_promote_via_strong_text_anchor"
             elif (
                 is_bundle
                 and ts_max < _BUNDLE_PROMOTE_TS_FLOOR

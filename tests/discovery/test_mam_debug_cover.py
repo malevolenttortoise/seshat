@@ -270,7 +270,14 @@ class TestCoverPromoteDecisionOverride:
                 # — when both signals would promote, the cover gets
                 # attribution credit because it's the more informative
                 # signal for diagnostic purposes.
+                # would_promote_via_strong_text_anchor was added in
+                # UAT 2026-05-11 round 3 — exact-title + author-matched
+                # at conf >= 0.65 promotes via a dedicated branch
+                # ahead of cover annotation, so this case lands there
+                # now. Cover override only fires when the candidate
+                # ISN'T already in a `would_promote_via_*` decision.
                 assert r["decision"] in (
                     "would_promote_via_cover_verification",
+                    "would_promote_via_strong_text_anchor",
                     "would_promote_to_found",
                 )

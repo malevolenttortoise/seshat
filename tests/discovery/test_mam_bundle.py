@@ -617,3 +617,169 @@ class TestScopedFilenameSearchHyphenNormalization:
         )
         assert "Michael R Hicks" in captured["text_override"]
         assert "R." not in captured["text_override"]
+
+
+# ─── Fix E + Fix F: debug-match decision predicates ──────────────
+#
+# UAT 2026-05-11 round 3: 50 of 56 unowned-Possibles were
+# "series-bundle" matches (bundle titled by series name, e.g.
+# "Northern Crusade Series"); 1-2 were exact-title singletons
+# sitting just below the conf=0.70 promote threshold. Fix E
+# promotes the series-bundle class; Fix F promotes exact-title
+# singletons. These tests pin the debug-match decision-string
+# logic so future refactors don't silently drop the new branches.
+
+
+def _trace_for_decision(
+    monkeypatch, *,
+    title="Foo",
+    authors="Bar",
+    series_name="",
+    mam_title="Foo",
+    mam_authors=None,
+    is_bundle=False,
+):
+    """Helper: construct a debug_check_book trace with a single
+    canned candidate and return its decision string.
+    """
+    import asyncio
+    from app.discovery.sources import mam as mam_mod
+
+    if mam_authors is None:
+        mam_authors = ["Bar"]
+    canned = {
+        "data": [{
+            "id": "1",
+            "title": mam_title,
+            "author_info": ",".join(mam_authors),
+            "filetypes": "epub",
+            "category": "Ebooks",
+            "language": 1,
+            "lang_code": "en",
+            "seeders": 5,
+            "numfiles": 5 if is_bundle else 1,
+        }],
+    }
+
+    async def _fake_search(token, authors, search_title, **_kw):
+        return canned
+
+    async def _fake_scoped(*_a, **_kw):
+        return set()
+
+    monkeypatch.setattr(mam_mod, "_mam_search", _fake_search)
+    monkeypatch.setattr(mam_mod, "_scoped_filename_search", _fake_scoped)
+
+    trace = asyncio.run(mam_mod.debug_check_book(
+        token="tok", title=title, authors=authors, series_name=series_name,
+    ))
+    decisions = []
+    for p in trace["passes"]:
+        if p.get("pass_kind") == "scoped":
+            continue
+        for r in p["results"]:
+            decisions.append(r["decision"])
+    return decisions
+
+
+class TestDebugDecisionFixE:
+    """Series-bundle inferred match — bundle titled by series name."""
+
+    def test_series_in_bundle_title_promotes(self, monkeypatch):
+        # "A Whisper After Midnight" by Christian Warren Freed,
+        # series='Northern Crusade', candidate is "Northern Crusade
+        # Series" bundle by same author. UAT canary pattern.
+        decisions = _trace_for_decision(
+            monkeypatch,
+            title="A Whisper After Midnight",
+            authors="Christian Warren Freed",
+            series_name="Northern Crusade",
+            mam_title="Northern Crusade Series",
+            mam_authors=["Christian Warren Freed"],
+            is_bundle=True,
+        )
+        assert "would_promote_via_series_bundle_match" in decisions
+
+    def test_series_NOT_in_bundle_title_doesnt_promote_via_E(self, monkeypatch):
+        # "Beyond Atlantis" series='Ascendant Chronicles' vs
+        # "Atlantis Quadrilogy - Box Set" — series name doesn't
+        # appear in bundle title, Fix E shouldn't fire.
+        decisions = _trace_for_decision(
+            monkeypatch,
+            title="Beyond Atlantis",
+            authors="Brandon Ellis",
+            series_name="Ascendant Chronicles",
+            mam_title="Atlantis Quadrilogy - Box Set",
+            mam_authors=["Brandon Ellis"],
+            is_bundle=True,
+        )
+        assert "would_promote_via_series_bundle_match" not in decisions
+
+    def test_non_bundle_with_series_match_doesnt_promote_via_E(self, monkeypatch):
+        # Fix E is bundle-specific. A non-bundle hit with series
+        # name in title shouldn't promote via Fix E. Title chosen
+        # to avoid `_is_bundle`'s keyword fallback (no "series" /
+        # "collection" / "omnibus" / "bundle" / "book" tokens).
+        decisions = _trace_for_decision(
+            monkeypatch,
+            title="Foo",
+            authors="Author",
+            series_name="Tropical Run",
+            mam_title="Tropical Run",
+            mam_authors=["Author"],
+            is_bundle=False,
+        )
+        assert "would_promote_via_series_bundle_match" not in decisions
+
+    def test_empty_series_doesnt_promote_via_E(self, monkeypatch):
+        decisions = _trace_for_decision(
+            monkeypatch,
+            title="Some Book",
+            authors="Author",
+            series_name="",
+            mam_title="Some Series Bundle",
+            mam_authors=["Author"],
+            is_bundle=True,
+        )
+        assert "would_promote_via_series_bundle_match" not in decisions
+
+
+class TestDebugDecisionFixF:
+    """Strong-text-anchor — exact title + author at conf>=0.65."""
+
+    def test_exact_title_singleton_promotes(self, monkeypatch):
+        # Tenuous Defense canary: ts >= 0.95, auth_matched=True,
+        # conf=0.665 → previously kept_as_possible, now promotes
+        # via strong_text_anchor.
+        decisions = _trace_for_decision(
+            monkeypatch,
+            title="Tenuous Defense",
+            authors="John Spearman",
+            mam_title="Tenuous Defense",
+            mam_authors=["John Spearman"],
+            is_bundle=False,
+        )
+        # Either strong_text_anchor OR would_promote_to_found is
+        # acceptable — both indicate "auto-promoted via text".
+        # The point is it didn't stay kept_as_possible.
+        assert any(
+            d in (
+                "would_promote_via_strong_text_anchor",
+                "would_promote_to_found",
+            )
+            for d in decisions
+        )
+
+    def test_high_ts_but_no_author_match_doesnt_promote_via_F(self, monkeypatch):
+        # ts high but author doesn't match — Fix F shouldn't fire.
+        # Caught by the existing kept_as_possible_no_author_match
+        # branch instead.
+        decisions = _trace_for_decision(
+            monkeypatch,
+            title="Tenuous Defense",
+            authors="Some Other Author",
+            mam_title="Tenuous Defense",
+            mam_authors=["John Spearman"],
+            is_bundle=False,
+        )
+        assert "would_promote_via_strong_text_anchor" not in decisions
