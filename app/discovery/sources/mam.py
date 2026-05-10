@@ -856,10 +856,21 @@ def _pick_best_result(
             "best_format": best_fmt,
         })
 
-    # Sort: lowest fmt_rank, highest match_pct, highest fmt_count, highest seeders
+    # Sort: lowest fmt_rank, highest match_pct, highest confidence,
+    # highest fmt_count, highest seeders. The `confidence` tiebreak
+    # (added 2026-05-09) reflects the B3b volume penalty — when
+    # `match_pct` is tied across multiple sibling-volume candidates
+    # (e.g. all 5 Marcus Sloss "Monsters Mayhem & Misfits N" books
+    # at 96% match_pct), the candidate with NO volume marker has
+    # higher conf (no -0.20 penalty applied) and SHOULD win over its
+    # siblings. Without this tiebreak, fmt_count would win — and
+    # whichever sibling happens to have multiple formats uploaded
+    # (typically not Bk1) would be silently picked as the wrong
+    # result.
     scored.sort(key=lambda x: (
         x["fmt_rank"],
         -x["match_pct"],
+        -x.get("confidence", 0),
         -x["fmt_count"],
         -x.get("seeders", 0),
     ))

@@ -19,7 +19,10 @@ visually-different cover art — the Cohort C definition):
 """
 import pytest
 
-from app.discovery.sources.mam import _description_mentions_title_loose
+from app.discovery.sources.mam import (
+    _description_mentions_title_loose,
+    _pick_best_result,
+)
 from app.metadata.scoring import _extract_volume
 
 
@@ -220,3 +223,68 @@ class TestDescriptionMentionsTitleLoose:
         # for it explicitly.
         desc = "Fans of Incarceron will enjoy..."
         assert _description_mentions_title_loose(desc, "Incarceron") is True
+
+
+# ─── _pick_best_result confidence tiebreak ──────────────────────
+
+
+class TestPickBestResultConfidenceTiebreak:
+    """When match_pct ties across siblings (e.g. all 5 Marcus Sloss
+    "Monsters Mayhem & Misfits N" books at 96% match_pct), the
+    candidate with NO volume marker has higher post-B3b confidence
+    (no -0.20 penalty) and SHOULD win over its siblings.
+
+    Pre-fix the sort key was (fmt_rank, -match_pct, -fmt_count,
+    -seeders) — fmt_count would win the tiebreak and whichever
+    sibling happens to have multiple formats uploaded would be
+    silently picked. Post-fix `confidence` slots in between
+    match_pct and fmt_count.
+    """
+
+    def _candidate(self, tid, *, match_pct, confidence, formats=None, seeders=5):
+        if formats is None:
+            formats = ["epub"]
+        return {
+            "torrent_id": tid,
+            "match_pct": match_pct,
+            "confidence": confidence,
+            "format_str": ",".join(formats),
+            "formats": formats,
+            "seeders": seeders,
+        }
+
+    def test_higher_conf_wins_when_match_pct_tied(self):
+        # MMM canary — Bk1 (no vol marker, conf=0.96) vs siblings
+        # (vol marker → -0.20 penalty → conf=0.77). Match_pct tied.
+        # MMM6 has 2 formats (would have won pre-fix via fmt_count
+        # tiebreak); now confidence ranks above fmt_count so MMM1
+        # wins despite having only 1 format.
+        candidates = [
+            self._candidate("MMM3", match_pct=96, confidence=0.77),
+            self._candidate("MMM2", match_pct=96, confidence=0.77),
+            self._candidate("MMM1", match_pct=96, confidence=0.96),
+            self._candidate("MMM6", match_pct=96, confidence=0.77, formats=["azw3", "epub"]),
+            self._candidate("MMM4", match_pct=96, confidence=0.77),
+        ]
+        winner = _pick_best_result(candidates, format_priority=["epub"])
+        assert winner["torrent_id"] == "MMM1"
+
+    def test_match_pct_still_dominates_over_conf(self):
+        # When match_pct differs, it wins over confidence — the
+        # tiebreak only fires within an equal match_pct cohort.
+        candidates = [
+            self._candidate("low_match", match_pct=80, confidence=0.95),
+            self._candidate("high_match", match_pct=95, confidence=0.50),
+        ]
+        winner = _pick_best_result(candidates, format_priority=["epub"])
+        assert winner["torrent_id"] == "high_match"
+
+    def test_fmt_count_still_breaks_tie_when_conf_tied(self):
+        # When match_pct AND confidence are both tied, fmt_count
+        # falls back as the next-tier tiebreak (legacy behavior).
+        candidates = [
+            self._candidate("one_fmt", match_pct=96, confidence=0.96, formats=["epub"]),
+            self._candidate("two_fmts", match_pct=96, confidence=0.96, formats=["epub", "azw3"]),
+        ]
+        winner = _pick_best_result(candidates, format_priority=["epub", "azw3"])
+        assert winner["torrent_id"] == "two_fmts"
