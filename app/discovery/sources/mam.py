@@ -426,6 +426,91 @@ def _extract_core_title(title: str) -> Optional[str]:
     return None
 
 
+# Trailing bare-number stripping for series volumes that MAM may
+# zero-pad differently. Mark's "Right of Retribution 2" failed to
+# match MAM's "Right of Retribution 02" because MAM tokenizes "2"
+# and "02" as different search terms; stripping the trailing number
+# entirely lets the cascade find both volumes (cover-pHash sorts
+# the right one out per Part C). Anchored to title end so we don't
+# strip mid-title numbers like "1984" or "Apollo 11".
+_RE_TRAILING_VOLUME = re.compile(r"\s+\d+\s*$")
+
+
+def _alternate_title_forms(title: str) -> list[str]:
+    """Return alternate title forms for MAM-search variant passes.
+
+    Currently handles trailing-number stripping (Right of Retribution 2
+    → Right of Retribution; Domestic Decay 2 → Domestic Decay). Returns
+    only forms that DIFFER from the input — the caller dedupes against
+    its already-tried passes.
+    """
+    if not title:
+        return []
+    out: list[str] = []
+    m = _RE_TRAILING_VOLUME.search(title)
+    if m:
+        stripped = title[: m.start()].strip()
+        if len(stripped) >= 3 and stripped != title:
+            out.append(stripped)
+    return out
+
+
+def _alternate_author_forms(author: str) -> list[str]:
+    """Return alternate author tokenization forms for MAM-search variant passes.
+
+    Multi-initial authors like "J J Cross" / "P. G. Wodehouse" can be
+    indexed on MAM as "JJ Cross" / "P.G. Wodehouse" (or vice versa),
+    and MAM's combined-text search treats space-separated initials as
+    distinct tokens that don't match the no-space form. Generates:
+
+      "J J Cross"      → ["JJ Cross", "J.J. Cross"]
+      "P. G. Wodehouse"→ ["P G Wodehouse", "PG Wodehouse"]
+      "JK Rowling"     → ["J K Rowling", "J.K. Rowling"]
+
+    Triggered when the author has 2+ single-letter tokens (with or
+    without periods) followed by at least one longer token. Returns only
+    forms that DIFFER from the input so the caller can dedupe.
+    """
+    if not author:
+        return []
+    tokens = author.split()
+    initials: list[str] = []
+    rest: list[str] = []
+    for t in tokens:
+        bare = t.rstrip(".")
+        if len(bare) == 1 and bare.isalpha():
+            initials.append(bare)
+        else:
+            rest.append(t)
+    if len(initials) < 2 or not rest:
+        # Detect concatenated-initials form like "JK Rowling" (single
+        # multi-letter all-uppercase token followed by surname).
+        if (
+            len(tokens) >= 2
+            and tokens[0].isalpha()
+            and 2 <= len(tokens[0]) <= 4
+            and tokens[0].isupper()
+            and tokens[0].rstrip(".") == tokens[0]  # no periods
+        ):
+            split_initials = list(tokens[0])
+            spaced = " ".join(split_initials) + " " + " ".join(tokens[1:])
+            with_periods = "".join(i + "." for i in split_initials) + " " + " ".join(tokens[1:])
+            return [v for v in (spaced, with_periods) if v != author]
+        return []
+    rest_part = " ".join(rest)
+    concat = "".join(initials) + " " + rest_part
+    with_periods = "".join(i + "." for i in initials) + " " + rest_part
+    out = [v for v in (concat, with_periods) if v != author]
+    # Dedupe in case both variants happen to equal each other.
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for v in out:
+        if v not in seen:
+            seen.add(v)
+            deduped.append(v)
+    return deduped
+
+
 def _build_query(authors: str, title: str) -> str:
     return f"{_clean_authors(authors)} {_clean_title(title)}"
 
@@ -2266,6 +2351,75 @@ async def check_book(
         await asyncio.sleep(delay)
         if await _try_evaluate(5, r, title_only):
             return result
+
+        # --- Passes 6+: alternate forms ---
+        # MAM tokenizes more strictly than we send. Two known patterns
+        # that drop the right candidate from earlier passes:
+        #   1. Trailing zero-padded volumes ("Right of Retribution 02")
+        #      vs source's bare "2" — search for nothing returns an
+        #      empty result, search without the number returns both.
+        #   2. Multi-initial authors ("JJ Cross") vs source's spaced
+        #      ("J J Cross") — combined text-token search can't bridge.
+        #
+        # Generate variant title/author forms and run them as additional
+        # passes. Dedupe against forms already tried in passes 1-5 so we
+        # don't burn API quota on duplicates. Cascade still short-
+        # circuits on a FOUND, so passes 6+ only run for Possible / NotFound
+        # cases — adds zero cost when text already nailed it.
+        tried_pairs: set[tuple] = {(authors, title)}
+        if core:
+            tried_pairs.add((authors, core))
+        if sub_right and sub_right != core:
+            tried_pairs.add((authors, sub_right))
+        if short and short != title and short != core:
+            tried_pairs.add((authors, short))
+        tried_pairs.add((None, title_only))
+
+        alt_titles = _alternate_title_forms(title)
+        # Also try variants of the short / core forms in case the trailing
+        # number is on a sub-form rather than the full title.
+        for base in (short, core):
+            if base:
+                alt_titles.extend(
+                    t for t in _alternate_title_forms(base)
+                    if t not in alt_titles
+                )
+        alt_authors = _alternate_author_forms(authors)
+
+        # Build the variant pass list. Order:
+        #   - alt-title with original author (catches D6 / Warhawk
+        #     trailing-number case)
+        #   - alt-author with original title (catches Veil
+        #     "JJ Cross" case)
+        #   - alt-author × alt-title compounding (catches both at once)
+        # Capped at 6 extras so we don't quintuple the API budget per
+        # book in the worst case (large initial sets × many alt titles).
+        variant_passes: list[tuple[Optional[str], str]] = []
+        for alt_t in alt_titles:
+            variant_passes.append((authors, alt_t))
+        for alt_a in alt_authors:
+            variant_passes.append((alt_a, title))
+            for alt_t in alt_titles:
+                variant_passes.append((alt_a, alt_t))
+        # Dedupe in order
+        seen_pairs: set[tuple] = set()
+        deduped_variants: list[tuple[Optional[str], str]] = []
+        for pair in variant_passes:
+            if pair in seen_pairs or pair in tried_pairs:
+                continue
+            seen_pairs.add(pair)
+            deduped_variants.append(pair)
+        deduped_variants = deduped_variants[:6]
+
+        for vidx, (v_author, v_title) in enumerate(deduped_variants):
+            pass_num = 6 + vidx
+            r = await _mam_search(
+                token, v_author, v_title,
+                lang_ids=lang_ids, content_type=content_type,
+            )
+            await asyncio.sleep(delay)
+            if await _try_evaluate(pass_num, r, v_title):
+                return result
 
     except _AuthError as e:
         result["status"] = STATUS_AUTH_ERROR
