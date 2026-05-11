@@ -364,6 +364,13 @@ async def _build_dispatcher(settings: dict, resolved_secrets: dict = None) -> Di
             settings.get("audiobook_format_priority", [])
             or ["m4b", "m4a", "mp3"]
         ),
+        # Reuse the existing `mam_format_priority` setting (already
+        # surfaced in Settings → Format Priorities for MAM scoring).
+        # Same list drives both result-picking on the search side AND
+        # primary-file-selection on the file-copier side.
+        ebook_format_priority=list(
+            settings.get("mam_format_priority", []) or []
+        ),
         default_sink=settings.get("default_sink", "calibre"),
         calibre_library_path=settings.get("calibre_library_path", ""),
         folder_sink_path=settings.get("folder_sink_path", ""),

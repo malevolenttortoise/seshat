@@ -37,6 +37,15 @@ BOOK_EXTENSIONS = frozenset({
 # in this set is untouched by priority-sorting.
 _AUDIOBOOK_EXTENSIONS = frozenset({"m4b", "m4a", "mp3", "aax", "aa"})
 
+# Ebook extensions the ebook priority list can reorder. Mirrors the
+# audiobook set above — `_apply_ebook_priority` is gated on whether
+# the torrent contains any ebook file at all so mixed audiobook-only
+# releases don't get touched.
+_EBOOK_EXTENSIONS = frozenset({
+    "epub", "mobi", "azw", "azw3", "pdf", "lit", "fb2", "djvu",
+    "cbz", "cbr",
+})
+
 
 def _apply_audiobook_priority(
     files: list[Path],
@@ -86,6 +95,56 @@ def _apply_audiobook_priority(
     return sorted(files, key=_key)
 
 
+def _apply_ebook_priority(
+    files: list[Path],
+    ebook_priority: Optional[list[str]] = None,
+) -> list[Path]:
+    """Re-rank a file list so the preferred ebook format lands first.
+
+    Mirror of `_apply_audiobook_priority` for the ebook side. UAT
+    canary 2026-05-11: Mark grabbed "Methodology of Secrets" by
+    Elliot Freeman from a torrent containing both EPUB and PDF;
+    file_copier picked the PDF (largest-first baseline) even
+    though `mam_format_priority` listed `epub` first. Without an
+    ebook-priority pass the largest file wins regardless of
+    extension, so a smaller preferred-format file gets passed over.
+
+    Baseline sort (largest-first) is preserved for non-ebook files
+    and for files within the same ebook format. Only the
+    between-format ordering changes. No-op when:
+      - `ebook_priority` is None or empty
+      - the torrent contains no ebook files at all (audiobook-only
+        releases stay in their original largest-first order)
+
+    Implementation matches `_apply_audiobook_priority` exactly:
+    stable sort with a key that gives ebook files a (priority_rank, 0)
+    pair, non-ranked-ebook files a (sentinel, 0) pair.
+    """
+    if not ebook_priority or not files:
+        return files
+    priority = [
+        str(p).lstrip(".").lower() for p in ebook_priority if p
+    ]
+    rank_of = {ext: i for i, ext in enumerate(priority)}
+    has_ebook = any(
+        f.suffix.lstrip(".").lower() in _EBOOK_EXTENSIONS for f in files
+    )
+    if not has_ebook:
+        return files
+    unranked_ebook = len(priority)
+    non_ebook = unranked_ebook + 1
+
+    def _key(p: Path) -> tuple[int, int]:
+        ext = p.suffix.lstrip(".").lower()
+        if ext in rank_of:
+            return (rank_of[ext], 0)
+        if ext in _EBOOK_EXTENSIONS:
+            return (unranked_ebook, 0)
+        return (non_ebook, 0)
+
+    return sorted(files, key=_key)
+
+
 @dataclass(frozen=True)
 class CopyResult:
     """Outcome of a file copy operation."""
@@ -102,15 +161,22 @@ def find_book_files(
     source_dir: Path,
     *,
     audiobook_priority: Optional[list[str]] = None,
+    ebook_priority: Optional[list[str]] = None,
 ) -> list[Path]:
     """Find all book files in a directory tree.
 
     Primary sort is size descending (largest-first). When
     `audiobook_priority` is provided and the torrent contains
     audiobook files, a second pass reorders so the user's preferred
-    format lands first — covers mixed-format bundles where Seshat
-    would otherwise pick whichever single file happened to be
-    largest regardless of extension.
+    audiobook format lands first. Same for `ebook_priority` on the
+    ebook side. Both can be applied independently — they touch
+    different file extensions and won't interfere.
+
+    Covers mixed-format bundles where Seshat would otherwise pick
+    whichever single file happened to be largest regardless of
+    extension. UAT canary 2026-05-11: an EPUB+PDF release where
+    PDF was larger had the PDF picked despite `mam_format_priority`
+    listing `epub` first.
     """
     if not source_dir.exists():
         return []
@@ -127,7 +193,8 @@ def find_book_files(
                 found.append(path)
 
     by_size = sorted(found, key=lambda p: p.stat().st_size, reverse=True)
-    return _apply_audiobook_priority(by_size, audiobook_priority)
+    by_audio = _apply_audiobook_priority(by_size, audiobook_priority)
+    return _apply_ebook_priority(by_audio, ebook_priority)
 
 
 def copy_to_staging(
@@ -137,6 +204,7 @@ def copy_to_staging(
     *,
     explicit_files: Optional[list[Path]] = None,
     audiobook_priority: Optional[list[str]] = None,
+    ebook_priority: Optional[list[str]] = None,
 ) -> CopyResult:
     """Copy book files from source to staging.
 
@@ -147,10 +215,12 @@ def copy_to_staging(
     it, `source_dir` is scanned recursively (legacy behavior used
     when the client can't report its file list).
 
-    `audiobook_priority` (optional) lets mixed-format torrents pick
-    a preferred audiobook extension for the primary file — the
-    baseline largest-first sort runs first, then a stable re-rank
-    promotes files whose extension appears earlier in the priority.
+    `audiobook_priority` / `ebook_priority` (optional) let mixed-
+    format torrents pick a preferred extension for the primary file
+    — the baseline largest-first sort runs first, then stable
+    re-ranks promote files whose extension appears earlier in each
+    respective priority list. The two priorities operate on disjoint
+    extension sets and don't interfere.
 
     Creates a subdirectory under staging_dir named after the torrent.
     Returns info about the primary (largest) book file.
@@ -175,10 +245,13 @@ def copy_to_staging(
                  if p.is_file() and p.suffix.lstrip(".").lower() in BOOK_EXTENSIONS],
                 key=lambda p: p.stat().st_size, reverse=True,
             )
-            book_files = _apply_audiobook_priority(by_size, audiobook_priority)
+            by_audio = _apply_audiobook_priority(by_size, audiobook_priority)
+            book_files = _apply_ebook_priority(by_audio, ebook_priority)
         else:
             book_files = find_book_files(
-                source_dir, audiobook_priority=audiobook_priority,
+                source_dir,
+                audiobook_priority=audiobook_priority,
+                ebook_priority=ebook_priority,
             )
         if not book_files:
             return CopyResult(

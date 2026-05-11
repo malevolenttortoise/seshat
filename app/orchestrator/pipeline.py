@@ -293,6 +293,7 @@ async def process_completion(
     metadata_enricher: Optional[MetadataEnricher] = None,
     torrent_files: Optional[list[str]] = None,
     audiobook_format_priority: Optional[list[str]] = None,
+    ebook_format_priority: Optional[list[str]] = None,
 ) -> bool:
     """Drive one completed download through the pipeline.
 
@@ -318,6 +319,7 @@ async def process_completion(
             metadata_enricher=metadata_enricher,
             torrent_files=torrent_files,
             audiobook_format_priority=audiobook_format_priority,
+            ebook_format_priority=ebook_format_priority,
         )
         if prep is None:
             return False
@@ -418,6 +420,7 @@ async def _prepare_book(
     metadata_enricher: Optional[MetadataEnricher] = None,
     torrent_files: Optional[list[str]] = None,
     audiobook_format_priority: Optional[list[str]] = None,
+    ebook_format_priority: Optional[list[str]] = None,
 ) -> Optional[_PreparedBook]:
     """Steps 1-4: locate file, optional staging, metadata, patch.
 
@@ -460,10 +463,14 @@ async def _prepare_book(
             # extension first; single-format is a no-op).
             from app.orchestrator.file_copier import (
                 _apply_audiobook_priority,
+                _apply_ebook_priority,
             )
-            book_files = _apply_audiobook_priority(
+            after_audio = _apply_audiobook_priority(
                 sorted(matched_paths, key=lambda p: p.name.lower()),
                 audiobook_format_priority,
+            )
+            book_files = _apply_ebook_priority(
+                after_audio, ebook_format_priority,
             )
             # `source` is a representative directory for logging +
             # staging copy fallback. Prefer the common parent when
@@ -494,6 +501,7 @@ async def _prepare_book(
             functools.partial(
                 find_book_files, source,
                 audiobook_priority=audiobook_format_priority,
+                ebook_priority=ebook_format_priority,
             ),
         )
 
@@ -526,6 +534,7 @@ async def _prepare_book(
                 source, Path(staging_path), event.torrent_name,
                 explicit_files=explicit,
                 audiobook_priority=audiobook_format_priority,
+                ebook_priority=ebook_format_priority,
             ),
         )
         if not copy_result.success:

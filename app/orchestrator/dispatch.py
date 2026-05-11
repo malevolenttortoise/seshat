@@ -176,6 +176,13 @@ class DispatcherDeps:
     # mixed-format torrents. None/empty disables the priority sort
     # (largest-file wins, which matches pre-Phase-7 behaviour).
     audiobook_format_priority: list[str] = field(default_factory=list)
+    # Ebook format priority — symmetric counterpart to the audiobook
+    # field above, sourced from `mam_format_priority` in settings.
+    # UAT canary 2026-05-11: a torrent containing both EPUB and PDF
+    # picked the PDF (largest-first baseline) despite EPUB being the
+    # user's preferred format. Mirrors the audiobook-priority sort
+    # for the ebook side.
+    ebook_format_priority: list[str] = field(default_factory=list)
 
     # Tier 4 metadata enrichment. The enricher instance is built
     # at startup from settings and passed through here so the

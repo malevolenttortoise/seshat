@@ -220,3 +220,100 @@ class TestAudiobookFormatPriority:
         # Primary (the file returned as book_filename) should be
         # the m4b even though it's smaller.
         assert result.book_filename == "book.m4b"
+
+
+class TestEbookFormatPriority:
+    """UAT 2026-05-11: ebook-side counterpart to TestAudiobookFormatPriority.
+    Mark grabbed "Methodology of Secrets" by Elliot Freeman from a torrent
+    containing both EPUB and PDF; the PDF was larger, so file_copier
+    picked it for enrichment + CWA ingest despite EPUB being the user's
+    preferred ebook format. `_apply_ebook_priority` mirrors the
+    audiobook re-rank for ebook files."""
+
+    def test_epub_preferred_over_pdf_when_ranked_first(self, tmp_path):
+        _create_file(tmp_path / "book.pdf", size=500)
+        _create_file(tmp_path / "book.epub", size=100)
+        files = find_book_files(
+            tmp_path, ebook_priority=["epub", "mobi", "azw3", "pdf"],
+        )
+        # EPUB wins despite being smaller — the canary fix.
+        assert files[0].name == "book.epub"
+        assert files[1].name == "book.pdf"
+
+    def test_no_ebook_priority_falls_back_to_size(self, tmp_path):
+        _create_file(tmp_path / "book.pdf", size=500)
+        _create_file(tmp_path / "book.epub", size=100)
+        files = find_book_files(tmp_path)
+        assert files[0].name == "book.pdf"
+
+    def test_empty_ebook_priority_falls_back_to_size(self, tmp_path):
+        _create_file(tmp_path / "book.pdf", size=500)
+        _create_file(tmp_path / "book.epub", size=100)
+        files = find_book_files(tmp_path, ebook_priority=[])
+        assert files[0].name == "book.pdf"
+
+    def test_largest_file_wins_within_same_format(self, tmp_path):
+        _create_file(tmp_path / "small.epub", size=100)
+        _create_file(tmp_path / "big.epub", size=500)
+        files = find_book_files(
+            tmp_path, ebook_priority=["epub", "pdf"],
+        )
+        assert files[0].name == "big.epub"
+
+    def test_noop_for_pure_audiobook_torrent(self, tmp_path):
+        """A folder of only m4b doesn't care about ebook priority."""
+        _create_file(tmp_path / "small.m4b", size=100)
+        _create_file(tmp_path / "large.m4b", size=500)
+        files = find_book_files(
+            tmp_path, ebook_priority=["epub", "pdf"],
+        )
+        assert files[0].name == "large.m4b"
+
+    def test_ebook_ext_missing_from_priority_ranked_after(self, tmp_path):
+        """An ebook file whose extension isn't in the priority list
+        lands after ranked formats but before non-ebook files."""
+        _create_file(tmp_path / "book.pdf", size=100)
+        _create_file(tmp_path / "book.azw3", size=500)
+        # Priority only mentions epub + pdf — azw3 unranked.
+        files = find_book_files(
+            tmp_path, ebook_priority=["epub", "pdf"],
+        )
+        assert files[0].name == "book.pdf"    # ranked
+        assert files[1].name == "book.azw3"   # unranked ebook
+
+    def test_audiobook_and_ebook_priorities_compose(self, tmp_path):
+        """Mixed-format release with BOTH audiobook + ebook priorities
+        applied. Each priority operates on its own extension set."""
+        _create_file(tmp_path / "book.pdf", size=500)
+        _create_file(tmp_path / "book.epub", size=100)
+        _create_file(tmp_path / "book.mp3", size=400)
+        _create_file(tmp_path / "book.m4b", size=200)
+        files = find_book_files(
+            tmp_path,
+            audiobook_priority=["m4b", "mp3"],
+            ebook_priority=["epub", "pdf"],
+        )
+        # Ebook-priority pass runs after audiobook-priority. With both
+        # extension sets ranked, the EPUB ends up first overall (the
+        # ebook re-rank walks all files; mp3/m4b are in the audiobook
+        # set so they get the unranked-ebook sentinel from the ebook
+        # pass, landing AFTER ranked ebook files).
+        assert files[0].name == "book.epub"
+        # m4b should still beat mp3 within the audiobook subset.
+        m4b_idx = next(i for i, f in enumerate(files) if f.name == "book.m4b")
+        mp3_idx = next(i for i, f in enumerate(files) if f.name == "book.mp3")
+        assert m4b_idx < mp3_idx
+
+    def test_copy_to_staging_honours_ebook_priority(self, tmp_path):
+        source = tmp_path / "src"
+        staging = tmp_path / "stage"
+        _create_file(source / "book.pdf", size=500)
+        _create_file(source / "book.epub", size=100)
+        result = copy_to_staging(
+            source, staging, "Book",
+            ebook_priority=["epub", "pdf"],
+        )
+        assert result.success
+        # Primary should be EPUB despite PDF being larger — the
+        # canary scenario from Mark's "Methodology of Secrets" grab.
+        assert result.book_filename == "book.epub"
