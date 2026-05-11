@@ -7,6 +7,190 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [2.7.0] — 2026-05-11
+
+Bundle/collection torrent support. When a single MAM grab contains
+several distinct works (e.g. a 3-book series bundle or a 4-audiobook
+collection), the pipeline now fans out into N review-queue entries —
+one per detected work — instead of silently dropping every file
+except the primary. The classifier preserves all prior single-book
+and multi-format-same-book and multi-part-audiobook handling
+unchanged via deterministic stem-dedupe and audiobook-parts pre-
+checks that run before any "split into N groups" decision.
+
+Default-ON via the new `bundle_detection_enabled` setting (kill
+switch available for hypothetical classifier misfires in production).
+
+### Added — Bundle classifier
+
+- **`app/orchestrator/bundle_classifier.py`** — pure-function module
+  with `classify(book_files) -> list[BookGroup]`. Five-signal pipeline,
+  cheapest first:
+  1. Single-file short-circuit → 1 group.
+  2. Stem dedupe → all files share a stem when format-suffix stripped
+     (the `book.epub + book.mobi + book.azw3` multi-format case) → 1
+     group. No embedded reads needed.
+  3. Audiobook-parts safety net → same extension across all files plus
+     a part/disc/chapter/track token in filenames → 1 group. Catches
+     the 26-part m4b rip that the v1.3 `_backfill_audio_companions` fix
+     was added to preserve.
+  4. Embedded metadata grouping → extract title+author per file (uses
+     existing `app.metadata.extract`), group by
+     `normalize_author_name(author) + "|" + normalize_title(title)`.
+     Distinct groups = bundle.
+  5. Filename-token fallback for files where extraction yielded an
+     empty title (PDFs especially) — longest common prefix +
+     Jaccard ≥ 0.85 against existing keyed groups.
+- 13 unit tests in `tests/orchestrator/test_bundle_classifier.py`
+  covering all six representative cases from the design doc:
+  1-file, multi-format-same-book, 3-book ebook bundle, mixed novel
+  +novella, 26-part audiobook, 4-distinct-audiobook bundle, plus
+  disabled-flag and filename-fallback paths.
+
+### Added — Schema migration (user_version 12)
+
+Five new columns on `book_review_queue`:
+- `bundle_group_id` — deterministic `f"grab-{grab_id}"`; legacy rows
+  backfilled by an idempotent UPDATE in the same migration step.
+- `bundle_index` (default 0) and `bundle_total` (default 1) — single-
+  book grabs land at 0/1 after backfill, indistinguishable from pre-
+  v2.7 rows.
+- `library_slug` — reserved for future multi-library sink routing
+  (NULL today; bundle children stamp their parent grab's slug when
+  the discovery side learns to attribute per-library routing).
+- `bundle_parent_grab_id` — set only on bundle children; carries the
+  parent grab id through approval so future `acquisition_linkback`
+  work can preserve the bundle's MAM URL on re-ingest instead of
+  attaching a wrong-torrent standalone MAM record.
+- New index `idx_review_queue_bundle_group` on `(bundle_group_id)`
+  for the grouped-query path. `list_pending` ordering extended to
+  `(created_at, bundle_group_id, bundle_index)` so siblings come
+  back adjacent and in correct index order for the UI grouping
+  wrapper.
+- Tests in `tests/orchestrator/test_review_queue_bundle.py` cover
+  default-shape inserts, bundle-children round-trip, adjacent-row
+  ordering across mixed bundle+single-book queues, and the legacy-
+  row backfill UPDATE.
+
+### Added — Pipeline fan-out (`_prepare_book` → `list[_PreparedBook]`)
+
+- `_prepare_book` now returns a list of one-per-group `_PreparedBook`
+  objects (was: a single optional). `_PreparedBook` gains
+  `group_files`, `bundle_index`, `bundle_total`,
+  `bundle_parent_grab_id`, `library_slug` slots. Single-book grabs
+  still produce a 1-element list with `bundle_total=1` — shape-
+  indistinguishable from pre-v2.7.
+- New internal helper `_prepare_group` extracts the per-group
+  metadata + enrichment + epub-patch path. Each group runs
+  independently with its own temp directory.
+- `process_completion` loops over the returned preps; one
+  `_stage_for_review` (or `_deliver_prepared` in legacy review-off
+  mode) call per group. Per-event download-complete notifications
+  fire once per torrent (not per group) to keep ntfy noise down;
+  per-group review/delivery notifications fire per group as before.
+- `_stage_for_review` writes bundle children to
+  `grab-<id>/group-<i>/` subdirs (single-book grabs stay at
+  `grab-<id>/` for backwards compatibility with in-flight queues).
+  Sibling-copy logic now consumes the per-group `group_files` list
+  instead of iterating the whole torrent staging dir, so a bundle's
+  audiobook siblings don't cross-contaminate other groups.
+- 5 integration tests in `tests/orchestrator/test_pipeline_bundle.py`
+  build real EPUB fixtures + run the full pipeline path: 3-book
+  bundle → 3 review rows, single-book → 1 row (no regression),
+  multi-format-same-book → 1 row, each child delivers independently.
+
+### Added — Per-child enrichment with inverted MAM priority
+
+For bundle children only, the metadata-enrichment chain inverts:
+
+1. **Seed** from the parent grab's MAM data (bundle-level — author
+   mostly; bundle title and cover are wrong per-book and get
+   overwritten downstream).
+2. **Goodreads / Hardcover / Audible** in the existing priority,
+   **overriding** any seed field they return data for (the inverse
+   of the single-book rule). Goodreads-wins because the seed
+   describes the bundle as a whole, not the individual child.
+3. **No per-child MAM search.** `MetadataEnricher.enrich` gains a
+   new `skip_mam: bool = False` kwarg; bundle children pass
+   `skip_mam=True`. Reason: a standalone MAM listing for a child
+   book is a *different torrent* than the bundle we grabbed.
+   Recording its `mam_url` on the child row would falsely claim we
+   have the book from that torrent, and any future code acting on
+   the stored URL (re-snatch, link-back match, status reconciliation)
+   would do the wrong thing. The bundle's MAM URL flows through
+   unchanged via `bundle_parent_grab_id` for the audit trail.
+
+Single-book grabs are unaffected — the existing MAM > Goodreads >
+Hardcover > Audible chain runs exactly as in v2.6.
+
+### Added — Review UX (desktop + mobile)
+
+- `/api/v1/review` response gains `bundle_group_id`, `bundle_index`,
+  `bundle_total`, `bundle_parent_grab_id` on every item. List
+  ordering already keeps siblings adjacent (DB-level), so the UI
+  groups them without extra logic.
+- **Desktop ReviewPage**: contiguous bundle siblings render inside
+  one dashed-border wrapper card with a "📚 Bundle — N books from
+  one torrent" header. Each child keeps its full action set
+  (approve / save edits / re-enrich / reject) and a "i/N" badge in
+  the card chip strip. Approve-some-reject-others is the natural
+  default since each child is its own review entry.
+- **Mobile ReviewPage**: each child stays a swipeable card (the
+  v2.1.0 mobile pattern is already independent-per-card) with a
+  "Bundle i of N · grab #" indicator bar at the top of bundle-child
+  cards. No mobile layout redesign needed.
+
+### Added — Delivery + slug correctness
+
+- `_backfill_audio_companions` (the v1.3 multi-file repair) now
+  skips bundle children. Each group's review staging dir was
+  populated with only that group's files at staging time, so
+  re-running the qBit-side backfill would re-introduce other
+  bundle siblings' audio files into this child's staging dir
+  (qBit reports every file in the torrent, not just this group's).
+- Each child delivers as an independent book — `deliver_reviewed`
+  already operates per review entry, so bundle fan-out works for
+  free at the delivery layer. Approving child 1 doesn't disturb
+  the still-pending siblings; their `group-<i>/` dirs stay intact
+  until they're individually approved or rejected.
+
+### Added — Setting
+
+- `bundle_detection_enabled` (default **True** from v2.7.0). Flip
+  to False to fall back to the pre-v2.7 single-group-per-torrent
+  behavior if a classifier misfire ever surfaces in production.
+  The flag is structurally safe by default because stem-dedupe and
+  audiobook-parts pre-checks both run before any "split into N
+  groups" decision can fire.
+
+### Documented
+
+- New reference memory: MAM rule that each format category (ebook,
+  audiobook, comic, podcast, newsletter, etc.) MUST be uploaded as
+  a separate torrent. Confirmed during the v2.7.0 design session
+  and used to scope out the "mixed audiobook + ebook in one
+  torrent" code path (which is impossible by MAM upload rules).
+
+### Architecture notes
+
+- **`pipeline_runs` stays 1:1 with grab.** Fan-out lives only in
+  the review table. Keeps `auto_train`, `review_timeout`, and
+  `economy_audit` join logic untouched. The first group's metadata
+  advances the pipeline-run state (`PIPE_METADATA_DONE`); the
+  last group transitions the run to `PIPE_AWAITING_REVIEW` and
+  flips the grab to `STATE_PROCESSING`. External watchers see one
+  state transition per torrent, not per child.
+- **Backwards compat.** Legacy queue rows (pre-migration) drain
+  through the existing single-book code paths because their
+  `bundle_total=1` makes them indistinguishable to delivery code.
+  Pre-v2.7 review rows in flight at upgrade-time keep working.
+
+Suite: **2037 passing, 7 skipped** (up from 2016 / 7 at v2.6.1).
+21 new tests across `test_bundle_classifier.py` (13),
+`test_review_queue_bundle.py` (4), and `test_pipeline_bundle.py` (4).
+
+---
+
 ## [2.6.1] — 2026-05-11
 
 Same-day patch closing the CodeQL alert that surfaced from v2.6.0's
