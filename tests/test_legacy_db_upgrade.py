@@ -20,7 +20,7 @@ and asserts init_db() lands without error.
 import aiosqlite
 import pytest
 
-from app.database import get_db, init_db, MIGRATIONS, SCHEMA
+from app.database import get_db, init_db, SCHEMA
 
 
 @pytest.fixture
@@ -85,12 +85,12 @@ async def legacy_db_path(tmp_path, monkeypatch):
             );
         """)
         # Stamp user_version at the migration count just before the
-        # first v2.7.0 bundle migration so all 7 v2.7.0 migrations
-        # (5 ALTERs + 1 index + 1 UPDATE) run as fresh upgrades. The
-        # bundle migrations form a contiguous tail block; counting
-        # back 7 from len(MIGRATIONS) lands on the first of them.
-        legacy_version = len(MIGRATIONS) - 7
-        await db.execute(f"PRAGMA user_version = {max(0, legacy_version)}")
+        # first v2.7.0 bundle migration so every v2.7.0+ migration
+        # runs as a fresh upgrade. The pre-v2.7 migration count
+        # (12) is stable — appending future v2.N migrations leaves
+        # this index unchanged.
+        _PRE_V27_MIGRATION_COUNT = 12
+        await db.execute(f"PRAGMA user_version = {_PRE_V27_MIGRATION_COUNT}")
         # Insert one pending review row so the backfill UPDATE has
         # something to touch.
         await db.execute(
@@ -132,6 +132,11 @@ class TestLegacyDbUpgrade:
             assert "bundle_total" in cols
             assert "library_slug" in cols
             assert "bundle_parent_grab_id" in cols
+
+            # v2.8.0 reingest column on grabs.
+            cursor = await db.execute("PRAGMA table_info(grabs)")
+            grab_cols = {row[1] for row in await cursor.fetchall()}
+            assert "is_reingest" in grab_cols
 
             # Bundle-group index present.
             cursor = await db.execute(

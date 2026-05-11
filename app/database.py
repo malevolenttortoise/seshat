@@ -83,7 +83,14 @@ CREATE TABLE IF NOT EXISTS grabs (
     submitted_at      TEXT,
     completed_at      TEXT,
     failed_reason     TEXT,
-    failed_with_cookie_id INTEGER
+    failed_with_cookie_id INTEGER,
+    -- v2.8.0 reingest: 1 = this grab row was synthesized from an
+    -- already-snatched torrent reingested from disk (the pre-Seshat
+    -- "Already Snatched" case). No .torrent was fetched from MAM,
+    -- no qBit submit was made, and no snatch budget was charged.
+    -- The pipeline path past `STATE_DOWNLOADED` runs identically
+    -- to a normal grab. is_reingest=0 on every legacy/normal row.
+    is_reingest       INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS snatch_ledger (
@@ -462,6 +469,10 @@ MIGRATIONS: list[str] = [
     "UPDATE book_review_queue "
     "SET bundle_group_id = 'grab-' || grab_id "
     "WHERE bundle_group_id IS NULL",
+    # v2.8.0 — reingest grabs: distinguishes grab rows synthesized
+    # from already-snatched-on-disk reingests (no MAM .torrent fetch,
+    # no qBit submit, no snatch budget charge) from normal grabs.
+    "ALTER TABLE grabs ADD COLUMN is_reingest INTEGER NOT NULL DEFAULT 0",
 ]
 
 

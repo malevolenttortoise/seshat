@@ -128,6 +128,8 @@ async def create_grab(
     category: str,
     author_blob: str,
     state: str,
+    qbit_hash: Optional[str] = None,
+    is_reingest: bool = False,
 ) -> int:
     """Insert a new row in the `grabs` table.
 
@@ -135,13 +137,19 @@ async def create_grab(
     The initial state depends on what the dispatcher is about to do
     next: `STATE_FETCHED` for the immediate-submit path,
     `STATE_PENDING_QUEUE` for the queue-mode path.
+
+    `qbit_hash` and `is_reingest` are populated up-front by the v2.8.0
+    reingest path (which skips the MAM fetch + qBit submit phases —
+    the file is already on disk, the hash is already known). Normal
+    grab callers leave them at their defaults; `qbit_hash` gets
+    stamped later via `set_state(STATE_SUBMITTED, qbit_hash=...)`.
     """
     cursor = await db.execute(
         """
         INSERT INTO grabs
             (announce_id, mam_torrent_id, torrent_name, category,
-             author_blob, state)
-        VALUES (?, ?, ?, ?, ?, ?)
+             author_blob, state, qbit_hash, is_reingest)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             announce_id,
@@ -150,6 +158,8 @@ async def create_grab(
             category,
             author_blob,
             state,
+            qbit_hash,
+            1 if is_reingest else 0,
         ),
     )
     await db.commit()
