@@ -474,7 +474,13 @@ def _strip_subtitle(title: str) -> Optional[str]:
     # path. Conservative — only matches end-of-title parens, won't
     # touch mid-title parens like "Foo (Updated) 2" or stylized
     # titles where the paren is part of the name.
-    m = re.search(r"\s*\([^)]*\)\s*$", title)
+    # Anchor the match at the opening `(` itself instead of any
+    # leading whitespace. Dropping the `\s*` prefix removes the
+    # backtrack-overlap with `[^)]*` that CodeQL flagged as
+    # py/polynomial-redos (alert #35); `.strip()` below trims the
+    # trailing whitespace anyway so output is unchanged on every
+    # realistic input.
+    m = re.search(r"\([^)]*\)\s*$", title)
     if m and m.start() > 0:
         stripped = title[:m.start()].strip()
         if len(stripped) >= 3:
