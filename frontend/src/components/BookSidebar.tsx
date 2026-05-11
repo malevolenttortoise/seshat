@@ -102,6 +102,28 @@ interface SendToPipelineResponse {
   message?: string;
 }
 
+// v2.8.0 reingest types — mirror the FastAPI ProbeResponse /
+// StartResponse shapes in app/discovery/routers/reingest.py.
+interface ReingestCandidate {
+  source: "qbit" | "fs";
+  display_path: string;
+  save_path: string;
+  book_files: string[];
+  qbit_hash: string | null;
+  mtime: number;
+  total_size: number;
+}
+
+interface ReingestProbeResponse {
+  found: boolean;
+  candidates: ReingestCandidate[];
+  auto_started: boolean;
+  grab_id: number | null;
+  pipeline_run_id: number | null;
+  searched: string[];
+  mam_torrent_name: string | null;
+}
+
 // Per-source badge palette for the "Metadata" row. `manual` is the
 // fallback for links that don't match a known provider.
 type SourceKey =
@@ -176,6 +198,15 @@ export function BookSidebar({
   const [useWedgeChecked, setUseWedgeChecked] = useState(false);
   const [buyFlChecked, setBuyFlChecked] = useState(false);
   const [preflight, setPreflight] = useState<PreflightResponse | null>(null);
+  // v2.8.0 reingest state. `reingestBusy` mirrors `sending` for the
+  // parallel button; `reingestCandidates` holds the picker payload
+  // when probe returned >1 result; `reingestError` shows the
+  // not-found / failure toast inline near the button.
+  const [reingestBusy, setReingestBusy] = useState(false);
+  const [reingestCandidates, setReingestCandidates] = useState<
+    ReingestCandidate[] | null
+  >(null);
+  const [reingestError, setReingestError] = useState<string | null>(null);
 
   useEffect(() => {
     requestAnimationFrame(() => setMounted(true));
@@ -379,6 +410,82 @@ export function BookSidebar({
       alert(`Send failed: ${(e as Error).message || e}`);
     }
     setSending(false);
+  };
+
+  // ── Reingest from disk (v2.8.0) ────────────────────────────
+  // For books MAM reports as already-snatched: probe qBit + the
+  // configured download folder for the existing files and either
+  // auto-start the pipeline (one candidate) or prompt the user to
+  // pick among multiple matches.
+  const probeReingest = async () => {
+    if (reingestBusy) return;
+    setReingestBusy(true);
+    setReingestCandidates(null);
+    setReingestError(null);
+    try {
+      const slug = book.library_slug
+        ? `?slug=${encodeURIComponent(book.library_slug)}`
+        : "";
+      const r = await api.post<ReingestProbeResponse>(
+        `/discovery/books/${book.id}/reingest/probe${slug}`,
+      );
+      if (!r.found) {
+        // Per the v2.8.0 design (option a): hard-fail with a clear
+        // message when the file isn't on disk anywhere. NO automatic
+        // fallback to re-snatch — the snatch-safety rule forbids it.
+        setReingestError(
+          `Could not find this snatch anywhere we looked: ${(r.searched || []).join(", ") || "no sources searched"}.`,
+        );
+        return;
+      }
+      if (r.auto_started) {
+        toast.success(
+          `Reingest started: grab #${r.grab_id}, run #${r.pipeline_run_id}. Check the Review queue.`,
+        );
+        onEdit?.();
+        return;
+      }
+      // Multi-candidate → show picker.
+      setReingestCandidates(r.candidates || []);
+    } catch (e) {
+      setReingestError(
+        `Reingest probe failed: ${(e as Error).message || e}`,
+      );
+    } finally {
+      setReingestBusy(false);
+    }
+  };
+
+  const startReingestWithCandidate = async (
+    candidate: ReingestCandidate,
+  ) => {
+    if (reingestBusy) return;
+    setReingestBusy(true);
+    setReingestError(null);
+    try {
+      const slug = book.library_slug
+        ? `?slug=${encodeURIComponent(book.library_slug)}`
+        : "";
+      const r = await api.post<{
+        ok: boolean;
+        grab_id: number;
+        pipeline_run_id: number;
+      }>(
+        `/discovery/books/${book.id}/reingest/start${slug}`,
+        { candidate },
+      );
+      toast.success(
+        `Reingest started: grab #${r.grab_id}, run #${r.pipeline_run_id}. Check the Review queue.`,
+      );
+      setReingestCandidates(null);
+      onEdit?.();
+    } catch (e) {
+      setReingestError(
+        `Reingest start failed: ${(e as Error).message || e}`,
+      );
+    } finally {
+      setReingestBusy(false);
+    }
   };
 
   if (!book) return null;
@@ -1409,8 +1516,130 @@ export function BookSidebar({
                         {sending ? <Spin /> : "⬇"} Send to pipeline
                       </Btn>
                     ) : null}
+                    {/* v2.8.0 reingest: same MAM-found + not-owned
+                        case as Send to pipeline, but specifically
+                        for books MAM reports as already snatched.
+                        Skips the MAM .torrent fetch + qBit submit
+                        and pulls the existing files off disk into
+                        the enrichment + review flow. */}
+                    {pipelineReady &&
+                    book.mam_status === "found" &&
+                    book.mam_my_snatched &&
+                    !book.owned ? (
+                      <Btn
+                        size="sm"
+                        onClick={probeReingest}
+                        disabled={reingestBusy}
+                        title="Already on disk from a prior snatch — find the files and run them through enrichment + review without re-downloading from MAM."
+                        style={{
+                          background: t.ok + "22",
+                          color: t.ok,
+                          border: `1px solid ${t.ok}44`,
+                        }}
+                      >
+                        {reingestBusy ? <Spin /> : "♻"} Reingest from disk
+                      </Btn>
+                    ) : null}
                   </div>
                 </div>
+                {/* Reingest error banner — shown inline below the
+                    button row when probe/start fails. Includes the
+                    list of sources searched so the user can debug
+                    a missing drive or wrong download_path setting. */}
+                {reingestError ? (
+                  <div
+                    style={{
+                      marginTop: 6,
+                      padding: "6px 10px",
+                      borderRadius: 6,
+                      background: t.err + "15",
+                      border: `1px solid ${t.err}55`,
+                      color: t.err,
+                      fontSize: 12,
+                    }}
+                  >
+                    {reingestError}
+                  </div>
+                ) : null}
+                {/* Reingest candidate picker — appears when probe
+                    returned multiple matches. Shows up to 5 with
+                    path + file count + size; user clicks one and
+                    we POST /reingest/start with the chosen entry. */}
+                {reingestCandidates && reingestCandidates.length > 0 ? (
+                  <div
+                    style={{
+                      marginTop: 8,
+                      padding: 10,
+                      borderRadius: 8,
+                      background: t.bg3,
+                      border: `1px solid ${t.borderL}`,
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: 12,
+                        fontWeight: 700,
+                        color: t.text2,
+                        marginBottom: 8,
+                      }}
+                    >
+                      Multiple matches found — pick one:
+                    </div>
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 6,
+                      }}
+                    >
+                      {reingestCandidates.map((c, i) => (
+                        <button
+                          key={`${c.source}:${c.save_path}:${i}`}
+                          disabled={reingestBusy}
+                          onClick={() => startReingestWithCandidate(c)}
+                          style={{
+                            textAlign: "left",
+                            padding: "6px 10px",
+                            borderRadius: 6,
+                            background: t.bg2,
+                            border: `1px solid ${t.borderL}`,
+                            color: t.text,
+                            cursor: reingestBusy ? "wait" : "pointer",
+                            fontSize: 12,
+                          }}
+                        >
+                          <div style={{ fontWeight: 600 }}>
+                            [{c.source}] {c.display_path}
+                          </div>
+                          <div style={{ color: t.textDim, fontSize: 11 }}>
+                            {c.book_files.length} file
+                            {c.book_files.length === 1 ? "" : "s"}
+                            {c.total_size > 0
+                              ? ` · ${(c.total_size / 1024 / 1024).toFixed(1)} MB`
+                              : ""}
+                          </div>
+                        </button>
+                      ))}
+                      <button
+                        disabled={reingestBusy}
+                        onClick={() => setReingestCandidates(null)}
+                        style={{
+                          marginTop: 4,
+                          padding: "4px 10px",
+                          borderRadius: 6,
+                          background: "transparent",
+                          border: "none",
+                          color: t.textDim,
+                          cursor: "pointer",
+                          fontSize: 11,
+                          textAlign: "left",
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
 
                 {/* Per-grab offer checkboxes (commit 7). On their
                     own row so narrow sidebar widths don't wrap the
