@@ -28,6 +28,14 @@ TENTATIVE_PENDING = "pending"
 TENTATIVE_APPROVED = "approved"
 TENTATIVE_REJECTED = "rejected"
 TENTATIVE_EXPIRED = "expired"
+# `dismissed` differs from `rejected` in that it leaves every author
+# on the blob untouched — neither trained to allowed nor pushed to the
+# weekly tentative-review list. The user is saying "this specific
+# torrent isn't what I want, but I'm not making a call about the
+# author(s) yet." Used when the same uploader posts duplicate
+# format-variants (MP3 + M4B) and the user wants one without
+# committing to / against the author overall.
+TENTATIVE_DISMISSED = "dismissed"
 
 
 @dataclass(frozen=True)

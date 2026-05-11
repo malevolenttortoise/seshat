@@ -110,13 +110,34 @@ function DesktopTentativePage() {
     }
   }
 
-  async function bulkAction(action: "approve" | "reject", ids: number[] | null) {
+  async function dismiss(id: number) {
+    setBusyId(id);
+    try {
+      await api.post(`/v1/tentative/${id}/dismiss`);
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function bulkAction(
+    action: "approve" | "reject" | "dismiss",
+    ids: number[] | null,
+  ) {
     const count = ids === null ? (items?.length ?? 0) : ids.length;
     if (count === 0) return;
-    const label = action === "approve" ? "Approve" : "Reject";
+    const label = action === "approve"
+      ? "Approve"
+      : action === "reject"
+        ? "Reject"
+        : "Dismiss";
     const warning = action === "approve"
       ? `${label} ${count} tentative torrent(s)? Each approval burns a MAM snatch.`
-      : `${label} ${count} tentative torrent(s)? Rejected authors land on the weekly review list.`;
+      : action === "reject"
+        ? `${label} ${count} tentative torrent(s)? Rejected authors land on the weekly review list.`
+        : `${label} ${count} tentative torrent(s)? No author lists will be modified.`;
     if (!confirm(warning)) return;
     setBulkBusy(true);
     setError(null);
@@ -126,8 +147,11 @@ function DesktopTentativePage() {
         ids === null ? {} : { ids },
       );
       if (r.failed > 0) {
+        // Past-tense verb: Approve→Approved, Reject→Rejected,
+        // Dismiss→Dismissed (one 'e', not two 's's).
+        const past = action === "dismiss" ? "Dismissed" : `${label}d`;
         setError(
-          `${label}d ${r.processed}, ${r.failed} failed. First errors: ${r.errors.slice(0, 3).join("; ")}`,
+          `${past} ${r.processed}, ${r.failed} failed. First errors: ${r.errors.slice(0, 3).join("; ")}`,
         );
       }
       clearSel();
@@ -178,6 +202,13 @@ function DesktopTentativePage() {
                   disabled={bulkBusy || sel.size === 0}
                 >
                   Reject Selected
+                </Btn>
+                <Btn
+                  variant="ghost" size="sm"
+                  onClick={() => bulkAction("dismiss", [...sel])}
+                  disabled={bulkBusy || sel.size === 0}
+                >
+                  Dismiss Selected
                 </Btn>
                 <Btn
                   variant="ghost" size="sm"
@@ -268,6 +299,7 @@ function DesktopTentativePage() {
               busy={busyId === item.id}
               onApprove={() => approve(item.id)}
               onReject={() => reject(item.id)}
+              onDismiss={() => dismiss(item.id)}
               selMode={selMode}
               selected={sel.has(item.id)}
               onToggleSel={() => toggleSel(item.id)}
@@ -284,6 +316,7 @@ function TentativeCard({
   busy,
   onApprove,
   onReject,
+  onDismiss,
   selMode,
   selected,
   onToggleSel,
@@ -292,6 +325,7 @@ function TentativeCard({
   busy: boolean;
   onApprove: () => void;
   onReject: () => void;
+  onDismiss: () => void;
   selMode: boolean;
   selected: boolean;
   onToggleSel: () => void;
@@ -434,6 +468,14 @@ function TentativeCard({
           </Btn>
           <Btn variant="danger" disabled={busy} onClick={onReject}>
             Reject
+          </Btn>
+          <Btn
+            variant="ghost"
+            disabled={busy}
+            onClick={onDismiss}
+            title="Drop this torrent without affecting the author allow/ignore lists"
+          >
+            Dismiss
           </Btn>
         </div>
       )}

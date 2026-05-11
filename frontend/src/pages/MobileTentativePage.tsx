@@ -81,14 +81,24 @@ export default function MobileTentativePage() {
     }
   };
 
-  const bulkAction = async (action: "approve" | "reject") => {
+  const dismiss = async (id: number) => {
+    setBusyId(id);
+    try {
+      await api.post(`/v1/tentative/${id}/dismiss`);
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const bulkAction = async (action: "approve" | "reject" | "dismiss") => {
     if (sel.size === 0) return;
-    if (
-      !confirm(
-        `${action === "approve" ? "Approve" : "Reject"} ${sel.size} torrent(s)?`,
-      )
-    )
-      return;
+    const verb = action === "approve"
+      ? "Approve"
+      : action === "reject" ? "Reject" : "Dismiss";
+    if (!confirm(`${verb} ${sel.size} torrent(s)?`)) return;
     setBulkBusy(true);
     try {
       await api.post(`/v1/tentative/bulk/${action}`, { ids: [...sel] });
@@ -179,6 +189,14 @@ export default function MobileTentativePage() {
             disabled={bulkBusy}
           >
             Reject {sel.size}
+          </MobileBtn>
+          <MobileBtn
+            variant="ghost"
+            fullWidth
+            onClick={() => bulkAction("dismiss")}
+            disabled={bulkBusy}
+          >
+            Dismiss {sel.size}
           </MobileBtn>
         </div>
       )}
@@ -299,7 +317,7 @@ export default function MobileTentativePage() {
                 <div
                   style={{
                     display: "grid",
-                    gridTemplateColumns: "1fr 1fr",
+                    gridTemplateColumns: "1fr 1fr 1fr",
                     gap: 8,
                   }}
                 >
@@ -319,6 +337,14 @@ export default function MobileTentativePage() {
                     disabled={busyId === item.id}
                   >
                     {busyId === item.id ? "…" : "Reject"}
+                  </MobileBtn>
+                  <MobileBtn
+                    variant="ghost"
+                    fullWidth
+                    onClick={() => dismiss(item.id)}
+                    disabled={busyId === item.id}
+                  >
+                    {busyId === item.id ? "…" : "Dismiss"}
                   </MobileBtn>
                 </div>
               )}
