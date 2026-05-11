@@ -7,6 +7,139 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [2.8.0] — 2026-05-11
+
+Reingest already-snatched torrents from disk. The standard "Send to
+pipeline" button hides on books MAM flags as `my_snatched=true` —
+Seshat refuses to re-download a torrent we already grabbed (the
+snatch-safety rule per `feedback_mam_snatch_safety.md`). v2.8.0
+adds a parallel "Reingest from disk" button that finds the existing
+files (in qBit or under the configured download folder) and runs
+them through enrichment + manual review WITHOUT touching MAM.
+
+Targets the "grandfather'd" case Mark flagged on 2026-05-11: books
+snatched months before Seshat existed (no qBit hash recorded
+anywhere, just files in the download dir) that he wants to flow
+through the pipeline now. Also handles the post-Seshat case where
+qBit still has the torrent loaded — the qBit-side resolver returns
+the authoritative save_path + file list straight from the client.
+
+### Added — Reingest module
+
+- **`app/orchestrator/reingest.py`** — pure-function candidate
+  resolution + pipeline kickoff:
+  - `find_qbit_candidates(dispatcher, mam_torrent_name)` walks
+    `qbit.list_torrents()`, matches by name (exact > prefix >
+    substring > Jaccard), and fetches each match's
+    `list_torrent_files` for the authoritative file list. Path-
+    aliasing applied via `translate_path()` so Unraid-style
+    qBit/Seshat mount differences resolve correctly.
+  - `find_fs_candidates(download_root, mam_torrent_name)` recursively
+    walks the configured `qbit_download_path` (translated to
+    Seshat's mount) up to 6 levels deep, looking for files OR
+    directories whose name matches. Directory matches gather every
+    book-format file inside via `rglob`; file matches wrap the
+    single file. Dedup prefers the directory entry when both shapes
+    land on the same path.
+  - `find_candidates(dispatcher, mam_torrent_name)` runs both, qBit
+    biased above fs by +100 in the score so a tie always picks the
+    authoritative qBit candidate. Caps at 5 entries.
+  - `start_reingest(db, dispatcher, ..., candidate)` synthesizes a
+    `grabs` row with `is_reingest=1`, `state=STATE_DOWNLOADED`, and
+    the qBit hash (if from qBit), creates a `pipeline_run`, then
+    calls `process_completion` directly — bypassing the MAM
+    .torrent fetch + qBit submit + rate limiter that a normal
+    grab would charge. No snatch budget cost.
+
+### Added — Schema migration (`grabs.is_reingest`)
+
+- New `is_reingest INTEGER NOT NULL DEFAULT 0` column on the
+  `grabs` table. Legacy and normal rows default to 0; reingest-
+  created rows are 1. Lets future audit/queries distinguish the
+  two paths without joining against `snatch_ledger`. ALTER TABLE
+  migration is appended to the standard MIGRATIONS list and
+  follows the v2.7.1 rule: column declared in BOTH the SCHEMA
+  CREATE TABLE (for fresh DBs) and a MIGRATIONS ALTER TABLE (for
+  legacy DBs). No SCHEMA-level CREATE INDEX touches it.
+
+### Added — Discovery router endpoints
+
+- **`POST /api/discovery/books/{book_id}/reingest/probe?slug=`** —
+  validates the book is `mam_status='found'` + `mam_my_snatched=1`
+  + not owned, resolves the canonical torrent name via MAM's
+  `torrent_info.php` (NOT a snatch — metadata-only call, cached
+  per the standard `get_torrent_info` TTL), then runs
+  `find_candidates`. Returns `{found: bool, candidates: [...]}`
+  for the picker, OR auto-starts the pipeline when exactly one
+  candidate is found (single-result auto-pick = the natural
+  default).
+- **`POST /api/discovery/books/{book_id}/reingest/start?slug=`** —
+  commits a user-chosen candidate from a previous probe. Re-
+  validates the book row state (something else could have changed
+  it between probe and start), then calls `start_reingest()` and
+  returns `{ok, grab_id, pipeline_run_id}`.
+- Both endpoints require `?slug=` per the multi-library safety
+  rule (`feedback_seshat_multi_library_slug.md`).
+
+### Added — BookSidebar UI
+
+- New "♻ Reingest from disk" button appears on the same row as
+  Re-scan / Send to pipeline, but only when:
+  `pipelineReady && mam_status==='found' && mam_my_snatched && !owned`.
+  Owned books skip the button entirely (no need to reingest
+  something already in Calibre/ABS).
+- Inline error banner shows "Could not find this snatch anywhere we
+  looked: qBit (live torrent list), filesystem: /downloads/..." when
+  the probe returns no candidates — clear list of paths checked
+  so the user can investigate (missing drive, wrong
+  `qbit_download_path` setting, etc.).
+- Multi-candidate picker renders below the button row when probe
+  returns more than one match: up to 5 entries with source tag
+  (qbit / fs), display path, file count, and total size. Click
+  an entry → POST to `/reingest/start` with that candidate; toast
+  on success.
+
+### Design decisions recorded
+
+Per the v2.8.0 design conversation:
+1. **No auto-fallback to re-snatch** when files aren't found
+   anywhere. Hard-fail with a clear error message. Option (a) from
+   the design — keeps the snatch-safety rule airtight and the UX
+   unambiguous. Users who want to re-snatch can do it manually
+   through MAM after confirming the original is truly gone.
+2. **Search scope: just the configured `qbit_download_path`.** No
+   user-configurable "additional library directories" setting in
+   v2.8.0 — keep the surface small and fight only the actual
+   reported case first.
+3. **Skip the button for owned books.** Owned means the book is
+   in Calibre/ABS already and the library sync handles it. No
+   reason to reingest something already linked.
+4. **Multi-match prompts.** Per design Q3 — these are one-offs the
+   user typically wants to be informed about and pick. Top-5 cap.
+5. **qBit preferred over fs.** Authoritative file list + hash from
+   qBit; fs is the fallback for grandfather'd snatches without a
+   qBit record. qBit candidates carry their hash forward into the
+   `grabs.qbit_hash` column for future status reconciliation.
+
+### Tests
+
+- **`tests/orchestrator/test_reingest.py`** — 20 tests covering
+  `_name_score` tiering, `find_fs_candidates` (single-file, multi-
+  file directory, no-match, missing root, 5-cap), `find_qbit_candidates`
+  (exact match, path translation, non-book filter, no-qbit
+  fallback), `find_candidates` (qbit > fs ranking), and
+  `start_reingest` end-to-end (grabs row carries `is_reingest=1`
+  and `qbit_hash`; review queue row created via `process_completion`).
+- **`tests/test_legacy_db_upgrade.py`** — gained a `is_reingest`
+  assertion on the v2.6.1 → v2.8.0 upgrade path so future
+  migration additions can't regress legacy-DB startup.
+
+Suite: **2059 passing, 7 skipped** (up from 2039 / 7 at v2.7.1).
+20 new tests in `test_reingest.py` + 1 additional assertion in
+`test_legacy_db_upgrade.py`.
+
+---
+
 ## [2.7.1] — 2026-05-11
 
 Same-day hotfix on v2.7.0. The v2.7.0 SCHEMA block declared a new
