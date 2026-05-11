@@ -313,7 +313,7 @@ async def process_completion(
     run_id = event.pipeline_run_id
 
     try:
-        prep = await _prepare_book(
+        preps = await _prepare_book(
             db, event, staging_path=staging_path, run_id=run_id,
             ntfy_url=ntfy_url, ntfy_topic=ntfy_topic,
             metadata_enricher=metadata_enricher,
@@ -321,47 +321,58 @@ async def process_completion(
             audiobook_format_priority=audiobook_format_priority,
             ebook_format_priority=ebook_format_priority,
         )
-        if prep is None:
+        if not preps:
             return False
 
+        # One download-complete notification per torrent (not per
+        # group) — bundle children share the same torrent name and
+        # spamming the ntfy channel N times would be noisy.
         if per_event_notifications and ntfy_url and ntfy_topic:
             try:
                 await ntfy.notify_download_complete(
                     ntfy_url, ntfy_topic,
                     event.torrent_name,
-                    prep.metadata.author or "",
+                    preps[0].metadata.author or "",
                 )
             except Exception:
                 _log.exception(
                     "per-event notify_download_complete failed (non-fatal)"
                 )
 
-        if review_queue_enabled:
-            ok = await _stage_for_review(
-                db, event, prep,
-                review_staging_path=review_staging_path,
-                ntfy_url=ntfy_url, ntfy_topic=ntfy_topic,
-                per_event_notifications=per_event_notifications,
-            )
-            return ok
-
-        return await _deliver_prepared(
-            db, event, prep,
-            default_sink=default_sink,
-            calibre_library_path=calibre_library_path,
-            folder_sink_path=folder_sink_path,
-            per_event_notifications=per_event_notifications,
-            audiobookshelf_library_path=audiobookshelf_library_path,
-            abs_base_url=abs_base_url,
-            abs_api_key=abs_api_key,
-            abs_library_id=abs_library_id,
-            cwa_ingest_path=cwa_ingest_path,
-            ntfy_url=ntfy_url,
-            ntfy_topic=ntfy_topic,
-            auto_train_enabled=auto_train_enabled,
-            review_id=None,
-            was_timeout=False,
-        )
+        # Fan out: each group becomes one review-queue entry (or
+        # one direct sink delivery in legacy review-off mode). The
+        # status returned from process_completion is True iff EVERY
+        # group succeeded — a partial bundle still surfaces failures
+        # in the pipeline-run state for the failed children.
+        results: list[bool] = []
+        for prep in preps:
+            if review_queue_enabled:
+                ok = await _stage_for_review(
+                    db, event, prep,
+                    review_staging_path=review_staging_path,
+                    ntfy_url=ntfy_url, ntfy_topic=ntfy_topic,
+                    per_event_notifications=per_event_notifications,
+                )
+            else:
+                ok = await _deliver_prepared(
+                    db, event, prep,
+                    default_sink=default_sink,
+                    calibre_library_path=calibre_library_path,
+                    folder_sink_path=folder_sink_path,
+                    per_event_notifications=per_event_notifications,
+                    audiobookshelf_library_path=audiobookshelf_library_path,
+                    abs_base_url=abs_base_url,
+                    abs_api_key=abs_api_key,
+                    abs_library_id=abs_library_id,
+                    cwa_ingest_path=cwa_ingest_path,
+                    ntfy_url=ntfy_url,
+                    ntfy_topic=ntfy_topic,
+                    auto_train_enabled=auto_train_enabled,
+                    review_id=None,
+                    was_timeout=False,
+                )
+            results.append(ok)
+        return all(results)
     except Exception:
         _log.exception("pipeline: unexpected error for grab_id=%d", event.grab_id)
         try:
@@ -378,11 +389,28 @@ async def process_completion(
 
 
 class _PreparedBook:
-    """Internal carrier for the outputs of `_prepare_book`."""
+    """Internal carrier for the outputs of `_prepare_book`.
+
+    v2.7.0: bundle/collection torrents fan out into one `_PreparedBook`
+    per detected work. Single-book torrents still produce exactly one
+    `_PreparedBook` with `bundle_total=1` and `bundle_index=0` — that
+    shape is indistinguishable from the pre-v2.7 single-result. Bundle
+    children carry `bundle_total>=2` plus `bundle_parent_grab_id`
+    pointing at the parent grab so the review-queue audit trail flows
+    through approval into future acquisition link-back.
+
+    `group_files` is the list of staged paths belonging to this
+    specific work — used by `_stage_for_review` to copy the right
+    sibling files (multi-format variants, audiobook parts) into the
+    per-group review staging subdir without dragging in unrelated
+    bundle siblings.
+    """
     __slots__ = (
         "book_path", "book_filename", "book_format",
         "metadata", "enriched", "announce_author",
         "delivery_source", "temp_dir", "cleanup_temp",
+        "group_files", "bundle_index", "bundle_total",
+        "bundle_parent_grab_id", "library_slug",
     )
 
     def __init__(
@@ -397,6 +425,11 @@ class _PreparedBook:
         temp_dir: Optional[Path],
         cleanup_temp: bool,
         enriched: Optional[MetaRecord] = None,
+        group_files: Optional[list[Path]] = None,
+        bundle_index: int = 0,
+        bundle_total: int = 1,
+        bundle_parent_grab_id: Optional[int] = None,
+        library_slug: Optional[str] = None,
     ):
         self.book_path = book_path
         self.book_filename = book_filename
@@ -407,6 +440,13 @@ class _PreparedBook:
         self.delivery_source = delivery_source
         self.temp_dir = temp_dir
         self.cleanup_temp = cleanup_temp
+        # Default group_files to just the primary so single-book
+        # callers don't need to think about it.
+        self.group_files = group_files if group_files is not None else [book_path]
+        self.bundle_index = bundle_index
+        self.bundle_total = bundle_total
+        self.bundle_parent_grab_id = bundle_parent_grab_id
+        self.library_slug = library_slug
 
 
 async def _prepare_book(
@@ -421,7 +461,7 @@ async def _prepare_book(
     torrent_files: Optional[list[str]] = None,
     audiobook_format_priority: Optional[list[str]] = None,
     ebook_format_priority: Optional[list[str]] = None,
-) -> Optional[_PreparedBook]:
+) -> list[_PreparedBook]:
     """Steps 1-4: locate file, optional staging, metadata, patch.
 
     `torrent_files` is the list of file paths qBit reports for the
@@ -431,8 +471,10 @@ async def _prepare_book(
     the older name-heuristic search (exact/prefix/substring match on
     `torrent_name`) for legacy clients and tests.
 
-    Returns a `_PreparedBook` on success, or None after recording
-    a failure on the pipeline run.
+    Returns a list of `_PreparedBook` on success — one per detected
+    work — or an empty list after recording a failure on the pipeline
+    run. Single-book torrents return a 1-element list (the pre-v2.7
+    shape after the caller indexes [0]); bundles return N elements.
     """
     loop = asyncio.get_event_loop()
     save_path = Path(event.save_path)
@@ -493,7 +535,7 @@ async def _prepare_book(
                             f"torrent files unavailable from client; "
                             f"no file matching {event.torrent_name!r} in {save_path}",
                             ntfy_url, ntfy_topic)
-                return None
+                return []
             fallback_source = matched
         source = fallback_source
         book_files = await loop.run_in_executor(
@@ -509,7 +551,7 @@ async def _prepare_book(
         await _fail(db, run_id, event,
                     f"no book files found in {source}",
                     ntfy_url, ntfy_topic)
-        return None
+        return []
 
     primary_book = book_files[0]
     book_filename = primary_book.name
@@ -525,6 +567,7 @@ async def _prepare_book(
     # staged — otherwise the copier would rglob `source` and, if
     # `source` is the shared save_path, pull in unrelated files from
     # other torrents (the v1.2.2 cross-grab frankensteining bug).
+    book_dir: Path
     if staging_path:
         explicit = book_files if torrent_files else None
         copy_result = await loop.run_in_executor(
@@ -541,9 +584,12 @@ async def _prepare_book(
             await _fail(db, run_id, event,
                         f"staging failed: {copy_result.error}",
                         ntfy_url, ntfy_topic)
-            return None
+            return []
         book_dir = Path(copy_result.staged_path)
-        book_path = book_dir / (copy_result.book_filename or book_filename)
+        # Primary path resolution: copy_to_staging reports the largest /
+        # format-priority winner, but for a bundle that's only the
+        # primary of group 0 — every other group's primary needs to be
+        # resolved separately below.
         book_filename = copy_result.book_filename or book_filename
         book_format = copy_result.book_format or book_format
         await pipe_storage.set_state(
@@ -553,7 +599,8 @@ async def _prepare_book(
             book_format=book_format,
         )
     else:
-        book_path = primary_book
+        # No staging — files stay where qBit left them.
+        book_dir = primary_book.parent
         await pipe_storage.set_state(
             db, run_id, pipe_storage.PIPE_EXTRACTED,
             staged_path=str(source),
@@ -561,26 +608,171 @@ async def _prepare_book(
             book_format=book_format,
         )
 
-    # Extract + enrich metadata.
-    file_metadata = BookMetadata()
-    if book_path.exists():
-        file_metadata = extract_metadata(book_path)
+    # ── Bundle classification ────────────────────────────────────
+    # Group the located book files into one or more `BookGroup`s.
+    # Single-book and multi-format-same-book and multi-part-audiobook
+    # all resolve to ONE group (preserving pre-v2.7 behavior); only
+    # actual bundle torrents fan out into multiple groups.
+    from app.config import load_settings
+    from app.orchestrator.bundle_classifier import classify as classify_bundle
+    settings = load_settings()
+    bundle_enabled = bool(settings.get("bundle_detection_enabled", True))
 
     grab = await grabs_storage.get_grab(db, event.grab_id)
     announce_author = grab.author_blob if grab else ""
     announce_title = grab.torrent_name if grab else ""
 
-    metadata = BookMetadata(
-        title=file_metadata.title or announce_title or "",
-        author=announce_author or file_metadata.author or "",
-        series=file_metadata.series,
-        series_index=file_metadata.series_index,
-        language=file_metadata.language,
-        publisher=file_metadata.publisher,
-        description=file_metadata.description,
-        isbn=file_metadata.isbn,
-        format=file_metadata.format,
+    # Run the classifier on the original (pre-staging) paths — they
+    # share basenames with the staged copies, so the classifier's
+    # metadata extraction works regardless of which dir we point at.
+    # Resolve each group's primary back to its staged location below.
+    groups = classify_bundle(
+        book_files,
+        enabled=bundle_enabled,
+        announce_title=announce_title,
+        announce_author=announce_author,
     )
+    if not groups:
+        await _fail(db, run_id, event,
+                    "bundle classifier returned no groups (unexpected)",
+                    ntfy_url, ntfy_topic)
+        return []
+    is_bundle = len(groups) > 1
+
+    if is_bundle:
+        _log.info(
+            "pipeline: grab_id=%d is a bundle of %d works",
+            event.grab_id, len(groups),
+        )
+
+    # Read source_metadata once — it's torrent-level, so all groups
+    # would see the same bundle-level data. For bundles we DON'T use
+    # it because the prebaked metadata describes the bundle as a
+    # whole. Single-book grabs use it as before.
+    prebaked_raw = await grabs_storage.get_source_metadata(db, event.grab_id)
+
+    prepared: list[_PreparedBook] = []
+    for group_idx, group in enumerate(groups):
+        # Resolve this group's files to their staged locations. After
+        # copy_to_staging every file lives under `book_dir` with its
+        # original basename.
+        group_staged: list[Path] = []
+        for f in group.files:
+            staged = book_dir / f.name
+            if staged.exists():
+                group_staged.append(staged)
+            else:
+                # File didn't make it through staging — log and skip
+                # (rare; the legacy code would silently lose it too).
+                _log.warning(
+                    "pipeline: group %d primary %s not in staging dir %s",
+                    group_idx, f.name, book_dir,
+                )
+        if not group_staged:
+            _log.warning(
+                "pipeline: skipping empty group %d for grab_id=%d",
+                group_idx, event.grab_id,
+            )
+            continue
+        primary_staged = group_staged[0]
+        group_book_filename = primary_staged.name
+        group_book_format = primary_staged.suffix.lstrip(".").lower()
+
+        prep = await _prepare_group(
+            db, event,
+            group=group,
+            group_files=group_staged,
+            primary_path=primary_staged,
+            book_filename=group_book_filename,
+            book_format=group_book_format,
+            grab=grab,
+            announce_author=announce_author,
+            announce_title=announce_title,
+            prebaked_raw=prebaked_raw if not is_bundle else None,
+            metadata_enricher=metadata_enricher,
+            is_bundle=is_bundle,
+            bundle_index=group_idx,
+            bundle_total=len(groups),
+            run_id=run_id,
+        )
+        if prep is not None:
+            prepared.append(prep)
+
+    return prepared
+
+
+async def _prepare_group(
+    db: aiosqlite.Connection,
+    event: CompletionEvent,
+    *,
+    group,  # BookGroup, not imported at module level to avoid circularity
+    group_files: list[Path],
+    primary_path: Path,
+    book_filename: str,
+    book_format: str,
+    grab,
+    announce_author: str,
+    announce_title: str,
+    prebaked_raw: Optional[str],
+    metadata_enricher: Optional[MetadataEnricher],
+    is_bundle: bool,
+    bundle_index: int,
+    bundle_total: int,
+    run_id: int,
+) -> Optional[_PreparedBook]:
+    """Build one `_PreparedBook` for a single classified book group.
+
+    Single-book grabs call this once with `is_bundle=False` and the
+    semantics match the pre-v2.7 flow exactly. Bundle children call
+    this once per group with `is_bundle=True`, which switches the
+    metadata-merge seed to use the group's extracted title (not the
+    bundle's announce title) and tells the enricher to skip MAM (since
+    the parent grab's MAM listing describes the bundle as a whole,
+    not the individual child book).
+    """
+
+    # Extract metadata from the per-group primary. For single-book
+    # callers the classifier already extracted this; reuse it to
+    # avoid a redundant file read.
+    file_metadata = group.extracted if group.extracted else BookMetadata()
+    if not file_metadata.title and primary_path.exists():
+        try:
+            file_metadata = extract_metadata(primary_path)
+        except Exception:
+            _log.exception(
+                "pipeline: extract failed for %s in group %d",
+                primary_path, bundle_index,
+            )
+
+    if is_bundle:
+        # Bundle child: prefer the per-book extracted title over the
+        # bundle's announce title. The announce title is bundle-level
+        # ("Mistborn Trilogy") and would mislabel every child.
+        metadata = BookMetadata(
+            title=file_metadata.title or "",
+            author=file_metadata.author or announce_author or "",
+            series=file_metadata.series,
+            series_index=file_metadata.series_index,
+            language=file_metadata.language,
+            publisher=file_metadata.publisher,
+            description=file_metadata.description,
+            isbn=file_metadata.isbn,
+            format=file_metadata.format,
+        )
+    else:
+        # Single-book: existing precedence (file > announce for title,
+        # announce > file for author — matches pre-v2.7 behavior).
+        metadata = BookMetadata(
+            title=file_metadata.title or announce_title or "",
+            author=announce_author or file_metadata.author or "",
+            series=file_metadata.series,
+            series_index=file_metadata.series_index,
+            language=file_metadata.language,
+            publisher=file_metadata.publisher,
+            description=file_metadata.description,
+            isbn=file_metadata.isbn,
+            format=file_metadata.format,
+        )
 
     # Tier 4: enrich via online metadata sources (Goodreads, etc.).
     # Only runs when an enricher was passed AND the enricher itself
@@ -592,10 +784,11 @@ async def _prepare_book(
     # send-to-pipeline flow or the external grabs endpoint), use that
     # INSTEAD of calling the enricher. Saves 6 outbound scraper
     # requests per book. If the bundle exists but is malformed JSON,
-    # fall through to the normal enricher path.
+    # fall through to the normal enricher path. Bundle children skip
+    # the prebaked path entirely (the prebaked metadata is bundle-
+    # level and would mislabel every child).
     enriched: Optional[MetaRecord] = None
-    prebaked_raw = await grabs_storage.get_source_metadata(db, event.grab_id)
-    if prebaked_raw:
+    if prebaked_raw and not is_bundle:
         try:
             prebaked = json.loads(prebaked_raw)
             # Surface which discovery-side sources contributed to this
@@ -646,51 +839,89 @@ async def _prepare_book(
             enriched = await metadata_enricher.enrich(
                 title=metadata.title,
                 author=metadata.author,
-                mam_torrent_id=grab.mam_torrent_id if grab else "",
-                mam_token=_get_mam_token(),
+                # Bundle children: don't pass mam_torrent_id (the
+                # bundle's torrent_id describes the bundle as a whole,
+                # not the child book). Also flip skip_mam=True so the
+                # default-priority MAM source doesn't fall back to a
+                # fuzzy text search that would hit the bundle listing.
+                mam_torrent_id="" if is_bundle else (grab.mam_torrent_id if grab else ""),
+                mam_token="" if is_bundle else _get_mam_token(),
                 audiobook=is_audiobook,
+                skip_mam=is_bundle,
             )
         except Exception:
             _log.exception(
-                "pipeline: enricher crashed for grab_id=%d (non-fatal)",
-                event.grab_id,
+                "pipeline: enricher crashed for grab_id=%d group %d (non-fatal)",
+                event.grab_id, bundle_index,
             )
             enriched = None
 
     if enriched is not None:
-        metadata = BookMetadata(
-            title=metadata.title or enriched.title or "",
-            author=metadata.author or ", ".join(enriched.authors) or "",
-            series=metadata.series or enriched.series,
-            series_index=metadata.series_index or enriched.series_index,
-            language=metadata.language or enriched.language,
-            publisher=metadata.publisher or enriched.publisher,
-            description=metadata.description or enriched.description,
-            isbn=metadata.isbn or enriched.isbn,
-            format=metadata.format,
+        if is_bundle:
+            # Bundle children: per the design, MAM data is bundle-
+            # level and effectively drops to last priority. Goodreads
+            # / Hardcover / Audible win when they have differing data
+            # for a given field; only fall back to the seed when no
+            # source filled the gap. Implemented as "enriched wins on
+            # any non-empty value" (the inverse of the single-book
+            # rule, which has metadata winning).
+            metadata = BookMetadata(
+                title=enriched.title or metadata.title or "",
+                author=(
+                    ", ".join(enriched.authors)
+                    if enriched.authors
+                    else metadata.author
+                ) or "",
+                series=enriched.series or metadata.series,
+                series_index=enriched.series_index or metadata.series_index,
+                language=enriched.language or metadata.language,
+                publisher=enriched.publisher or metadata.publisher,
+                description=enriched.description or metadata.description,
+                isbn=enriched.isbn or metadata.isbn,
+                format=metadata.format,
+            )
+        else:
+            # Single-book: existing precedence (file-embedded wins;
+            # enricher fills nulls only) — preserves pre-v2.7 behavior.
+            metadata = BookMetadata(
+                title=metadata.title or enriched.title or "",
+                author=metadata.author or ", ".join(enriched.authors) or "",
+                series=metadata.series or enriched.series,
+                series_index=metadata.series_index or enriched.series_index,
+                language=metadata.language or enriched.language,
+                publisher=metadata.publisher or enriched.publisher,
+                description=metadata.description or enriched.description,
+                isbn=metadata.isbn or enriched.isbn,
+                format=metadata.format,
+            )
+
+    # The pipeline_run state stays at PIPE_METADATA_DONE per torrent
+    # — only the first group's metadata advances the run state so
+    # downstream watchers see a single state-machine transition. The
+    # other groups' metadata still lands on each row's review entry.
+    if bundle_index == 0:
+        await pipe_storage.set_state(
+            db, run_id, pipe_storage.PIPE_METADATA_DONE,
+            metadata_title=metadata.title or None,
+            metadata_author=metadata.author or None,
+            metadata_series=metadata.series or None,
+            metadata_language=metadata.language or None,
         )
 
-    await pipe_storage.set_state(
-        db, run_id, pipe_storage.PIPE_METADATA_DONE,
-        metadata_title=metadata.title or None,
-        metadata_author=metadata.author or None,
-        metadata_series=metadata.series or None,
-        metadata_language=metadata.language or None,
-    )
-
     # Patch metadata into a temp copy of the epub so the seeding
-    # original is untouched.
-    delivery_source = book_path
+    # original is untouched. Per-group temp_dir so bundle siblings
+    # don't share state.
+    delivery_source = primary_path
     temp_dir: Optional[Path] = None
     if (
-        book_path.exists()
-        and book_path.suffix.lower() == ".epub"
+        primary_path.exists()
+        and primary_path.suffix.lower() == ".epub"
         and metadata.author
     ):
         temp_dir = Path(tempfile.mkdtemp(prefix="seshat-patch-"))
         try:
-            temp_book = temp_dir / book_path.name
-            shutil.copy2(str(book_path), str(temp_book))
+            temp_book = temp_dir / primary_path.name
+            shutil.copy2(str(primary_path), str(temp_book))
             authors = [a.strip() for a in metadata.author.split(",") if a.strip()]
             # Description and language have been present on BookMetadata
             # since v1.0 but the initial staging patch was passing only
@@ -711,17 +942,17 @@ async def _prepare_book(
             if patched_ok:
                 delivery_source = temp_book
                 _log.debug(
-                    "pipeline: patched epub metadata for grab_id=%d",
-                    event.grab_id,
+                    "pipeline: patched epub metadata for grab_id=%d group %d",
+                    event.grab_id, bundle_index,
                 )
         except Exception:
             _log.exception(
-                "pipeline: failed to patch epub for grab_id=%d, "
-                "using original file", event.grab_id,
+                "pipeline: failed to patch epub for grab_id=%d group %d, "
+                "using original file", event.grab_id, bundle_index,
             )
 
     return _PreparedBook(
-        book_path=book_path,
+        book_path=primary_path,
         book_filename=book_filename,
         book_format=book_format,
         metadata=metadata,
@@ -730,6 +961,11 @@ async def _prepare_book(
         temp_dir=temp_dir,
         cleanup_temp=True,
         enriched=enriched,
+        group_files=group_files,
+        bundle_index=bundle_index,
+        bundle_total=bundle_total,
+        bundle_parent_grab_id=event.grab_id if is_bundle else None,
+        library_slug=None,  # reserved for future multi-library routing
     )
 
 
@@ -755,7 +991,19 @@ async def _stage_for_review(
         return False
 
     try:
-        target_dir = Path(review_staging_path) / f"grab-{event.grab_id}"
+        # Single-group grabs (the common case) land in `grab-{id}/`
+        # for backwards compatibility with in-flight review queues
+        # and existing review-staging dirs. Bundle children land in
+        # `grab-{id}/group-{i}/` so siblings of different works don't
+        # cross-contaminate each other's staging dir.
+        if prep.bundle_total > 1:
+            target_dir = (
+                Path(review_staging_path)
+                / f"grab-{event.grab_id}"
+                / f"group-{prep.bundle_index}"
+            )
+        else:
+            target_dir = Path(review_staging_path) / f"grab-{event.grab_id}"
         target_dir.mkdir(parents=True, exist_ok=True)
         # Copy the (possibly patched) delivery source into the review
         # staging dir. Don't move the temp file — keep _prepare_book's
@@ -770,30 +1018,22 @@ async def _stage_for_review(
                         ntfy_url, ntfy_topic)
             return False
 
-        # Multi-file audiobook support: also copy every OTHER book-
-        # format file from the original staging dir so the review
-        # directory is self-contained. Without this a 26-file
-        # Audible rip arrived in Review with only the primary MP3
-        # (usually the last alphabetical part) and ABS ended up
-        # with a broken 1-chapter book. Uses prep.book_path.parent
-        # — that's the per-torrent staging subdir populated by
-        # copy_to_staging. For single-file ebooks this loop runs
-        # once and no-ops.
-        staging_parent = prep.book_path.parent
-        if staging_parent.exists() and staging_parent.is_dir():
-            from app.orchestrator.file_copier import BOOK_EXTENSIONS
-            for sibling in staging_parent.iterdir():
-                if not sibling.is_file():
-                    continue
-                if sibling.name == prep.book_filename:
-                    continue  # primary already staged via delivery_source
-                ext = sibling.suffix.lstrip(".").lower()
-                if ext not in BOOK_EXTENSIONS:
-                    continue
-                sibling_dest = target_dir / sibling.name
-                if sibling_dest.exists():
-                    continue
-                shutil.copy2(str(sibling), str(sibling_dest))
+        # Multi-file group support: copy every OTHER book-format file
+        # in this group's file list (NOT the whole torrent's staging
+        # dir — for bundles that would drag in unrelated works). For
+        # single-book groups `group_files` contains just the primary
+        # so this loop no-ops. For multi-part audiobooks it copies the
+        # other 25 m4b parts. For multi-format ebooks (epub+mobi+azw3)
+        # it copies the other formats.
+        for sibling in prep.group_files:
+            if not sibling.is_file():
+                continue
+            if sibling.name == prep.book_filename:
+                continue  # primary already staged via delivery_source
+            sibling_dest = target_dir / sibling.name
+            if sibling_dest.exists():
+                continue
+            shutil.copy2(str(sibling), str(sibling_dest))
     except Exception as e:
         _log.exception("pipeline: review staging copy failed")
         await _fail(db, run_id, event,
@@ -868,11 +1108,20 @@ async def _stage_for_review(
         book_format=prep.book_format,
         metadata=metadata_dict,
         cover_path=cover_path_str,
+        bundle_group_id=f"grab-{event.grab_id}",
+        bundle_index=prep.bundle_index,
+        bundle_total=prep.bundle_total,
+        library_slug=prep.library_slug,
+        bundle_parent_grab_id=prep.bundle_parent_grab_id,
     )
-    await pipe_storage.set_state(db, run_id, pipe_storage.PIPE_AWAITING_REVIEW)
-    await grabs_storage.set_state(
-        db, event.grab_id, grabs_storage.STATE_PROCESSING
-    )
+    # Pipeline-run state only advances on the LAST group so that
+    # external watchers (review-timeout, dispatcher status) see the
+    # awaiting_review transition once per torrent, not per child.
+    if prep.bundle_index == prep.bundle_total - 1:
+        await pipe_storage.set_state(db, run_id, pipe_storage.PIPE_AWAITING_REVIEW)
+        await grabs_storage.set_state(
+            db, event.grab_id, grabs_storage.STATE_PROCESSING
+        )
 
     _log.debug(
         "pipeline: staged for review grab_id=%d %s → %s",
@@ -1063,10 +1312,19 @@ async def deliver_reviewed(
     # from the original download location into the review dir before
     # the sink runs. Best-effort — qBit offline / torrent removed
     # falls through to delivering whatever IS present.
+    #
+    # SKIP for v2.7.0 bundle children: each group's review staging
+    # dir was populated with only THAT group's files at staging time
+    # (see `_stage_for_review` `prep.group_files` loop). Running the
+    # qBit-side backfill would re-introduce other bundle siblings'
+    # audio files into this child's staging dir, since qBit reports
+    # every file in the torrent — not just this group's. Detected
+    # via `bundle_total > 1` on the review entry.
     if (
         _is_audiobook_grab(entry.book_format, grab.category or "")
         and grab.qbit_hash
         and state.dispatcher is not None
+        and entry.bundle_total <= 1
     ):
         try:
             await _backfill_audio_companions(

@@ -343,6 +343,17 @@ DEFAULT_SETTINGS = {
     # `grab-<id>/` subfolder. Distinct from staging_path, which is
     # used only during metadata extraction.
     "review_staging_path": "",
+    # Bundle/collection detection. When True (default from v2.7.0),
+    # the pipeline classifies multi-file torrents into one or more
+    # `BookGroup`s — a bundle of three distinct works produces three
+    # review-queue entries instead of one (with the other two books
+    # silently dropped, as v2.6 and earlier did). Multi-format and
+    # multi-part-audiobook torrents still resolve to a single group
+    # via the stem-dedupe and audiobook-parts pre-checks, so the
+    # default-ON behavior is structurally safe. Flip to False to fall
+    # back to the pre-v2.7 "always one group per torrent" path if a
+    # classifier misfire ever surfaces in production.
+    "bundle_detection_enabled": True,
     # If review queue items aren't decided within N days, auto-add to Calibre
     # with whatever metadata the file ships with (no enrichment).
     "metadata_review_timeout_days": 14,

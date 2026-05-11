@@ -261,6 +261,7 @@ class MetadataEnricher:
         mam_torrent_id: str = "",
         mam_token: str = "",
         audiobook: bool = False,
+        skip_mam: bool = False,
     ) -> Optional[MetaRecord]:
         """Run the priority list and return the best merged record.
 
@@ -273,6 +274,16 @@ class MetadataEnricher:
         `config.audiobook_priority` (Audible leads, hydrating its
         hits through Audnexus internally) so narrator / duration /
         ASIN come from the audiobook-aware sources first.
+
+        `skip_mam=True` removes MAM from the source list entirely.
+        Used for bundle-child enrichment (v2.7.0): the parent grab's
+        MAM listing describes the bundle as a whole, so re-searching
+        MAM with a per-child title would either miss (whole-listing
+        score below threshold) or return bundle-level data and
+        contaminate the child's metadata. We rely on Goodreads /
+        Hardcover / Audible for per-child fields and let the parent
+        grab's MAM URL flow through unchanged via the bundle_parent_grab_id
+        audit trail.
 
         Returns None when every source returned None or errored.
         """
@@ -300,7 +311,14 @@ class MetadataEnricher:
         # torrent ID changes for each book.
         base_sources = self._audiobook_sources if audiobook else self._sources
         sources = list(base_sources)
-        if mam_torrent_id and mam_token:
+        if skip_mam:
+            # Bundle-child path: drop MAM entirely. The default-priority
+            # MAM source (no torrent_id) would otherwise fall back to
+            # fuzzy text search and likely hit the bundle listing for
+            # every child, polluting each child's metadata with
+            # bundle-level fields.
+            sources = [s for s in sources if s.name != "mam"]
+        elif mam_torrent_id and mam_token:
             mam_src = MamSearchSource(
                 mam_token=mam_token, torrent_id=mam_torrent_id
             )
