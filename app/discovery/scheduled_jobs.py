@@ -59,9 +59,11 @@ logger = logging.getLogger("seshat.discovery.scheduled")
 
 async def sync_all_libraries() -> None:
     """Interval job: sync each discovered library with mtime skip."""
+    from app.discovery import sync_state as _sync_state
     current_active = get_active_library()
     st = load_settings()
-    mtimes = st.get("library_mtimes", {})
+    if _sync_state.migrate_settings(st):
+        save_settings(st)
     any_synced = False
     # Per-library interval config. The APScheduler job fires every
     # library_sync_interval_minutes (the minimum cadence), but each
@@ -87,10 +89,23 @@ async def sync_all_libraries() -> None:
                     effective_interval = default_interval
                 last_at = state._library_last_sync_at.get(slug, 0.0)
                 elapsed_min = (now - last_at) / 60 if last_at else float("inf")
-                if last_at and elapsed_min < effective_interval:
+                # Drift slack: each tick stamps `last_at = time.time()`
+                # AFTER processing (which can take seconds to minutes
+                # when a real sync runs), so the next tick at the same
+                # APScheduler cadence sees slightly less than
+                # `effective_interval` elapsed and skips. Without the
+                # slack, ABS / Calibre with a per-library interval
+                # matching the APScheduler interval ends up checking
+                # every OTHER tick — Mark's 130-vs-131 case
+                # (2026-05-11): 118.7m elapsed vs 120m configured
+                # caused a 4-hour gap between ABS change-detection
+                # checks. 5 minutes absorbs typical processing drift
+                # without weakening the gate for genuinely longer
+                # per-library overrides.
+                if last_at and elapsed_min < effective_interval - 5:
                     logger.debug(
                         "Scheduled sync: '%s' interval not elapsed "
-                        "(%.1fm < %dm), skipping tick",
+                        "(%.1fm < %dm - 5m slack), skipping tick",
                         lib["name"], elapsed_min, effective_interval,
                     )
                     continue
@@ -104,7 +119,7 @@ async def sync_all_libraries() -> None:
                     if lib_app
                     else os.path.getmtime(lib["source_db_path"])
                 )
-                last_mtime = mtimes.get(lib["slug"])
+                last_mtime = _sync_state.get_state(st, slug)["last_mtime"]
                 if last_mtime is not None and current_mtime == last_mtime:
                     logger.debug(
                         f"Scheduled sync: '{lib['name']}' source unchanged, skipping"
@@ -127,8 +142,11 @@ async def sync_all_libraries() -> None:
                     sync_result = await sync_calibre(
                         lib["source_db_path"], lib["library_path"]
                     )
-                mtimes[lib["slug"]] = current_mtime
-                st["library_mtimes"] = mtimes
+                _sync_state.record_completion(
+                    st, slug,
+                    mtime=current_mtime,
+                    mode=(sync_result or {}).get("mode", "full"),
+                )
                 save_settings(st)
                 state._library_last_sync_at[slug] = time.time()
                 any_synced = True
@@ -142,26 +160,35 @@ async def sync_all_libraries() -> None:
                     logger.debug("library-sync notify failed", exc_info=True)
             except Exception as e:
                 logger.warning(f"Scheduled sync failed for '{lib['name']}': {e}")
+                try:
+                    _sync_state.record_failure(st, lib["slug"])
+                    save_settings(st)
+                except Exception:
+                    logger.debug("record_failure crashed", exc_info=True)
         set_active_library(current_active)
         state._last_library_sync_check["at"] = time.time()
         state._last_library_sync_check["synced"] = any_synced
-        # Bump the Command Center "(Last Sync: …)" timestamp on every
-        # tick, including no-op skips. Without this, the displayed "ago"
-        # value freezes at the last real sync and users correctly suspect
-        # the scheduler stopped. sync_calibre already updates the progress
-        # dict on actual syncs — we only need to handle the all-skipped
-        # case here. Stamp every discovered library's per-slug dict so
-        # both Calibre and ABS rows advance together on a no-op tick.
+        # Stamp `last_check_at` on every tick (including skips) so the
+        # Command Center can show "Scheduler is alive — last checked X
+        # min ago". Crucially, do NOT bump `completed_at` here — that
+        # field is reserved for actual sync completions so the "Last
+        # Sync: …" indicator stays accurate. Previously this code
+        # overwrote `completed_at = time.time()` on every skip, which
+        # produced a "Last Sync 3 min ago" display when the last real
+        # sync was actually 40 hours ago — exactly the confusion Mark
+        # hit 2026-05-11 chasing the missing 131st audiobook.
         if not any_synced:
+            now_ts = time.time()
             for lib in state._discovered_libraries:
-                state.get_lib_progress(lib["slug"]).update({
+                p = state.get_lib_progress(lib["slug"])
+                p.update({
                     "running": False,
                     "status": "complete",
                     "type": "scheduled_skip",
                     "current": 0,
                     "total": 0,
                     "current_book": "",
-                    "completed_at": time.time(),
+                    "last_check_at": now_ts,
                 })
 
         # Post-sync: refresh cross-library work links once the ebook

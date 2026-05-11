@@ -116,25 +116,33 @@ class AudiobookshelfApp(LibraryApp):
         return None
 
     async def get_mtime(self, library: dict) -> float | str:
-        """ABS change-detection signal: `f"{lastUpdate}:{numItems}"`.
+        """ABS change-detection signal:
+        `f"{lastUpdate}:{numItems}:{newestUpdatedAt}"`.
+
+        Three signals composited, each catching a different mutation
+        class:
+
+        - `lastUpdate` — bumps on filesystem changes under the watched
+          audiobooks path (adds, removes, file-system metadata).
+        - `numItems` — bumps on adds/removes (already caught by
+          `lastUpdate` in most cases, but ABS occasionally fails to
+          advance `lastUpdate` on adds — see v2.3.4.1 history below).
+        - `newestUpdatedAt` — bumps on **any** item-level change
+          including metadata edits and cover replacements that happen
+          via the ABS UI/API without touching the watched filesystem
+          (verified 2026-05-11 against Mark's library). Without this
+          third signal, edit-only changes are silently missed until
+          the next add/remove forces a sync.
 
         Pre-v2.3.4.1 this returned `lastUpdate` alone. UAT 2026-05-07
         revealed that ABS's `lastUpdate` advances on library settings
         changes but NOT reliably when items are added — Mark added 5
         audiobooks, ABS UI showed 113 items, but `lastUpdate` was
-        17 days stale. Scheduled sync read the same `lastUpdate` on
-        every tick and skipped, even though the library content had
-        grown.
+        17 days stale.
 
-        The fix: combine `lastUpdate` with the library's total item
-        count (via `/api/libraries/{id}/items?limit=0`). Either signal
-        moving forces a re-sync. Composite returned as a string —
-        `sync_all_libraries`'s equality check doesn't care about type.
-
-        Self-heals across the v2.3.4.0 → v2.3.4.1 boundary: the saved
-        `library_mtimes[slug]` is a number from before the fix; the
-        new return is a string; the `==` comparison fails; one
-        re-sync runs and stores the new string format.
+        Self-heals across version boundaries: each shape change makes
+        the cached value's `==` comparison fail once, triggering a
+        single re-sync that stamps the new composite shape.
 
         Falls back to the previous return shape on API failure so a
         transient ABS outage doesn't trigger a fake re-sync. The
@@ -182,13 +190,21 @@ class AudiobookshelfApp(LibraryApp):
             # API misreport.
             return cached_f
 
-        # Second signal: total item count via the items endpoint.
-        # `limit=0` returns metadata only — `total` is the item count.
-        # Failure here is non-fatal: degrade to lastUpdate-only (the
-        # pre-v2.3.4.1 behavior) rather than blocking the sync.
+        # Second + third signals: total item count + newest-updated
+        # item's `updatedAt`, fetched in one paged call (limit=1,
+        # sort=updatedAt desc). Failure is non-fatal: degrade to
+        # lastUpdate-only (the pre-v2.3.4.1 behavior) rather than
+        # blocking the sync.
         try:
-            page = await client.list_items(lib_id, limit=0, page=0)
+            page = await client.list_items(
+                lib_id, limit=1, page=0,
+                sort="updatedAt", desc=True,
+            )
             total_items = int(page.get("total") or 0)
+            results = page.get("results") or []
+            newest_updated_at = (
+                int(results[0].get("updatedAt") or 0) if results else 0
+            )
         except Exception as e:
             logger.warning(
                 "Audiobookshelf: get_mtime item-count fetch failed "
@@ -197,7 +213,7 @@ class AudiobookshelfApp(LibraryApp):
             )
             return fresh_f
 
-        return f"{fresh_f}:{total_items}"
+        return f"{fresh_f}:{total_items}:{newest_updated_at}"
 
 
 async def _get_abs_api_key() -> Optional[str]:
@@ -300,18 +316,29 @@ class AudiobookshelfClient:
         *,
         limit: int = 500,
         page: int = 0,
+        sort: Optional[str] = None,
+        desc: bool = False,
     ) -> dict:
         """GET /api/libraries/{id}/items — paginated.
 
         Returns the raw page dict with keys:
           results (list of item dicts), total, limit, page, offset
+
+        `sort` accepts ABS field selectors like "updatedAt" or
+        "addedAt"; `desc=True` reverses the order. Used by `get_mtime`
+        to fetch the single newest-updated item alongside the total
+        count in one round trip.
         """
         import httpx
+        params: dict = {"limit": limit, "page": page}
+        if sort:
+            params["sort"] = sort
+            params["desc"] = "1" if desc else "0"
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             resp = await client.get(
                 f"{self.base_url}/api/libraries/{library_id}/items",
                 headers=self._headers(),
-                params={"limit": limit, "page": page},
+                params=params,
             )
             resp.raise_for_status()
             return resp.json() or {}

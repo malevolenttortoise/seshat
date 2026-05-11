@@ -76,10 +76,17 @@ async def trigger_sync(slug: str | None = None):
             else:
                 result = await sync_calibre(lib["source_db_path"], lib["library_path"])
             # Update mtime after successful manual sync
+            from app.discovery import sync_state as _sync_state
             s = load_settings()
-            mtimes = s.get("library_mtimes", {})
-            mtimes[target_slug] = await app_instance.get_mtime(lib) if app_instance else os.path.getmtime(lib["source_db_path"])
-            s["library_mtimes"] = mtimes
+            current_mtime = (
+                await app_instance.get_mtime(lib) if app_instance
+                else os.path.getmtime(lib["source_db_path"])
+            )
+            _sync_state.record_completion(
+                s, target_slug,
+                mtime=current_mtime,
+                mode=(result or {}).get("mode", "full"),
+            )
             save_settings(s)
             try:
                 from app.discovery.notify import notify_library_sync
@@ -105,6 +112,13 @@ async def trigger_sync(slug: str | None = None):
 
         return {"status": "ok", **result}
     except Exception as e:
+        try:
+            from app.discovery import sync_state as _sync_state
+            s = load_settings()
+            _sync_state.record_failure(s, target_slug)
+            save_settings(s)
+        except Exception:
+            logger.debug("record_failure crashed", exc_info=True)
         raise HTTPException(500, str(e))
     finally:
         state._library_sync_in_progress = False
@@ -449,6 +463,11 @@ def _project_libraries() -> list[dict]:
             "current_book": p.get("current_book", "") or None,
             "status": p.get("status", "idle"),
             "completed_at": _stamp_completed(p),
+            # Distinct from completed_at: bumps on every scheduler
+            # tick whether or not real work happened. Lets the
+            # Command Center show "Scheduler alive — last checked X
+            # min ago" without claiming a sync just finished.
+            "last_check_at": p.get("last_check_at"),
             "extra": {
                 "books_new": p.get("books_new", 0),
                 "books_updated": p.get("books_updated", 0),
@@ -479,7 +498,16 @@ async def scan_status():
         if proj.get("kind") != "library" and proj["status"] == "idle" and proj["type"] == "none":
             continue
         out.append(proj)
-    return {"scans": out}
+    # `startup_complete` gates the frontend's first-boot splash. Flips
+    # True once the supervised startup-sync task finishes its first
+    # pass through every library (regardless of per-library outcome).
+    # Stays False on libraries-less setups too — the lifespan never
+    # spawns the task, so a freshly-installed Seshat shows the
+    # SetupWizard rather than this splash anyway.
+    return {
+        "scans": out,
+        "startup_complete": bool(state._startup_sync_complete),
+    }
 
 
 @router.post("/sync/full-rescan")

@@ -587,6 +587,7 @@ DEFAULT_SETTINGS = {
     # Per-library state.
     "active_library": "",
     "library_mtimes": {},
+    "library_sync_state": {},
     "library_sources": [],
     # Discovery-side notification toggles.
     "ntfy_on_scan_complete": True,

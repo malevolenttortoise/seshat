@@ -251,6 +251,9 @@ export interface PenNameLink {
 // claiming every value is a number.
 export interface ScanProgress {
   kind: "lookup" | "mam" | "library";
+  slug?: string;
+  app_type?: string;
+  content_type?: string;
   type: string;
   label: string;
   running: boolean;
@@ -260,6 +263,7 @@ export interface ScanProgress {
   current_book?: string | null;
   status: string;
   completed_at?: number | null;
+  last_check_at?: number | null;
   extra?: Record<string, unknown>;
 }
 

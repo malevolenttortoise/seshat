@@ -725,6 +725,10 @@ async def lifespan(app: FastAPI):
     if not state._discovered_libraries:
         _log.info("No libraries configured — discovery features available after setup wizard")
         await init_discovery_db()
+        # No libraries means no startup sync to run. Flip the flag
+        # immediately so `/scan-status` doesn't report a perpetual
+        # "still syncing" state to the SetupWizard frontend.
+        state._startup_sync_complete = True
     else:
         lib_names = [l["name"] for l in state._discovered_libraries]
         _log.info(f"Discovered {len(state._discovered_libraries)} libraries: {', '.join(lib_names)}")
@@ -743,59 +747,98 @@ async def lifespan(app: FastAPI):
         save_settings(settings)
         _log.info(f"Active library: '{active}'")
 
-        # Initial sync with mtime optimization
-        import os as _os
-        import time as _time
-        mtimes = settings.get("library_mtimes", {})
-        any_synced = False
-        for lib in state._discovered_libraries:
-            set_active_library(lib["slug"])
+        # Initial sync with mtime optimization — moved off the
+        # lifespan's critical path. Pre v2.5 this `await`ed the
+        # per-library sync loop synchronously, blocking FastAPI's
+        # startup completion until every library finished. For Mark's
+        # 2862-book Calibre library + 131-item ABS library that meant
+        # 30-60 seconds of total webpage unavailability on every
+        # container restart, with the user staring at a hung-loading
+        # browser tab the entire time. After the incremental-sync
+        # work in steps 1-5 most restarts will finish in seconds, but
+        # the first-ever sync, post-failure recovery, and weekly
+        # safety-net runs still take minutes. Running this as a
+        # supervised background task lets FastAPI start accepting
+        # requests immediately; the frontend gates its UX via the
+        # `startup_complete` field exposed on `/scan-status`.
+        from app.discovery import sync_state as _sync_state
+        if _sync_state.migrate_settings(settings):
+            save_settings(settings)
+
+        async def _run_startup_sync():
+            import os as _os
+            import time as _time
             try:
-                lib_app = get_app(lib.get("app_type", "calibre"))
-                current_mtime = (
-                    await lib_app.get_mtime(lib)
-                    if lib_app
-                    else _os.path.getmtime(lib["source_db_path"])
-                )
-                last_mtime = mtimes.get(lib["slug"])
-                if last_mtime is not None and current_mtime == last_mtime:
-                    _log.info(f"Library '{lib['name']}': source unchanged, skipping sync")
-                else:
-                    _log.info(f"Library '{lib['name']}': syncing...")
-                    if lib_app:
-                        await lib_app.sync(lib)
-                    mtimes[lib["slug"]] = current_mtime
-                    settings["library_mtimes"] = mtimes
-                    save_settings(settings)
-                    any_synced = True
-            except Exception as e:
-                _log.warning(f"Sync failed for library '{lib['name']}': {e}")
-        set_active_library(active)
-        state._last_library_sync_check["at"] = _time.time()
-        state._last_library_sync_check["synced"] = True
-        # Seed `_library_sync_progress` with the startup outcome so the
-        # Command Center Sync Progress widget has a "Last sync" timestamp
-        # to display immediately. Without this it shows "Idle" from the
-        # module-default until the first scheduled tick fires (up to 60
-        # minutes later). `sync_all_libraries()` already does this for
-        # every scheduled tick — mirroring the no-op-skip case here
-        # keeps the display consistent across startup and scheduled runs.
-        # `sync_calibre` / `sync_audiobookshelf` already populate the
-        # progress dict during actual syncs, so only the all-skipped
-        # branch needs an explicit completion update here. Stamp every
-        # discovered library so the Command Center shows a timestamp
-        # per row immediately at startup (not just the active one).
-        if not any_synced:
-            for lib in state._discovered_libraries:
-                state.get_lib_progress(lib["slug"]).update({
-                    "running": False,
-                    "status": "complete",
-                    "type": "startup_skip",
-                    "current": 0,
-                    "total": 0,
-                    "current_book": "",
-                    "completed_at": _time.time(),
-                })
+                state._library_sync_in_progress = True
+                any_synced = False
+                # Reload settings inside the task so we see anything
+                # the lifespan path saved (e.g. `active_library`).
+                inner_settings = load_settings()
+                for lib in state._discovered_libraries:
+                    slug = lib["slug"]
+                    set_active_library(slug)
+                    try:
+                        lib_app = get_app(lib.get("app_type", "calibre"))
+                        current_mtime = (
+                            await lib_app.get_mtime(lib)
+                            if lib_app
+                            else _os.path.getmtime(lib["source_db_path"])
+                        )
+                        last_mtime = _sync_state.get_state(
+                            inner_settings, slug
+                        )["last_mtime"]
+                        if last_mtime is not None and current_mtime == last_mtime:
+                            _log.info(
+                                f"Library '{lib['name']}': source unchanged, "
+                                "skipping sync"
+                            )
+                        else:
+                            _log.info(f"Library '{lib['name']}': syncing...")
+                            sync_result = (
+                                await lib_app.sync(lib) if lib_app else None
+                            )
+                            _sync_state.record_completion(
+                                inner_settings, slug,
+                                mtime=current_mtime,
+                                mode=(sync_result or {}).get("mode", "full"),
+                            )
+                            save_settings(inner_settings)
+                            any_synced = True
+                    except Exception as e:
+                        _log.warning(
+                            f"Sync failed for library '{lib['name']}': {e}"
+                        )
+                        _sync_state.record_failure(inner_settings, slug)
+                        save_settings(inner_settings)
+                set_active_library(active)
+                state._last_library_sync_check["at"] = _time.time()
+                state._last_library_sync_check["synced"] = True
+                # Seed `_library_sync_progress` with the startup
+                # outcome so the Command Center has a "Last sync"
+                # timestamp to display. See scheduled_jobs.py — only
+                # `last_check_at` advances on skips.
+                if not any_synced:
+                    now_ts = _time.time()
+                    for lib in state._discovered_libraries:
+                        state.get_lib_progress(lib["slug"]).update({
+                            "running": False,
+                            "status": "complete",
+                            "type": "startup_skip",
+                            "current": 0,
+                            "total": 0,
+                            "current_book": "",
+                            "last_check_at": now_ts,
+                        })
+            finally:
+                state._library_sync_in_progress = False
+                state._startup_sync_complete = True
+                _log.info("Startup sync complete; first-boot splash can clear")
+
+        state._startup_sync_task = state.supervised_task(
+            _run_startup_sync,
+            name="startup-sync",
+            restart_on_crash=False,
+        )
 
     # Per-source rate limits and the Hardcover API key are read once
     # into module-level source instances at import time. Refresh them
@@ -926,6 +969,7 @@ async def lifespan(app: FastAPI):
             "_digest_scheduler_task",
             "_economy_vip_task",
             "_economy_upload_task",
+            "_startup_sync_task",
         ):
             task = getattr(state, task_attr, None)
             if task is not None and not task.done():

@@ -250,8 +250,11 @@ class TestAudiobookshelfDiscover:
             "abs_last_update": 1234,  # stale cached value
         }
         result = await abs_mod.AudiobookshelfApp().get_mtime(lib)
-        # Composite signal: lastUpdate:numItems.
-        assert result == "9999.0:113"
+        # Composite signal: lastUpdate:numItems:newestUpdatedAt.
+        # `_mock_transport`'s items handler returns no `results`, so
+        # newestUpdatedAt is 0 — sufficient to fail the equality check
+        # against any cached pre-v2.5 shape and force one re-sync.
+        assert result == "9999.0:113:0"
         # Cache also refreshed in place (still a float so existing
         # readers don't break).
         assert lib["abs_last_update"] == 9999.0
@@ -301,9 +304,65 @@ class TestAudiobookshelfDiscover:
         items_total["n"] = 113  # five audiobooks added between ticks
         second = await abs_mod.AudiobookshelfApp().get_mtime(lib)
         # lastUpdate identical, item count changed → signals differ.
+        # Third component is the newest item's updatedAt — 0 here
+        # because the mock returns an empty `results` list, but the
+        # itemCount delta alone is enough to fail the equality check.
         assert first != second
-        assert first == "9999.0:108"
-        assert second == "9999.0:113"
+        assert first == "9999.0:108:0"
+        assert second == "9999.0:113:0"
+
+    async def test_get_mtime_item_edit_with_stable_lastupdate_and_count(
+        self, monkeypatch,
+    ):
+        """The Step 5a fix's reason for being. ABS bumps an item's
+        `updatedAt` on metadata / cover edits but does NOT bump the
+        library's `lastUpdate` (since covers / metadata live in
+        ABS's `/metadata` folder, not the watched `/audiobooks`
+        path) and does NOT change `itemCount`. Without the third
+        composite component, the pre-Step-5a signal stays stable
+        across edits — silently missed by Seshat's scheduled sync.
+        Verified against Mark's live library 2026-05-11: a tag edit
+        on a Halo audiobook bumped item.updatedAt 1776711603065 →
+        1778523541603 with library.lastUpdate unchanged."""
+        from app.library_apps import audiobookshelf as abs_mod
+
+        async def fake_get_key():
+            return "tok"
+        monkeypatch.setattr(abs_mod, "_get_abs_api_key", fake_get_key)
+
+        # Two ticks: lastUpdate AND itemCount stay flat, but the
+        # newest item's updatedAt jumps (simulating an edit).
+        newest_updated_at = {"v": 1000}
+        def items_handler(request):
+            return httpx.Response(200, json={
+                "results": [{"id": "item-x", "updatedAt": newest_updated_at["v"]}],
+                "total": 50, "limit": 1, "page": 0,
+            })
+
+        transport = _mock_transport({
+            "/api/libraries": (200, {"libraries": [
+                {"id": "lib-book", "mediaType": "book", "folders": [],
+                 "lastUpdate": 9999},
+            ]}),
+            "/api/libraries/lib-book/items": items_handler,
+        })
+        orig = httpx.AsyncClient
+        monkeypatch.setattr(
+            httpx, "AsyncClient",
+            lambda **kw: orig(transport=transport, **{k: v for k, v in kw.items() if k != "transport"}),
+        )
+
+        lib = {
+            "abs_base_url": "http://abs:13378",
+            "abs_library_id": "lib-book",
+            "abs_last_update": 9999,
+        }
+        first = await abs_mod.AudiobookshelfApp().get_mtime(lib)
+        newest_updated_at["v"] = 2000  # edit between ticks
+        second = await abs_mod.AudiobookshelfApp().get_mtime(lib)
+        assert first == "9999.0:50:1000"
+        assert second == "9999.0:50:2000"
+        assert first != second
 
     async def test_get_mtime_item_count_failure_degrades_to_lastupdate(
         self, monkeypatch,

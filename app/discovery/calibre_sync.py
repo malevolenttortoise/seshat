@@ -185,7 +185,12 @@ async def _apply_calibre_diff(db, book_id: int, book: dict) -> tuple[int, int]:
     return (auto_flowed, queued)
 
 
-def _read_calibre_db(calibre_path: str, library_path: str = None) -> dict:
+def _read_calibre_db(
+    calibre_path: str,
+    library_path: str = None,
+    *,
+    last_modified_threshold: float | None = None,
+) -> dict:
     """Read Calibre metadata.db into a list of book dicts.
 
     Synchronous + read-only, opened via the SQLite URI `mode=ro` flag
@@ -202,6 +207,13 @@ def _read_calibre_db(calibre_path: str, library_path: str = None) -> dict:
     `library_path` is the on-disk root of the Calibre library; we use
     it to resolve `cover.jpg` paths so the discovery domain can serve
     covers without re-uploading them.
+
+    `last_modified_threshold` (unix seconds) limits the result to books
+    whose Calibre `last_modified` is newer than the threshold. Drives
+    incremental sync. Step 0 on Mark's library confirmed that all four
+    common mutation paths bump `last_modified`: GUI tag edits, GUI
+    cover replacement, external `calibredb set_metadata`, and format
+    add/remove via KFX→EPUB conversion.
     """
     lib_path = library_path or CALIBRE_LIBRARY_PATH
     if not Path(calibre_path).exists():
@@ -210,17 +222,37 @@ def _read_calibre_db(calibre_path: str, library_path: str = None) -> dict:
     conn = sqlite3.connect(f"file:{calibre_path}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     try:
-        books_raw = conn.execute("""
-            SELECT
-                b.id as book_id,
-                b.title,
-                b.pubdate,
-                b.series_index,
-                b.path as book_path,
-                COALESCE(c.text, '') as comments
-            FROM books b
-            LEFT JOIN comments c ON c.book = b.id
-        """).fetchall()
+        # `julianday()` on both sides normalizes Calibre's mixed
+        # `last_modified` formats — observed in Mark's library:
+        #   "2026-05-11 15:13:27.887295+00:00"  (most rows)
+        #   "2026-05-10 19:57:29.995709"        (some rows, no tz)
+        # Naive string comparison breaks across that boundary; numeric
+        # Julian Day comparison handles both shapes uniformly.
+        if last_modified_threshold is not None:
+            books_raw = conn.execute("""
+                SELECT
+                    b.id as book_id,
+                    b.title,
+                    b.pubdate,
+                    b.series_index,
+                    b.path as book_path,
+                    COALESCE(c.text, '') as comments
+                FROM books b
+                LEFT JOIN comments c ON c.book = b.id
+                WHERE julianday(b.last_modified) > julianday(?, 'unixepoch')
+            """, (last_modified_threshold,)).fetchall()
+        else:
+            books_raw = conn.execute("""
+                SELECT
+                    b.id as book_id,
+                    b.title,
+                    b.pubdate,
+                    b.series_index,
+                    b.path as book_path,
+                    COALESCE(c.text, '') as comments
+                FROM books b
+                LEFT JOIN comments c ON c.book = b.id
+            """).fetchall()
 
         result = []
         for bk in books_raw:
@@ -320,8 +352,85 @@ def _read_calibre_db(calibre_path: str, library_path: str = None) -> dict:
         conn.close()
 
 
+def _read_calibre_ids(calibre_path: str) -> list[int]:
+    """Full-library `book_id` list, no joins. Cheap.
+
+    Incremental sync's `last_modified > threshold` filter misses
+    deletes — a book removed from Calibre never appears in that query.
+    We diff this list against the discovery DB's `calibre_id` set to
+    find the dropouts and prune them.
+    """
+    if not Path(calibre_path).exists():
+        raise FileNotFoundError(f"Calibre database not found at {calibre_path}")
+    conn = sqlite3.connect(f"file:{calibre_path}?mode=ro", uri=True)
+    try:
+        rows = conn.execute("SELECT id FROM books").fetchall()
+        return [row[0] for row in rows]
+    finally:
+        conn.close()
+
+
+def _read_calibre_series_authors(calibre_path: str) -> list[dict]:
+    """Full-library shallow read of (book_id, authors[id], series[id]).
+
+    Pass 2 of `sync_calibre` decides whether each Calibre series is
+    "shared" (2+ contributing authors → one row with author_id=NULL)
+    or per-author. That decision MUST see the full Calibre book set
+    even when only a filtered subset is being upserted, or else a
+    multi-author series whose only-modified book belongs to a single
+    author would be misclassified as per-author and re-split.
+
+    Two index-aware joins on the link tables + one `SELECT id FROM
+    books`. Books without authors/series still appear (with empty
+    lists) so callers can rely on every book_id being represented.
+
+    Result shape mirrors the relevant subset of `_read_calibre_db`'s
+    output so Pass 2's loop body works against either input unchanged:
+        [{"book_id": int,
+          "authors": [{"id": int}, ...],
+          "series":  [{"id": int}, ...]}, ...]
+
+    `ORDER BY ... id` on the link queries preserves the same insertion
+    order as the per-book queries in `_read_calibre_db` — important
+    because `book["authors"][0]` is treated as the primary author by
+    downstream passes.
+    """
+    if not Path(calibre_path).exists():
+        raise FileNotFoundError(f"Calibre database not found at {calibre_path}")
+    conn = sqlite3.connect(f"file:{calibre_path}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        all_ids = conn.execute("SELECT id FROM books").fetchall()
+        author_rows = conn.execute("""
+            SELECT bal.book as book_id, bal.author as author_id
+            FROM books_authors_link bal
+            ORDER BY bal.book, bal.id
+        """).fetchall()
+        series_rows = conn.execute("""
+            SELECT bsl.book as book_id, bsl.series as series_id
+            FROM books_series_link bsl
+            ORDER BY bsl.book, bsl.id
+        """).fetchall()
+    finally:
+        conn.close()
+
+    by_book: dict[int, dict] = {
+        row["id"]: {"book_id": row["id"], "authors": [], "series": []}
+        for row in all_ids
+    }
+    for row in author_rows:
+        entry = by_book.get(row["book_id"])
+        if entry is not None:
+            entry["authors"].append({"id": row["author_id"]})
+    for row in series_rows:
+        entry = by_book.get(row["book_id"])
+        if entry is not None:
+            entry["series"].append({"id": row["series_id"]})
+    return list(by_book.values())
+
+
 async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
-    """Run a full Calibre → discovery DB import.
+    """Run a Calibre → discovery DB import.
 
     Three passes, in this exact order (because each pass needs the FK
     targets from the previous one to exist):
@@ -334,6 +443,14 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
                    discovery rows as owned when they title-match the
                    book we just imported.
 
+    Mode is decided by `sync_state.resolve_threshold` against the
+    persisted per-slug state. Incremental mode reads only books whose
+    Calibre `last_modified` is newer than the last successful sync
+    (with a 60s drift bias), supplemented by a cheap shallow full read
+    so Pass 2's multi-author series detection still sees every book.
+    Full mode runs on first sync, weekly safety-net intervals, and
+    after a recorded failure.
+
     Paths default to `CALIBRE_DB_PATH` / `CALIBRE_LIBRARY_PATH` from
     config when not supplied — used by single-library setups. The
     multi-library code path always passes the discovered library's
@@ -341,7 +458,6 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
     """
     cal_path = calibre_db_path or CALIBRE_DB_PATH
     lib_path = calibre_library_path or CALIBRE_LIBRARY_PATH
-    logger.info(f"Starting Calibre sync from {cal_path}...")
     start_time = time.time()
     # Slug is whichever library is active during this call — callers
     # (main.py lifespan, scheduled_jobs, trigger_sync) always set it
@@ -349,8 +465,22 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
     # means Calibre + ABS each keep their own last-sync timestamp and
     # in-flight display, instead of stomping a single shared dict.
     from app.discovery.database import get_active_library
+    from app.discovery import sync_state as _sync_state
+    from app.config import load_settings as _load_settings
     slug = get_active_library() or "calibre"
     progress = state.get_lib_progress(slug)
+
+    settings = _load_settings()
+    threshold, reason = _sync_state.resolve_threshold(
+        _sync_state.get_state(settings, slug)
+    )
+    mode = "full" if threshold is None else "incremental"
+    logger.info(
+        f"Starting Calibre sync from {cal_path} "
+        f"(mode={mode}, reason={reason}"
+        + (f", threshold={threshold:.0f}" if threshold is not None else "")
+        + ")"
+    )
 
     # Initialize so the except handler below can reference sync_id
     # safely even if the INSERT INTO sync_log itself fails (e.g.,
@@ -367,7 +497,17 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
         sync_id = cursor.lastrowid
         await db.commit()
 
-        calibre_data = _read_calibre_db(cal_path, lib_path)
+        calibre_data = _read_calibre_db(
+            cal_path, lib_path, last_modified_threshold=threshold,
+        )
+        # Pass 2's multi-author detection needs the full library's
+        # (author, series) tuples even when only a filtered subset is
+        # being upserted. In full mode the filtered set IS the full
+        # set; in incremental we do a cheap shallow read.
+        if mode == "incremental":
+            shallow_books = _read_calibre_series_authors(cal_path)
+        else:
+            shallow_books = calibre_data["books"]
         books_found = 0
         books_new = 0
         # Surface progress in the unified scan widget. The initial dict
@@ -403,7 +543,19 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
             normalize_author_name,
             pick_canonical_display_name,
         )
+        # In incremental mode, Pass 2's `cal_series_authors` map must
+        # resolve `our_author_id` for authors that may appear only on
+        # un-modified books (and therefore aren't processed by Pass 1
+        # this sync). Pre-loading the full calibre_id → seshat_id map
+        # from the discovery DB covers those — Pass 1 then augments it
+        # with any newly-upserted authors. Full mode keeps the empty
+        # start so existing re-canonicalization behavior is preserved.
         author_map = {}  # calibre_author_id -> our_id
+        if mode == "incremental":
+            existing = await (await db.execute(
+                "SELECT id, calibre_id FROM authors WHERE calibre_id IS NOT NULL"
+            )).fetchall()
+            author_map = {row["calibre_id"]: row["id"] for row in existing}
         for book in calibre_data["books"]:
             for author in book["authors"]:
                 cal_id = author["id"]
@@ -443,8 +595,12 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
         # Distinct Calibre series ids that happen to share a name
         # remain per-author (Cressman/Savarovsky "The Last Paladin"
         # case — they have different Calibre ids).
+        #
+        # `shallow_books` is the full library in incremental mode and
+        # the filtered set in full mode — either way it covers every
+        # book whose contribution to multi-author detection matters.
         cal_series_authors: dict[int, set[int]] = {}
-        for book in calibre_data["books"]:
+        for book in shallow_books:
             if not book["series"] or not book["authors"]:
                 continue
             primary_cal_id = book["authors"][0]["id"]
@@ -771,12 +927,20 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
         # are untouched — the user's enrichment state for unowned books
         # is independent of what's in Calibre.
         #
-        # SAFETY: zero-book calibre_data is almost always a transient
+        # Incremental mode needs a full ID-only re-read here because
+        # `calibre_data["books"]` only carries books whose last_modified
+        # crossed the threshold — using it directly would prune every
+        # un-modified row.
+        #
+        # SAFETY: zero-book current_ids is almost always a transient
         # read error, not a deliberate "I deleted everything" — skip
         # the prune in that case rather than wipe every calibre row.
-        books_pruned = 0
-        if calibre_data["books"]:
+        if mode == "incremental":
+            current_ids = _read_calibre_ids(cal_path)
+        else:
             current_ids = [book["book_id"] for book in calibre_data["books"]]
+        books_pruned = 0
+        if current_ids:
             ph = ",".join("?" * len(current_ids))
             cur = await db.execute(
                 f"DELETE FROM books WHERE source='calibre' "
@@ -800,7 +964,7 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
         await db.commit()
 
         logger.info(
-            f"Calibre sync complete: {books_found} books, "
+            f"Calibre sync complete ({mode}): {books_found} books, "
             f"{books_new} new, {books_pruned} pruned"
         )
         progress.update({
@@ -808,11 +972,14 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
             "current_book": "",
             "status": "complete",
             "completed_at": time.time(),
+            "last_check_at": time.time(),
+            "sync_mode": mode,
         })
         return {
             "books_found": books_found,
             "books_new": books_new,
             "books_pruned": books_pruned,
+            "mode": mode,
         }
 
     except Exception as e:

@@ -11,6 +11,7 @@ import { Spin } from "./components/Spin";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import Toaster from "./components/Toaster";
 import { OfflineBanner } from "./components/OfflineBanner";
+import { LibrarySyncBanner } from "./components/LibrarySyncBanner";
 import { InstallPrompt } from "./components/InstallPrompt";
 import { MobileNavDrawer } from "./components/MobileNavDrawer";
 import { SseEventsProvider } from "./providers/SseEventsProvider";
@@ -437,6 +438,11 @@ function SeshatApp() {
           </>
         )}
       </nav>
+
+      {/* Library sync banner — sticky strip under the navbar while
+          startup sync runs, or full-screen splash on the very first
+          boot. Self-clearing once everything settles. */}
+      <LibrarySyncBanner />
 
       {/* ─── Page content ───────────────────────────────────── */}
       <main

@@ -145,16 +145,27 @@ async def _apply_abs_diff(db, book_id: int, book: dict) -> tuple[int, int]:
 
 
 async def sync_audiobookshelf(library: dict) -> dict:
-    """Run a full ABS → Seshat discovery DB import for one library.
+    """Run an ABS → Seshat discovery DB import for one library.
 
     `library` is the dict returned by `AudiobookshelfApp.discover()` —
     carries `abs_base_url`, `abs_library_id`, plus the standard
     `slug`/`name`/etc. fields.
+
+    Mode (full vs incremental) is decided by
+    `sync_state.resolve_threshold`. Incremental mode still fetches the
+    full ABS item list — ABS libraries are small (~100s typical,
+    ~1000s extreme) and per-item-update API filtering isn't exposed by
+    ABS, so client-side filtering by `updatedAt > threshold` is the
+    simplest path. Pass 1 + Pass 2 still iterate the full set in both
+    modes (authors and per-author series are cheap to upsert
+    idempotently); only Pass 3's book-row writes are filtered.
     """
     from app.library_apps.audiobookshelf import (
         AudiobookshelfClient,
         _get_abs_api_key,
     )
+    from app.discovery import sync_state as _sync_state
+    from app.config import load_settings as _load_settings
 
     abs_url = library.get("abs_base_url", "")
     abs_library_id = library.get("abs_library_id", "")
@@ -169,8 +180,19 @@ async def sync_audiobookshelf(library: dict) -> dict:
     if not api_key:
         raise RuntimeError("ABS sync called but no abs_api_key is configured")
 
+    settings = _load_settings()
+    threshold, reason = _sync_state.resolve_threshold(
+        _sync_state.get_state(settings, slug or "abs")
+    )
+    mode = "full" if threshold is None else "incremental"
+
     client = AudiobookshelfClient(abs_url, api_key)
-    logger.info(f"Starting ABS sync from {abs_url} library={abs_library_id}")
+    logger.info(
+        f"Starting ABS sync from {abs_url} library={abs_library_id} "
+        f"(mode={mode}, reason={reason}"
+        + (f", threshold={threshold:.0f}" if threshold is not None else "")
+        + ")"
+    )
     start_time = time.time()
 
     db = await get_db()
@@ -191,19 +213,36 @@ async def sync_audiobookshelf(library: dict) -> dict:
         items: list[dict] = []
         async for item in client.iter_all_items(abs_library_id):
             items.append(item)
-        books = [_flatten_item(it) for it in items]
-        books = [b for b in books if b is not None]
+        # Pass 4 uses the raw item-id set, not the flattened books, so
+        # items that fail `_flatten_item` (missing title or author) are
+        # still considered "currently in ABS" for prune purposes. This
+        # closes a pre-existing latent bug where unflatten-able items
+        # caused matching discovery rows to be wrongly pruned.
+        current_abs_ids = [it.get("id") for it in items if it.get("id")]
+        books_all = [_flatten_item(it) for it in items]
+        books_all = [b for b in books_all if b is not None]
+        # Incremental mode: restrict Pass 3 to books whose ABS
+        # `updatedAt` is newer than the threshold. Pass 1 + Pass 2
+        # still iterate `books_all` so author / series resolution
+        # works for un-modified books that Pass 3 will look up.
+        if mode == "incremental":
+            books_for_upsert = [
+                b for b in books_all if b["updated_at"] > threshold
+            ]
+        else:
+            books_for_upsert = books_all
 
         progress.update({
             "running": True,
             "current": 0,
-            "total": len(books),
+            "total": len(books_for_upsert),
             "current_book": "",
             "books_new": 0,
             "books_updated": 0,
             "books_pruned": 0,
             "status": "scanning",
             "type": "manual",
+            "sync_mode": mode,
         })
         progress.pop("completed_at", None)
 
@@ -213,7 +252,7 @@ async def sync_audiobookshelf(library: dict) -> dict:
         # collaborative audiobooks ("King & Straub") stay together
         # as one author because ABS joins with " & " in that case.
         author_id_map: dict[str, int] = {}
-        for book in books:
+        for book in books_all:
             for author_name in book["authors"]:
                 if author_name in author_id_map:
                     continue
@@ -243,7 +282,7 @@ async def sync_audiobookshelf(library: dict) -> dict:
 
         # ── Pass 2: series ─────────────────────────────────────
         series_id_map: dict[tuple[str, int], int] = {}
-        for book in books:
+        for book in books_all:
             if not book["series_name"] or not book["authors"]:
                 continue
             primary_author_id = author_id_map.get(book["authors"][0])
@@ -284,8 +323,7 @@ async def sync_audiobookshelf(library: dict) -> dict:
         # ── Pass 3: books ──────────────────────────────────────
         books_found = 0
         books_new = 0
-        current_abs_ids: list[str] = []
-        for book in books:
+        for book in books_for_upsert:
             if not book["authors"]:
                 continue
             books_found += 1
@@ -300,7 +338,6 @@ async def sync_audiobookshelf(library: dict) -> dict:
                 our_series_id = series_id_map.get(
                     (book["series_name"].lower(), our_author_id)
                 )
-            current_abs_ids.append(book["abs_id"])
 
             existing = await (await db.execute(
                 "SELECT id FROM books WHERE audiobookshelf_id = ? AND source = 'audiobookshelf'",
@@ -399,7 +436,7 @@ async def sync_audiobookshelf(library: dict) -> dict:
         await db.commit()
 
         logger.info(
-            f"ABS sync complete: {books_found} books, "
+            f"ABS sync complete ({mode}): {books_found} books, "
             f"{books_new} new, {books_pruned} pruned"
         )
         progress.update({
@@ -407,11 +444,14 @@ async def sync_audiobookshelf(library: dict) -> dict:
             "current_book": "",
             "status": "complete",
             "completed_at": time.time(),
+            "last_check_at": time.time(),
+            "sync_mode": mode,
         })
         return {
             "books_found": books_found,
             "books_new": books_new,
             "books_pruned": books_pruned,
+            "mode": mode,
         }
     except Exception as e:
         logger.error(f"ABS sync error: {e}", exc_info=True)
@@ -507,6 +547,15 @@ def _flatten_item(item: dict) -> Optional[dict]:
         # pick up ASINs by mistake.
         isbn = None
 
+    # ABS reports `updatedAt` as milliseconds-since-epoch at the top
+    # level of the item. Convert to unix seconds so it can be compared
+    # against `sync_state.resolve_threshold`'s output without re-doing
+    # the unit conversion at every comparison site.
+    try:
+        updated_at = float(item.get("updatedAt") or 0) / 1000.0
+    except (TypeError, ValueError):
+        updated_at = 0.0
+
     return {
         "abs_id": item.get("id"),
         "title": title,
@@ -523,6 +572,7 @@ def _flatten_item(item: dict) -> Optional[dict]:
         "abridged": bool(meta.get("abridged")),
         "duration_sec": duration_sec,
         "audio_formats": audio_formats,
+        "updated_at": updated_at,
     }
 
 

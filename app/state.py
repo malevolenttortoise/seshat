@@ -207,6 +207,17 @@ _library_last_sync_at: Dict[str, float] = {}
 # flag before grabbing the DB write lock so they yield cleanly.
 _library_sync_in_progress: bool = False
 
+# ─── Startup sync task ──────────────────────────────────────
+# The lifespan-time per-library sync loop. Lives in a supervised
+# task instead of blocking the lifespan so FastAPI starts accepting
+# requests immediately on container boot, even when Calibre/ABS sync
+# takes minutes. `_startup_sync_complete` flips True after the first
+# pass through every library finishes (success OR all-failed) so the
+# frontend can hide its "first-boot splash" once the library is
+# usable.
+_startup_sync_task: Optional[asyncio.Task] = None
+_startup_sync_complete: bool = False
+
 # Per-library sync progress keyed by library slug. Each entry mirrors
 # the old single-dict shape (running/current/total/current_book/status
 # /type/books_new/books_updated/completed_at). Keyed by slug so the
