@@ -2528,11 +2528,21 @@ async def check_book(
         # the regular promote threshold despite the title being an
         # exact match. The bundle cap (promote_blocked_by_bundle)
         # still applies; this branch only helps singletons.
+        #
+        # Volume_likely_mismatch guard (UAT round 3 follow-up): the
+        # third disambig branch caps conf at exactly 0.65 when search
+        # is BkN+ but candidate has no vol marker. UAT canary that
+        # caught this: "Royal Dragons 3" surfaced "Royal Dragons"
+        # (Bk1) — ts=1.0 from exact title match, vol-cap held conf
+        # at 0.65. Without this guard Fix F would bypass the cap and
+        # promote Bk1 as a Bk3 result. Same logic protects against
+        # any volume-likely-mismatched candidate slipping through.
         strong_text_anchor = (
             best.get("title_similarity", 0.0) >= 0.95
             and best.get("author_matched", False)
             and conf >= 0.65
             and not promote_blocked_by_bundle
+            and not best.get("volume_likely_mismatch", False)
         )
 
         # Promote to FOUND when:
@@ -3160,6 +3170,9 @@ async def debug_check_book(
                     is_bundle
                     and ts_max < _BUNDLE_PROMOTE_TS_FLOOR
                 )
+                # Vol-likely-mismatch guard — see production comment
+                # for the Royal Dragons 3 UAT canary.
+                and volume_disambig_note != "volume_likely_mismatch"
             )
             if confidence < MATCH_MIN_SCORE:
                 decision = "skipped_below_min"
