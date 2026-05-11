@@ -474,17 +474,31 @@ def _strip_subtitle(title: str) -> Optional[str]:
     # path. Conservative — only matches end-of-title parens, won't
     # touch mid-title parens like "Foo (Updated) 2" or stylized
     # titles where the paren is part of the name.
-    # Anchor the match at the opening `(` itself instead of any
-    # leading whitespace. Dropping the `\s*` prefix removes the
-    # backtrack-overlap with `[^)]*` that CodeQL flagged as
-    # py/polynomial-redos (alert #35); `.strip()` below trims the
-    # trailing whitespace anyway so output is unchanged on every
-    # realistic input.
-    m = re.search(r"\([^)]*\)\s*$", title)
-    if m and m.start() > 0:
-        stripped = title[:m.start()].strip()
-        if len(stripped) >= 3:
-            return stripped
+    # Linear string scan instead of a regex. The previous
+    # `\([^)]*\)\s*$` pattern had two CodeQL polynomial-redos hits
+    # (alerts #35 and #36) from `[^)]*` backtracking on inputs that
+    # are mostly `(` with no closing `)`. A regex with bounded
+    # alternation could fix this in theory but Python's `re` doesn't
+    # support atomic groups, so `rfind` + a substring check is both
+    # simpler and trivially O(n).
+    #
+    # Semantics preserved against the old regex:
+    #   - Trailing whitespace tolerated (rstrip before the endswith).
+    #   - Requires text before the open paren (`open_paren > 0`,
+    #     matching the old `m.start() > 0` guard).
+    #   - Inner parenthetical can't contain `)` itself (matching
+    #     `[^)]*` — would otherwise risk stripping more than the
+    #     trailing token).
+    stripped_title = title.rstrip()
+    if stripped_title.endswith(")"):
+        open_paren = stripped_title.rfind("(")
+        close_paren = len(stripped_title) - 1
+        if open_paren > 0:
+            inner = stripped_title[open_paren + 1:close_paren]
+            if ")" not in inner:
+                head = title[:open_paren].strip()
+                if len(head) >= 3:
+                    return head
     return None
 
 

@@ -855,3 +855,18 @@ class TestStripSubtitleParenFallback:
         # Plain title with no subtitle markers — None as before.
         from app.discovery.sources.mam import _strip_subtitle
         assert _strip_subtitle("Foundation") is None
+
+    def test_many_open_parens_no_redos(self):
+        # Regression for CodeQL alerts #35 and #36 (py/polynomial-redos).
+        # Pathological input: long run of '(' with no closing ')'.
+        # The previous `re.search(r"\([^)]*\)\s*$", title)` backtracked
+        # O(n^2) here; the rfind-based rewrite runs linearly. We don't
+        # measure timing (flaky in CI), just assert it returns the
+        # expected None quickly without blowing the call stack.
+        from app.discovery.sources.mam import _strip_subtitle
+        assert _strip_subtitle("(" * 5000) is None
+
+    def test_many_spaces_then_paren_no_redos(self):
+        # Companion regression for CodeQL #35's "many spaces" vector.
+        from app.discovery.sources.mam import _strip_subtitle
+        assert _strip_subtitle((" " * 5000) + "(no close") is None
