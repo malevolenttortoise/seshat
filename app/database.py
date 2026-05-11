@@ -151,7 +151,21 @@ CREATE TABLE IF NOT EXISTS book_review_queue (
     status            TEXT NOT NULL DEFAULT 'pending',
     created_at        TEXT NOT NULL DEFAULT (datetime('now')),
     decided_at        TEXT,
-    decision_note     TEXT
+    decision_note     TEXT,
+    -- v2.7.0 bundle-aware pipeline: when a single torrent contains
+    -- multiple distinct works (e.g. a 3-book MAM bundle), the pipeline
+    -- fans out into N review entries instead of dropping the extras.
+    -- Single-book grabs get bundle_total=1, bundle_index=0 (default
+    -- shape — indistinguishable from pre-v2.7 rows after backfill).
+    -- library_slug stamps every entry with its target library so
+    -- delivery routes to the correct sink (multi-library safety —
+    -- without this a bundle could deliver to the wrong library when
+    -- two libraries share numeric ids).
+    bundle_group_id      TEXT,
+    bundle_index         INTEGER NOT NULL DEFAULT 0,
+    bundle_total         INTEGER NOT NULL DEFAULT 1,
+    library_slug         TEXT,
+    bundle_parent_grab_id INTEGER
 );
 
 -- Tier 2: tentative torrent queue for announces that passed all
@@ -223,6 +237,7 @@ CREATE INDEX IF NOT EXISTS idx_pipeline_runs_state ON pipeline_runs(state);
 CREATE INDEX IF NOT EXISTS idx_pipeline_runs_grab_id ON pipeline_runs(grab_id);
 CREATE INDEX IF NOT EXISTS idx_review_queue_status ON book_review_queue(status);
 CREATE INDEX IF NOT EXISTS idx_review_queue_created_at ON book_review_queue(created_at);
+CREATE INDEX IF NOT EXISTS idx_review_queue_bundle_group ON book_review_queue(bundle_group_id);
 CREATE INDEX IF NOT EXISTS idx_tentative_status ON tentative_torrents(status);
 CREATE INDEX IF NOT EXISTS idx_tentative_torrent_id ON tentative_torrents(mam_torrent_id);
 CREATE INDEX IF NOT EXISTS idx_ignored_seen_at ON ignored_torrents_seen(seen_at);
@@ -420,6 +435,26 @@ MIGRATIONS: list[str] = [
         height      INTEGER,
         bytes       INTEGER
     )""",
+    # v2.7.0 — bundle-aware pipeline. Five new columns on
+    # book_review_queue: bundle_group_id (deterministic
+    # `f"grab-{grab_id}"` per torrent), bundle_index (0-based child
+    # position within the bundle), bundle_total (1 for single-book
+    # grabs, N for bundles), library_slug (target library for sink
+    # delivery — multi-library safety), bundle_parent_grab_id (set
+    # only on bundle children; carries through approval into future
+    # acquisition-linkback so the bundle MAM URL stays attached on
+    # re-ingest). Legacy rows backfilled below with `bundle_total=1,
+    # bundle_index=0, bundle_group_id="grab-<id>"`.
+    "ALTER TABLE book_review_queue ADD COLUMN bundle_group_id TEXT",
+    "ALTER TABLE book_review_queue ADD COLUMN bundle_index INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE book_review_queue ADD COLUMN bundle_total INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE book_review_queue ADD COLUMN library_slug TEXT",
+    "ALTER TABLE book_review_queue ADD COLUMN bundle_parent_grab_id INTEGER",
+    "CREATE INDEX IF NOT EXISTS idx_review_queue_bundle_group "
+    "ON book_review_queue(bundle_group_id)",
+    "UPDATE book_review_queue "
+    "SET bundle_group_id = 'grab-' || grab_id "
+    "WHERE bundle_group_id IS NULL",
 ]
 
 

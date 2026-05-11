@@ -44,6 +44,17 @@ class ReviewRow:
     created_at: str
     decided_at: Optional[str]
     decision_note: Optional[str]
+    # v2.7.0 bundle awareness. Single-book grabs:
+    # bundle_total=1, bundle_index=0, bundle_group_id="grab-<id>",
+    # bundle_parent_grab_id=None — indistinguishable from pre-v2.7
+    # rows after the migration backfill. Bundle children carry
+    # bundle_total>=2 plus a bundle_parent_grab_id pointing at the
+    # parent grab.
+    bundle_group_id: Optional[str] = None
+    bundle_index: int = 0
+    bundle_total: int = 1
+    library_slug: Optional[str] = None
+    bundle_parent_grab_id: Optional[int] = None
 
 
 async def create_entry(
@@ -56,13 +67,25 @@ async def create_entry(
     book_format: Optional[str],
     metadata: dict,
     cover_path: Optional[str] = None,
+    bundle_group_id: Optional[str] = None,
+    bundle_index: int = 0,
+    bundle_total: int = 1,
+    library_slug: Optional[str] = None,
+    bundle_parent_grab_id: Optional[int] = None,
 ) -> int:
+    # Default the bundle_group_id to the per-grab deterministic value
+    # when the caller doesn't specify one. Keeps legacy callers (test
+    # code, internal helpers) shape-compatible.
+    if bundle_group_id is None:
+        bundle_group_id = f"grab-{grab_id}"
     cursor = await db.execute(
         """
         INSERT INTO book_review_queue
             (grab_id, pipeline_run_id, staged_path, book_filename,
-             book_format, metadata_json, cover_path, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             book_format, metadata_json, cover_path, status,
+             bundle_group_id, bundle_index, bundle_total,
+             library_slug, bundle_parent_grab_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             grab_id,
@@ -73,6 +96,11 @@ async def create_entry(
             json.dumps(metadata, ensure_ascii=False),
             cover_path,
             STATUS_PENDING,
+            bundle_group_id,
+            bundle_index,
+            bundle_total,
+            library_slug,
+            bundle_parent_grab_id,
         ),
     )
     await db.commit()
@@ -96,7 +124,7 @@ async def list_pending(
         """
         SELECT * FROM book_review_queue
         WHERE status = ?
-        ORDER BY created_at ASC
+        ORDER BY created_at ASC, bundle_group_id, bundle_index
         LIMIT ?
         """,
         (STATUS_PENDING, limit),
@@ -175,9 +203,15 @@ def _row_to_review(row) -> ReviewRow:
         meta = json.loads(row["metadata_json"]) if row["metadata_json"] else {}
     except (ValueError, TypeError):
         meta = {}
+    # Bundle columns are optional in row factories that select a
+    # subset of columns; tolerate KeyError and fall back to the
+    # single-book defaults. aiosqlite.Row supports __getitem__ but
+    # raises IndexError for missing names; check with `.keys()`.
+    keys = set(row.keys()) if hasattr(row, "keys") else set()
+    grab_id_val = int(row["grab_id"])
     return ReviewRow(
         id=int(row["id"]),
-        grab_id=int(row["grab_id"]),
+        grab_id=grab_id_val,
         pipeline_run_id=row["pipeline_run_id"],
         staged_path=str(row["staged_path"] or ""),
         book_filename=str(row["book_filename"] or ""),
@@ -188,4 +222,15 @@ def _row_to_review(row) -> ReviewRow:
         created_at=str(row["created_at"] or ""),
         decided_at=row["decided_at"],
         decision_note=row["decision_note"],
+        bundle_group_id=(
+            row["bundle_group_id"]
+            if "bundle_group_id" in keys else f"grab-{grab_id_val}"
+        ),
+        bundle_index=int(row["bundle_index"]) if "bundle_index" in keys else 0,
+        bundle_total=int(row["bundle_total"]) if "bundle_total" in keys else 1,
+        library_slug=row["library_slug"] if "library_slug" in keys else None,
+        bundle_parent_grab_id=(
+            row["bundle_parent_grab_id"]
+            if "bundle_parent_grab_id" in keys else None
+        ),
     )
