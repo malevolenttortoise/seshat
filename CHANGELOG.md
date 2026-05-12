@@ -7,6 +7,123 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [2.10.5] — 2026-05-13
+
+Rewrites `HardcoverSource` to use a direct two-phase author-id
+lookup. Fixes a major coverage bug surfaced during Phase 0 of the
+v2.11.0 metadata-source overhaul where Jim Butcher returned 0
+books, Brandon Sanderson returned 3, J.N. Chaney returned 0 —
+when their actual Hardcover catalogs are 146, 1000+, and 398
+books respectively.
+
+### Fixed — HardcoverSource grossly under-reported author bibliographies
+
+**Root cause:** the pre-v2.10.5 implementation used Hardcover's
+SEARCH (`query_type: "Book"`) endpoint which finds books with the
+author's name in the **TITLE**, not books **BY** the author. For
+Jim Butcher this returned 10 graphic novels titled "Jim Butcher's
+The Dresden Files: …" and missed every actual Dresden Files
+novel, every Codex Alera book, and every Cinder Spires entry
+because their titles ("Storm Front", "Furies of Calderon",
+"The Aeronaut's Windlass") don't contain the author's name.
+
+**Fix:** replace book-search-by-name with direct author-id lookup
+via the `contributions` GraphQL relation (the correct field name
+per schema introspection; the previously-defined-but-unused
+`AUTHOR_BOOKS_QUERY` referenced a non-existent `book_authors`
+field). New flow:
+
+1. **Phase 1 — `_resolve_author_id`** runs SEARCH_AUTHOR_QUERY
+   (`query_type: "Author"`) to find candidate author IDs, then a
+   batched AUTHORS_META lookup to disambiguate namesakes by
+   strict normalized-name match, with books_count as tiebreaker.
+2. **Phase 2 — `_fetch_all_author_books`** walks
+   `authors(id={resolved}).contributions` paginated via
+   `$limit`/`$offset` (100 rows per page, up to 20 pages).
+3. **Per-book processing loop** stays unchanged — series picking,
+   edition selection, cover, release date.
+
+The old per-book authorship-name gate is retired (books came in
+via the author's contributions relation, so they're definitionally
+by them). This also fixes a punctuation-mismatch edge case where
+"J. N. Chaney" (space-separated) failed to match Hardcover's
+canonical "J.N. Chaney" (no space) and dropped every book.
+
+**Verified against the 14-author ground-truth fixture (live API):**
+
+| Author | Pre-fix | Post-fix | Hardcover books_count |
+|---|---|---|---|
+| J. N. Chaney | 0 | **511** | 398 |
+| Marcus Sloss | 2 | 145 | — |
+| Sabaa Tahir | 3 | 84 | — |
+| James S. A. Corey | 5 | 257 | — |
+| **Jim Butcher** | **0** | **445** | 146 |
+| **Brandon Sanderson** | **3** | **1032** | — |
+| William D. Arand | 0 | 47 | — |
+| **Logan Jacobs** | **0** | **363** | — |
+| Jon Messenger | 0 | 10 | 10 (Hardcover genuinely sparse) |
+| Karen Traviss | 0 | 94 | — |
+| Robyn Bee | 2 | 2 | — |
+| K.D. Robertson | 0 | 34 | — |
+| Asato Asato | 0 | 49 | — |
+| Isuna Hasekura | 0 | 124 | — |
+
+Post-fix counts exceed `books_count` because Hardcover returns
+all editions / translations under the contributions relation;
+downstream dedup (existing in lookup.py) handles edition
+consolidation per the established pipeline pattern.
+
+### Fixed — Validation harness undercount in `scripts/validate_sources.py`
+
+The Phase 0 baseline harness counted only `result.books`
+(standalone) and missed `result.series[*].books`. Hardcover
+delivers most results under `series[]` (every Dresden Files
+book gets grouped under "The Dresden Files" series), so the
+harness reported 0 books for Jim Butcher when the actual
+result was 10 books — masking the real shape of the fix
+during pre-release verification. Harness now totals across
+both fields.
+
+### Fixed — Typo in YAML ground-truth fixture
+
+`tests/fixtures/goodreads_ground_truth.yaml` had a comment on
+K.D. Robertson's "Heretic Spellblade: Epilogue" that was
+accidentally copy-pasted from the adjacent Asato Asato section
+("English translated it is '86—EIGHTY-SIX, Vol. 10...'"). Removed
+the stray comment.
+
+### Tests
+
+- `tests/discovery/sources/test_hardcover_search.py` (new,
+  14 cases) — covers `_resolve_author_id` (single candidate,
+  namesake disambiguation by name + books_count, no-match,
+  fallback to top-ranked id), `_fetch_all_author_books`
+  (single page, multi-page pagination with offset tracking,
+  audiobook format_id routing, empty author), end-to-end
+  `search_author` (Jim Butcher regression, punctuation-
+  mismatch regression, no-key, resolver miss), and a
+  policy regression test asserting `query_type: "Book"` is
+  never used.
+
+Suite: **2201 passing, 7 skipped** (+14 from v2.10.4's 2187).
+
+### Diagnostic artifacts
+
+`scripts/probe_hardcover.py` (new) — schema introspection +
+multi-query probe used to diagnose the bug. Useful pattern for
+future Hardcover schema changes. Run with
+`docker exec Seshat python /app/scripts/probe_hardcover.py`.
+
+### Implications for v2.11.0 priority decisions
+
+This fix invalidates the Phase 0 baseline observations on
+Hardcover coverage. The v2.11.0 plan should be re-run against
+the fixed source before any default-priority decisions. Notes
+in `memory/project_seshat_metadata_overhaul.md` updated to
+reflect this.
+
+---
+
 ## [2.10.4] — 2026-05-13
 
 Phase 1 + 1.5 (tier 1+3) of the v2.11.0 metadata-source overhaul,

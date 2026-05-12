@@ -92,18 +92,31 @@ async def _run_one(source, author: str) -> Result:
             )
         # Some sources do all the heavy lifting in search_author and
         # already have books on the result; others need a second call.
-        books = list(getattr(sr, "books", []) or [])
-        if not books and hasattr(source, "get_author_books"):
+        # Count books across BOTH the standalone `books` field AND every
+        # `series[*].books` list — Hardcover puts all entries under
+        # series when each book belongs to a series, so reading only
+        # `books` under-counts (e.g., Jim Butcher: 0 standalone + 10
+        # in-series = 10 actual, not 0).
+        def _total(result):
+            standalone = list(getattr(result, "books", []) or [])
+            series_total = sum(
+                len(getattr(s, "books", []) or [])
+                for s in (getattr(result, "series", []) or [])
+            )
+            return len(standalone) + series_total
+
+        book_count = _total(sr)
+        if book_count == 0 and hasattr(source, "get_author_books"):
             br = await source.get_author_books(sr.external_id)
             if br is not None:
-                books = list(getattr(br, "books", []) or [])
+                book_count = _total(br)
         return Result(
             source=source.name,
             author=author,
             found_id=str(sr.external_id),
-            book_count=len(books),
+            book_count=book_count,
             seconds=time.monotonic() - t0,
-            error=None,
+            error=None if book_count > 0 else "search_author returned None",
         )
     except Exception as e:
         return Result(

@@ -448,7 +448,7 @@ authors:
         series_position: ~
         pub_year: 2026
       - goodreads_book_id: 244916675
-        title: "Heretic Spellblade: Epilogue" # English translated it is "86—EIGHTY-SIX, Vol. 10: Fragmental Neoteny"
+        title: "Heretic Spellblade: Epilogue"
         series_name: ~ # It should technically be a part of "Heretic Spellblade" series, but Goodreads doesn't have that since it's an "Epilogue" and its series_position would be 9
         series_position: ~
         pub_year: 2025

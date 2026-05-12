@@ -36,7 +36,7 @@ not already present.
 """
 import asyncio
 import re
-import httpx, logging, json
+import httpx, logging
 from typing import Optional
 from app.discovery.sources.base import BaseSource, AuthorResult, BookResult, SeriesResult
 
@@ -177,23 +177,32 @@ fragment EditionData on editions {
 }
 """
 
-SEARCH_QUERY = """
-query Search($query: String!) {
-  search(query: $query, query_type: "Book", per_page: 50) {
-    ids
-    results
+# Batched author-meta lookup. Pulls just enough to disambiguate
+# the SEARCH_AUTHOR results (name + books_count) without paying
+# for the full bibliography of each candidate.
+AUTHORS_META_QUERY = """
+query AuthorsMeta($ids: [Int!]) {
+  authors(where: {id: {_in: $ids}}) {
+    id name books_count
   }
 }
 """
 
-FIND_BOOKS_BY_IDS = FRAGMENTS + """
-query FindBooksByIds($ids: [Int!], $languages: [String!], $format_ids: [Int!]) {
-  books(where: {id: {_in: $ids}}, order_by: {users_read_count: desc_nulls_last}) {
-    ...BookData
-    editions(
-      where: {reading_format_id: {_in: $format_ids}, language: {_or: [{code3: {_in: $languages}}, {code3: {_is_null: true}}]}}
-      order_by: {users_count: desc_nulls_last}
-    ) { ...EditionData }
+
+# v2.10.5 — direct author search. Replaces the previous indirect
+# "book-search by name → filter by contributor" approach, which
+# only surfaced books where the author's name appeared in the
+# TITLE (e.g., "Jim Butcher's The Dresden Files: Welcome to the
+# Jungle" graphic novels) and missed every novel where the title
+# didn't carry the name (Storm Front, Death Masks, the entire
+# Codex Alera, Cinder Spires, etc.). Confirmed via probe 2026-05-13:
+# Hardcover's `authors.books_count` for Jim Butcher = 146, while
+# the old pipeline returned 10 graphic novels.
+SEARCH_AUTHOR_QUERY = """
+query SearchAuthor($query: String!) {
+  search(query: $query, query_type: "Author", per_page: 20) {
+    ids
+    results
   }
 }
 """
@@ -210,16 +219,27 @@ def _edition_format_ids(content_type: Optional[str]) -> list[int]:
         return [2]
     return [1, 4]
 
-# Direct author query (may work with some API keys)
+
+# Direct author-books query. Walks the `contributions` relation on
+# the `authors` type — the correct relation name per schema
+# introspection (the old `book_authors` field doesn't exist).
+# Paginated via $limit + $offset; the caller loops until fewer
+# than $limit rows return. Hardcover's default per-page cap is
+# generous (~250+); we use 100 to keep round-trip sizes sane for
+# very prolific authors (J.N. Chaney 493, Logan Jacobs 326).
 AUTHOR_BOOKS_QUERY = FRAGMENTS + """
-query AuthorBooks($id: Int!, $languages: [String!]) {
+query AuthorBooks($id: Int!, $limit: Int!, $offset: Int!, $languages: [String!], $format_ids: [Int!]) {
   authors(where: {id: {_eq: $id}}) {
-    id name bio image { url }
-    book_authors(order_by: {book: {release_date: asc}}) {
+    id name bio books_count image { url }
+    contributions(
+      limit: $limit
+      offset: $offset
+      order_by: {book: {release_date: asc_nulls_last}}
+    ) {
       book {
         ...BookData
         editions(
-          where: {reading_format_id: {_in: [1, 4]}, language: {_or: [{code3: {_in: $languages}}, {code3: {_is_null: true}}]}}
+          where: {reading_format_id: {_in: $format_ids}, language: {_or: [{code3: {_in: $languages}}, {code3: {_is_null: true}}]}}
           order_by: {users_count: desc_nulls_last}
           limit: 1
         ) { ...EditionData }
@@ -333,26 +353,181 @@ class HardcoverSource(BaseSource):
             logger.error(f"Hardcover query exhausted retries: {last_err}")
         return {}
 
-    async def search_author(self, author_name: str, owned_titles: list = None,
+    async def _resolve_author_id(
+        self, author_name: str
+    ) -> Optional[int]:
+        """Resolve a name to a Hardcover author_id via SEARCH_AUTHOR_QUERY.
+
+        Returns the integer id of the best-matching author record,
+        or None on no match. Disambiguates among multiple namesakes
+        (the "Jim Butcher" problem — Hardcover has 20 authors that
+        match that query) by:
+
+          1. Strict normalized-name gate (lower + period/space-strip)
+             keeps only candidates whose name actually matches.
+          2. books_count tiebreaker among survivors — the real,
+             prolific author wins over the namesake with 1 book.
+          3. If nothing passes the gate, fall back to the first id
+             from Hardcover's own ranker (they put the most-likely
+             match first in most cases).
+        """
+        search = await self._query(
+            SEARCH_AUTHOR_QUERY, {"query": author_name}
+        )
+        ids_raw = ((search.get("search") or {}).get("ids") or [])
+        if not ids_raw:
+            logger.info(
+                "  Hardcover: SEARCH_AUTHOR returned no IDs for %r",
+                author_name,
+            )
+            return None
+
+        candidate_ids: list[int] = []
+        for x in ids_raw[:10]:  # top 10 should always include the right one
+            try:
+                candidate_ids.append(int(x))
+            except (ValueError, TypeError):
+                pass
+        if not candidate_ids:
+            return None
+        if len(candidate_ids) == 1:
+            return candidate_ids[0]
+
+        # Pull name + books_count for the candidates so we can disambiguate.
+        meta = await self._query(
+            AUTHORS_META_QUERY, {"ids": candidate_ids}
+        )
+        records = meta.get("authors") or []
+        if not records:
+            # Couldn't disambiguate — trust Hardcover's ranker.
+            return candidate_ids[0]
+
+        target = author_name.lower().replace(".", "").replace(" ", "")
+        scored: list[tuple[int, int, str]] = []  # (score, books_count, name)
+        for rec in records:
+            try:
+                rid = int(rec.get("id"))
+            except (ValueError, TypeError):
+                continue
+            name = rec.get("name") or ""
+            count = rec.get("books_count") or 0
+            normalized = name.lower().replace(".", "").replace(" ", "")
+            score = 0
+            if normalized == target:
+                score = 100  # exact match
+            elif target in normalized or normalized in target:
+                score = 50   # substring
+            if score == 0:
+                continue
+            scored.append((score, count, name))
+            # Cache for log
+            id_map = getattr(self, "_resolve_id_map_cache", None)
+            if id_map is None:
+                id_map = {}
+                self._resolve_id_map_cache = id_map
+            id_map[rid] = (name, count, score)
+
+        if not scored:
+            logger.info(
+                "  Hardcover: no candidate name matched %r — falling back "
+                "to top-ranked id %d", author_name, candidate_ids[0],
+            )
+            return candidate_ids[0]
+
+        # Rank winners: higher score first, then higher books_count.
+        # Re-derive the rid for the winner by matching name+count.
+        scored.sort(key=lambda t: (t[0], t[1]), reverse=True)
+        winner = scored[0]
+        winning_id = None
+        for rec in records:
+            try:
+                rid = int(rec.get("id"))
+            except (ValueError, TypeError):
+                continue
+            if rec.get("name") == winner[2] and (rec.get("books_count") or 0) == winner[1]:
+                winning_id = rid
+                break
+        if winning_id is None:
+            winning_id = candidate_ids[0]
+
+        if len(scored) > 1:
+            losers = ", ".join(
+                f"{n}({c})" for _, c, n in scored[1:5]
+            )
+            logger.info(
+                "  Hardcover: disambiguated %r → id=%d (name=%r "
+                "books_count=%d). Passed-over namesakes: %s",
+                author_name, winning_id, winner[2], winner[1], losers,
+            )
+        return winning_id
+
+    async def _fetch_all_author_books(
+        self, author_id: int, content_type: Optional[str]
+    ) -> list[dict]:
+        """Walk every book under `authors.contributions` for this id.
+
+        Paginated via `limit` + `offset`. Each page returns a list of
+        contribution rows; we unwrap to book dicts and accumulate.
+        Stops when a page returns fewer than `PAGE_SIZE` rows
+        (Hasura's last-page signal).
+        """
+        PAGE_SIZE = 100  # Hardcover handles 100-row pages comfortably (~250ms)
+        MAX_PAGES = 20   # 2000-book ceiling; prolific indie authors fit (Chaney 493, Jacobs 326)
+        format_ids = _edition_format_ids(content_type)
+        all_books: list[dict] = []
+        offset = 0
+        for _ in range(MAX_PAGES):
+            page = await self._query(AUTHOR_BOOKS_QUERY, {
+                "id": author_id,
+                "limit": PAGE_SIZE,
+                "offset": offset,
+                "languages": ["eng", "en"],
+                "format_ids": format_ids,
+            })
+            authors_arr = page.get("authors") or []
+            if not authors_arr:
+                break
+            contribs = authors_arr[0].get("contributions") or []
+            if not contribs:
+                break
+            for entry in contribs:
+                book = entry.get("book") if isinstance(entry, dict) else None
+                if isinstance(book, dict):
+                    all_books.append(book)
+            if len(contribs) < PAGE_SIZE:
+                break  # last page
+            offset += PAGE_SIZE
+        return all_books
+
+    async def search_author(self, author_name: str, owned_titles: list = None,  # noqa: ARG002 — owned_titles unused in v2.10.5 (was used by retired book-search expansion); kept for interface compat
                             owned_series_names: list = None) -> Optional[AuthorResult]:
-        """Find an author by searching for their books, then merging by same author.
+        """Find an author and walk their full bibliography.
 
-        Two important behaviors:
+        v2.10.5 redesign: replaces the previous book-search-by-name
+        approach with a direct two-phase author-id lookup. Solves the
+        bug where Jim Butcher returned 10 graphic novels instead of
+        his real 146-book catalog — the old SEARCH_QUERY only
+        matched books with the author's name in the TITLE, missing
+        every novel whose title is just "Storm Front" etc.
 
-        **Query expansion** — fires one SEARCH_QUERY for the bare
-        author name PLUS one for each entry in `owned_titles[:25]`,
-        and accumulates the result IDs across ALL queries (no early
-        break). This is the only way prolific authors return more
-        than ~10 books on Hardcover; without expansion, a Sanderson
-        scan once returned 10 IDs of which only 1 actually matched
-        the user's library, while Goodreads matched 14 of 16 owned
-        books in the same scan.
+        Phase 1: SEARCH_AUTHOR_QUERY by name → disambiguate to a
+        single Hardcover author_id (`_resolve_author_id`).
+        Phase 2: AUTHOR_BOOKS_QUERY walks `authors.contributions`
+        with pagination → full bibliography
+        (`_fetch_all_author_books`).
+        Phase 3: existing per-book processing loop extracts series,
+        edition, cover, language, release date.
 
-        **owned_series_names** — passed through to the per-book
-        series picker so Hardcover candidates that match the user's
-        Calibre series names beat deeper sub-series like "The
-        Mistborn Saga: The Original Trilogy" when Calibre says
-        "The Mistborn Saga". See `_pick_best_series` above.
+        `owned_titles` is no longer needed for query expansion (the
+        new path doesn't paginate by guessing book titles) but stays
+        in the signature for source-interface compatibility with the
+        BaseSource contract and lookup.py's call sites.
+
+        `owned_series_names` — passed through to the per-book series
+        picker so Hardcover candidates that match the user's Calibre
+        series names beat deeper sub-series like "The Mistborn Saga:
+        The Original Trilogy" when Calibre says "The Mistborn Saga".
+        See `_pick_best_series` above.
         """
         if not self.api_key:
             return None
@@ -364,255 +539,53 @@ class HardcoverSource(BaseSource):
             owned_norms = {_norm_series(s) for s in (owned_series_names or []) if s}
             owned_norms.discard("")
 
-            # Build the query list. Order matters for tie-breaking but
-            # since we accumulate from ALL queries it mostly affects the
-            # "which books got searched in priority order" debug story.
-            search_queries = [author_name]
-            if owned_titles:
-                # `[:25]` is sized to cover the ~95th-percentile of
-                # owned books for prolific authors. A smaller slice
-                # silently misses books at positions 11-16 in the SQL
-                # return order — verified by a Sanderson scan that
-                # missed Rhythm of War, Tress, etc. with `[:10]`.
-                # Cost is bounded: 26 searches × ~250ms = ~6.5s, and
-                # only on the first Hardcover scan of a large author.
-                for t in owned_titles[:25]:
-                    search_queries.append(f"{t} {author_name}")
-
-            all_book_ids = set()
-            for sq in search_queries:
-                data = await self._query(SEARCH_QUERY, {"query": sq})
-                # Defensive: Hardcover can return `search: null` or
-                # `search: {ids: null}` for queries that match nothing
-                # or partially fail server-side. Dict-default `{}`
-                # only protects against MISSING keys, not null VALUES,
-                # so coerce both null cases via `or` chains.
-                search = data.get("search") or {}
-                ids = search.get("ids") or []
-                for bid in ids[:10]:
-                    try:
-                        all_book_ids.add(int(bid))
-                    except (ValueError, TypeError):
-                        pass
-                # No early-break: every search contributes to the union.
-
-            if not all_book_ids:
-                logger.info(f"  Hardcover: no search results for '{author_name}'")
+            # Phase 1: resolve the Hardcover author_id.
+            resolved_id = await self._resolve_author_id(author_name)
+            if resolved_id is None:
+                logger.info(
+                    f"  Hardcover: could not resolve author_id for '{author_name}'"
+                )
                 return None
+            author_id = str(resolved_id)
 
-            # Cap at 100 IDs. With 25 owned-title queries we
-            # routinely accumulate 60-90 unique IDs for prolific
-            # authors, and Hardcover's books-by-id query handles
-            # batches this size comfortably (~270ms for ~40 IDs).
-            book_ids = list(all_book_ids)[:100]
+            # Phase 2: walk the full bibliography via paginated
+            # contributions. Format filter varies by the active library's
+            # content_type (set by lookup.py alongside `_linked_author_names`)
+            # so audiobook scans pull audiobook editions while ebook scans
+            # pull print/ebook.
+            content_type = getattr(self, "_content_type", None)
+            books = await self._fetch_all_author_books(resolved_id, content_type)
+            if not books:
+                logger.info(
+                    f"  Hardcover: author_id={resolved_id} returned 0 books for '{author_name}'"
+                )
+                return None
             logger.info(
-                f"  Hardcover: search yielded {len(all_book_ids)} unique IDs "
-                f"across {len(search_queries)} queries → fetching {len(book_ids)}"
+                f"  Hardcover: author_id={resolved_id} '{author_name}' → "
+                f"{len(books)} books from contributions relation"
             )
             
-            # Step 2: Fetch books by IDs. Format filter varies by the
-            # active library's content_type (set by lookup.py alongside
-            # `_linked_author_names`) so audiobook scans pull audiobook
-            # editions while ebook scans pull print/ebook.
-            content_type = getattr(self, "_content_type", None)
-            books_data = await self._query(FIND_BOOKS_BY_IDS, {
-                "ids": book_ids,
-                "languages": ["eng", "en"],
-                "format_ids": _edition_format_ids(content_type),
-            })
-            books = books_data.get("books", [])
-            if not books:
-                return None
-            
-            # Pre-normalize owned titles for the disambiguation tiebreaker.
-            # Same shape lookup.py uses (lowercased, punctuation stripped).
-            owned_title_norms = set()
-            for ot in (owned_titles or []):
-                if not ot:
-                    continue
-                tn = re.sub(r'[^\w\s]', '', ot.lower()).strip()
-                tn = re.sub(r'\s+', ' ', tn)
-                if tn:
-                    owned_title_norms.add(tn)
-
-            # Extract author info from cached_contributors
-            author_id = None
-
-            def _check_contributor(c, target_name):
-                """Check if a contributor matches our author name."""
-                target = target_name.lower().strip()
-                target_parts = set(target.replace(".", "").split())
-                if isinstance(c, dict):
-                    # Try multiple name fields
-                    cname = ""
-                    if c.get("name"):
-                        cname = c["name"]
-                    elif isinstance(c.get("author"), dict) and c["author"].get("name"):
-                        cname = c["author"]["name"]
-                    elif c.get("author_name"):
-                        cname = c["author_name"]
-                    
-                    cn = cname.lower().strip()
-                    # Exact match
-                    if cn == target:
-                        return True, cname, c.get("id") or c.get("author_id")
-                    # Match ignoring periods/dots (J. K. Rowling vs JK Rowling)
-                    if cn.replace(".", "") == target.replace(".", ""):
-                        return True, cname, c.get("id") or c.get("author_id")
-                    # All name parts present (handles "James S A Corey" vs "James S. A. Corey")
-                    cn_parts = set(cn.replace(".", "").split())
-                    if target_parts and cn_parts and target_parts == cn_parts:
-                        return True, cname, c.get("id") or c.get("author_id")
-                    return False, cname, c.get("id") or c.get("author_id")
-                elif isinstance(c, str):
-                    cn = c.lower().strip()
-                    if cn == target or cn.replace(".", "") == target.replace(".", ""):
-                        return True, c, None
-                    return False, c, None
-                return False, str(c), None
-            
-            def _parse_contributors(raw):
-                """Parse contributors from various formats."""
-                if isinstance(raw, list):
-                    return raw
-                if isinstance(raw, str):
-                    try:
-                        import json as jn
-                        return jn.loads(raw)
-                    except (ValueError, TypeError):
-                        return [{"name": raw}]
-                return []
-            
-            # ── Namesake disambiguation ────────────────────────────
-            # Hardcover often has multiple authors with the same name
-            # — "David Burke" returns three distinct people: a LitRPG
-            # writer with 32 books, a music journalist with 7, and a
-            # Cold War espionage writer with 3. Both the bare-name
-            # query and the owned-title queries above are name-based,
-            # so the accumulated book set can mix all three. Without
-            # filtering, the merge would silently glue another
-            # David Burke's catalog onto the user's LitRPG author.
-            #
-            # Strategy: tally each `book.contributions[].author.id`
-            # whose name matches our target, vote-rank by owned-title
-            # overlap (book count is the tiebreaker), and keep only
-            # the winning ID's books. With one candidate ID — the
-            # common case — no filtering happens.
-            id_to_books = {}  # author_id (str) → [book dict, ...]
-            id_to_name = {}   # author_id (str) → display name
-            for book in books:
-                for contrib in book.get("contributions", []):
-                    author_obj = contrib.get("author", {})
-                    if not isinstance(author_obj, dict):
-                        continue
-                    aname = author_obj.get("name", "")
-                    matched, _, _ = _check_contributor({"name": aname}, author_name)
-                    if not matched:
-                        continue
-                    aid_raw = author_obj.get("id")
-                    if aid_raw is None:
-                        # Skip ID-less matches for the vote — they'd
-                        # collapse all unknown authors into one bucket
-                        # and wreck the tally.
-                        continue
-                    aid = str(aid_raw)
-                    id_to_books.setdefault(aid, []).append(book)
-                    id_to_name.setdefault(aid, aname)
-                    break  # one vote per book per ID
-
-            winning_id = None
-            if len(id_to_books) >= 2:
-                def _vote_score(item):
-                    aid, blist = item
-                    base = len(blist)
-                    # Tiebreaker: how many of this ID's books overlap
-                    # the user's owned titles? Normalized comparison
-                    # mirrors lookup.py's _normalize style.
-                    overlap = 0
-                    if owned_title_norms:
-                        for b in blist:
-                            t = b.get("title", "") or ""
-                            tn = re.sub(r'[^\w\s]', '', t.lower()).strip()
-                            tn = re.sub(r'\s+', ' ', tn)
-                            if tn and tn in owned_title_norms:
-                                overlap += 1
-                    # Score: book count × 10 + overlap × 100. Owned
-                    # overlap dominates because a single confirmed
-                    # match is much stronger evidence than +5 random
-                    # books — but book count still breaks ties when
-                    # neither candidate has any owned overlap.
-                    return overlap * 100 + base * 10
-
-                ranked = sorted(id_to_books.items(), key=_vote_score, reverse=True)
-                winning_id = ranked[0][0]
-                summary = ", ".join(
-                    f"{aid} ({id_to_name.get(aid,'?')}): {len(blist)} books"
-                    for aid, blist in ranked
-                )
-                logger.info(
-                    f"  Hardcover: namesake disambiguation for '{author_name}' — "
-                    f"{len(id_to_books)} candidate IDs [{summary}] → picked {winning_id}"
-                )
-                # Filter the working set to only the winner's books
-                winner_book_ids = {id(b) for b in id_to_books[winning_id]}
-                books = [b for b in books if id(b) in winner_book_ids]
-                author_id = winning_id
-            elif len(id_to_books) == 1:
-                winning_id = next(iter(id_to_books))
-                author_id = winning_id
-                logger.debug(
-                    f"  Hardcover: disambiguation pass: 1 candidate ID for "
-                    f"'{author_name}' (id={winning_id}, "
-                    f"{len(id_to_books[winning_id])} books) — no filter needed"
-                )
-            # else: no contributions[] IDs found at all — fall through
-            # to the legacy edition-contributor path below, which
-            # accepts books by name match without an ID.
+            # Namesake disambiguation now happens in Phase 1
+            # (`_resolve_author_id`) — by the time we get here, every
+            # book in `books` was fetched via the resolved author's
+            # contributions relation and is definitionally by them.
+            # The per-book authorship check below remains as a safety
+            # net for the rare Goodreads-vs-Hardcover name-spelling
+            # edge case.
 
             # Build result from found books
             series_map = {}
             standalone = []
             
             for book in books:
-                is_by_author = False
-                
-                # Check 1: Book-level contributions (most reliable)
-                for contrib in book.get("contributions", []):
-                    author_obj = contrib.get("author", {})
-                    if isinstance(author_obj, dict):
-                        aname = author_obj.get("name", "")
-                        matched, _, _ = _check_contributor({"name": aname}, author_name)
-                        if matched:
-                            is_by_author = True
-                            if not author_id:
-                                author_id = str(author_obj.get("id", "matched"))
-                            logger.debug(f"  Hardcover: '{book.get('title')}' matched via contributions → '{aname}'")
-                            break
-                
-                # Check 2: Edition-level cached_contributors
-                if not is_by_author:
-                    for edition in book.get("editions", []):
-                        contribs = _parse_contributors(edition.get("contributors"))
-                        for c in contribs:
-                            matched, cname, _ = _check_contributor(c, author_name)
-                            if matched:
-                                is_by_author = True
-                                logger.debug(f"  Hardcover: '{book.get('title')}' matched via edition contributor → '{cname}'")
-                                break
-                        if is_by_author:
-                            break
-                
-                if not is_by_author:
-                    # Log what we found for diagnosis
-                    book_authors = [c.get("author", {}).get("name", "?") for c in book.get("contributions", [])]
-                    ed_contribs = []
-                    for ed in book.get("editions", []):
-                        for c in _parse_contributors(ed.get("contributors")):
-                            _, cn, _ = _check_contributor(c, author_name)
-                            if cn: ed_contribs.append(cn)
-                    all_names = book_authors + ed_contribs
-                    logger.info(f"  Hardcover: skipping '{book.get('title')}' — contributors: {all_names[:5] if all_names else '(none)'}")
-                    continue
+                # Per-book authorship gate retired in v2.10.5: books
+                # came in via `authors(id={resolved_id}).contributions`,
+                # so they're already filtered to this author. The old
+                # name-match gate was incorrectly rejecting books when
+                # Goodreads ("J. N. Chaney" with spaces) and Hardcover
+                # ("J.N. Chaney" no space) disagreed on punctuation,
+                # killing whole catalogs that the relation correctly
+                # surfaced.
 
                 # Per-book progress hook. Hardcover has no per-book
                 # HTTP fetch (everything comes from one GraphQL round-
