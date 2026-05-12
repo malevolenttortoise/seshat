@@ -70,6 +70,21 @@ _MAX_CANDIDATES = 5
 # Word-token regex for filename-similarity scoring on the fs side.
 _TOKEN_RX = re.compile(r"[A-Za-z0-9]+")
 
+# Strips leading zeros from a digit run preceded by a non-digit (or
+# string start). "02" → "2", "Ghost Academy 01" → "Ghost Academy 1",
+# but "2024" stays "2024" and "100" stays "100". Used to align
+# numeric-padded filenames ("02 - Fall Term") with their unpadded
+# MAM torrent equivalents ("Ghost Academy 2: Fall Term").
+_LEADING_ZERO_RX = re.compile(r"(?<!\d)0+(\d)")
+
+# Minimum length of the matched-substring side for the substring tier.
+# Without this guard a single-char directory name (e.g. "2" or "3" in
+# a series-collection layout) matches every target torrent name that
+# contains that digit anywhere — pulling in the whole directory's
+# files as a false-positive candidate. v2.9.1: regression for the
+# Ghost Academy reingest mismatch.
+_SUBSTRING_MIN_LEN = 4
+
 
 @dataclass(frozen=True)
 class Candidate:
@@ -146,7 +161,6 @@ async def find_qbit_candidates(
     qbit_prefix = getattr(dispatcher, "qbit_path_prefix", "") or ""
     local_prefix = getattr(dispatcher, "local_path_prefix", "") or ""
 
-    target = mam_torrent_name.strip().lower()
     candidates: list[Candidate] = []
     for t in torrents:
         score = _name_score(t.name, mam_torrent_name)
@@ -360,7 +374,9 @@ def _name_score(candidate_name: str, target_name: str) -> int:
     Tiers (descending):
       100  — exact case-insensitive match on the full name or its stem
        80  — candidate stem starts with the target (or vice versa)
-       60  — target is a substring of the candidate (or vice versa)
+       60  — target is a substring of the candidate (or vice versa),
+             and the shorter side is at least `_SUBSTRING_MIN_LEN`
+             characters long
        40  — token-set Jaccard ≥ 0.6 on word tokens
         0  — no plausible match
 
@@ -370,6 +386,11 @@ def _name_score(candidate_name: str, target_name: str) -> int:
     bracketed series tag. We prefer false-positive candidates the
     user can ignore over a false-negative "not found anywhere"
     when the file is in fact on disk.
+
+    Both sides are run through `_normalize_numeric_padding` before
+    comparison so zero-padded indices ("02") match plain numbers
+    ("2"). MAM uses unpadded indices in torrent titles; Calibre
+    and bundle-collection downloads frequently use padded ones.
     """
     if not candidate_name or not target_name:
         return 0
@@ -377,11 +398,15 @@ def _name_score(candidate_name: str, target_name: str) -> int:
     b = _strip_ext(target_name).strip().lower()
     if not a or not b:
         return 0
+    a = _normalize_numeric_padding(a)
+    b = _normalize_numeric_padding(b)
     if a == b:
         return 100
     if a.startswith(b) or b.startswith(a):
         return 80
-    if b in a or a in b:
+    if (a in b and len(a) >= _SUBSTRING_MIN_LEN) or (
+        b in a and len(b) >= _SUBSTRING_MIN_LEN
+    ):
         return 60
     a_tokens = set(_TOKEN_RX.findall(a))
     b_tokens = set(_TOKEN_RX.findall(b))
@@ -393,6 +418,18 @@ def _name_score(candidate_name: str, target_name: str) -> int:
     if jaccard >= 0.6:
         return 40
     return 0
+
+
+def _normalize_numeric_padding(s: str) -> str:
+    """Strip leading zeros from numeric runs so '02' compares equal to '2'.
+
+    Applied to both sides before tier comparison and tokenization in
+    `_name_score`. The regex matches a run of one-or-more '0's that's
+    not preceded by another digit and is followed by another digit —
+    so '02' → '2', 'Vol 01' → 'Vol 1', but '2024' stays '2024' and
+    '100' stays '100'.
+    """
+    return _LEADING_ZERO_RX.sub(r"\1", s)
 
 
 def _strip_ext(name: str) -> str:

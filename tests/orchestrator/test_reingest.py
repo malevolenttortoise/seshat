@@ -149,6 +149,42 @@ class TestNameScore:
         assert _name_score("", "anything") == 0
         assert _name_score("anything", "") == 0
 
+    def test_single_char_directory_does_not_match_via_substring(self):
+        # v2.9.1 regression: a directory basename of just "2" used to
+        # substring-match every target torrent name containing "2".
+        # In Mark's library that pulled in a Warhammer Empire Army
+        # bundle's `/collection/2/` files as a candidate for
+        # "Ghost Academy 2: Fall Term". Guard rejects short
+        # candidate names from the substring tier; the Jaccard
+        # fallback then correctly drops the score to 0 (single
+        # numeric token / no token overlap).
+        assert _name_score("2", "Ghost Academy 2: Fall Term") == 0
+        assert _name_score("3", "Ghost Academy 3: Winter Term") == 0
+
+    def test_zero_padded_numeric_aligns_with_unpadded(self):
+        # v2.9.1: MAM titles use plain numbers ("Ghost Academy 2");
+        # on-disk filenames frequently use zero-padded indices
+        # ("Ghost Academy 02"). Without normalization the tokens
+        # "02" and "2" stayed distinct, dropping the Jaccard below
+        # the 0.6 cutoff and breaking the legitimate match.
+        score = _name_score(
+            "D L Bacon - Ghost Academy  02 - Fall Term",
+            "Ghost Academy 2: Fall Term",
+        )
+        # 5 shared tokens (ghost, academy, 2, fall, term) out of
+        # 8 in the union (+d, +l, +bacon) → Jaccard 0.625 ≥ 0.6.
+        assert score == 40
+
+    def test_zero_pad_preserves_real_years_and_round_numbers(self):
+        # Sanity: normalization must only strip leading zeros, not
+        # collapse 2024 → 224 or 100 → 1.
+        from app.orchestrator.reingest import _normalize_numeric_padding
+        assert _normalize_numeric_padding("Book (2024)") == "Book (2024)"
+        assert _normalize_numeric_padding("100") == "100"
+        assert _normalize_numeric_padding("2024-02") == "2024-2"
+        assert _normalize_numeric_padding("01") == "1"
+        assert _normalize_numeric_padding("Vol 03") == "Vol 3"
+
 
 # ─── find_fs_candidates ─────────────────────────────────────
 
@@ -204,6 +240,65 @@ class TestFsCandidates:
             mam_torrent_name="Tangle Variant",
         )
         assert len(cs) <= 5
+
+    def test_ghost_academy_regression_picks_correct_file(self, tmp_path):
+        """v2.9.1 regression for the Ghost Academy reingest mismatch.
+
+        Mark's downloads tree has:
+          [mam-complete]/[2026-04]/D L Bacon - Ghost Academy  02 - Fall Term.epub
+          [mam-complete]/[2024-02]/collection/2/Warhammer ... Iron Company.epub
+          [mam-complete]/[2024-02]/collection/3/Warhammer ... Call to Arms.epub
+
+        Before the fix, reingesting "Ghost Academy 2: Fall Term"
+        substring-matched the `2/` directory ("2" is a substring of
+        the target), pulled in the Iron Company files as a score-60
+        candidate, and beat the legitimate Bacon file (which scored
+        0 because the "02" token didn't match "2" and the
+        "D L Bacon -" prefix diluted Jaccard below 0.6).
+
+        After: the dir `2` is rejected (length-1 candidate), and
+        the Bacon file matches via Jaccard with normalized numeric
+        tokens.
+        """
+        root = tmp_path / "downloads" / "[mam-complete]"
+        _make_epub(
+            root / "[2026-04]"
+            / "D L Bacon - Ghost Academy  02 - Fall Term.epub",
+            title="Ghost Academy 2", author="D L Bacon",
+        )
+        _make_epub(
+            root / "[2024-02]" / "collection" / "2"
+            / "Warhammer - [Empire Army 02] - Iron Company by Chris Wraight.epub",
+            title="Iron Company", author="Chris Wraight",
+        )
+        _make_epub(
+            root / "[2024-02]" / "collection" / "3"
+            / "Warhammer - [Empire Army 03] - Call to Arms by Mitchel Scanlon.epub",
+            title="Call to Arms", author="Mitchel Scanlon",
+        )
+
+        cs = find_fs_candidates(
+            str(root), mam_torrent_name="Ghost Academy 2: Fall Term",
+        )
+
+        # The Bacon file must appear; the Warhammer Iron Company
+        # directory must NOT (its parent dir basename "2" is the
+        # false-positive that the v2.9.1 guard rejects).
+        bacon_paths = [
+            c for c in cs
+            if any("Ghost Academy" in f for f in c.book_files)
+        ]
+        warhammer_paths = [
+            c for c in cs
+            if any("Iron Company" in f for f in c.book_files)
+        ]
+        assert len(bacon_paths) == 1, (
+            f"expected the Bacon file as a candidate; got {cs}"
+        )
+        assert warhammer_paths == [], (
+            f"Warhammer Iron Company must not be a candidate for "
+            f"Ghost Academy 2; got {warhammer_paths}"
+        )
 
 
 # ─── find_qbit_candidates ───────────────────────────────────

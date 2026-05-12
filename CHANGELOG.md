@@ -7,6 +7,65 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [2.9.1] — 2026-05-12
+
+Reingest matcher hardening. Two interacting flaws in
+`_name_score` let the v2.8 reingest pipeline match torrents
+against the wrong files on disk.
+
+### Fixed — Reingest false-positive on single-char directories
+
+- **`app/orchestrator/reingest.py:_name_score`** — the substring
+  tier (`b in a or a in b` → score 60) accepted matches of any
+  length, so a directory basename of just `2` or `3` (common in
+  multi-book bundle layouts like `collection/2/`,
+  `collection/3/`) substring-matched every reingest target
+  containing that digit. The directory's contents were then
+  pulled in as a score-60 candidate. Mark's reingest of
+  "Ghost Academy 2: Fall Term" matched
+  `/[mam-complete]/[2024-02]/collection/2/` and treated a
+  Warhammer Empire Army bundle's *Iron Company* by Chris Wraight
+  as the snatch source. Same story for "Ghost Academy 3" →
+  *Call to Arms* by Mitchel Scanlon out of `collection/3/`.
+  The substring tier now requires the matched-substring side
+  to be at least 4 characters long.
+
+### Fixed — Reingest zero-padded numeric tokens
+
+- **`app/orchestrator/reingest.py:_name_score`** — MAM torrent
+  titles use plain numbers ("Ghost Academy 2") while many
+  on-disk filenames use zero-padded indices ("Ghost Academy 02").
+  The `_TOKEN_RX` word-tokenizer kept `02` and `2` as distinct
+  tokens, dropping the Jaccard fallback below the 0.6 threshold
+  on otherwise-obvious matches. A new `_normalize_numeric_padding`
+  helper strips leading zeros from digit runs before
+  comparison and tokenization, so `02` and `2` now match.
+  Real years (`2024`) and round numbers (`100`) are
+  unaffected — only single leading zeros are stripped, never
+  internal zeros.
+
+### Notes
+
+These two fixes interact: with the false-positive guarded out
+and the numeric normalization in place, "Ghost Academy 1"
+(which previously returned `found=False` because no
+single-character directory `1` happened to exist in Mark's
+tree) now matches its legitimate Bacon file via the Jaccard
+tier (5 shared tokens / 8 in union = 0.625 ≥ 0.6).
+
+### Tests
+
+- **`tests/orchestrator/test_reingest.py:TestNameScore`** — three
+  new unit cases covering the substring-guard rejection, the
+  zero-padded-token alignment, and the preservation of multi-digit
+  numbers / years.
+- **`tests/orchestrator/test_reingest.py:TestFsCandidates`** — one
+  new integration case that plants the actual Ghost Academy +
+  Warhammer fixture and asserts the Bacon file appears as a
+  candidate while the `collection/2/` Iron Company files do not.
+
+---
+
 ## [2.9.0] — 2026-05-11
 
 Format-priority dedup. When two torrents of the same book in
