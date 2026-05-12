@@ -86,6 +86,7 @@ async def record_announce(
     category: str,
     author_blob: str,
     decision: Decision,
+    filetype: str = "",
 ) -> int:
     """Insert one row in the `announces` table.
 
@@ -93,13 +94,19 @@ async def record_announce(
     whether the filter allowed it. The `decision` field captures
     the filter outcome so the audit log + UI can show why a given
     announce was allowed or skipped.
+
+    `filetype` is the lowercased IRC `Filetype: ( xxx )` value
+    (epub / azw3 / m4b / ...). v2.9.0 persists this for audit so
+    format-dedup decisions can be reviewed retroactively. Pre-v2.9.0
+    callers that didn't pass it land an empty string, which the
+    schema accepts via the column's NULL-able definition.
     """
     cursor = await db.execute(
         """
         INSERT INTO announces
             (raw, torrent_id, torrent_name, category, author_blob,
-             decision, decision_reason, matched_author)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             decision, decision_reason, matched_author, filetype)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             raw,
@@ -110,10 +117,34 @@ async def record_announce(
             decision.action,
             decision.reason,
             decision.matched_author,
+            (filetype or "").lower() or None,
         ),
     )
     await db.commit()
     return cursor.lastrowid or 0
+
+
+async def update_announce_decision(
+    db: aiosqlite.Connection,
+    *,
+    announce_id: int,
+    action: str,
+    reason: str,
+) -> None:
+    """Overwrite an existing announce row's decision + reason.
+
+    Used by the v2.9.0 format-dedup gate, which runs AFTER the filter
+    has already recorded its allow/skip verdict. When dedup overrides
+    the outcome (filter said allow, dedup says skip or hold) we update
+    the same audit row in-place rather than writing a second row —
+    keeping one-row-per-announce makes the dashboard counts clean.
+    """
+    await db.execute(
+        "UPDATE announces SET decision = ?, decision_reason = ? "
+        "WHERE id = ?",
+        (action, reason, announce_id),
+    )
+    await db.commit()
 
 
 # ─── Grabs (lifecycle) ───────────────────────────────────────
@@ -130,6 +161,8 @@ async def create_grab(
     state: str,
     qbit_hash: Optional[str] = None,
     is_reingest: bool = False,
+    book_format: str = "",
+    dedup_key: str = "",
 ) -> int:
     """Insert a new row in the `grabs` table.
 
@@ -143,13 +176,23 @@ async def create_grab(
     the file is already on disk, the hash is already known). Normal
     grab callers leave them at their defaults; `qbit_hash` gets
     stamped later via `set_state(STATE_SUBMITTED, qbit_hash=...)`.
+
+    `book_format` and `dedup_key` are the v2.9.0 format-dedup fields.
+    The dispatcher computes both at announce time (book_format from
+    `announce.filetype`; dedup_key from
+    `app.orchestrator.format_dedup.normalize_dedup_key`) and stamps
+    them here so subsequent dedup-gate lookups can find this grab as
+    an "in-flight sibling" via the `idx_grabs_dedup_key` index.
+    Empty strings are written as NULL — pre-v2.9.0 grabs and reingests
+    have no announce-time filetype hint.
     """
     cursor = await db.execute(
         """
         INSERT INTO grabs
             (announce_id, mam_torrent_id, torrent_name, category,
-             author_blob, state, qbit_hash, is_reingest)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             author_blob, state, qbit_hash, is_reingest,
+             book_format, dedup_key)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             announce_id,
@@ -160,6 +203,8 @@ async def create_grab(
             state,
             qbit_hash,
             1 if is_reingest else 0,
+            (book_format or "").lower() or None,
+            dedup_key or None,
         ),
     )
     await db.commit()

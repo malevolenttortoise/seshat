@@ -386,6 +386,11 @@ async def _build_dispatcher(settings: dict, resolved_secrets: dict = None) -> Di
         per_event_notifications=bool(settings.get("per_event_notifications", False)),
         auto_train_enabled=bool(settings.get("pipeline_auto_train_enabled", True)),
         metadata_enricher=enricher,
+        # v2.9.0 format-priority dedup.
+        format_priority=dict(settings.get("format_priority") or {}),
+        format_dedup_hold_seconds=int(
+            settings.get("format_dedup_hold_seconds", 600) or 600
+        ),
     )
 
 
@@ -680,6 +685,28 @@ async def lifespan(app: FastAPI):
         )
     else:
         _log.info("Review-timeout loop disabled (review_queue_enabled=false)")
+
+    # v2.9.0 — format-priority dedup hold-release loop. Wakes any
+    # `pending_holds` row whose timer has fired and re-evaluates the
+    # dedup decision against current state. Always runs (cheap when
+    # there are no holds; the format_priority gate dictates whether
+    # holds get created in the first place).
+    from app.orchestrator.hold_release import run_loop as hold_release_loop
+    hold_release_interval = int(
+        settings.get("format_dedup_release_tick_seconds", 60) or 60
+    )
+
+    async def _hold_release_factory():
+        await hold_release_loop(
+            deps_for_loops, interval_seconds=hold_release_interval,
+        )
+
+    state._hold_release_task = state.supervised_task(
+        _hold_release_factory, name="hold-release",
+    )
+    _log.info(
+        f"Hold-release loop started (interval={hold_release_interval}s)"
+    )
 
     # APScheduler: always construct so discovery-domain interval jobs
     # (library sync + scheduled author lookup) have somewhere to land.

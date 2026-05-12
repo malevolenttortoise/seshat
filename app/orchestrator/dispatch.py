@@ -64,7 +64,14 @@ from app.rate_limit import ledger as ledger_mod
 from app.rate_limit import queue as queue_mod
 from app.storage import economy_audit
 from app.storage import grabs as grabs_storage
+from app.storage import holds as holds_storage
 from app.storage import tentative as tentative_storage
+from app.orchestrator.format_dedup import (
+    evaluate_format_dedup,
+    lookup_dedup_siblings,
+    media_type_from_category,
+    normalize_dedup_key,
+)
 
 _log = logging.getLogger("seshat.orchestrator.dispatch")
 
@@ -206,6 +213,15 @@ class DispatcherDeps:
     per_event_notifications: bool = False
     auto_train_enabled: bool = True
 
+    # v2.9.0 — format-priority dedup. `format_priority` is the dict
+    # of per-media-type priority lists from settings; an empty dict
+    # disables dedup entirely (every announce that passes the filter
+    # gate just grabs). `format_dedup_hold_seconds` is how long to
+    # park a disabled-format announce in `pending_holds` waiting for
+    # a higher-priority sibling. See app/orchestrator/format_dedup.py.
+    format_priority: dict = field(default_factory=dict)
+    format_dedup_hold_seconds: int = 600
+
     # Optional: an audit hook for tests / future observability.
     on_event: Optional[Callable[[str, dict], None]] = None
 
@@ -249,12 +265,14 @@ async def handle_announce(
       1. Evaluate the filter
       2. Always write the audit row in `announces`
       3. If filter says skip → return "skip"
-      4. If filter says allow → consult the rate limiter
-      5. If decision is drop → return "drop" (no grab row, only audit)
-      6. Fetch the .torrent file
-      7. If fetch fails → write a failed grab row, return failure
-      8. If decision is submit → submit to qBit, record in ledger
-      9. If decision is queue → enqueue (file already fetched)
+      4. v2.9.0: evaluate the format-priority dedup gate
+         (skip / hold / allow with optional preempts)
+      5. If filter says allow → consult the rate limiter
+      6. If decision is drop → return "drop" (no grab row, only audit)
+      7. Fetch the .torrent file
+      8. If fetch fails → write a failed grab row, return failure
+      9. If decision is submit → submit to qBit, record in ledger
+      10. If decision is queue → enqueue (file already fetched)
 
     Returns a `DispatchResult` describing the outcome. Never raises
     on the happy or expected-failure paths — the IRC listener
@@ -269,6 +287,7 @@ async def handle_announce(
         filter_decision=decision,
         skip_filter=False,
         force_fl_wedge=False,
+        apply_format_dedup=True,
     )
 
 
@@ -281,8 +300,10 @@ async def inject_grab(
     author_blob: str = "",
     series_name: str = "",
     book_title: str = "",
+    filetype: str = "",
     raw_line: str = "manual_inject",
     force_fl_wedge: bool = False,
+    apply_format_dedup: bool = True,
 ) -> DispatchResult:
     """Manually queue a grab by torrent ID.
 
@@ -315,6 +336,7 @@ async def inject_grab(
         author_blob=author_blob,
         series_name=series_name,
         book_title=book_title,
+        filetype=(filetype or "").lower(),
     )
     # Synthetic "allow" decision so the audit row reflects that this
     # was a manual override (reason `manual_inject` rather than the
@@ -331,6 +353,7 @@ async def inject_grab(
         filter_decision=fake_decision,
         skip_filter=True,
         force_fl_wedge=force_fl_wedge,
+        apply_format_dedup=apply_format_dedup,
     )
 
 
@@ -345,11 +368,26 @@ async def _dispatch_with_decision(
     filter_decision: Decision,
     skip_filter: bool,
     force_fl_wedge: bool = False,
+    apply_format_dedup: bool = True,
 ) -> DispatchResult:
     """The shared pipeline body used by both handle_announce and
     inject_grab. The only thing they differ on is whether the filter
     decision came from `evaluate_announce` or was synthesized.
+
+    `apply_format_dedup` (v2.9.0) gates whether the format-priority
+    dedup runs after the filter says allow. Default True; manual-
+    inject callers can pass False from a UI override checkbox to
+    force a grab regardless of in-flight/owned siblings.
     """
+    # Computed once at the top so the dedup gate, the announce row,
+    # and (if we reach the grab branch) the grab row all carry the
+    # same values. Empty strings collapse to no-ops downstream.
+    book_format = (announce.filetype or "").lower().strip()
+    dedup_key = normalize_dedup_key(
+        announce.torrent_name or announce.title or "",
+        announce.author_blob or "",
+    )
+
     db = await deps.db_factory()
     try:
         announce_id = await grabs_storage.record_announce(
@@ -360,6 +398,7 @@ async def _dispatch_with_decision(
             category=announce.category,
             author_blob=announce.author_blob,
             decision=filter_decision,
+            filetype=book_format,
         )
         _emit(deps, "announce_recorded", {"announce_id": announce_id})
 
@@ -436,6 +475,111 @@ async def _dispatch_with_decision(
                 reason=filter_decision.reason,
                 announce_id=announce_id,
             )
+
+        # v2.9.0 — format-priority dedup gate. Runs only when the
+        # caller asked us to AND the user has any priority list
+        # configured. Three possible outcomes:
+        #   skip → another format of this book is owned / racing at
+        #          higher priority; update the audit row and return.
+        #   hold → no immediate blocker but this format is disabled;
+        #          park in pending_holds for the configured window.
+        #   allow → grab normally; preempt any held lower-priority
+        #          siblings as a side-effect.
+        # `apply_format_dedup=False` is the manual-inject override
+        # checkbox path — user explicitly bypasses dedup.
+        if apply_format_dedup and deps.format_priority:
+            try:
+                siblings = await lookup_dedup_siblings(
+                    dedup_key=dedup_key,
+                    media_type=media_type_from_category(announce.category) or "",
+                )
+            except Exception:
+                _log.exception(
+                    "format_dedup: sibling lookup failed; failing open "
+                    "(grab proceeds) for announce_id=%s", announce_id,
+                )
+                siblings = []
+
+            dedup_decision = evaluate_format_dedup(
+                announce=announce,
+                format_priority=deps.format_priority,
+                hold_seconds=deps.format_dedup_hold_seconds,
+                siblings=siblings,
+            )
+
+            # Preempt held lower-priority siblings regardless of outcome
+            # (the allow + hold branches may have populated this; skip
+            # never does but the call is harmless on empty input).
+            if dedup_decision.preempt_hold_ids:
+                try:
+                    await holds_storage.drop_holds(
+                        db, dedup_decision.preempt_hold_ids,
+                        reason=f"preempted_by_{dedup_decision.reason}",
+                    )
+                except Exception:
+                    _log.exception(
+                        "format_dedup: preempt failed for hold_ids=%s",
+                        dedup_decision.preempt_hold_ids,
+                    )
+
+            if dedup_decision.action == "skip":
+                await grabs_storage.update_announce_decision(
+                    db, announce_id=announce_id,
+                    action="skip", reason=dedup_decision.reason,
+                )
+                _emit(deps, "format_dedup_skip", {
+                    "torrent_id": announce.torrent_id,
+                    "reason": dedup_decision.reason,
+                    "dedup_key": dedup_decision.dedup_key,
+                    "book_format": dedup_decision.book_format,
+                })
+                return DispatchResult(
+                    action="skip",
+                    reason=dedup_decision.reason,
+                    announce_id=announce_id,
+                )
+
+            if dedup_decision.action == "hold":
+                await grabs_storage.update_announce_decision(
+                    db, announce_id=announce_id,
+                    action="hold", reason=dedup_decision.reason,
+                )
+                try:
+                    hold_id = await holds_storage.create_hold(
+                        db,
+                        announce_id=announce_id,
+                        dedup_key=dedup_decision.dedup_key,
+                        media_type=dedup_decision.media_type or "",
+                        book_format=dedup_decision.book_format,
+                        torrent_id=announce.torrent_id,
+                        torrent_name=announce.torrent_name,
+                        category=announce.category,
+                        author_blob=announce.author_blob,
+                        hold_seconds=dedup_decision.hold_seconds
+                            or deps.format_dedup_hold_seconds,
+                    )
+                except Exception:
+                    _log.exception(
+                        "format_dedup: hold insert failed; failing open "
+                        "(grab proceeds) for announce_id=%s", announce_id,
+                    )
+                else:
+                    _emit(deps, "format_dedup_hold", {
+                        "torrent_id": announce.torrent_id,
+                        "hold_id": hold_id,
+                        "release_seconds": dedup_decision.hold_seconds,
+                        "dedup_key": dedup_decision.dedup_key,
+                        "book_format": dedup_decision.book_format,
+                    })
+                    return DispatchResult(
+                        action="skip",
+                        reason=dedup_decision.reason,
+                        announce_id=announce_id,
+                    )
+
+            # dedup_decision.action == "allow" — fall through to the
+            # normal grab path. The grab-create call below stamps
+            # book_format + dedup_key on the new row.
 
         # Co-author auto-train: if the filter allowed this announce
         # because one co-author matched, add the unknown co-authors
@@ -599,6 +743,8 @@ async def _dispatch_with_decision(
             category=announce.category,
             author_blob=announce.author_blob,
             state=initial_state,
+            book_format=book_format,
+            dedup_key=dedup_key,
         )
 
         # `force_fl_wedge` is the manual-inject override — the user
