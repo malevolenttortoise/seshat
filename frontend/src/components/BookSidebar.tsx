@@ -23,6 +23,7 @@ import { Spin } from "./Spin";
 import { SBRow } from "./SBRow";
 import { BufferInsufficientBanner } from "./BufferInsufficientBanner";
 import { CompareModal } from "./CompareModal";
+import { MergeBookModal } from "./MergeBookModal";
 import { economyApi, type PreflightResponse } from "../lib/economyApi";
 import type {
   Book,
@@ -170,6 +171,7 @@ export function BookSidebar({
   const [mounted, setMounted] = useState(false);
   const [editing, setEditing] = useState(false);
   const [compareOpen, setCompareOpen] = useState(false);
+  const [mergeOpen, setMergeOpen] = useState(false);
   const [ef, setEf] = useState<EditFields>({
     title: "",
     description: "",
@@ -756,6 +758,25 @@ export function BookSidebar({
               }}
             >
               Compare
+            </button>
+          )}
+          {!editing && (
+            <button
+              onClick={() => setMergeOpen(true)}
+              title="Merge this book with another (duplicate row resolution)"
+              style={{
+                background: t.bg4,
+                border: `1px solid ${t.border}`,
+                borderRadius: 8,
+                cursor: "pointer",
+                color: t.tg,
+                padding: "8px 10px",
+                minHeight: 36,
+                fontSize: 12,
+                fontWeight: 600,
+              }}
+            >
+              Merge
             </button>
           )}
           <button
@@ -2176,6 +2197,26 @@ export function BookSidebar({
                 /* background refresh — surfaces on parent list */
               });
             }
+          }}
+        />
+      ) : null}
+
+      {mergeOpen ? (
+        <MergeBookModal
+          book={book}
+          onClose={() => setMergeOpen(false)}
+          onChanged={() => {
+            // Successful merge — the initiator's id may or may not
+            // have survived (the backend picks the winner). Closing
+            // the sidebar avoids leaving a sidebar open on a row
+            // that was just deleted. The parent list refetch via
+            // onEdit surfaces the merged row.
+            if (onEdit) {
+              Promise.resolve(onEdit()).catch(() => {
+                /* background refresh — surfaces on parent list */
+              });
+            }
+            onClose();
           }}
         />
       ) : null}

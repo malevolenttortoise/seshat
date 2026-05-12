@@ -1161,6 +1161,83 @@ async def delete_book(bid: int, slug: str | None = Query(None)):
         await db.close()
 
 
+# ─── Manual merge ────────────────────────────────────────────
+# Folds two book rows representing the same work into one. The
+# initiator (path) and partner (body) can be in either order — the
+# backend picks the winner deterministically via the
+# `pick_winner_id` policy (calibre+owned > calibre > owned > rest).
+# Both rows must be in the same library; the slug query-param
+# routes the per-library books table per the multi-library rule.
+@router.post("/books/{bid}/merge")
+async def merge_book(
+    bid: int,
+    data: dict = Body(...),
+    slug: str | None = Query(None),
+):
+    """Merge book `bid` with `other_id` from the request body.
+
+    Returns the surviving row (after the merge) so the frontend can
+    decide whether to refresh the current view or navigate to the
+    winner's id when the initiator was the loser. Errors:
+      - 400  same id, missing other_id, both rows are owned Calibre rows
+      - 404  either book row not found
+    """
+    from app.database import get_db as get_pipeline_db
+    from app.discovery.book_merge import (
+        MergeError,
+        merge_books,
+        pick_winner_id,
+    )
+
+    other_id_raw = data.get("other_id")
+    if other_id_raw is None:
+        raise HTTPException(400, "missing other_id in request body")
+    try:
+        other_id = int(other_id_raw)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "other_id must be an integer")
+    if other_id == bid:
+        raise HTTPException(400, "cannot merge a book with itself")
+
+    discovery = await get_db(slug)
+    pipeline = await get_pipeline_db()
+    try:
+        row_a = await (await discovery.execute(
+            "SELECT * FROM books WHERE id = ?", (bid,),
+        )).fetchone()
+        if row_a is None:
+            raise HTTPException(404, f"book id={bid} not found")
+        row_b = await (await discovery.execute(
+            "SELECT * FROM books WHERE id = ?", (other_id,),
+        )).fetchone()
+        if row_b is None:
+            raise HTTPException(404, f"book id={other_id} not found")
+
+        winner_id = pick_winner_id(dict(row_a), dict(row_b))
+        loser_id = bid if winner_id == other_id else other_id
+
+        try:
+            merged_row = await merge_books(
+                discovery, pipeline,
+                library_slug=(slug or ""),
+                winner_id=winner_id,
+                loser_id=loser_id,
+                reason="manual",
+            )
+        except MergeError as exc:
+            raise HTTPException(400, str(exc))
+
+        return {
+            "status": "ok",
+            "winner_id": winner_id,
+            "loser_id": loser_id,
+            "merged_book": merged_row,
+        }
+    finally:
+        await discovery.close()
+        await pipeline.close()
+
+
 # ─── Bulk Book Actions ───────────────────────────────────────
 # Used by the multi-select bar on Author Detail (and any future page
 # that needs to act on a set of book IDs). Each endpoint mirrors the

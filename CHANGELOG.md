@@ -7,6 +7,96 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [2.10.0] — 2026-05-12
+
+Duplicate-row resolution: manual merge UI + automatic post-UPDATE
+merge sweep in calibre_sync. Closes the loop on the title-mismatch
+duplicate class that surfaced in Mark's 2026-05-11 sync run, where
+11 of the 17 books he grabbed/reingested ended up as duplicate
+pairs (one owned-Calibre row + one unowned-discovery row) because
+Calibre's title (e.g. "Right of Retribution: Book 2") didn't
+match the discovery scan's title (e.g. "Right of Retribution 2")
+under the existing strict exact-match merge query in calibre_sync.
+
+Two complementary paths now resolve these:
+
+### Added — Post-UPDATE merge sweep in calibre_sync
+
+- **`app/discovery/calibre_sync.py:_post_update_merge_sweep`** —
+  runs after every UPDATE on an existing Calibre row. If the
+  row's title now exactly matches a single unowned discovery row
+  (same author, source != 'calibre', calibre_id IS NULL), the
+  sweep folds the discovery row into the Calibre row via the
+  shared `merge_books` helper. Same exact-title-match shape as
+  the INSERT-path merge query — multi-match or no-match cases
+  remain conservative no-ops.
+
+  This heals the specific case where a user fixes a wrong Calibre
+  title to match an existing discovery row's title and re-syncs.
+  Pre-v2.10.0 the resync just rewrote the Calibre row's title
+  field and left both rows in place forever. Of Mark's 11 stuck
+  pairs from 2026-05-11, six (RoR 2, DD 2/3, SS 2/3, A
+  Temperamental Enchantress) had their Calibre titles fixed by
+  the user — those heal on the next sync after deploying this
+  release.
+
+### Added — Manual merge UI
+
+- **`app/discovery/book_merge.py`** — shared `merge_books()`
+  function used by both the calibre_sync sweep and the manual
+  endpoint. Field-resolution rules: identity fields (mam_torrent_id,
+  goodreads_id, isbn, etc.) coalesce winner-first, owned uses MAX,
+  hidden uses MIN (visible wins), timestamps preserve earliest
+  first_seen_at and latest mam_last_scanned_at. Two
+  owned-Calibre-source rows are refused — that case is upstream
+  duplicate-Calibre data that the user should remove from
+  Calibre, not paper over in Seshat.
+
+- **`POST /api/discovery/books/{bid}/merge?slug=…`** — manual
+  merge endpoint. Body `{other_id}`. Backend deterministically
+  picks the winner via `pick_winner_id` (calibre+owned > calibre
+  > owned > rest, tiebreaks by lowest id) so the user doesn't
+  have to choose. Returns the surviving row so the frontend can
+  decide whether to refresh in place or navigate to the winner's
+  id when the initiator was absorbed.
+
+- **`frontend/src/components/MergeBookModal.tsx`** — search-and-pick
+  modal opened from BookSidebar's new Merge button. Default search
+  is scoped to the same author (the overwhelming case);
+  "All authors" checkbox handles pen-name / mis-attribution edge
+  cases. Clicking a result highlights it; "Approve Merge" submits
+  and the parent list refetches.
+
+- **`book_merges`** audit table — every merge writes a row with
+  the full loser snapshot as JSON. Manual rollback is a hand-SQL
+  job today; the audit row exists so forensic recovery is
+  possible if a sweep ever folds the wrong row.
+
+### Migration
+
+- New `book_merges` table on each per-library books DB. Idempotent
+  via the existing `MIGRATIONS` list mechanism.
+
+### Tests
+
+- **`tests/discovery/test_book_merge.py`** — 14 unit tests for
+  the merge engine: field resolution (identity coalesce, hidden
+  MIN, timestamp preservation), book_grab_links FK redirect with
+  the UNIQUE-collision drop-loser-link fallback, audit row
+  capture, error preconditions (same id, missing row, two
+  owned-Calibre rows).
+- **`tests/discovery/test_calibre_sync_merge_sweep.py`** — 3
+  integration tests replaying Mark's exact scenario (heal a RoR
+  2 duplicate via title fix + re-sync), a negative test
+  (title still mismatched → no merge), and a multi-candidate
+  ambiguity test.
+- **`tests/discovery/test_book_merge_endpoint.py`** — 5 HTTP
+  endpoint tests covering the winner-policy delegation, error
+  shapes (400/404), and the symmetric initiator-from-either-side
+  case.
+
+---
+
 ## [2.9.1] — 2026-05-12
 
 Reingest matcher hardening. Two interacting flaws in

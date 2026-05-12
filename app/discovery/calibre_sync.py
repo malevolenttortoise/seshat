@@ -429,6 +429,64 @@ def _read_calibre_series_authors(calibre_path: str) -> list[dict]:
     return list(by_book.values())
 
 
+async def _post_update_merge_sweep(
+    db, pipeline_db, slug, our_author_id, calibre_title, calibre_row_id,
+):
+    """If a Calibre-row UPDATE just landed and the title now matches an
+    unowned discovery row, fold the discovery row into the Calibre row.
+
+    Runs the same exact-title-match (with article-stripping for
+    "The X" vs "X") that the INSERT path uses, so the sweep's behavior
+    is symmetric: the Calibre row is the canonical "this book is in
+    the library" record, and a single unambiguous discovery match
+    gets merged in. Multi-match (2+) or zero-match cases are no-ops —
+    the same conservative semantics that prevent the INSERT path
+    from merging a book into the wrong row.
+
+    Returns True if a merge happened, False otherwise.
+    """
+    from app.discovery.book_merge import merge_books, MergeError
+
+    candidates = await (await db.execute("""
+        SELECT id FROM books
+        WHERE author_id = ? AND calibre_id IS NULL AND source != 'calibre'
+        AND id != ?
+        AND (
+            LOWER(TRIM(title)) = LOWER(TRIM(?))
+            OR REPLACE(LOWER(TRIM(title)), 'the ', '') =
+               REPLACE(LOWER(TRIM(?)), 'the ', '')
+        )
+    """, (our_author_id, calibre_row_id, calibre_title, calibre_title))
+    ).fetchall()
+    if len(candidates) != 1:
+        return False
+    loser_id = candidates[0]["id"]
+    try:
+        await merge_books(
+            db, pipeline_db,
+            library_slug=slug,
+            winner_id=calibre_row_id,
+            loser_id=loser_id,
+            reason="calibre_sync_post_update",
+        )
+    except MergeError as exc:
+        # MergeError here means a precondition the sweep can't
+        # satisfy (e.g. both rows owned-calibre, which shouldn't
+        # happen given the source != 'calibre' filter above, but
+        # belt-and-suspenders). Log and continue rather than crash
+        # the whole sync run.
+        logger.warning(
+            "calibre_sync: post-update merge sweep skipped for "
+            f"book_id={calibre_row_id} ('{calibre_title[:60]}'): {exc}"
+        )
+        return False
+    logger.info(
+        f"calibre_sync: post-update merged unowned id={loser_id} into "
+        f"Calibre row id={calibre_row_id} ('{calibre_title[:60]}')"
+    )
+    return True
+
+
 async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
     """Run a Calibre → discovery DB import.
 
@@ -489,6 +547,13 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
     # UnboundLocalError, masking the original exception.
     sync_id: int | None = None
     db = await get_db()
+    # v2.10.0 post-UPDATE merge sweep reads/writes `book_grab_links`
+    # via the shared `merge_books` helper. Opening the pipeline DB
+    # once per sync (rather than once per merge) avoids the overhead
+    # of repeatedly opening the global SQLite file on UPDATE-heavy
+    # syncs. The connection stays unused if no sweep fires.
+    from app.database import get_db as _get_pipeline_db
+    pipeline_db = await _get_pipeline_db()
     try:
         cursor = await db.execute(
             "INSERT INTO sync_log (sync_type, started_at) VALUES (?, ?)",
@@ -786,6 +851,29 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
                 )
                 progress["books_updated"] += 1
                 logger.debug(f"  Calibre: updated '{book['title']}' (calibre_id={book['book_id']}, tags={book['tags']}, rating={book['rating']})")
+                # v2.10.0 post-UPDATE merge sweep. When a user edits
+                # the title of an existing Calibre book to match
+                # what their discovery scan recorded (e.g. fixing
+                # "Right of Retribution: Book 2" → "Right of
+                # Retribution 2" so it aligns with the Goodreads-
+                # source unowned row), the INSERT-path merge query
+                # above (line ~806) doesn't run because the Calibre
+                # row already exists. Pre-v2.10.0 the duplicate
+                # stayed forever even after metadata cleanup. The
+                # sweep re-runs the same exact-title-match query
+                # against unowned non-calibre rows and folds in the
+                # single unambiguous match, if any. Safe by design:
+                # multi-match or no-match cases leave both rows
+                # alone (same conservative semantics the INSERT
+                # path uses).
+                merged = await _post_update_merge_sweep(
+                    db, pipeline_db, slug,
+                    our_author_id, book["title"], row["id"],
+                )
+                if merged:
+                    progress["books_merged_post_update"] = (
+                        progress.get("books_merged_post_update", 0) + 1
+                    )
             else:
                 # Before INSERTing a new Calibre row, look for a matching
                 # discovery row (typically a Missing entry created by an
@@ -1014,3 +1102,4 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
         raise
     finally:
         await db.close()
+        await pipeline_db.close()

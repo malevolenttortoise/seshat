@@ -548,6 +548,27 @@ MIGRATIONS = [
     # hashing failed. Populated by Calibre/ABS sync hooks on cover
     # landing and by source-scan cover_url writes.
     "ALTER TABLE books ADD COLUMN cover_phash TEXT",
+    # v2.10.0 manual-merge + post-update sweep audit. Records every
+    # books-row merge — driven either by the user clicking Merge in
+    # the BookSidebar or by calibre_sync's post-UPDATE healer when
+    # a title fix on an existing calibre row unmasks an unowned
+    # discovery row's exact-title match.
+    #
+    # winner_id stays referenceable forever; loser_id is the row that
+    # was deleted by the merge so a manual rollback can rebuild it
+    # from loser_snapshot_json. No FK to books — winner can later be
+    # deleted/merged and we still want the audit row to survive for
+    # forensics.
+    """CREATE TABLE IF NOT EXISTS book_merges (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        winner_id INTEGER NOT NULL,
+        loser_id INTEGER NOT NULL,
+        loser_snapshot_json TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        merged_at REAL NOT NULL DEFAULT (strftime('%s','now'))
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_book_merges_winner ON book_merges(winner_id)",
+    "CREATE INDEX IF NOT EXISTS idx_book_merges_loser ON book_merges(loser_id)",
 ]
 
 
