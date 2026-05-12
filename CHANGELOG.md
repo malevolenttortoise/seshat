@@ -7,6 +7,211 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [2.9.0] — 2026-05-11
+
+Format-priority dedup. When two torrents of the same book in
+different formats arrive on MAM within minutes of each other (a
+slow uploader split-uploading EPUB + AZW3), pre-v2.9.0 Seshat
+grabbed both — by the time the first reached "Owned" the second
+had already snatched. The Keleros "The Delves" + "The Duchy"
+incident on 2026-05-09 is the canary; both books shipped through
+the pipeline twice that night, charging two snatches per book.
+
+v2.9.0 adds a new gate in the announce pipeline that consults a
+per-media-type format priority list. Enabled formats (e.g. EPUB,
+M4B by default) grab immediately. Disabled formats (AZW3, MOBI,
+PDF, MP3 by default) get parked in a `pending_holds` table for
+10 minutes (configurable) and re-evaluated by a scheduler tick —
+released as a grab if no higher-priority sibling arrived, or
+dropped if one did. A higher-priority enabled-format arrival
+during the window synchronously preempts any held lower-priority
+sibling.
+
+Plus filter-page cleanup Mark requested mid-design: the legacy
+`accept_audiobook_announces` boolean is removed, replaced by
+"audiobooks" membership in the (renamed) Media Type filter as
+the single source of truth.
+
+### Added — Format-priority dedup gate
+
+- **`app/orchestrator/format_dedup.py`** — pure decision module:
+  - `normalize_dedup_key(title, author_blob)` wraps the existing
+    cross-library `match_key()` so an announce's dedup key lines
+    up exactly with the (author, title) keys the works/matcher
+    uses against per-library `books` rows. First author only;
+    full Unicode + article + format-paren normalization inherited.
+  - `media_type_from_category()` maps "Ebooks - Fantasy" →
+    "ebook", "Audiobooks - X" → "audiobook". Other prefixes
+    (comics, etc.) return None and the gate falls through.
+  - `evaluate_format_dedup()` — pure function over the announce,
+    the user's `format_priority` setting, the hold window, and a
+    pre-fetched `SiblingMatch` list. Returns "allow" / "skip" /
+    "hold" with a machine-stable reason and an optional
+    `preempt_hold_ids` tuple. No I/O.
+  - `lookup_dedup_siblings()` — async helper that scans `grabs`
+    in-flight states, `pending_holds` in 'pending' state, and
+    per-library `books` tables for owned matches. Owned-side
+    filtered by media type so an audiobook copy never blocks an
+    ebook announce.
+
+### Added — Hold-release scheduler
+
+- **`app/orchestrator/hold_release.py`** — supervised loop
+  (default tick = 60s). For each `pending_holds` row with
+  `release_at <= now()`:
+  - Filters the hold itself out of the sibling lookup.
+  - Re-runs the dedup gate against the *current* state of the
+    world (the hold window can change everything).
+  - "skip" → mark dropped (a blocking sibling arrived).
+  - "allow" or "hold" at release time → inject the grab with
+    `apply_format_dedup=False` (we ARE the dedup decision
+    releasing; the gate already ran) and mark released.
+  - Registered as `state._hold_release_task` from main.py
+    lifespan.
+
+### Added — Wired dedup behavior in dispatcher
+
+- **`app/orchestrator/dispatch.py`** — `_dispatch_with_decision`
+  now consults the dedup gate immediately after the filter says
+  allow:
+  - **skip** path: UPDATE the audit row's decision to 'skip'
+    with the dedup reason (format_dedup_higher_priority_inflight
+    / format_dedup_owned_sibling). No grab created.
+  - **hold** path: UPDATE the audit row's decision to 'hold',
+    insert a `pending_holds` row with `release_at = now +
+    format_dedup_hold_seconds`, drop any preempted lower-
+    priority holds. No grab created.
+  - **allow** path: drop any preempted held lower-priority
+    siblings (the Delves preempt case), continue to the existing
+    policy/rate-limit/grab path. `create_grab` now stamps
+    `book_format` + `dedup_key` so subsequent dedup lookups
+    find this grab via `idx_grabs_dedup_key`.
+- New `apply_format_dedup: bool = True` parameter on
+  `inject_grab` (and threaded through `_dispatch_with_decision`).
+  IRC announces always pass True; manual-inject / send-to-
+  pipeline callers pass False to bypass dedup ("Snatch anyway"
+  semantics).
+- New `filetype` kwarg on `inject_grab` so manual-inject paths
+  can hint the gate.
+
+### Added — Schema + settings (idempotent migrations)
+
+- `announces.filetype TEXT` — persists the IRC `Filetype: ( xxx )`
+  field at announce-decision time so dedup decisions are
+  auditable retroactively. Pre-v2.9.0 announces have this NULL.
+- `grabs.book_format TEXT, grabs.dedup_key TEXT` — tag each
+  grab with its filetype hint + normalized dedup key.
+- New `pending_holds` table — the 10-min hold queue. Indexed on
+  (state, release_at) for the scheduler tick and on dedup_key
+  for the higher-priority-sibling preemption path.
+- `idx_grabs_dedup_key` lives in MIGRATIONS only — same legacy-
+  DB safety pattern as v2.7.0's bundle_group_id index.
+- New settings: `format_priority` (per-media-type list of
+  `{fmt, enabled}` entries; default ebook = EPUB-only-enabled,
+  audiobook = M4B-only-enabled) and
+  `format_dedup_hold_seconds: 600`.
+
+### Added — `GET /api/v1/announces` endpoint
+
+- Serves the persisted SQLite `announces` audit table — distinct
+  from the in-memory log buffer. Query params: `decision`
+  (comma-separated subset of allow/skip/hold), `reason`
+  (substring match), `q` (substring against torrent_name /
+  author_blob / category), `limit` (default 200, cap 1000).
+- Returns rows newest-first plus a `decision_counts` dict.
+  `decision_counts` honors q+reason filters but ignores
+  `decision` itself so the chip UX can show "what would be
+  visible if I clicked this".
+
+### Added — UI: Format Priority + Announce Log
+
+- **Filters page**: new "Format Priority" section with one
+  sub-card per media type (Ebook / Audiobook). Each row shows
+  rank, format name, Enabled checkbox, up/down reorder arrows.
+  Same UX on Desktop + Mobile. Help text exposes the hold
+  window so the rule is self-documenting.
+- **Logs page → Announces tab**: data source swapped from the
+  in-memory log buffer to the new `/v1/announces` endpoint.
+  Structured rows with timestamp, color-coded decision pill
+  (Allow = green, Skip = red, Hold = warn), filetype,
+  torrent name, author, and decision_reason. Six-column grid
+  on Desktop; stacked card layout on Mobile.
+- New decision filter chips (All / Allow / Skip / Hold) with
+  live counts. Substring filter input narrows server-side on
+  this tab (debounced 250ms).
+
+### Removed — Legacy `accept_audiobook_announces` toggle
+
+- The boolean is gone. "audiobooks" being in the Media Type
+  filter (renamed from "Formats" — setting key kept as
+  `allowed_formats` for backwards-compat) is now the single
+  source of truth. `_build_filter_config` derives:
+  audiobook is accepted when allowed_formats is empty
+  (= "accept all") OR contains "audiobooks". When accepted,
+  `allowed_audiobook_categories` merges into the runtime
+  category set (same behavior as the old toggle).
+- The "Audiobook Announces" UI section on FiltersPage and
+  MobileFiltersPage is removed.
+- **Migration**: `_apply_legacy_settings_migrations` runs on
+  every `load_settings()`. Legacy `accept_audiobook_announces=
+  True` + non-empty `allowed_formats` without "audiobooks" →
+  adds it. Then drops the key. Idempotent and auto-saves on
+  change so disk + memory stay in sync.
+
+### Added — Override flag on inject endpoints
+
+- New `override_format_dedup: bool` on three entry points:
+  `POST /api/v1/grabs/inject`, `POST /api/v1/grabs/inject-batch`
+  (batch-level), and `POST /discovery/send-to-pipeline` (per-
+  batch). Passes `apply_format_dedup=not override` through to
+  `inject_grab`. send-to-pipeline also seeds the filetype hint
+  from `books.mam_formats` (first CSV entry) so the gate
+  actually fires on that path. UI checkbox not surfaced yet
+  (matches existing `buy_personal_fl` / `use_wedge_override`
+  convention — API-only); external bookmarklet/curl callers
+  can pass it now.
+
+### Tests
+
+- `tests/orchestrator/test_format_dedup.py` (+41) — pure-helper
+  unit tests plus the four v2.9.0 scenarios + the Delves
+  preempt + disabled hold-replacement + lookup integration
+  against real SQLite DBs. Real Keleros Delves/Duchy fixtures
+  baked in as canaries.
+- `tests/orchestrator/test_format_dedup_integration.py` (+12)
+  — exercises the wired dispatcher flow + manual-inject
+  override + the hold_release scheduler tick.
+- `tests/routers/test_announces.py` (+11) — endpoint coverage
+  for decision_counts UX, multi-value filters, q + reason
+  combinations, limit cap, empty-table behavior.
+- `tests/test_config.py` (+6) — every branch of the
+  `accept_audiobook_announces` migration, idempotency,
+  no-op-when-already-migrated.
+- `tests/test_legacy_db_upgrade.py` (+2) — v2.8.1 → v2.9.0
+  upgrade lands the new columns + indexes + `pending_holds`
+  table cleanly. Settings-defaults shape pinned.
+
+Suite: **2135 passing, 7 skipped** (up from 2063 / 7 at v2.8.1).
+72 new tests across 5 files.
+
+### Operator notes
+
+- On first v2.9.0 startup, the legacy-settings migration runs
+  silently and rewrites `settings.json` if `accept_audiobook_announces`
+  was set. Backup not strictly needed but the change is logged
+  at INFO level so the audit trail is in `docker logs Seshat`.
+- The dedup gate is dormant until `format_priority` is
+  populated. Default seeded values (EPUB-only enabled for ebook,
+  M4B-only for audiobook) make the gate active immediately for
+  Mark's current setup. Empty `format_priority={}` disables it
+  entirely and preserves pre-v2.9.0 behavior.
+- `pending_holds` rows are never auto-purged. The table will
+  accumulate one row per disabled-format announce. At ~10/day
+  volume that's negligible, but if it ever matters a future
+  patch can add a TTL cleaner.
+
+---
+
 ## [2.8.1] — 2026-05-11
 
 Same-day polish + bugfix release on v2.8.0. Three issues surfaced
