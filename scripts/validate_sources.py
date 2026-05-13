@@ -143,12 +143,23 @@ async def main(hardcover_api_key: str, google_books_api_key: str) -> int:
         GoogleBooksSource(rate_limit=1.5, api_key=google_books_api_key or None),
     ]
 
+    # Per-source extra inter-author delay (beyond the source's own
+    # rate_limit). Catches the 2026-05-12 Hardcover transient issue
+    # where the GraphQL beta API throttled mid-batch after ~6 calls,
+    # producing 8/14 false FAILs that didn't reproduce on one-shot
+    # probes. Conservative defaults — only adds 1-2s per author.
+    PER_SOURCE_EXTRA_DELAY = {
+        "hardcover": 2.0,    # GraphQL beta throttling observed
+        "google_books": 1.0, # transient 503s observed
+    }
+
     print(f"validating {len(AUTHORS)} authors against {len(sources)} sources...")
     print()
 
     results: list[Result] = []
     for src in sources:
         print(f"  → {src.name}")
+        extra_delay = PER_SOURCE_EXTRA_DELAY.get(src.name, 0.0)
         for author in AUTHORS:
             res = await _run_one(src, author)
             status = (
@@ -158,6 +169,8 @@ async def main(hardcover_api_key: str, google_books_api_key: str) -> int:
             )
             print(f"    {author:<24} {status:<60} ({res.seconds:.1f}s)")
             results.append(res)
+            if extra_delay > 0:
+                await asyncio.sleep(extra_delay)
         try:
             await src.close()
         except Exception:
