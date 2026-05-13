@@ -587,6 +587,20 @@ class HardcoverSource(BaseSource):
                 # killing whole catalogs that the relation correctly
                 # surfaced.
 
+                # v2.11.0: skip rows where Hardcover returned a
+                # null/empty title. These are data-quality misses
+                # in HC's catalog (book record exists with editions
+                # + ISBN but no canonical title yet), and emitting
+                # them creates phantom empty-title rows in the review
+                # queue — UAT 2026-05-13 caught one for Hasekura.
+                _raw_title = (book.get("title") or "").strip()
+                if not _raw_title:
+                    logger.debug(
+                        "  hardcover: skipping book id=%s — null/empty title",
+                        book.get("id"),
+                    )
+                    continue
+
                 # Per-book progress hook. Hardcover has no per-book
                 # HTTP fetch (everything comes from one GraphQL round-
                 # trip), so this loop tears through fast — but the

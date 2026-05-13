@@ -25,6 +25,8 @@ import httpx
 
 from app.discovery.sources.openlibrary import (
     OpenLibrarySource,
+    _EDITION_REJECT_RX,
+    _extract_language,
     _extract_series_from_title,
     _has_cjk,
     _query_variants,
@@ -136,6 +138,87 @@ class TestQueryVariants:
         out = _query_variants("J.R.R. Tolkien")
         assert out[0] == "J.R.R. Tolkien"
         assert len(out) >= 2
+
+
+class TestEditionRejectRegex:
+    """v2.11.0 UAT exposed a precision gap: the original
+    `_EDITION_REJECT_RX` only caught numbered editions ("2nd Edition")
+    and missed the open-ended `"{X} Edition"` pattern. Hasekura's
+    OL bibliography produced false-positive series names
+    "Japanese Edition" and "Numbered Edition" because those slipped
+    past the exact-list AND the numbered-only regex.
+
+    Now matches any title ending in " edition" / " ed." / " printing"
+    so the series extractor can reject them as decorations."""
+
+    def test_numbered_edition_still_caught(self):
+        # Regression: original behavior preserved
+        assert _EDITION_REJECT_RX.match("2nd Edition")
+        assert _EDITION_REJECT_RX.match("10th Edition")
+        assert _EDITION_REJECT_RX.match("3rd Ed")
+        assert _EDITION_REJECT_RX.match("1st printing")
+
+    def test_language_edition_caught(self):
+        # v2.11.0 UAT bugs — these are NOT series, they're decorations
+        assert _EDITION_REJECT_RX.match("Japanese Edition")
+        assert _EDITION_REJECT_RX.match("Spanish Edition")
+        assert _EDITION_REJECT_RX.match("German Edition")
+        assert _EDITION_REJECT_RX.match("French ed.")
+
+    def test_other_decorator_edition_caught(self):
+        assert _EDITION_REJECT_RX.match("Numbered Edition")
+        assert _EDITION_REJECT_RX.match("Limited Edition")
+        assert _EDITION_REJECT_RX.match("Author's Edition")
+
+    def test_case_insensitive(self):
+        assert _EDITION_REJECT_RX.match("japanese edition")
+        assert _EDITION_REJECT_RX.match("JAPANESE EDITION")
+
+    def test_non_edition_unaffected(self):
+        # Real series names that happen to mention sub-words shouldn't trip
+        assert not _EDITION_REJECT_RX.match("Stormlight Archive")
+        assert not _EDITION_REJECT_RX.match("Spice & Wolf")
+        assert not _EDITION_REJECT_RX.match("Edited Anthology")  # leading "edited" ≠ trailing "edition"
+
+
+class TestExtractLanguage:
+    """v2.11.0 — discovery-side language extraction. Pre-fix, every OL
+    work landed with language=None, bypassing `_lang_ok` (which lets
+    null through). Now we map MARC codes to ISO 639-1 so the filter
+    actually fires for non-English entries."""
+
+    def test_english_mapped(self):
+        assert _extract_language({"languages": [{"key": "/languages/eng"}]}) == "en"
+
+    def test_japanese_mapped(self):
+        assert _extract_language({"languages": [{"key": "/languages/jpn"}]}) == "ja"
+
+    def test_french_mapped_from_either_marc_variant(self):
+        # MARC has both "fre" (deprecated) and "fra" (current). Both map.
+        assert _extract_language({"languages": [{"key": "/languages/fre"}]}) == "fr"
+        assert _extract_language({"languages": [{"key": "/languages/fra"}]}) == "fr"
+
+    def test_bare_string_code(self):
+        # Older OL responses sometimes have plain strings in the list
+        assert _extract_language({"languages": ["jpn"]}) == "ja"
+
+    def test_missing_languages_field_returns_none(self):
+        assert _extract_language({"title": "anything"}) is None
+
+    def test_empty_languages_list_returns_none(self):
+        assert _extract_language({"languages": []}) is None
+
+    def test_unknown_code_returns_none(self):
+        # Don't fabricate mappings — let lookup.py treat unknown as
+        # "let it through" the same as no-language path.
+        assert _extract_language({"languages": [{"key": "/languages/xyz"}]}) is None
+
+    def test_first_known_wins(self):
+        # Multilingual works are rare but valid; take the first
+        # mappable code so we don't get stuck on an unknown.
+        assert _extract_language({
+            "languages": [{"key": "/languages/xyz"}, {"key": "/languages/jpn"}],
+        }) == "ja"
 
 
 class TestHasCjk:
@@ -596,6 +679,71 @@ class TestSearchAuthorEndToEnd:
         assert "狼と羊皮紙" in all_titles
         assert "Wolf & Parchment 2" in all_titles
         await src.close()
+
+    async def test_language_extraction_lands_on_book_result(self):
+        # v2.11.0 — OL works.json carries a `languages` field. Pre-fix
+        # we ignored it, so every OL book arrived with language=None
+        # which `_lang_ok` lets through. Now Japanese / French / etc.
+        # works land with the right ISO 639-1 code so the user's
+        # language filter actually fires.
+        src = _make_source()
+        _patch_get(src, {
+            "search/authors.json": {
+                "docs": [{"key": "/authors/OL1A", "name": "Test Author", "work_count": 3}],
+            },
+            "/authors/OL1A/works.json": {
+                "entries": [
+                    {"key": "/works/OL1W", "title": "English Book",
+                     "languages": [{"key": "/languages/eng"}]},
+                    {"key": "/works/OL2W", "title": "Japanese Book",
+                     "languages": [{"key": "/languages/jpn"}]},
+                    {"key": "/works/OL3W", "title": "Language-Unknown Book"},
+                ],
+            },
+        })
+
+        result = await src.search_author("Test Author")
+        assert result is not None
+        books = result.books
+        by_title = {b.title: b for b in books}
+
+        assert by_title["English Book"].language == "en"
+        assert by_title["Japanese Book"].language == "ja"
+        # No `languages` field → None (lookup.py will treat as
+        # "unknown, assume ok", same as pre-v2.11.0 behavior)
+        assert by_title["Language-Unknown Book"].language is None
+        await src.close()
+
+    async def test_japanese_edition_decoration_not_treated_as_series(self):
+        # v2.11.0 UAT — Hasekura's OL bibliography included works with
+        # "(Japanese Edition)" parentheticals that the original
+        # `_EDITION_REJECT_RX` missed. The series_map ended up with
+        # garbage entries like a series literally named "Japanese
+        # Edition" holding multiple unrelated books.
+        src = _make_source()
+        _patch_get(src, {
+            "search/authors.json": {
+                "docs": [{"key": "/authors/OL1A", "name": "Test Author", "work_count": 5}],
+            },
+            "/authors/OL1A/works.json": {
+                "entries": [
+                    {"key": "/works/OL1W", "title": "Some Book (Japanese Edition)"},
+                    {"key": "/works/OL2W", "title": "Another Title (Numbered Edition)"},
+                    {"key": "/works/OL3W", "title": "Third Book (Limited Edition)"},
+                ],
+            },
+        })
+
+        result = await src.search_author("Test Author")
+        assert result is not None
+        # All three should be standalone (no series entries)
+        assert len(result.series) == 0, (
+            f"Edition decorations leaked into series_map: "
+            f"{[s.name for s in result.series]}"
+        )
+        assert len(result.books) == 3
+        for b in result.books:
+            assert b.series_name is None
 
     async def test_format_specific_parenthetical_not_treated_as_series(self):
         # "(Annotated)", "(2nd Edition)", "(Illustrated)", "(Boxed Set)"

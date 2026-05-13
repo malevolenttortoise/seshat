@@ -271,6 +271,47 @@ class TestSearchAuthorEndToEnd:
         assert series_names == {"The Dresden Files", "Codex Alera"}
         await src.close()
 
+    async def test_empty_title_book_skipped(self):
+        """v2.11.0 — Hardcover occasionally returns book records with
+        null/empty `title` (data-quality misses in their catalog).
+        Pre-fix, these landed as empty-title rows in the review queue.
+        Caught during 2026-05-13 Hasekura UAT — `hardcover_id=2532938`
+        had no title yet created a phantom row.
+        Post-fix: skip the BookResult emission entirely."""
+        src = _make_source()
+        _patch_query(src, {
+            "SearchAuthor": {"search": {"ids": [123], "results": ""}},
+            "AuthorBooks": {"authors": [{
+                "id": 123, "name": "Test Author", "books_count": 3,
+                "contributions": [
+                    {"book": {
+                        "id": 1001, "title": "Real Book", "slug": "real-book",
+                        "contributions": [{"author": {"id": 123, "name": "Test Author"}}],
+                        "editions": [{"language": {"code3": "eng"}}],
+                    }},
+                    {"book": {
+                        "id": 1002, "title": None, "slug": "phantom",
+                        "contributions": [{"author": {"id": 123, "name": "Test Author"}}],
+                        "editions": [{"isbn_13": "9999999999999"}],
+                    }},
+                    {"book": {
+                        "id": 1003, "title": "  ", "slug": "whitespace-only",
+                        "contributions": [{"author": {"id": 123, "name": "Test Author"}}],
+                        "editions": [{}],
+                    }},
+                ],
+            }]},
+        })
+
+        result = await src.search_author("Test Author")
+
+        assert result is not None
+        all_titles = [b.title for b in result.books] + [
+            b.title for s in (result.series or []) for b in s.books
+        ]
+        assert all_titles == ["Real Book"]
+        await src.close()
+
     async def test_no_api_key_returns_none(self):
         src = HardcoverSource(api_key="")
         result = await src.search_author("Anyone")

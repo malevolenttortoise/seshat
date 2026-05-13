@@ -58,8 +58,12 @@ _SERIES_RX = re.compile(
 
 # Common edition / format decorations that get parenthesized in OL
 # titles and would otherwise be misread as a series name. Exact-
-# lowercase lookup PLUS a regex catch for "Nth Edition" / "Nth Ed"
-# patterns so "2nd Edition", "3rd Ed", "10th Edition" all skip.
+# lowercase lookup PLUS regexes for:
+#   - Numbered editions: "2nd Edition", "10th Edition", "3rd Ed",
+#     "1st Printing" etc.
+#   - Generic " edition" / " ed." suffixes (catches the v2.11.0 UAT
+#     bugs "Japanese Edition", "Numbered Edition", "Spanish Edition",
+#     etc. — anything ending in "edition" that the exact list misses)
 _EDITION_REJECT_EXACT = frozenset({
     "edition", "annotated", "illustrated", "unabridged", "abridged",
     "revised", "expanded", "deluxe edition", "anniversary edition",
@@ -68,9 +72,59 @@ _EDITION_REJECT_EXACT = frozenset({
     "boxed set", "box set", "omnibus",
 })
 _EDITION_REJECT_RX = re.compile(
-    r"^\d+(?:st|nd|rd|th)\s+(?:edition|ed\.?|printing)$",
+    r"(?:"
+    r"^\d+(?:st|nd|rd|th)\s+(?:edition|ed\.?|printing)$"  # "2nd Edition"
+    r"|"
+    r"^.*\s+(?:edition|ed\.?|printing)$"                  # "Japanese Edition"
+    r")",
     re.IGNORECASE,
 )
+
+
+# MARC → ISO 639-1 language map. Matches the per-book MetaSource shape
+# in `app.metadata.sources.openlibrary`. Unknown codes pass through
+# as None so we don't fabricate language labels for downstream filtering.
+_OL_LANGUAGE_MAP = {
+    "eng": "en",
+    "spa": "es",
+    "fre": "fr", "fra": "fr",
+    "ger": "de", "deu": "de",
+    "ita": "it",
+    "jpn": "ja",
+    "rus": "ru",
+    "chi": "zh", "zho": "zh",
+    "por": "pt",
+    "dut": "nl", "nld": "nl",
+    "kor": "ko",
+    "pol": "pl",
+    "swe": "sv",
+    "tur": "tr",
+    "ara": "ar",
+}
+
+
+def _extract_language(work: dict) -> Optional[str]:
+    """Pick the first known language from an OL work entry.
+
+    OL exposes work-level language as `[{"key": "/languages/eng"}, ...]`
+    on the works.json response. Returns ISO 639-1 (2-letter) when
+    mappable; None otherwise (downstream `_lang_ok` treats None as
+    "unknown, let it through" — so populating this field is what
+    actually drives the language filter for OL-sourced books).
+    """
+    codes = work.get("languages") or []
+    for entry in codes:
+        if isinstance(entry, dict):
+            raw = entry.get("key") or entry.get("name") or ""
+            raw = raw.rsplit("/", 1)[-1]
+        elif isinstance(entry, str):
+            raw = entry
+        else:
+            continue
+        mapped = _OL_LANGUAGE_MAP.get(raw.lower())
+        if mapped:
+            return mapped
+    return None
 
 
 def _extract_series_from_title(title: str) -> tuple[Optional[str], Optional[float], str]:
@@ -503,6 +557,13 @@ class OpenLibrarySource(BaseSource):
         work_key = (work.get("key") or "").rsplit("/", 1)[-1]
         source_url = f"{BASE}/works/{work_key}" if work_key else None
 
+        # v2.11.0: extract work-level language so lookup.py's `_lang_ok`
+        # can actually filter non-English entries. Pre-fix, every OL
+        # work landed with language=None, which `_lang_ok` treats as
+        # "unknown, assume ok" → non-English entries bypassed the
+        # user's language filter and polluted the review queue.
+        language = _extract_language(work)
+
         return BookResult(
             title=cleaned_title,
             series_name=series_name,
@@ -510,6 +571,7 @@ class OpenLibrarySource(BaseSource):
             cover_url=cover_url,
             description=description,
             pub_date=pub_date,
+            language=language,
             external_id=work_key or None,
             source=self.name,
             source_url=source_url,
