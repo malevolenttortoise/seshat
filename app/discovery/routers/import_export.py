@@ -312,19 +312,19 @@ async def _fetch_hardcover_book(slug: str) -> dict:
 
 @router.post("/books/search-url")
 async def search_by_url(data: dict = Body(...)):
-    """Fetch book details from a Goodreads or Hardcover URL."""
+    """Fetch book details from any supported source URL.
+
+    v2.11.0 Stage 4.5: extended from Goodreads/Hardcover-only to
+    cover Amazon, Open Library (works/books/isbn), Google Books,
+    Kobo, IBDB. Dispatch lives in `app/discovery/url_import.py`;
+    this router just unwraps the request body and surfaces errors.
+    """
+    from app.discovery.url_import import fetch_by_url
     url = data.get("url", "").strip()
     if not url:
         raise HTTPException(400, "URL is required")
     try:
-        gr = re.search(r'goodreads\.com/book/show/(\d+)', url)
-        hc = re.search(r'hardcover\.app/books/([a-z0-9-]+)', url)
-        if gr:
-            return await _fetch_goodreads_book(gr.group(1))
-        elif hc:
-            return await _fetch_hardcover_book(hc.group(1))
-        else:
-            raise HTTPException(400, "Please provide a Goodreads or Hardcover book URL")
+        return await fetch_by_url(url)
     except HTTPException:
         raise
     except httpx.HTTPError as e:
@@ -359,20 +359,20 @@ async def import_preview(data: dict = Body(...)):
             f"FROM books b JOIN authors a ON b.author_id=a.id WHERE {HF}"
         )).fetchall()
 
+        # v2.11.0 Stage 4.5: dispatch via the universal URL parser.
+        # Covers Goodreads, Hardcover, Amazon, Open Library, Google
+        # Books, Kobo, IBDB. Unknown URLs surface "Unrecognized URL".
+        from app.discovery.url_import import fetch_by_url, parse_url
+
         for url in urls[:50]:
             url = url.strip()
             if not url: continue
             entry = {"url": url, "status": "error", "error": None, "book": None}
             try:
-                gr = re.search(r'goodreads\.com/book/show/(\d+)', url)
-                hc = re.search(r'hardcover\.app/books/([a-zA-Z0-9_-]+)', url)
-                if gr:
-                    book = await _fetch_goodreads_book(gr.group(1))
-                elif hc:
-                    book = await _fetch_hardcover_book(hc.group(1))
-                else:
+                if parse_url(url) is None:
                     entry["error"] = "Unrecognized URL format"
                     results.append(entry); continue
+                book = await fetch_by_url(url)
 
                 entry["book"] = book
                 title = book.get("title", "")

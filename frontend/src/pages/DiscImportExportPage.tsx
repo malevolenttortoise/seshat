@@ -1,10 +1,13 @@
 // Import / Export page.
 //
 // Two flows:
-//   - Import: paste a list of Goodreads / Hardcover URLs, preview
-//     the parsed metadata, and add the survivors to the library as
-//     unowned books. The preview step is intentional so the user can
-//     drop bad matches before they hit the database.
+//   - Import: paste a list of book URLs from any supported source
+//     (Goodreads, Hardcover, Amazon, Open Library, Google Books,
+//     Kobo, IBDB), preview the parsed metadata, and add the
+//     survivors to the library as unowned books. The preview step
+//     is intentional so the user can drop bad matches before they
+//     hit the database. URL parsing + per-source fetch dispatch
+//     lives in `app/discovery/url_import.py` on the backend.
 //   - Export: ExportModal handles the actual download — this page
 //     just opens it.
 import { useState } from "react";
@@ -150,13 +153,13 @@ function DesktopImportExportPage() {
           Import Books
         </h2>
         <p style={{ fontSize: 13, color: t.td, margin: "0 0 16px" }}>
-          Paste Goodreads or Hardcover book URLs below, one per line. Books will be checked against your library before adding.
+          Paste book URLs below, one per line. Supported sources: Goodreads, Hardcover, Amazon (<code style={{ background: t.bg3, padding: "1px 4px", borderRadius: 3 }}>/dp/&#123;ASIN&#125;</code>), Open Library (<code style={{ background: t.bg3, padding: "1px 4px", borderRadius: 3 }}>/works</code>, <code style={{ background: t.bg3, padding: "1px 4px", borderRadius: 3 }}>/books</code>, <code style={{ background: t.bg3, padding: "1px 4px", borderRadius: 3 }}>/isbn</code>), Google Books, Kobo, IBDB. Books will be checked against your library before adding.
         </p>
         <textarea
           value={urls}
           onChange={(e) => setUrls(e.target.value)}
           placeholder={
-            "https://www.goodreads.com/book/show/12345\nhttps://hardcover.app/books/some-book\nhttps://www.goodreads.com/book/show/67890"
+            "https://www.goodreads.com/book/show/12345\nhttps://hardcover.app/books/some-book\nhttps://www.amazon.com/dp/B0CJDP9MNL\nhttps://openlibrary.org/works/OL15161W\nhttps://books.google.com/books?id=ABC"
           }
           rows={6}
           style={{

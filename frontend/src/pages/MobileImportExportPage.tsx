@@ -128,7 +128,8 @@ export default function MobileImportExportPage() {
       <MobileSection title="Import from URLs" defaultOpen={true}>
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <p style={{ fontSize: 13, color: t.td, margin: 0 }}>
-            Paste Goodreads or Hardcover URLs (one per line). Preview
+            Paste book URLs (one per line) from Goodreads, Hardcover,
+            Amazon, Open Library, Google Books, Kobo, or IBDB. Preview
             then add the new ones to your library as unowned.
           </p>
           <textarea
