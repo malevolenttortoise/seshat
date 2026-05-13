@@ -591,15 +591,37 @@ def _lang_ok(book_lang: str, allowed: list[str]) -> bool:
 
 
 def _looks_foreign(title: str) -> bool:
-    """Detect titles that are likely non-English."""
+    """Detect titles that are likely non-English.
+
+    Three signals, OR'd:
+      1. Diacritics (covers French/Spanish/German/Polish/etc. accented forms)
+      2. Non-Latin script (Cyrillic, CJK, Arabic, Hangul — already-block)
+      3. Edition/volume keywords that are unambiguously non-English
+
+    The keyword list intentionally avoids ambiguous English-overlapping
+    words ("tome" exists in English; "edition" can appear in English
+    titles). Only words that are essentially proof of foreign translation
+    go in: "coffret" (French boxed-set marker), "ausgabe" (German
+    edition), "edizione" (Italian edition), "wydanie" (Polish edition).
+    """
     if _RX_FOREIGN_ACCENTS.search(title):
         return True
     if _RX_FOREIGN_UNICODE.search(title):
         return True
-    # Common foreign words in translated titles
+    # Common foreign words in translated titles. Hungarian + Polish kept
+    # from original list; v2.11.0 added French/German/Italian/Polish
+    # edition markers surfaced by the Hasekura Hardcover/OL UAT.
     tl = title.lower()
-    foreign_kw = ['hamvai', 'kapuja', 'háborúja', 'bosszúja', 'przebudzenie',
-                  'ekspansja', 'lewiatana', 'babilon', 'пробуждение', 'врата']
+    foreign_kw = [
+        # Original (Hungarian, Polish, Russian)
+        'hamvai', 'kapuja', 'háborúja', 'bosszúja', 'przebudzenie',
+        'ekspansja', 'lewiatana', 'babilon', 'пробуждение', 'врата',
+        # v2.11.0 additions — unambiguously non-English edition markers
+        'coffret',   # French boxed-set
+        'ausgabe',   # German edition
+        'edizione',  # Italian edition
+        'wydanie',   # Polish edition
+    ]
     if any(fw in tl for fw in foreign_kw):
         return True
     return False

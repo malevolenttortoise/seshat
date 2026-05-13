@@ -515,6 +515,15 @@ class OpenLibrarySource(BaseSource):
         # Series extraction from title — best-effort. Only consume
         # the parenthetical when it looks series-shaped (has a
         # name component); leave format / edition decorations alone.
+        #
+        # v2.11.0: when the parenthetical IS an edition decoration
+        # (Japanese Edition / Limited Edition / 2nd Ed / etc.), strip
+        # it from the title entirely instead of restoring the full
+        # form. The decoration is noise that pollutes review-queue
+        # display and breaks downstream title-match dedup. Surfaced
+        # by the 2026-05-13 Hasekura UAT — "Side Colors, Volume 3
+        # (Japanese Edition)" was landing with the decoration intact
+        # despite the series-extraction correctly rejecting it.
         series_name, series_idx, cleaned_title = _extract_series_from_title(title_raw)
         if series_name:
             lname = series_name.lower().strip()
@@ -523,7 +532,8 @@ class OpenLibrarySource(BaseSource):
                 or _EDITION_REJECT_RX.match(lname)
             ):
                 series_name, series_idx = None, None
-                cleaned_title = title_raw
+                # KEEP cleaned_title (parenthetical stripped) — don't
+                # restore the noise.
 
         # Cover — OL's `covers` field is a list of cover_ids
         cover_url: Optional[str] = None

@@ -720,6 +720,10 @@ class TestSearchAuthorEndToEnd:
         # `_EDITION_REJECT_RX` missed. The series_map ended up with
         # garbage entries like a series literally named "Japanese
         # Edition" holding multiple unrelated books.
+        #
+        # Post-fix: not only is series rejected, but the decoration
+        # parenthetical is STRIPPED from the title so the noise
+        # doesn't pollute review-queue display or dedup.
         src = _make_source()
         _patch_get(src, {
             "search/authors.json": {
@@ -742,6 +746,10 @@ class TestSearchAuthorEndToEnd:
             f"{[s.name for s in result.series]}"
         )
         assert len(result.books) == 3
+        titles = sorted(b.title for b in result.books)
+        # v2.11.0: decoration parenthetical stripped from title too.
+        # Pre-fix titles ended in "(Japanese Edition)" etc.
+        assert titles == ["Another Title", "Some Book", "Third Book"]
         for b in result.books:
             assert b.series_name is None
 
@@ -750,6 +758,11 @@ class TestSearchAuthorEndToEnd:
         # are common OL title decorations and must NOT become series_name.
         # Both the exact-name reject list AND the "Nth Edition" regex
         # have to fire correctly.
+        #
+        # v2.11.0: also assert that the decoration parenthetical is
+        # stripped from the cleaned title so review queue / dedup
+        # don't see the noise. Pre-v2.11.0 the title retained the
+        # decoration; post-fix the title is the cleaned base.
         src = _make_source()
         _patch_get(src, {
             "search/authors.json": {
@@ -776,8 +789,8 @@ class TestSearchAuthorEndToEnd:
         assert len(result.books) == 5
         for b in result.books:
             assert b.series_name is None
-            # And the cleaned title should retain the original — we
-            # didn't strip the decoration, we just refused to read it
-            # as series info.
-            assert b.title.startswith("Some Book")
+            # Cleaned title — decoration parenthetical stripped
+            assert b.title == "Some Book", (
+                f"expected stripped 'Some Book', got {b.title!r}"
+            )
         await src.close()
