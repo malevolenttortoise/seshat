@@ -309,11 +309,16 @@ SOURCES: list[SourceSpec] = [
 # library). Audible runs as primary since its catalog + Audnexus
 # hydration covers narrator/duration/series cleanly. Hardcover
 # stays secondary because it does track audiobook editions when
-# given an API key. Goodreads/Kobo/etc. are omitted — they don't
-# surface audiobook-specific metadata and the catalog coverage
-# heavily overlaps Audible.
+# given an API key. Amazon discovers Audio CD / MP3 CD /
+# Preloaded Digital Audio + the dominant Audible-distributed
+# digital audiobook via the v2.11.1 `/juvec` audiobook filter
+# (`authorFilters.format=["audible_audiobook"]`); mediaMatrix
+# cross-refs handle the Audible-overlap dedupe. Goodreads/Kobo/etc.
+# are omitted — they don't surface audiobook-specific metadata
+# and the catalog coverage heavily overlaps Audible.
 AUDIOBOOK_SOURCES: list[SourceSpec] = [
     SourceSpec("audible",     "primary",       300.0, _src_audible,     True),
+    SourceSpec("amazon",      "secondary",     600.0, _src_amazon,      False),
     SourceSpec("hardcover",   "secondary",     180.0, _src_hardcover,   True),
     SourceSpec("openlibrary", "supplementary", 120.0, _src_openlibrary, False),
 ]
