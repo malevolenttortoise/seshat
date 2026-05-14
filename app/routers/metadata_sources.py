@@ -58,6 +58,10 @@ class SourceEntry(BaseModel):
     # Amazon row only.
     format: str | None = None
     language: str | None = None
+    # v2.11.1 N5 — Kobo-specific. Parallel detail-fetch worker count
+    # for the asyncio.Semaphore in `app/discovery/sources/kobo.py`.
+    # None for non-Kobo sources.
+    concurrency: int | None = None
 
 
 class PriorityLists(BaseModel):
@@ -133,6 +137,13 @@ def _state_from_settings(settings: dict) -> MetadataSourcesState:
                 # entries surface the ship-defaults to the panel.
                 format=entry.get("format") if name == "amazon" else None,
                 language=entry.get("language") if name == "amazon" else None,
+                # Kobo-specific (v2.11.1 N5). Parallel detail-fetch
+                # worker count.
+                concurrency=(
+                    int(entry["concurrency"])
+                    if name == "kobo" and entry.get("concurrency") is not None
+                    else None
+                ),
             )
         except Exception:
             _log.exception(

@@ -121,7 +121,13 @@ _DEFAULT_NEW_INSTALL_STATE: dict[str, dict[str, Any]] = {
     # mass_market and the other languages from content.languageFilter.
     "amazon":      {"ebook_enrich": True,  "ebook_scan": True,  "audiobook_enrich": False, "audiobook_scan": False, "mandatory": False, "format": "kindle", "language": "English"},
     "hardcover":   {"ebook_enrich": True,  "ebook_scan": True,  "audiobook_enrich": True,  "audiobook_scan": True,  "mandatory": True},
-    "kobo":        {"ebook_enrich": True,  "ebook_scan": True,  "audiobook_enrich": False, "audiobook_scan": False, "mandatory": False},
+    # Kobo — v2.11.0 ships parallel detail-fetch via asyncio.Semaphore.
+    # `concurrency` sets the worker count; each worker still respects
+    # `rate_limit` between its own requests, so the effective request
+    # rate is ~concurrency/rate_limit. Defaults give 4/3.0 = 1.33 req/s,
+    # which stays below Cloudflare's Kobo soft-block threshold. Raising
+    # concurrency without also raising rate_limit will trigger soft-blocks.
+    "kobo":        {"ebook_enrich": True,  "ebook_scan": True,  "audiobook_enrich": False, "audiobook_scan": False, "mandatory": False, "concurrency": 4},
     "ibdb":        {"ebook_enrich": False, "ebook_scan": False, "audiobook_enrich": False, "audiobook_scan": False, "mandatory": False},
     # Google Books defaults off for audiobook enrich — rate-limited
     # and carries no audiobook-specific fields (narrator, duration,

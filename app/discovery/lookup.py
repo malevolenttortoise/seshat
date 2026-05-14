@@ -190,7 +190,14 @@ def reload_sources():
     s = load_settings()
     hardcover = HardcoverSource(api_key=s.get("hardcover_api_key", ""))
     goodreads = GoodreadsSource(rate_limit=get_source_rate_limit(s, "goodreads"))
-    kobo = KoboSource(rate_limit=get_source_rate_limit(s, "kobo"))
+    # v2.11.1 N5: kobo.concurrency exposed via metadata_sources panel.
+    # Read with default=4 so pre-v2.11.1 settings.json files (no
+    # `concurrency` key) keep the v2.11.0 ship-default behaviour.
+    _kobo_entry = (s.get("metadata_sources") or {}).get("kobo") or {}
+    kobo = KoboSource(
+        rate_limit=get_source_rate_limit(s, "kobo"),
+        concurrency=int(_kobo_entry.get("concurrency", 4) or 4),
+    )
     # Stage 5++: format + language drive Amazon's server-side
     # authorFilters API on /juvec. Defaults applied if missing.
     _amazon_entry = (s.get("metadata_sources") or {}).get("amazon") or {}

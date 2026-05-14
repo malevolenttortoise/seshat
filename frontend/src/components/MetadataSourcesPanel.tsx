@@ -40,6 +40,10 @@ interface SourceEntry {
   // other source.
   format?: string | null;
   language?: string | null;
+  // v2.11.1 N5: Kobo-specific. Parallel detail-fetch worker count.
+  // Effective request rate is ~concurrency/rate_limit. Null for
+  // every other source.
+  concurrency?: number | null;
 }
 
 // Amazon Author-Store format options (matches FILTER_TO_BINDING in
@@ -338,6 +342,8 @@ function SourceList({ tab, draft, setDraft, known }: {
         const canUp = !locked && i > 1;
         const canDown = !locked && i < ordered.length - 1;
         const showAmazonExtras = name === "amazon" && tab === "ebook";
+        const showKoboExtras = name === "kobo" && tab === "ebook";
+        const hasExtrasRow = showAmazonExtras || showKoboExtras;
         return (
           <div key={name}>
           <div
@@ -347,7 +353,7 @@ function SourceList({ tab, draft, setDraft, known }: {
               alignItems: "center",
               gap: "8px 12px",
               padding: "8px 4px",
-              borderBottom: showAmazonExtras ? "none" : `1px solid ${t.borderL}`,
+              borderBottom: hasExtrasRow ? "none" : `1px solid ${t.borderL}`,
               background: locked ? t.bg3 : "transparent",
             }}
           >
@@ -472,6 +478,12 @@ function SourceList({ tab, draft, setDraft, known }: {
               onChange={(key, value) => setToggle(name, key, value)}
             />
           )}
+          {showKoboExtras && (
+            <KoboExtrasRow
+              entry={entry}
+              onChange={(key, value) => setToggle(name, key, value)}
+            />
+          )}
           </div>
         );
       })}
@@ -544,6 +556,64 @@ function AmazonExtrasRow({
     </div>
   );
 }
+
+// ─── Kobo-specific sub-row ──────────────────────────────────────
+//
+// Renders directly below the Kobo row in the Ebook tab. Lets the
+// user tune the parallel detail-fetch worker count. Maps to
+// `metadata_sources.kobo.concurrency` and flows through reload_sources
+// to the live KoboSource singleton.
+//
+// Effective request rate = ~concurrency/rate_limit. At ship-defaults
+// (4 / 3.0 = 1.33 req/s) Kobo stays below the Cloudflare-fronted
+// soft-block threshold. Raising concurrency without also raising
+// rate_limit will trigger soft-blocks — call out the multiplication
+// in the help text so power users don't shoot themselves in the foot.
+
+function KoboExtrasRow({
+  entry, onChange,
+}: {
+  entry: SourceEntry;
+  onChange: (key: keyof SourceEntry, value: number) => void;
+}) {
+  const t = useTheme();
+  const concurrency = entry.concurrency ?? 4;
+  const rateLimit = entry.rate_limit ?? 3.0;
+  const effectiveRate = rateLimit > 0 ? concurrency / rateLimit : 0;
+  return (
+    <div style={{
+      display: "flex", gap: 24, alignItems: "center",
+      padding: "8px 4px 12px 60px",
+      borderBottom: `1px solid ${t.borderL}`,
+      fontSize: 12,
+    }}>
+      <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ color: t.textDim, fontWeight: 600 }}>Concurrency</span>
+        <input
+          type="number"
+          min={1}
+          max={16}
+          step={1}
+          value={concurrency}
+          onChange={e => onChange("concurrency", parseInt(e.target.value) || 1)}
+          style={{
+            width: 60, padding: "4px 8px", textAlign: "center",
+            borderRadius: 6,
+            border: `1px solid ${t.border}`, background: t.inp,
+            color: t.text2, fontSize: 12, outline: "none",
+          }}
+        />
+      </label>
+      <span style={{ color: t.textDim, fontSize: 11, fontStyle: "italic" }}>
+        Parallel detail-fetch workers. Effective rate ≈
+        {" "}{effectiveRate.toFixed(2)} req/s ({concurrency} workers ÷
+        {" "}{rateLimit}s each). Raising concurrency without raising
+        Rate triggers Cloudflare soft-blocks.
+      </span>
+    </div>
+  );
+}
+
 
 // ─── Banner ───────────────────────────────────────────────────
 

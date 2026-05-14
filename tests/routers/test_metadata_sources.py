@@ -191,3 +191,67 @@ class TestPutReloadsDiscoverySources:
             assert put.status_code == 200, put.text
 
         assert lookup_module.amazon.format_filter == "paperback"
+
+
+class TestKoboConcurrency:
+    """v2.11.1 N5 — Kobo's parallel detail-fetch worker count is
+    exposed via `metadata_sources.kobo.concurrency`. Round-trips
+    GET/PUT and flows through reload_sources to the live
+    `lookup.kobo` singleton without a container restart."""
+
+    async def test_get_returns_kobo_concurrency_default(
+        self, isolated_settings,
+    ):
+        """Fresh install seeds kobo.concurrency=4 via
+        `_DEFAULT_NEW_INSTALL_STATE`."""
+        async with await _client(_make_app()) as ac:
+            resp = await ac.get("/api/v1/metadata-sources")
+        kobo = resp.json()["state"]["sources"]["kobo"]
+        assert kobo["concurrency"] == 4
+
+    async def test_concurrency_null_for_other_sources(
+        self, isolated_settings,
+    ):
+        """concurrency is Kobo-specific — every other source's row
+        should have it as None."""
+        async with await _client(_make_app()) as ac:
+            resp = await ac.get("/api/v1/metadata-sources")
+        for name, entry in resp.json()["state"]["sources"].items():
+            if name == "kobo":
+                continue
+            assert entry.get("concurrency") is None, (
+                f"{name!r} should not carry Kobo-specific concurrency"
+            )
+
+    async def test_put_persists_concurrency(self, isolated_settings):
+        """User bumps Kobo concurrency 4 → 8 via the panel; PUT
+        round-trips through settings + a subsequent GET reports
+        the new value."""
+        async with await _client(_make_app()) as ac:
+            resp = await ac.get("/api/v1/metadata-sources")
+            state = resp.json()["state"]
+            state["sources"]["kobo"]["concurrency"] = 8
+            put = await ac.put("/api/v1/metadata-sources", json=state)
+            assert put.status_code == 200, put.text
+            resp2 = await ac.get("/api/v1/metadata-sources")
+        assert resp2.json()["state"]["sources"]["kobo"]["concurrency"] == 8
+
+    async def test_put_propagates_concurrency_to_singleton(
+        self, isolated_settings,
+    ):
+        """N9 + N5 interplay: after a concurrency PUT, the live
+        `lookup.kobo` singleton's `concurrency` attribute reflects
+        the saved value — proves the reload chain works for the new
+        config dimension."""
+        from app.discovery import lookup as lookup_module
+        lookup_module.reload_sources()
+        assert lookup_module.kobo.concurrency == 4  # baseline
+
+        async with await _client(_make_app()) as ac:
+            resp = await ac.get("/api/v1/metadata-sources")
+            state = resp.json()["state"]
+            state["sources"]["kobo"]["concurrency"] = 6
+            put = await ac.put("/api/v1/metadata-sources", json=state)
+            assert put.status_code == 200, put.text
+
+        assert lookup_module.kobo.concurrency == 6
