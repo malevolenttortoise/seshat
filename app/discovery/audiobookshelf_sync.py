@@ -279,6 +279,25 @@ async def sync_audiobookshelf(library: dict) -> dict:
                         (author_name, sort_name, abs_library_id),
                     )
                     author_id_map[author_name] = cur.lastrowid
+                    # v2.12.1 #2 — dual author-row pattern. Stub this
+                    # author into every ebook library so the
+                    # cross-library Scan Ebooks button can always run
+                    # discovery against them. See `author_mirror.py`
+                    # docstring for the full rationale. Best-effort.
+                    try:
+                        from app.discovery.author_mirror import (
+                            mirror_new_author_to_other_type_libs,
+                        )
+                        await mirror_new_author_to_other_type_libs(
+                            author_name,
+                            source_content_type="audiobook",
+                            sort_name=sort_name,
+                        )
+                    except Exception:
+                        logger.debug(
+                            "audiobookshelf_sync: stub-mirror failed for '%s' "
+                            "(non-fatal)", author_name, exc_info=True,
+                        )
 
         # ── Pass 2: series ─────────────────────────────────────
         series_id_map: dict[tuple[str, int], int] = {}

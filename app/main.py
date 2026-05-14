@@ -881,6 +881,36 @@ async def lifespan(app: FastAPI):
                 state._startup_sync_complete = True
                 _log.info("Startup sync complete; first-boot splash can clear")
 
+            # v2.12.1 #2 — one-shot dual-author-row backfill. Runs
+            # AFTER the initial sync so all libraries have their
+            # canonical author rows. Idempotent + guarded by a
+            # settings flag so subsequent boots skip it. Failure to
+            # backfill logs a warning but doesn't fail startup.
+            inner_settings = load_settings()
+            if not inner_settings.get("v2_12_1_dual_row_backfill_done"):
+                try:
+                    from app.discovery.author_mirror import (
+                        backfill_dual_author_rows,
+                    )
+                    result = await backfill_dual_author_rows()
+                    _log.info(
+                        "dual-author-row backfill: checked=%d "
+                        "stubs_inserted=%d by_lib=%s",
+                        result.get("checked", 0),
+                        result.get("stubs_inserted", 0),
+                        result.get("by_library", {}),
+                    )
+                    inner_settings = load_settings()
+                    inner_settings["v2_12_1_dual_row_backfill_done"] = True
+                    save_settings(inner_settings)
+                except Exception:
+                    _log.exception(
+                        "dual-author-row backfill failed (non-fatal — "
+                        "stubs will accrue on next sync via the "
+                        "per-author mirror hook in calibre_sync / "
+                        "audiobookshelf_sync)"
+                    )
+
         state._startup_sync_task = state.supervised_task(
             _run_startup_sync,
             name="startup-sync",

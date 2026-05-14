@@ -713,6 +713,29 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
                         (incoming_name, author["sort"], cal_id, norm),
                     )
                     author_map[cal_id] = cur.lastrowid
+                    # v2.12.1 #2 — dual author-row pattern. Stub this
+                    # author into every audiobook library so the
+                    # cross-library Scan Audiobooks button can always
+                    # run discovery against them. Stub is name-only;
+                    # the audiobook lib's row is owned by ABS sync (or
+                    # remains empty if the author has no audiobook
+                    # presence). Best-effort: failure to mirror logs a
+                    # warning but doesn't fail the Calibre sync.
+                    try:
+                        from app.discovery.author_mirror import (
+                            mirror_new_author_to_other_type_libs,
+                        )
+                        await mirror_new_author_to_other_type_libs(
+                            incoming_name,
+                            source_content_type="ebook",
+                            sort_name=author["sort"],
+                            normalized_name=norm,
+                        )
+                    except Exception:
+                        logger.debug(
+                            "calibre_sync: stub-mirror failed for '%s' "
+                            "(non-fatal)", incoming_name, exc_info=True,
+                        )
 
         # Pass 2: upsert series
         #
