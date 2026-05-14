@@ -1137,6 +1137,14 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                 if bk.is_unreleased is not None:
                     sets.append("is_unreleased=?")
                     vals.append(1 if bk.is_unreleased else 0)
+                # v2.11.1: amazon_format_asins JSON cross-reference.
+                # Source-private cache, not user-editable, not
+                # reviewable. Always overwrite when the source emits
+                # it — newer mediaMatrix data wins. Only Amazon sets
+                # this today; merge no-ops for every other source.
+                if bk.amazon_format_asins is not None:
+                    sets.append("amazon_format_asins=?")
+                    vals.append(bk.amazon_format_asins)
                 if fields_updated or queue_rows:
                     updated_books += 1
                     logger.debug(
@@ -1405,8 +1413,8 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                     if suffix_norm in author_series_norms and prefix_norm in rows_by_norm:
                         omnibus = True
                 s_idx = None if omnibus else bk.series_index
-                await db.execute(f"INSERT OR IGNORE INTO books (title,author_id,series_id,series_index,isbn,cover_url,pub_date,expected_date,is_unreleased,description,page_count,source,source_url,owned,is_new,is_omnibus,{source_name}_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,1,?,?)",
-                    (bk.title, author_id, sid_use, s_idx, bk.isbn, bk.cover_url, bk.pub_date, bk.expected_date, 1 if bk.is_unreleased else 0, bk.description, bk.page_count, source_name, initial_urls, 1 if omnibus else 0, bk.external_id))
+                await db.execute(f"INSERT OR IGNORE INTO books (title,author_id,series_id,series_index,isbn,cover_url,pub_date,expected_date,is_unreleased,description,page_count,source,source_url,owned,is_new,is_omnibus,{source_name}_id,amazon_format_asins) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,1,?,?,?)",
+                    (bk.title, author_id, sid_use, s_idx, bk.isbn, bk.cover_url, bk.pub_date, bk.expected_date, 1 if bk.is_unreleased else 0, bk.description, bk.page_count, source_name, initial_urls, 1 if omnibus else 0, bk.external_id, bk.amazon_format_asins))
                 existing.add(norm); new_books += 1
                 if on_new_book:
                     on_new_book()
@@ -1523,8 +1531,8 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                     continue
             initial_urls = json.dumps({source_name: bk.source_url}) if bk.source_url else "{}"
             omnibus = _is_omnibus(bk.title)
-            await db.execute(f"INSERT OR IGNORE INTO books (title,author_id,isbn,cover_url,pub_date,expected_date,is_unreleased,description,page_count,source,source_url,owned,is_new,is_omnibus,{source_name}_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,0,1,?,?)",
-                (bk.title, author_id, bk.isbn, bk.cover_url, bk.pub_date, bk.expected_date, 1 if bk.is_unreleased else 0, bk.description, bk.page_count, source_name, initial_urls, 1 if omnibus else 0, bk.external_id))
+            await db.execute(f"INSERT OR IGNORE INTO books (title,author_id,isbn,cover_url,pub_date,expected_date,is_unreleased,description,page_count,source,source_url,owned,is_new,is_omnibus,{source_name}_id,amazon_format_asins) VALUES (?,?,?,?,?,?,?,?,?,?,?,0,1,?,?,?)",
+                (bk.title, author_id, bk.isbn, bk.cover_url, bk.pub_date, bk.expected_date, 1 if bk.is_unreleased else 0, bk.description, bk.page_count, source_name, initial_urls, 1 if omnibus else 0, bk.external_id, bk.amazon_format_asins))
             existing.add(norm); new_books += 1
             if on_new_book:
                 on_new_book()

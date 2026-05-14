@@ -55,6 +55,13 @@ class BookResult:
     language: Optional[str] = None
     source: str = ""
     source_url: Optional[str] = None
+    # v2.11.1: Amazon-specific. JSON-encoded `{binding_symbol: asin}`
+    # map from the Author-Store `mediaMatrix` cross-references. Lets
+    # us record the Kindle/Hardcover/Paperback/Audible ASIN siblings
+    # of a canonical work in one column so the UI can offer "switch
+    # format" later. Only AmazonSource populates this today; other
+    # sources leave it None and the merge layer no-ops.
+    amazon_format_asins: Optional[str] = None
 
 
 @dataclass

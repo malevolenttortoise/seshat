@@ -33,6 +33,7 @@ per author scan (1 GET + 1 filter POST + ~3 detail-fetch POSTs +
 """
 from __future__ import annotations
 
+import json
 import logging
 import urllib.parse
 from typing import Any, Optional
@@ -498,16 +499,28 @@ class AmazonSource(BaseSource):
     def _product_to_book(self, p: Product) -> BookResult:
         """Convert one parsed Product into a BookResult.
 
-        We store the canonical ASIN in external_id and rely on the
+        We store the canonical ASIN in `external_id` and rely on the
         merge layer's `f"{source}_id"` UPDATE pattern (lookup.py:759)
         to land it in `books.amazon_id`. The mediaMatrix variants
-        are serialized into `amazon_format_asins` JSON via the
-        source's source-specific persistence path (see commit 5
-        finalization).
+        are JSON-serialized into `amazon_format_asins` so the merge
+        layer can persist them to the column added in v2.11.0 Stage
+        5++ commit 1.
         """
         source_url = (
             urllib.parse.urljoin(_AMAZON_BASE, p.detail_page_link)
             if p.detail_page_link else None
+        )
+        # JSON-encode the mediaMatrix variants as `{binding_symbol: asin}`.
+        # Stable key order via sorted() so a re-scan that returns the
+        # same variants generates an identical JSON string (lets the
+        # merge layer skip the UPDATE when nothing actually changed).
+        format_asins: dict[str, str] = {}
+        for v in p.media_matrix:
+            if v.binding_symbol and v.asin:
+                format_asins[v.binding_symbol] = v.asin
+        amazon_format_asins = (
+            json.dumps(format_asins, sort_keys=True)
+            if format_asins else None
         )
         return BookResult(
             title=p.title,
@@ -520,6 +533,7 @@ class AmazonSource(BaseSource):
             external_id=p.asin,
             source="amazon",
             source_url=source_url,
+            amazon_format_asins=amazon_format_asins,
         )
 
 

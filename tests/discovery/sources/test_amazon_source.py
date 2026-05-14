@@ -565,3 +565,132 @@ class TestClose:
         source._session_init_attempted = True
         await source.close()
         assert session.closed is True
+
+
+class TestAmazonFormatAsins:
+    """v2.11.1: each BookResult emitted by AmazonSource carries the
+    mediaMatrix cross-reference map JSON-encoded in
+    `amazon_format_asins`. The merge layer persists it to
+    `books.amazon_format_asins`."""
+
+    async def test_book_carries_mediamatrix_json(self):
+        """Mistborn has Kindle / Hardcover / Paperback / Mass Market /
+        Audible / Preloaded Digital Audio variants in the SSR JSON.
+        The emitted BookResult should carry a JSON map matching."""
+        import json as _json
+        session = MockSession(
+            get_routes={
+                "/stores/author/B001IGFHW6/allbooks": MockResponse(
+                    200, SANDERSON_HTML,
+                ),
+            },
+            post_responses=[MockResponse(200, _juvec_response_json(
+                asin_list=["B002GYI9C4"],
+                total=1,
+                products=[
+                    _product_dict(
+                        "B002GYI9C4", "Mistborn",
+                        series_title="Mistborn", series_position=1,
+                        media_matrix=[
+                            ("kindle_edition", "B002GYI9C4"),
+                            ("hardcover", "076531178X"),
+                            ("paperback", "1250868289"),
+                            ("audio_download", "B001QKBHG4"),
+                        ],
+                    ),
+                ],
+            ))],
+        )
+        source = AmazonSource(burst_delay_s=0.0)
+        source._session = session
+        source._session_init_attempted = True
+
+        result = await source.get_author_books("B001IGFHW6")
+        assert result is not None
+        all_books = list(result.books)
+        for s in result.series:
+            all_books.extend(s.books)
+        mistborn = next(b for b in all_books if b.title == "Mistborn")
+        assert mistborn.amazon_format_asins is not None
+        parsed = _json.loads(mistborn.amazon_format_asins)
+        assert parsed == {
+            "kindle_edition": "B002GYI9C4",
+            "hardcover": "076531178X",
+            "paperback": "1250868289",
+            "audio_download": "B001QKBHG4",
+        }
+
+    async def test_book_with_no_mediamatrix_emits_none(self):
+        """A product entry with an empty mediaMatrix.items array
+        should produce amazon_format_asins=None on the BookResult."""
+        session = MockSession(
+            get_routes={
+                "/stores/author/B001IGFHW6/allbooks": MockResponse(
+                    200, SANDERSON_HTML,
+                ),
+            },
+            post_responses=[MockResponse(200, _juvec_response_json(
+                asin_list=["B003"],
+                total=1,
+                products=[
+                    _product_dict(
+                        "B003", "Solo Title",
+                        series_title=None,
+                        media_matrix=[],
+                    ),
+                ],
+            ))],
+        )
+        source = AmazonSource(burst_delay_s=0.0)
+        source._session = session
+        source._session_init_attempted = True
+
+        result = await source.get_author_books("B001IGFHW6")
+        assert result is not None
+        all_books = list(result.books)
+        for s in result.series:
+            all_books.extend(s.books)
+        solo = next(b for b in all_books if b.title == "Solo Title")
+        assert solo.amazon_format_asins is None
+
+    async def test_json_is_stable_across_reruns(self):
+        """sort_keys=True in the JSON dump means a re-scan that
+        returns the same variants produces a byte-identical string.
+        Lets the merge layer's deferred change-detection logic
+        (if any) skip writes for unchanged records."""
+        import json as _json
+        session = MockSession(
+            get_routes={
+                "/stores/author/B001IGFHW6/allbooks": MockResponse(
+                    200, SANDERSON_HTML,
+                ),
+            },
+            post_responses=[MockResponse(200, _juvec_response_json(
+                asin_list=["B002GYI9C4"],
+                total=1,
+                products=[
+                    _product_dict(
+                        "B002GYI9C4", "Mistborn",
+                        media_matrix=[
+                            ("hardcover", "076531178X"),
+                            ("kindle_edition", "B002GYI9C4"),
+                            ("paperback", "1250868289"),
+                        ],
+                    ),
+                ],
+            ))],
+        )
+        source = AmazonSource(burst_delay_s=0.0)
+        source._session = session
+        source._session_init_attempted = True
+
+        result = await source.get_author_books("B001IGFHW6")
+        all_books = list(result.books)
+        for s in result.series:
+            all_books.extend(s.books)
+        mistborn = next(b for b in all_books if b.title == "Mistborn")
+        # Keys should be alphabetically sorted regardless of source
+        # ordering — hardcover < kindle_edition < paperback.
+        assert mistborn.amazon_format_asins is not None
+        decoded = _json.loads(mistborn.amazon_format_asins)
+        assert list(decoded.keys()) == sorted(decoded.keys())
