@@ -19,7 +19,7 @@ from typing import Optional
 import httpx
 
 from app.discovery.sources.base import BaseSource, AuthorResult, SeriesResult, BookResult, _redact_sensitive
-from app.metadata.scoring import score_match
+from app.metadata.scoring import author_overlap
 
 logger = logging.getLogger("seshat.discovery.google_books")
 
@@ -247,11 +247,24 @@ class GoogleBooksSource(BaseSource):
                 continue
 
             item_authors = vi.get("authors", [])
-            sc = score_match(
-                record_title=title, record_authors=item_authors,
-                search_title=title, search_authors=author_name,
-            )
-            if sc < 0.3:
+            # v2.12.0 namesake gate. The old `score_match` call here
+            # compared `record_title=title, search_title=title` —
+            # trivially 1.0 for title similarity, so the composite
+            # score never dropped below the 0.3 threshold regardless
+            # of author mismatch. Result: indie author searches
+            # surfaced unrelated books by other authors sharing part
+            # of the queried name (UAT 2026-05-14: "Colin Graves"
+            # got 19 google_books "new books" most of which were by
+            # a different Colin Graves; Hardcover + Kobo correctly
+            # rejected the same namesake via the lookup-layer
+            # `_validate_author` gate).
+            #
+            # `author_overlap` returns the fraction of the queried
+            # author's name parts that appear in the record's authors
+            # list, after `normalize_author`. We require ≥0.5 — gives
+            # a little tolerance for typographic variants without
+            # admitting unrelated namesakes.
+            if author_overlap(item_authors, author_name) < 0.5:
                 continue
 
             # ISBN: prefer ISBN_13, fall back to ISBN_10
