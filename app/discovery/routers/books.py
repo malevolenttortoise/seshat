@@ -853,9 +853,10 @@ async def scan_books_sources(data: dict = Body(...)):
 
     # Same background-task pattern as /authors/scan-sources. Lazy
     # import keeps books.py from pulling in the whole authors router
-    # at module load time.
+    # at module load time. The helper lives in the *discovery*
+    # authors router, not the top-level app.routers package.
     import asyncio
-    from app.routers.authors import _spawn_lookup_task
+    from app.discovery.routers.authors import _spawn_lookup_task
 
     if content_type is None:
         async def _runner():
