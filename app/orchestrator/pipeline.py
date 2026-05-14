@@ -1130,7 +1130,11 @@ async def _stage_for_review(
         event.grab_id, event.torrent_name, dest,
     )
 
-    if per_event_notifications and ntfy_url and ntfy_topic:
+    # v2.12.0 — gate on `notify_on_review_queued`. Pre-v2.12.0 this
+    # fired whenever per_event_notifications was on, with no per-event
+    # opt-out. Users who wanted "added to library" pushes but not
+    # "ready for review" pushes had no UI knob.
+    if ntfy_url and ntfy_topic and ntfy.is_event_enabled("review_queued"):
         try:
             await ntfy.notify_pipeline_complete(
                 ntfy_url, ntfy_topic,
@@ -1238,7 +1242,13 @@ async def _deliver_prepared(
         event.grab_id, event.torrent_name, sink_result.sink_name,
     )
 
-    if per_event_notifications and ntfy_url and ntfy_topic:
+    # v2.12.0 — gate on `notify_on_library_ingest`. This is the
+    # "Added to Calibre / Audiobookshelf / …" push — fires only after
+    # the book actually lands in the user's library app. Mark wanted a
+    # discrete toggle for this so users could mute the download/grab
+    # pushes while keeping the "book is now in your library" signal,
+    # or vice versa.
+    if ntfy_url and ntfy_topic and ntfy.is_event_enabled("library_ingest"):
         try:
             await ntfy.notify_pipeline_complete(
                 ntfy_url, ntfy_topic,

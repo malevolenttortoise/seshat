@@ -194,6 +194,9 @@ def is_event_enabled(event_key: str) -> bool:
       - "grab"               → notify_on_grab
       - "download_complete"  → notify_on_download_complete
       - "pipeline_error"     → notify_on_pipeline_error
+      - "review_queued"      → notify_on_review_queued       (v2.12.0)
+      - "library_ingest"     → notify_on_library_ingest      (v2.12.0)
+      - "buffer_gate_block"  → notify_on_buffer_gate_block   (v2.12.0)
 
     Settings are mtime-cached in `app.config.load_settings`, so a
     per-event call is effectively free.

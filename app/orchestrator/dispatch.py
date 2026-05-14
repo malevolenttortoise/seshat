@@ -1117,6 +1117,12 @@ async def _record_buffer_gate_block(
     _last_buffer_gate_notify_at[trigger] = now
     try:
         from app.notify import ntfy as _ntfy
+        # v2.12.0 — gate on `notify_on_buffer_gate_block`. The 6h
+        # throttle still applies above; this gate lets the user opt
+        # out of buffer-gate pushes entirely while keeping per-event
+        # notifications on for other event types.
+        if not _ntfy.is_event_enabled("buffer_gate_block"):
+            return
         await _ntfy.notify_buffer_gate_block(
             deps.ntfy_url, deps.ntfy_topic,
             announce.torrent_name or f"tid={announce.torrent_id}",

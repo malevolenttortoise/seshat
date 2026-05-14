@@ -476,6 +476,12 @@ DEFAULT_SETTINGS = {
     "notify_on_grab": True,
     "notify_on_download_complete": True,
     "notify_on_pipeline_error": True,
+    # v2.12.0 — new per-event toggles. Each gates one previously-ungated
+    # ntfy emit site that the v2.12.0 audit caught firing regardless of
+    # user preference.
+    "notify_on_review_queued": True,       # `notify_pipeline_complete(sink="review_queue")` — book ready for review-queue approval
+    "notify_on_library_ingest": True,      # `notify_pipeline_complete(sink="<library_app>")` — book landed in CWA / Audiobookshelf / etc.
+    "notify_on_buffer_gate_block": True,   # `notify_buffer_gate_block` — autograb refused due to buffer (throttled 6h)
     "notify_daily_accepted": True,
     "notify_daily_tentative": True,
     "notify_daily_ignored": True,

@@ -808,13 +808,16 @@ function DesktopSettingsPage() {
             const perEventOn = !!s.per_event_notifications;
             const digestOn = !!s.daily_digest_enabled;
             return <>
-              <SF label="Pipeline Per-Event Pushes" desc="Fire one notification per pipeline event as it happens (grab, download, error). Individual events selectable below.">
+              <SF label="Pipeline Per-Event Pushes" desc="Fire one notification per pipeline event as it happens (grab, download, ingest, error). Individual events selectable below.">
                 <STog on={perEventOn} onToggle={() => upd("per_event_notifications", !perEventOn)} label />
               </SF>
               <SF label="" desc="" wide>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "8px 32px", width: "100%", opacity: perEventOn ? 1 : 0.4, pointerEvents: perEventOn ? "auto" : "none" }}>
                   <NCheck label="New book grabbed" field="notify_on_grab" s={s} upd={upd} />
                   <NCheck label="Download completed" field="notify_on_download_complete" s={s} upd={upd} />
+                  <NCheck label="Ready for review" field="notify_on_review_queued" s={s} upd={upd} />
+                  <NCheck label="Added to library" field="notify_on_library_ingest" s={s} upd={upd} />
+                  <NCheck label="Buffer-gate block" field="notify_on_buffer_gate_block" s={s} upd={upd} />
                   <NCheck label="Pipeline errors" field="notify_on_pipeline_error" s={s} upd={upd} />
                 </div>
               </SF>
