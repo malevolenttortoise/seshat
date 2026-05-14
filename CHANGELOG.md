@@ -7,6 +7,110 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [2.13.0] — 2026-05-14
+
+Stage 6 Goodreads Cloudflare bypass (Phase A). Closes the long-deferred
+v2.11.2 ↦ v2.12.0 ↦ v2.13.0 work item from the metadata-overhaul arc.
+First minor since v2.12.2's stub-row hotfix.
+
+### Phase A — what ships now
+
+curl_cffi Chrome120 TLS impersonation for every Goodreads HTTP call,
+plus the dispatcher + observability scaffolding that lets us measure
+whether the bypass actually holds under realistic burst load. Cookie
+injection (`cf_clearance` + `_session_id2`) is held in reserve as
+Phase B — only built if Phase A UAT shows persistent 202s.
+
+### Added
+
+- **`app/metadata/goodreads_session.py`** — centralized HTTP plumbing
+  for goodreads.com. Single source of truth for TLS impersonation,
+  soft-block detection (HTTP 202 / empty 2xx body), runtime-state
+  flag transitions, and the 5s + 0–1s jitter rate-limit. All 4 call
+  sites (discovery source, metadata source, ID resolver, paste-URL
+  importer) route through it.
+- **Three runtime-state keys** in settings.json:
+  `goodreads_session_state` (active / soft_blocked / unknown),
+  `goodreads_session_state_since`, `goodreads_session_last_status`.
+  All three protected via `_RUNTIME_STATE_KEYS` so PATCH can't
+  clobber them.
+- **Dispatcher skip** in both source-iteration loops (per-book
+  enricher + per-author scan) when state is soft_blocked. Without
+  this, every iteration paid the full request → 202 → next-source
+  roundtrip after the first failure.
+- **`app/metadata/id_cache.py`** — SQLite-backed cross-reference
+  cache. 30-day book_id TTL on hits, 1-day on misses (so dead-end
+  ISBNs don't re-probe Goodreads every scan). 7-day author_bib TTL
+  reserved for future discovery-source integration. WAL mode so the
+  canary's read never blocks a live scan's write.
+- **Hardcover `book_mappings` Tier 2** in the goodreads_id_resolver
+  chain. Single GraphQL roundtrip: editions filtered by ISBN-13 / ASIN
+  → book → book_mappings restricted to `platform.name == "Goodreads"`
+  → external_id. Resolves the Goodreads ID for many books without
+  ever touching Goodreads itself, when a Hardcover API key is
+  configured. Closes the long-deferred Phase-1.5 Tier 2 slot.
+- **Probe endpoints** under `/api/v1/metadata/goodreads/`:
+  - `GET /state` — current runtime-state shape
+  - `POST /test` — probe Goodreads (`mode=single` or `mode=burst`).
+    Burst uses a canonical 10-book pool sourced from Mark's prod
+    library 2026-05-14 (mix of recent + older IDs, mainstream +
+    indie).
+  - `POST /mark-active` — manually clear the soft-block flag
+- **`scripts/probe_goodreads.py`** — standalone host-side variant of
+  the burst probe for UAT baseline runs. Mirrors the in-app code path
+  exactly so wire-level results are comparable.
+- **Frontend GoodreadsStatusCard** in MetadataSourcesPanel. Status
+  pill (Active / Soft-blocked / Unknown), "Run probe" + "Run burst
+  (10×)" buttons, "Mark as active" (only when soft-blocked), and
+  inline result rendering. No cookie input fields in Phase A.
+- **Weekly Goodreads canary** (Mondays 03:00 local). One GET to The
+  Hobbit through the production session module. On 202 it flips the
+  state flag (handled by the session module) AND emits a ntfy
+  notification gated on `notify_on_goodreads_canary_failed` (new
+  per-event toggle, default True). Also prunes expired id_cache rows.
+- **`docs/metadata-sources.md`** — full Phase-7 docs file covering
+  per-source coverage, the Cloudflare bypass story end-to-end, the
+  resolver chain, and the "what to do when Goodreads goes silent"
+  runbook.
+- **README pointer** + bump from "7 metadata sources" to "9" (OL +
+  Audible were missing from the count).
+
+### Changed
+
+- **Goodreads default rate limit: 2.0s → 5.0s + 0–1s jitter.**
+  Conservative Phase-A default per the design memo. Existing installs
+  keep their saved value; only fresh installs get 5.0s. A one-click
+  migration banner in the panel offers existing users a bump to 5.0s.
+- The duplicate `_is_cloudflare_soft_block` helpers in
+  `app/discovery/sources/goodreads.py` and
+  `app/metadata/sources/goodreads.py` are replaced by re-exports from
+  the new `goodreads_session` module, so the detection logic exists
+  in exactly one place.
+- `notify_on_goodreads_canary_failed` (default True) joins the
+  v2.12.0 per-event ntfy toggle family.
+
+### Tests
+
++52 across 5 new test files / classes — covering the session module
+(15), id_cache (18), the new resolver tier (3), the probe endpoint
+(9), and the canary scheduler (5). Suite at 2585 passed / 7 skipped.
+
+### Known limitations
+
+- Phase A relies on TLS fingerprint alone. If Cloudflare tightens (or
+  for users whose IP reputation is bad), the burst probe may show
+  202s. The Phase-A recovery path is raise the rate limit (8s+) and/or
+  wait for the bot-score to decay. Phase B (encrypted cookie panel)
+  is the engineered fallback held in reserve.
+- The id_cache integrates only into the resolver today. Author
+  bibliography caching (the 7-day scope) is wired but not yet
+  consumed by `app/discovery/sources/goodreads.py` — held for a
+  future patch.
+- Backfilling CHANGELOG entries for v2.11.0 / v2.12.0 / v2.12.1 /
+  v2.12.2 is out of this arc's scope.
+
+---
+
 ## [2.10.10] — 2026-05-13
 
 Security + reliability hygiene patch as the deck-clearing first step
