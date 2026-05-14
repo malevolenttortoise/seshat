@@ -21,6 +21,28 @@ from app.metadata.goodreads_id_resolver import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _isolated_id_cache(tmp_path, monkeypatch):
+    """v2.13.0: the resolver now caches outcomes in
+    `app.metadata.id_cache` AND writes the goodreads_session_state
+    runtime flag via app.config.save_settings on soft-block. Both
+    side-effects must land in tmp_path, not the dev DATA_DIR.
+
+    SETTINGS_PATH is computed at import time from DATA_DIR, so
+    patching DATA_DIR alone leaks writes to the real settings.json.
+    We also patch SETTINGS_PATH so any save_settings call writes here.
+    """
+    from app import config
+    from app.metadata import id_cache
+
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(config, "SETTINGS_PATH", tmp_path / "settings.json")
+    monkeypatch.setattr(
+        id_cache, "_db_path", lambda: tmp_path / "id_cache.db",
+    )
+    yield
+
+
 def _make_client(handler: Callable[[httpx.Request], httpx.Response]) -> httpx.AsyncClient:
     transport = httpx.MockTransport(handler)
     return httpx.AsyncClient(transport=transport, timeout=5.0)

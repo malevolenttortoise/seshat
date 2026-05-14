@@ -78,13 +78,32 @@ async def resolve_goodreads_id(
     query: ResolveQuery,
     *,
     client: Optional[httpx.AsyncClient] = None,
+    use_cache: bool = True,
 ) -> ResolveResult:
     """Run the tiered resolver chain. First hit wins.
 
     `client` is optional — tests inject an `httpx.AsyncClient` with a
     `MockTransport` to drive scenarios. Production callers can pass
     a shared client to amortize connection pooling across calls.
+
+    v2.13.0: cache lookup against `app.metadata.id_cache` happens
+    BEFORE any HTTP. Hits (30-day TTL) skip the network entirely.
+    Misses are ALSO cached (1-day TTL) so a dead-end ISBN doesn't
+    pay another auto_complete round-trip every scan. `use_cache=False`
+    bypasses both read and write — useful for the canary which
+    explicitly wants a live probe of the resolver chain.
     """
+    from app.metadata import id_cache
+
+    if use_cache:
+        cached = id_cache.get_book_id(
+            isbn=query.isbn, asin=query.asin,
+            title=query.title, author=query.author,
+        )
+        if cached is not None:
+            book_id, tier = cached
+            return ResolveResult(book_id, tier or None, soft_blocked=False)
+
     owned_client = client is None
     if owned_client:
         client = httpx.AsyncClient(timeout=15.0, headers=_DEFAULT_HEADERS)
@@ -104,7 +123,14 @@ async def resolve_goodreads_id(
                     "resolver: tier1 (auto_complete) hit for %s → goodreads_id=%s",
                     ident, tier1,
                 )
-                return ResolveResult(tier1, "auto_complete", soft_blocked)
+                result = ResolveResult(tier1, "auto_complete", soft_blocked)
+                if use_cache:
+                    id_cache.put_book_id(
+                        isbn=query.isbn, asin=query.asin,
+                        title=query.title, author=query.author,
+                        book_id=tier1, tier="auto_complete",
+                    )
+                return result
 
         # ── Tier 2: Hardcover book_mappings (deferred) ─────────
         # Implemented in v2.11.0 once the Hardcover discovery client
@@ -122,8 +148,25 @@ async def resolve_goodreads_id(
                     "resolver: tier3 (openlibrary) hit for isbn=%s → goodreads_id=%s",
                     query.isbn, tier3,
                 )
-                return ResolveResult(tier3, "openlibrary", soft_blocked)
+                result = ResolveResult(tier3, "openlibrary", soft_blocked)
+                if use_cache:
+                    id_cache.put_book_id(
+                        isbn=query.isbn, asin=query.asin,
+                        title=query.title, author=query.author,
+                        book_id=tier3, tier="openlibrary",
+                    )
+                return result
 
+        # Full miss across all tiers — cache the negative so the next
+        # scan with the same identifier doesn't re-probe Goodreads.
+        # Skip cache-write on soft-block so a transient Cloudflare gate
+        # doesn't poison the cache for a day.
+        if use_cache and not soft_blocked:
+            id_cache.put_book_id(
+                isbn=query.isbn, asin=query.asin,
+                title=query.title, author=query.author,
+                book_id=None, tier=None,
+            )
         return ResolveResult(None, None, soft_blocked)
     finally:
         if owned_client:
