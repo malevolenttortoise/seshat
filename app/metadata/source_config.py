@@ -70,7 +70,14 @@ _log = logging.getLogger("seshat.metadata.source_config")
 # whole Audible+Audnexus chain.
 KNOWN_SOURCES: dict[str, dict[str, Any]] = {
     "mam":         {"display": "MyAnonamouse",  "available_for": ("ebook", "audiobook"), "default_rate": 2.0, "mam_only": True},
-    "goodreads":   {"display": "Goodreads",     "available_for": ("ebook", "audiobook"), "default_rate": 2.0},
+    # Goodreads — v2.13.0 Stage 6: 5s ±1s jitter default (was 2.0s).
+    # Conservative phased-rollout pace lets curl_cffi Chrome120 TLS
+    # impersonation clear Cloudflare without tripping density-based
+    # 202s. Existing installs keep their saved value; only fresh
+    # installs get 5.0s. Power users can dial up to 8s+ for extra
+    # margin or down for faster scans once Phase-A UAT confirms the
+    # bypass holds.
+    "goodreads":   {"display": "Goodreads",     "available_for": ("ebook", "audiobook"), "default_rate": 5.0},
     # Amazon: 30s default rate (was 2.0 through v2.10.x). v2.11.0
     # confirmed via single-shot probe that Amazon's bot detection
     # is density-based, not fingerprint-based: a one-off query

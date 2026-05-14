@@ -482,6 +482,12 @@ DEFAULT_SETTINGS = {
     "notify_on_review_queued": True,       # `notify_pipeline_complete(sink="review_queue")` — book ready for review-queue approval
     "notify_on_library_ingest": True,      # `notify_pipeline_complete(sink="<library_app>")` — book landed in CWA / Audiobookshelf / etc.
     "notify_on_buffer_gate_block": True,   # `notify_buffer_gate_block` — autograb refused due to buffer (throttled 6h)
+    # v2.13.0 — fires on the weekly Goodreads canary probe when it
+    # detects a soft-block (HTTP 202 / empty 2xx body). Default True;
+    # users on the Phase-A no-cookie path want to know when the
+    # bypass stops working so they can refresh credentials or
+    # investigate.
+    "notify_on_goodreads_canary_failed": True,
     "notify_daily_accepted": True,
     "notify_daily_tentative": True,
     "notify_daily_ignored": True,
@@ -609,6 +615,14 @@ DEFAULT_SETTINGS = {
     # retired once lookup.py started reading from `metadata_sources`
     # directly via the derivation helpers in app.metadata.source_config.
     "google_books_auto_disabled_at": None,
+    # v2.13.0 — Goodreads Cloudflare soft-block state. Written by
+    # `app/metadata/goodreads_session.py` on every response. Read by
+    # the enricher dispatcher (skip Goodreads when soft_blocked) and
+    # by the Settings GoodreadsStatusCard. Protected from PATCH via
+    # `_RUNTIME_STATE_KEYS` in app/routers/settings.py.
+    "goodreads_session_state": "unknown",
+    "goodreads_session_state_since": None,
+    "goodreads_session_last_status": None,
     "theme": "dark",
     "languages": ["English"],
     "lookup_interval_days": 3,

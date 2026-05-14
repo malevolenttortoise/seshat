@@ -64,6 +64,14 @@ _RUNTIME_STATE_KEYS: frozenset[str] = frozenset({
     "mam_last_validated_at",
     "last_mam_validated_at",
     "qbit_orphan_adoption_since",
+    # v2.13.0 — Goodreads Cloudflare soft-block state. Written by
+    # `app/metadata/goodreads_session.py` on every response. Cleared
+    # to "active" manually via the Settings panel "Mark as active"
+    # button (which POSTs to a dedicated endpoint, not PATCH, so the
+    # runtime-state protection here stays intact).
+    "goodreads_session_state",
+    "goodreads_session_state_since",
+    "goodreads_session_last_status",
 })
 
 
