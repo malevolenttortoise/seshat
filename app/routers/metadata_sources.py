@@ -33,6 +33,11 @@ from app.metadata.source_config import (
     derive_scan_priority,
     sync_legacy_keys,
 )
+from app.metadata.source_config import (
+    _DEFAULT_AUDIOBOOK_PRIORITY,
+    _DEFAULT_EBOOK_PRIORITY,
+    _DEFAULT_NEW_INSTALL_STATE,
+)
 
 _log = logging.getLogger("seshat.routers.metadata_sources")
 
@@ -262,6 +267,103 @@ async def put_state(body: MetadataSourcesState) -> PutResponse:
         rebuilt, sources_reloaded,
     )
     return PutResponse(ok=True, dispatcher_rebuilt=rebuilt)
+
+
+@router.post("/reset", response_model=MetadataSourcesResponse)
+async def reset_to_defaults() -> MetadataSourcesResponse:
+    """Wipe `metadata_sources` + `metadata_priority` and rebuild from
+    `_DEFAULT_NEW_INSTALL_STATE` + the default priority lists.
+
+    v2.11.1 N-item: the original v2.11.0 priority reshuffle migration
+    only fires for fresh installs (`migrate_legacy_settings` skips
+    the legacy pass on populated installs and the backfill pass only
+    ADDS missing entries, never touches existing ones). Upgraded
+    users were left with whatever priority + per-source state they
+    had at upgrade time. This endpoint gives them an in-app way to
+    forcibly adopt the current ship-defaults.
+
+    Returns the freshly-reset state in the same shape as GET so the
+    frontend can update its display without a follow-up GET. Side
+    effects: settings persisted to disk, dispatcher rebuilt, and
+    `reload_sources()` re-instantiates the discovery-side singletons
+    (matching the v2.11.1 N9 fix in PUT).
+    """
+    settings = load_settings()
+    # Bypass the legacy-migration path entirely — it would honour
+    # the legacy `metadata_provider_priority` key (still in the
+    # settings dict from a pre-Phase-7 install) and emit a state
+    # that mirrors the user's pre-overhaul ordering, not the
+    # current ship-defaults. Build the panel state directly from
+    # `_DEFAULT_NEW_INSTALL_STATE` + `KNOWN_SOURCES`.
+    fresh_sources: dict[str, dict[str, Any]] = {}
+    for name, meta in KNOWN_SOURCES.items():
+        defaults = _DEFAULT_NEW_INSTALL_STATE.get(name) or {
+            "ebook_enrich": False, "ebook_scan": False,
+            "audiobook_enrich": False, "audiobook_scan": False,
+            "mandatory": False,
+        }
+        fresh_sources[name] = {
+            **defaults,
+            "rate_limit": float(meta.get("default_rate", 1.0)),
+        }
+    # Default priority lists, filtered to sources that support each
+    # surface (audiobook list drops ebook-only sources, etc.).
+    fresh_ebook = [
+        n for n in _DEFAULT_EBOOK_PRIORITY
+        if n in KNOWN_SOURCES
+        and "ebook" in (KNOWN_SOURCES[n].get("available_for") or ())
+    ]
+    fresh_audiobook = [
+        n for n in _DEFAULT_AUDIOBOOK_PRIORITY
+        if n in KNOWN_SOURCES
+        and "audiobook" in (KNOWN_SOURCES[n].get("available_for") or ())
+    ]
+    settings["metadata_sources"] = fresh_sources
+    settings["metadata_priority"] = {
+        "ebook": fresh_ebook,
+        "audiobook": fresh_audiobook,
+    }
+    sync_legacy_keys(settings)
+    save_settings(settings)
+
+    # Same dispatcher + sources-reload chain as PUT.
+    try:
+        from app.main import _build_dispatcher
+        resolved = await _resolve_secrets_lazy()
+        state.dispatcher = await _build_dispatcher(settings, resolved)
+    except Exception:
+        _log.exception(
+            "metadata_sources reset: dispatcher rebuild failed "
+            "(settings reset — restart container to apply)"
+        )
+    try:
+        from app.discovery.lookup import reload_sources
+        reload_sources()
+    except Exception:
+        _log.exception(
+            "metadata_sources reset: source reload failed "
+            "(settings reset — restart container to apply)"
+        )
+
+    _log.info(
+        "metadata_sources reset to v2.11.x defaults: %d sources, "
+        "ebook priority=%d, audiobook priority=%d",
+        len(settings.get("metadata_sources", {})),
+        len(settings.get("metadata_priority", {}).get("ebook") or []),
+        len(settings.get("metadata_priority", {}).get("audiobook") or []),
+    )
+
+    # Return the new state in GET-shape so the panel can re-render.
+    state_obj = _state_from_settings(settings)
+    derived = {
+        "ebook_enrich": derive_enrich_priority(settings, audiobook=False),
+        "ebook_scan": derive_scan_priority(settings, audiobook=False),
+        "audiobook_enrich": derive_enrich_priority(settings, audiobook=True),
+        "audiobook_scan": derive_scan_priority(settings, audiobook=True),
+    }
+    return MetadataSourcesResponse(
+        state=state_obj, known=_build_known(), derived=derived,
+    )
 
 
 async def _resolve_secrets_lazy() -> dict[str, Any]:

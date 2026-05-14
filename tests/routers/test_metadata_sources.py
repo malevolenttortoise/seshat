@@ -193,6 +193,99 @@ class TestPutReloadsDiscoverySources:
         assert lookup_module.amazon.format_filter == "paperback"
 
 
+class TestResetToDefaults:
+    """v2.11.1: POST /api/v1/metadata-sources/reset wipes the
+    panel-managed fields + re-runs `migrate_legacy_settings` so the
+    user adopts the current ship-defaults (priority order +
+    per-source toggles + Stage 5++ Amazon format/language defaults).
+
+    The new-install priority migration only runs once at first-ever
+    install; upgrades retain whatever state the user had. This
+    endpoint gives existing users an in-app way to adopt the
+    v2.11.x defaults without a settings.json edit."""
+
+    async def test_reset_returns_full_state_shape(self, isolated_settings):
+        async with await _client(_make_app()) as ac:
+            resp = await ac.post("/api/v1/metadata-sources/reset")
+        assert resp.status_code == 200
+        payload = resp.json()
+        assert set(payload.keys()) == {"state", "known", "derived"}
+        assert "sources" in payload["state"]
+        assert "priority" in payload["state"]
+
+    async def test_reset_overwrites_user_customizations(
+        self, isolated_settings,
+    ):
+        """User has edited Amazon's rate_limit from default 30 →
+        45 and format from kindle → paperback. Reset reverts both
+        to v2.11.x ship-defaults."""
+        # Step 1: simulate user customizations via PUT.
+        async with await _client(_make_app()) as ac:
+            resp = await ac.get("/api/v1/metadata-sources")
+            state = resp.json()["state"]
+            state["sources"]["amazon"]["rate_limit"] = 45.0
+            state["sources"]["amazon"]["format"] = "paperback"
+            await ac.put("/api/v1/metadata-sources", json=state)
+
+            # Confirm changes stuck.
+            verify = await ac.get("/api/v1/metadata-sources")
+            verify_amazon = verify.json()["state"]["sources"]["amazon"]
+            assert verify_amazon["rate_limit"] == 45.0
+            assert verify_amazon["format"] == "paperback"
+
+            # Step 2: reset + verify defaults applied.
+            reset = await ac.post("/api/v1/metadata-sources/reset")
+            assert reset.status_code == 200
+            amazon = reset.json()["state"]["sources"]["amazon"]
+            # rate_limit reverts to ship default (30.0 for Amazon).
+            assert amazon["rate_limit"] == 30.0
+            # format reverts to "kindle".
+            assert amazon["format"] == "kindle"
+            # audiobook_format also at default.
+            assert amazon["audiobook_format"] == "audible_audiobook"
+
+    async def test_reset_restores_default_priority_order(
+        self, isolated_settings,
+    ):
+        """User rearranged Hardcover to slot 5; reset restores the
+        v2.11.0 ordering (mam, hardcover, openlibrary, goodreads,
+        google_books, kobo, amazon, ibdb, audible)."""
+        async with await _client(_make_app()) as ac:
+            resp = await ac.get("/api/v1/metadata-sources")
+            state = resp.json()["state"]
+            # Custom: move hardcover to the end.
+            new_order = [n for n in state["priority"]["ebook"] if n != "hardcover"] + ["hardcover"]
+            state["priority"]["ebook"] = new_order
+            await ac.put("/api/v1/metadata-sources", json=state)
+
+            reset = await ac.post("/api/v1/metadata-sources/reset")
+        priority = reset.json()["state"]["priority"]["ebook"]
+        # Hardcover should be back at slot 2 (rank index 1).
+        assert priority[0] == "mam"
+        assert priority[1] == "hardcover"
+
+    async def test_reset_propagates_to_singletons(
+        self, isolated_settings,
+    ):
+        """Same propagation as PUT (N9): after reset, the live
+        `lookup.amazon` instance reflects the default rate_limit."""
+        from app.discovery import lookup as lookup_module
+        lookup_module.reload_sources()
+        async with await _client(_make_app()) as ac:
+            # Push a non-default rate to confirm propagation actually
+            # ran (otherwise pre-existing state could give a false
+            # green).
+            resp = await ac.get("/api/v1/metadata-sources")
+            state = resp.json()["state"]
+            state["sources"]["amazon"]["rate_limit"] = 99.0
+            await ac.put("/api/v1/metadata-sources", json=state)
+            assert lookup_module.amazon.rate_limit == 99.0
+
+            await ac.post("/api/v1/metadata-sources/reset")
+        # Default rate for Amazon is 30.0 per KNOWN_SOURCES.
+        assert lookup_module.amazon.rate_limit == 30.0
+
+
 class TestKoboConcurrency:
     """v2.11.1 N5 — Kobo's parallel detail-fetch worker count is
     exposed via `metadata_sources.kobo.concurrency`. Round-trips

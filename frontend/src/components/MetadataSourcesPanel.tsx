@@ -183,6 +183,39 @@ export function MetadataSourcesPanel() {
     setError(null);
   }
 
+  // v2.11.1: POST /reset wipes the panel-managed settings + rebuilds
+  // from `_DEFAULT_NEW_INSTALL_STATE`. Confirmation prompt because
+  // it overwrites the user's customizations (priority order, rate
+  // limits, format dropdowns, etc.) wholesale. Distinct from the
+  // local `reset()` above (which just discards unsaved draft).
+  const [resetting, setResetting] = useState(false);
+  async function resetToDefaults() {
+    if (!loaded) return;
+    const ok = window.confirm(
+      "Reset every Amazon / Hardcover / Open Library / etc. setting on this "
+      + "panel to the v2.11.x ship-defaults? This overwrites your priority "
+      + "order, Rate values, Mandatory toggles, and Amazon format / "
+      + "language dropdowns. Cannot be undone."
+    );
+    if (!ok) return;
+    setResetting(true);
+    setError(null);
+    setMsg(null);
+    try {
+      const r = await api.post<GetResponse>(
+        "/v1/metadata-sources/reset", {},
+      );
+      setLoaded(r);
+      setDraft(JSON.parse(JSON.stringify(r.state)) as PanelState);
+      setMsg("Reset to ship-defaults. Discovery sources rebuilt — live.");
+      setTimeout(() => setMsg(null), 5000);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setResetting(false);
+    }
+  }
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div style={{
@@ -226,6 +259,15 @@ export function MetadataSourcesPanel() {
         background: t.bg + "ee", backdropFilter: "blur(8px)",
         padding: "12px 0", borderTop: `1px solid ${t.borderL}`, marginTop: 8,
       }}>
+        <Btn
+          variant="ghost"
+          disabled={saving || resetting}
+          onClick={resetToDefaults}
+          title="Wipe all panel settings + reapply v2.11.x ship-defaults"
+        >
+          {resetting ? <Spin size={14} /> : "Reset to defaults"}
+        </Btn>
+        <span style={{ flex: 1 }} />
         <span style={{ fontSize: 13, color: t.textDim, alignSelf: "center" }}>
           {dirty ? "Unsaved changes" : "No unsaved changes"}
         </span>
