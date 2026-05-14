@@ -634,7 +634,17 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
                   <span style={{ color: t.td }}>Last source scan: </span>
                   {("current" in srcScan ? srcScan.current : 0) ?? 0} authors
                   checked ·{" "}
-                  <span style={{ color: t.jade, fontWeight: 600 }}>
+                  <span
+                    style={{ color: t.jade, fontWeight: 600, cursor: "help" }}
+                    title={
+                      "Updates live as each source returns candidates, then "
+                      + "snaps to the post-merge total at each source's "
+                      + "completion boundary. The count can correct downward "
+                      + "between sources if dedup against existing rows "
+                      + "filtered some candidates out. Final value (after "
+                      + "all sources finish) is always accurate."
+                    }
+                  >
                     {srcNewBooks ?? 0} new books
                   </span>
                 </div>
