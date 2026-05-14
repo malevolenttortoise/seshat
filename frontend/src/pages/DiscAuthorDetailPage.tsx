@@ -785,6 +785,60 @@ function DesktopAuthorDetailPage({
     return [...ids];
   };
 
+  // v2.12.1 #1 — per-library partition for cross-library bulk
+  // operations. Pre-v2.12.1 the bulk-{op} request sent ALL selected
+  // book_ids to a single endpoint with `slug=a.active_library_slug`.
+  // When the user selected books from a cross-library tab in the
+  // Combined view, their IDs were scoped to a different library, and
+  // the request hit the wrong DB — finding arbitrary unrelated books
+  // by id collision (UAT 2026-05-14: "The Far Reaches" id=288 in
+  // ABS lib collided with "God Hammer" id=288 in Calibre lib; the
+  // delete request skipped "God Hammer" as Calibre-synced while
+  // "The Far Reaches" was never touched).
+  //
+  // Build a bookId → libSlug map from the data we have on hand, then
+  // partition `sel` by slug and fire one bulk-{op} request per
+  // library. Aggregates responses into a single user-facing toast.
+  // Works for all four bulk endpoints (delete / hide / dismiss /
+  // skip-mam) — they share the same {slug, book_ids} contract.
+  const buildBookSlugMap = (): Map<number, string> => {
+    const out = new Map<number, string>();
+    const activeSlug = a?.active_library_slug || "active";
+    // Active library: standalone books on the AuthorDetail root.
+    (a?.standalone_books || []).forEach((b) => out.set(b.id, activeSlug));
+    // Cross-library entries: each carries its own slug as the map key.
+    Object.entries(a?.cross_library || {}).forEach(([slug, entry]) => {
+      (entry.author.standalone_books || []).forEach((b) => out.set(b.id, slug));
+    });
+    // Lazy-loaded series books: `seriesBooks` keys are
+    // "{librarySlug || 'active'}:{series.id}" so we can recover the
+    // owning slug from the key. Books not yet covered above (e.g.
+    // series in a cross-lib tab the user hasn't expanded? — defensive)
+    // get the prefix's slug.
+    Object.entries(seriesBooks).forEach(([key, books]) => {
+      const prefix = key.split(":", 1)[0];
+      const slug = prefix === "active" ? activeSlug : prefix;
+      books.forEach((b) => {
+        if (!out.has(b.id)) out.set(b.id, slug);
+      });
+    });
+    return out;
+  };
+
+  // Map slug → human-readable upstream-app label for the "skipped N
+  // X-synced" toast. Calibre + Audiobookshelf is the full known set
+  // today; revisit when a third app type lands.
+  const slugToSyncedLabel = (slug: string): string => {
+    if (slug === a?.active_library_slug) {
+      return a?.active_content_type === "audiobook"
+        ? "Audiobookshelf-synced"
+        : "Calibre-synced";
+    }
+    const entry = a?.cross_library?.[slug];
+    if (entry?.content_type === "audiobook") return "Audiobookshelf-synced";
+    return "Calibre-synced";
+  };
+
   const bulkAct = async (kind: "hide" | "dismiss" | "delete" | "skip-mam") => {
     const ids = [...sel];
     if (ids.length === 0) return;
@@ -800,45 +854,89 @@ function DesktopAuthorDetailPage({
       hide: "Hidden", dismiss: "Dismissed", delete: "Deleted",
       "skip-mam": "Marked N/A",
     } as const;
-    // v2.12.0 — context-aware "X-synced" copy. Each library app
-    // owns its books (Calibre / Audiobookshelf / etc.) so the delete
-    // handler can't remove them from this side — it skips them. The
-    // user needs to know WHICH app is blocking the delete. ebook → Calibre,
-    // audiobook → Audiobookshelf (the only two app_types we currently
-    // support; revisit if a third lands).
-    const syncedLabel = a?.active_content_type === "audiobook"
-      ? "Audiobookshelf-synced"
-      : "Calibre-synced";
+
+    // v2.12.1 #1 — partition selection by library slug. For delete,
+    // the confirmation copy needs to list all upstream-app labels
+    // that COULD be skipped (so the user knows the protection
+    // semantics even on cross-library deletes). Build the per-slug
+    // book lists up front so the confirmation message + the bulk
+    // dispatch both consume the same partition.
+    const slugMap = buildBookSlugMap();
+    const partition = new Map<string, number[]>();
+    for (const id of ids) {
+      const slug = slugMap.get(id) || a?.active_library_slug || "active";
+      const arr = partition.get(slug) || [];
+      arr.push(id);
+      partition.set(slug, arr);
+    }
+    const slugs = [...partition.keys()];
+    const syncedLabelsInvolved = [
+      ...new Set(slugs.map(slugToSyncedLabel)),
+    ];
+    const syncedLabelText = syncedLabelsInvolved.length === 1
+      ? syncedLabelsInvolved[0]
+      : syncedLabelsInvolved.join(" / ");
+
     const msg =
       kind === "delete"
-        ? `Delete ${ids.length} book(s)? ${syncedLabel} books will be skipped.`
+        ? `Delete ${ids.length} book(s)? ${syncedLabelText} books will be skipped.`
         : kind === "skip-mam"
         ? `Mark ${ids.length} book(s) as Not Applicable for MAM scanning?`
         : `${labels[kind]} ${ids.length} book(s)?`;
     if (!confirm(msg)) return;
     setBusy(true);
     try {
-      const r = await api.post<{
-        status?: string;
-        count?: number;
-        deleted?: number;
-        skipped?: number;
-        error?: string;
-      }>(
-        `/discovery/books/bulk-${kind}${slugQuery(a?.active_library_slug)}`,
-        { book_ids: ids },
+      // Fire one bulk-{kind} request per library slug; gather results
+      // into per-slug map so the aggregate toast can label the skip
+      // count with the right upstream-app name (Calibre / ABS).
+      const results = await Promise.all(
+        slugs.map((slug) => {
+          const slugIds = partition.get(slug)!;
+          return api.post<{
+            status?: string;
+            count?: number;
+            deleted?: number;
+            skipped?: number;
+            error?: string;
+          }>(
+            `/discovery/books/bulk-${kind}${slugQuery(slug)}`,
+            { book_ids: slugIds },
+          ).then((r) => ({ slug, r }))
+            .catch((e) => ({ slug, r: { error: (e as Error).message || "failed" } }));
+        }),
       );
-      if (r.error) {
-        toast.error(r.error);
-      } else if (kind === "delete") {
-        const skipMsg = r.skipped
-          ? `, skipped ${r.skipped} ${syncedLabel}`
-          : "";
-        toast.success(`Deleted ${r.deleted || 0} book(s)${skipMsg}`);
+
+      // Aggregate. First surface any errors; otherwise build a
+      // success toast with per-slug skip breakdown.
+      const errors = results.filter((x) => x.r.error);
+      if (errors.length > 0 && errors.length === results.length) {
+        toast.error(errors[0].r.error || "Bulk action failed");
       } else {
-        toast.success(
-          `${pastLabels[kind]} ${r.count ?? ids.length} book(s)`,
-        );
+        if (errors.length > 0) {
+          toast.warn(
+            `Partial failure: ${errors.length} of ${results.length} ${
+              errors.length === 1 ? "library" : "libraries"
+            } errored. ${errors[0].r.error || ""}`,
+          );
+        }
+        if (kind === "delete") {
+          const totalDeleted = results.reduce(
+            (acc, x) => acc + (x.r.deleted || 0), 0,
+          );
+          // Per-slug skip breakdown, labeled by upstream app type.
+          const skipParts = results
+            .filter((x) => (x.r.skipped || 0) > 0)
+            .map((x) => `${x.r.skipped} ${slugToSyncedLabel(x.slug)}`);
+          const skipMsg = skipParts.length > 0
+            ? `, skipped ${skipParts.join(", ")}`
+            : "";
+          toast.success(`Deleted ${totalDeleted} book(s)${skipMsg}`);
+        } else {
+          const totalCount = results.reduce(
+            (acc, x) => acc + (x.r.count ?? 0), 0,
+          );
+          toast.success(`${pastLabels[kind]} ${totalCount || ids.length} book(s)`);
+        }
       }
       setSel(new Set());
       setSelMode(false);
