@@ -340,7 +340,10 @@ def _spawn_lookup_task(scan_type: str, total: int, runner) -> None:
                 # state — use it so the notification reads
                 # "Scan complete: William D. Arand" rather than
                 # "Author Scan complete".
-                if scan_type in ("single_author", "single_author_full"):
+                if scan_type in (
+                    "single_author", "single_author_full",
+                    "single_author_cross", "single_author_full_cross",
+                ):
                     label = state._lookup_progress.get("current_author") or "Author"
                     authors_total = 1
                 else:

@@ -219,9 +219,16 @@ export default function MobileUnifiedDashboard({ onNav }: Props) {
     setSyncingSlug(null);
     refresh();
   };
-  const triggerSources = async () => {
+  // v2.12.0 — paired ebook/audiobook triggers, each cross-library.
+  const triggerEbookSources = async () => {
     setScanning(true);
-    try { await api.post("/discovery/lookup"); } catch { /* ignore */ }
+    try { await api.post("/discovery/lookup?content_type=ebook"); } catch { /* ignore */ }
+    setScanning(false);
+    refresh();
+  };
+  const triggerAudiobookSources = async () => {
+    setScanning(true);
+    try { await api.post("/discovery/lookup?content_type=audiobook"); } catch { /* ignore */ }
     setScanning(false);
     refresh();
   };
@@ -315,10 +322,18 @@ export default function MobileUnifiedDashboard({ onNav }: Props) {
             <MobileBtn
               variant="secondary"
               fullWidth
-              onClick={triggerSources}
+              onClick={triggerEbookSources}
               disabled={scanning}
             >
-              {scanning ? "Scanning…" : "Scan Sources"}
+              {scanning ? "Scanning…" : "Scan Ebooks"}
+            </MobileBtn>
+            <MobileBtn
+              variant="secondary"
+              fullWidth
+              onClick={triggerAudiobookSources}
+              disabled={scanning}
+            >
+              {scanning ? "Scanning…" : "Scan Audiobooks"}
             </MobileBtn>
             <MobileBtn
               variant="secondary"

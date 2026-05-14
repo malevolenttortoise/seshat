@@ -123,9 +123,16 @@ export default function MobileDiscDashboard({
     setSyncing(false);
     api.get<DashboardStats>("/discovery/stats").then(setD).catch(() => {});
   };
-  const triggerSources = async () => {
+  // v2.12.0 — paired ebook/audiobook scan triggers. Both fan
+  // across every library of that content_type (cross-library).
+  const triggerEbookSources = async () => {
     setScanning(true);
-    try { await api.post("/discovery/lookup"); } catch { /* ignore */ }
+    try { await api.post("/discovery/lookup?content_type=ebook"); } catch { /* ignore */ }
+    setScanning(false);
+  };
+  const triggerAudiobookSources = async () => {
+    setScanning(true);
+    try { await api.post("/discovery/lookup?content_type=audiobook"); } catch { /* ignore */ }
     setScanning(false);
   };
   const triggerMam = async () => {
@@ -207,10 +214,18 @@ export default function MobileDiscDashboard({
           <MobileBtn
             variant="secondary"
             fullWidth
-            onClick={triggerSources}
+            onClick={triggerEbookSources}
             disabled={scanning || lookupScan?.running}
           >
-            {scanning || lookupScan?.running ? "Scanning…" : "Scan Sources"}
+            {scanning || lookupScan?.running ? "Scanning…" : "Scan Ebooks"}
+          </MobileBtn>
+          <MobileBtn
+            variant="secondary"
+            fullWidth
+            onClick={triggerAudiobookSources}
+            disabled={scanning || lookupScan?.running}
+          >
+            {scanning || lookupScan?.running ? "Scanning…" : "Scan Audiobooks"}
           </MobileBtn>
           {d.mam_enabled && (
             <MobileBtn

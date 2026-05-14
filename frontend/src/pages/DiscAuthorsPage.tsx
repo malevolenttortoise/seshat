@@ -642,7 +642,7 @@ function DesktopAuthorsPage({ onNav }: { onNav: NavFn }) {
                     border: `1px solid ${t.grn}44`,
                   }}
                 >
-                  Scan Sources
+                  Scan Ebooks
                 </Btn>
                 <Btn
                   size="sm"
@@ -655,7 +655,7 @@ function DesktopAuthorsPage({ onNav }: { onNav: NavFn }) {
                     border: `1px solid ${t.pur}44`,
                   }}
                 >
-                  Scan Audio
+                  Scan Audiobooks
                 </Btn>
                 {mamOn && (
                   <>

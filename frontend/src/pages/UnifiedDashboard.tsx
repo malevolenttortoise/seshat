@@ -282,10 +282,16 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
     setSyncingSlug(null);
     refresh();
   };
-  const triggerSources = async () => {
+  // v2.12.0 — explicit scope. "Scan Ebooks" / "Scan Audiobooks"
+  // each fan across every library of the named content_type. The
+  // pre-v2.12.0 "Scan Sources" button only scanned the active
+  // library, which was inconsistent with the parallel "Scan
+  // Audiobooks" button that already fan-iterated. Both buttons now
+  // use the cross-fan path so behaviour matches the labels.
+  const triggerEbookSources = async () => {
     setScanning(true);
     try {
-      await api.post("/discovery/lookup");
+      await api.post("/discovery/lookup?content_type=ebook");
     } catch {
       /* ignore */
     }
@@ -544,27 +550,30 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
             <CmdBtn
               label={
                 <>
-                  <Dot color={t.cyan} /> Scan Sources
+                  <Dot color={t.cyan} /> Scan Ebooks
                 </>
               }
               busy={scanning || ("running" in srcScan && !!srcScan.running)}
-              onClick={triggerSources}
+              onClick={triggerEbookSources}
             />
-            {libScans.some(
-              (ls) =>
-                (ls as ScanProgress & { content_type?: string }).content_type ===
-                "audiobook",
-            ) ? (
-              <CmdBtn
-                label={
-                  <>
-                    <Dot color={t.pur} /> Scan Audiobooks
-                  </>
-                }
-                busy={scanning || ("running" in srcScan && !!srcScan.running)}
-                onClick={triggerAudiobookSources}
-              />
-            ) : null}
+            <CmdBtn
+              label={
+                <>
+                  <Dot color={t.pur} /> Scan Audiobooks
+                </>
+              }
+              busy={scanning || ("running" in srcScan && !!srcScan.running)}
+              onClick={triggerAudiobookSources}
+            />
+            {/* v2.12.0 — both Scan buttons render unconditionally now.
+                Pre-v2.12.0 "Scan Audiobooks" was gated on
+                libScans.some(... content_type === "audiobook") which
+                tied it to mid-flight sync activity and hid the button
+                when no audiobook scan was actively running. The
+                backend politely no-ops with `{total: 0, message: "No
+                audiobook libraries found"}` if the user truly has no
+                audiobook libraries; the resulting toast is the right
+                feedback. */}
             <CmdBtn
               label={
                 <>

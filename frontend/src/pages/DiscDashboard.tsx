@@ -448,17 +448,23 @@ function DesktopDiscDashboard({
               >
                 {sy ? <Spin /> : Ic.sync} Sync Library
               </Btn>
+              {/* v2.12.0 — paired Scan Ebooks / Scan Audiobooks
+                  buttons. Each fans across every library of that
+                  content_type via /discovery/sync/lookup?content_type=...
+                  Pre-v2.12.0 the single "Scan Sources" button only
+                  scanned the active library which was inconsistent
+                  with the parallel sibling on UnifiedDashboard. */}
               <Btn
                 onClick={async () => {
                   try {
                     const r = await api.post<ScanTriggerResponse>(
-                      "/discovery/sync/lookup",
+                      "/discovery/sync/lookup?content_type=ebook",
                     );
                     if (r.error) toast.warn(r.error);
                     else if (r.due === 0)
                       toast.info(r.message || "No authors due for scanning");
                     else {
-                      toast.info(`Source scan started — ${r.due || 0} authors`);
+                      toast.info(`Ebook scan started — ${r.due || 0} authors`);
                       window.dispatchEvent(new CustomEvent("seshat:scan-started"));
                     }
                   } catch (e) {
@@ -467,7 +473,28 @@ function DesktopDiscDashboard({
                 }}
                 disabled={lookupRunning}
               >
-                {lookupRunning && lookupScan?.type === "lookup" ? <Spin /> : Ic.search} Scan Sources
+                {lookupRunning && lookupScan?.type === "lookup" ? <Spin /> : Ic.search} Scan Ebooks
+              </Btn>
+              <Btn
+                onClick={async () => {
+                  try {
+                    const r = await api.post<ScanTriggerResponse>(
+                      "/discovery/sync/lookup?content_type=audiobook",
+                    );
+                    if (r.error) toast.warn(r.error);
+                    else if (r.due === 0)
+                      toast.info(r.message || "No authors due for scanning");
+                    else {
+                      toast.info(`Audiobook scan started — ${r.due || 0} authors`);
+                      window.dispatchEvent(new CustomEvent("seshat:scan-started"));
+                    }
+                  } catch (e) {
+                    toast.error((e as Error).message || "Scan failed to start");
+                  }
+                }}
+                disabled={lookupRunning}
+              >
+                {lookupRunning && lookupScan?.type === "lookup" ? <Spin /> : Ic.search} Scan Audiobooks
               </Btn>
               {d.mam_enabled && d.mam_scanning_enabled !== false ? (
                 <Btn

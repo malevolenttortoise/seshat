@@ -116,6 +116,7 @@ interface BulkScanSourcesResponse {
   error?: string;
   status?: string;
   total?: number;
+  message?: string;
 }
 
 // POST /discovery/send-to-pipeline
@@ -472,22 +473,24 @@ function DesktopMAMPage({ onNav }: { onNav: NavFn }) {
     setBusy(false);
   };
 
-  const scanSelectedSources = async () => {
+  // v2.12.0 — paired ebook/audiobook scan triggers. Each fans the
+  // scan across every library of the named content_type. Pre-v2.12.0
+  // there was a single scanSelectedSources that hardcoded
+  // content_type="ebook", which silently failed to scan audiobook
+  // libraries even when MAM page selections included audiobook
+  // candidates. `author_names` is pre-resolved so the backend's
+  // cross-library name path runs (avoids id-collision in merged
+  // book lists; see scan-sources docstring on the backend).
+  const _scanSelectedScoped = async (scope: "ebook" | "audiobook") => {
+    const label = scope === "audiobook" ? "audiobook" : "ebook";
     if (
       !confirm(
-        `Run a source-plugin scan for the unique authors of ${sel.size} selected book(s)?\n\nNote: source plugins look up by author, so this will scan the WHOLE author for each unique author in your selection — not just the selected books.`,
+        `Run a ${label}-source scan for the unique authors of ${sel.size} selected book(s)?\n\nNote: source plugins look up by author, so this will scan the WHOLE author for each unique author in your selection across every ${label} library.`,
       )
     )
       return;
     setBusy(true);
     try {
-      // content_type="ebook" + pre-resolved author_names route through
-      // the cross-library name-only path on the backend so the scan
-      // works correctly even when the MAM page is fed cross-library
-      // merged book IDs. Without author_names the backend's resolver
-      // looks up book_ids in the active library and can pick up the
-      // wrong author (or none) when a merged book row's id collides
-      // with an unrelated active-library book. See v2.2.x notes.
       const author_names = [
         ...new Set(
           [...sel]
@@ -500,28 +503,26 @@ function DesktopMAMPage({ onNav }: { onNav: NavFn }) {
         {
           book_ids: [...sel],
           author_names,
-          content_type: "ebook",
+          content_type: scope,
         },
       );
       if (r.error) {
         toast.error(`Source scan failed: ${r.error}`);
-      } else {
-        // v2.11.1 N6: the endpoint kicks off a background task and
-        // returns immediately. Don't claim completion — say "started"
-        // and let the scan-status banner poll surface actual progress
-        // + completion.
-        toast.info(
-          `Source scan started for ${r.total ?? 0} author(s)`,
-        );
+      } else if ((r.total ?? 0) > 0) {
+        toast.info(`${scope === "audiobook" ? "Audiobook" : "Ebook"} scan started for ${r.total} author(s)`);
         window.dispatchEvent(new CustomEvent("seshat:scan-started"));
         setSel(new Set());
         setSelMode(false);
+      } else {
+        toast.warn(r.message || `Nothing to scan — no matching authors in ${label} libraries.`);
       }
     } catch (e) {
       toast.error(`Source scan failed: ${(e as Error).message || e}`);
     }
     setBusy(false);
   };
+  const scanSelectedEbookSources = () => _scanSelectedScoped("ebook");
+  const scanSelectedAudiobookSources = () => _scanSelectedScoped("audiobook");
 
   const tabDefs: TabDef[] = [
     {
@@ -947,16 +948,29 @@ function DesktopMAMPage({ onNav }: { onNav: NavFn }) {
             <>
               <Btn
                 size="sm"
-                onClick={scanSelectedSources}
+                onClick={scanSelectedEbookSources}
                 disabled={busy}
-                title="Scans the unique authors of the selected books — note that source plugins lookup by author, not by individual book"
+                title="Scan the unique authors of the selected books across every ebook library"
                 style={{
                   background: t.grn + "22",
                   color: t.grnt,
                   border: `1px solid ${t.grn}44`,
                 }}
               >
-                {busy ? "…" : ""} Scan Sources
+                {busy ? "…" : ""} Scan Ebooks
+              </Btn>
+              <Btn
+                size="sm"
+                onClick={scanSelectedAudiobookSources}
+                disabled={busy}
+                title="Scan the unique authors of the selected books across every audiobook library"
+                style={{
+                  background: t.pur + "22",
+                  color: t.purt,
+                  border: `1px solid ${t.pur}44`,
+                }}
+              >
+                {busy ? "…" : ""} Scan Audiobooks
               </Btn>
               <Btn
                 size="sm"

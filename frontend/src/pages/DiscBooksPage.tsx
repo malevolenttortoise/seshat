@@ -759,7 +759,7 @@ function DesktopBooksPage({
                     border: `1px solid ${t.grn}44`,
                   }}
                 >
-                  {busy ? "…" : ""} Scan Sources
+                  {busy ? "…" : ""} Scan Ebooks
                 </Btn>
                 <Btn
                   size="sm"
@@ -772,7 +772,7 @@ function DesktopBooksPage({
                     border: `1px solid ${t.pur}44`,
                   }}
                 >
-                  Scan Audio
+                  Scan Audiobooks
                 </Btn>
                 {mamOn ? (
                   <Btn

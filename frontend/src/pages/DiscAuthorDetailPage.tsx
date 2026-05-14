@@ -698,27 +698,31 @@ function DesktopAuthorDetailPage({
     }
   };
 
-  const scanAudiobookSources = async () => {
+  // v2.12.0 — paired cross-library scan triggers for the author
+  // detail page. Each fans across every library of the named
+  // content_type by NAME (so audiobook-origin authors can be
+  // re-discovered in every ebook library and vice-versa). The
+  // backend resolves the local author row per library; empty
+  // matches return total=0 with a polite message.
+  const _crossLibraryAuthorScan = async (scope: "ebook" | "audiobook") => {
     if (!authorIdNum || ref) return;
-    if (!confirm("Scan this author across every audiobook library?")) return;
+    const label = scope === "audiobook" ? "audiobook" : "ebook";
+    if (!confirm(`Scan this author across every ${label} library?`)) return;
     setRef(true);
     try {
-      // v2.12.0 — gate the "started" toast on r.total > 0. When the
-      // author has no matching audiobook-library row, the backend
-      // returns {total: 0, message: "..."}; the previous code lied
-      // about the scan starting.
       const r = await api.post<{status?: string; total?: number; message?: string}>(
         "/discovery/authors/scan-sources",
         {
           author_ids: [authorIdNum],
-          content_type: "audiobook",
+          ...(a?.name ? { author_names: [a.name] } : {}),
+          content_type: scope,
         },
       );
       if ((r.total ?? 0) > 0) {
-        toast.info(`Audiobook scan started — ${r.total} library iteration(s)`);
+        toast.info(`${scope === "audiobook" ? "Audiobook" : "Ebook"} scan started — ${r.total} library iteration(s)`);
         window.dispatchEvent(new CustomEvent("seshat:scan-started"));
       } else {
-        toast.warn(r.message || "No audiobook-library match for this author.");
+        toast.warn(r.message || `No ${label}-library match for this author.`);
         setRef(false);
       }
     } catch (e) {
@@ -726,6 +730,8 @@ function DesktopAuthorDetailPage({
       setRef(false);
     }
   };
+  const scanEbookSources = () => _crossLibraryAuthorScan("ebook");
+  const scanAudiobookSources = () => _crossLibraryAuthorScan("audiobook");
 
   // Listen for scan completion (broadcast by the unified poller in
   // App-level Dashboard) and refresh this page's author data + book
@@ -1125,6 +1131,20 @@ function DesktopAuthorDetailPage({
             </Btn>
             <Btn
               size="sm"
+              onClick={scanEbookSources}
+              disabled={ref}
+              title="Scan this author across every ebook library"
+              style={{
+                height: 38,
+                background: t.grn + "22",
+                color: t.grnt,
+                border: `1px solid ${t.grn}44`,
+              }}
+            >
+              Scan Ebooks
+            </Btn>
+            <Btn
+              size="sm"
               onClick={scanAudiobookSources}
               disabled={ref}
               title="Scan this author across every audiobook library"
@@ -1135,7 +1155,7 @@ function DesktopAuthorDetailPage({
                 border: `1px solid ${t.pur}44`,
               }}
             >
-              Scan Audio
+              Scan Audiobooks
             </Btn>
             {mamOn ? (
               <Btn
