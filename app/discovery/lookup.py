@@ -3075,6 +3075,22 @@ async def _lookup_author_inner(author_id: int, author_name: str, full_scan: bool
         # so the user doesn't see a failed scan they never asked for.
         if spec.name == "hardcover" and not _hc_key:
             continue
+        # v2.13.0 Stage 6 — skip Goodreads when its session state is
+        # `soft_blocked`. The session module flips this flag on any
+        # 202 / empty 2xx response. Per-author scans typically fan out
+        # 50-500+ requests to Goodreads; without this gate every one
+        # of them pays the full request + soft-block + log + drop
+        # roundtrip until the user notices. Re-enabled when a probe
+        # (Settings "Run probe" button or weekly canary) returns 200.
+        if spec.name == "goodreads":
+            from app.metadata import goodreads_session
+            if goodreads_session.is_soft_blocked():
+                logger.info(
+                    f"  Skipping goodreads for '{author_name}' — "
+                    f"session state = soft_blocked. Run the probe in "
+                    f"Settings → Sources to recover."
+                )
+                continue
         # Global budget gate — if we've already burned our wall-clock
         # budget, abandon the rest of the sources for this author.
         elapsed = time.monotonic() - scan_started_at

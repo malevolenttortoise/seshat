@@ -355,6 +355,25 @@ class MetadataEnricher:
                 )
                 source_log.append({"source": src.name, "confidence": None, "status": "budget_exceeded"})
                 break
+            # v2.13.0 Stage 6 — skip Goodreads when its session state is
+            # `soft_blocked`. Without this gate every per-book lookup
+            # pays the full request → soft-block detect → next-source
+            # roundtrip even though we already know the answer.
+            # `mark_active()` flips state back when a probe (Settings
+            # "Run probe" button or the weekly canary) returns 200.
+            if src.name == "goodreads":
+                from app.metadata import goodreads_session
+                if goodreads_session.is_soft_blocked():
+                    _log.debug(
+                        "enricher: goodreads skipped (session state = "
+                        "soft_blocked) for %r", title,
+                    )
+                    source_log.append({
+                        "source": "goodreads",
+                        "confidence": None,
+                        "status": "soft_blocked",
+                    })
+                    continue
             result = await self._safe_search(
                 src, title=title, author=author, max_wait=remaining,
             )

@@ -373,6 +373,57 @@ class TestEnricher:
         assert a.call_count == 1
         assert b.call_count == 1
 
+    async def test_goodreads_skipped_when_soft_blocked(self, monkeypatch):
+        """v2.13.0 Stage 6 — when `goodreads_session_state == "soft_blocked"`,
+        the enricher must skip the goodreads source entirely (not call
+        `search_book`). Without this gate every per-book lookup pays the
+        full request → 202 → log → next-source roundtrip even though we
+        already know Goodreads is gated.
+
+        Patches `is_soft_blocked` directly rather than writing to the
+        runtime-state file — keeps the test fully isolated from
+        sibling tests that use fake sources named "goodreads".
+        """
+        from app.metadata import goodreads_session as gs
+
+        monkeypatch.setattr(gs, "is_soft_blocked", lambda: True)
+
+        cfg = EnrichmentConfig(enabled=True, accept_confidence=0.6)
+        rec_from_fallback = MetaRecord(
+            title="Book", authors=["A"], source="hardcover",
+        )
+        # Mirror the production source ordering: goodreads first, then a
+        # fallback. The fallback should win because goodreads is skipped.
+        gr_fake = _FakeSource(name="goodreads", result=None)
+        fallback = _FakeSource(name="hardcover", result=rec_from_fallback)
+        enricher = MetadataEnricher(cfg, sources=[gr_fake, fallback])
+
+        result = await enricher.enrich(title="Book", author="A")
+        assert result is not None
+        assert result.source == "hardcover"
+        # Critical: the goodreads source was NEVER called.
+        assert gr_fake.call_count == 0
+        # And the fallback did run exactly once.
+        assert fallback.call_count == 1
+
+    async def test_goodreads_runs_when_session_active(self, monkeypatch):
+        """Mirror of the above — when not soft-blocked, the source DOES
+        run. Guard against a regression where the new gate accidentally
+        always-skips goodreads."""
+        from app.metadata import goodreads_session as gs
+
+        monkeypatch.setattr(gs, "is_soft_blocked", lambda: False)
+
+        cfg = EnrichmentConfig(enabled=True, accept_confidence=0.6)
+        gr_rec = MetaRecord(title="Book", authors=["A"], source="goodreads")
+        gr_fake = _FakeSource(name="goodreads", result=gr_rec)
+        enricher = MetadataEnricher(cfg, sources=[gr_fake])
+
+        result = await enricher.enrich(title="Book", author="A")
+        assert result is not None
+        assert result.source == "goodreads"
+        assert gr_fake.call_count == 1
+
     async def test_audiobook_flag_swaps_source_list(self):
         """Phase 6: `audiobook=True` routes to `audiobook_sources` so the
         audiobook-specific priority (Audible leads; Audnexus is
