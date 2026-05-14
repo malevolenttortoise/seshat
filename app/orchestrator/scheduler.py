@@ -106,3 +106,98 @@ def register_digest_jobs(
             "weekly_calibre_audit: disabled (no calibre_library_path configured); "
             "job will be a no-op"
         )
+
+
+# ─── v2.13.0 Stage 6: Goodreads session canary ───────────────────────
+
+
+def register_goodreads_canary(scheduler: AsyncIOScheduler) -> None:
+    """Register the weekly Goodreads-session canary onto the scheduler.
+
+    Fires Mondays at 03:00 local. Does one probe-style fetch through
+    the production `goodreads_session` module against a known-stable
+    book (The Hobbit, id=5907). Two outcomes:
+
+      - 200 with body → silently mark the session "active" (in case
+        a prior soft-block was sitting in state and the user hasn't
+        noticed). Also prunes expired id_cache rows.
+      - 202 / soft-block → flip state to "soft_blocked" (the session
+        module does this automatically inside `get()`) AND emit a
+        ntfy notification (gated on `notify_on_goodreads_canary_failed`).
+
+    The canary is a passive observer — it doesn't try to recover or
+    rotate credentials. Recovery is user-driven: see the
+    GoodreadsStatusCard's "Run probe" / "Mark as active" buttons.
+
+    Cadence: weekly is the design's "we don't expect Cloudflare to
+    flip mid-week if cookies aren't part of the bypass" cadence.
+    Phase B may tighten to daily once cookies enter the mix
+    (cf_clearance typically lasts hours-to-days).
+    """
+    async def _canary():
+        from app.config import load_settings
+        from app.metadata import goodreads_session, id_cache
+        from app.notify import ntfy
+
+        _log.info("goodreads canary tick")
+        try:
+            session = await goodreads_session.get_session()
+            resp = await session.get("https://www.goodreads.com/book/show/5907")
+            soft_blocked = goodreads_session.is_cloudflare_soft_block(resp)
+        except Exception:
+            _log.exception("goodreads canary fetch crashed")
+            return
+
+        # Side effect: prune expired id_cache rows. Cheap, weekly is fine.
+        try:
+            id_cache.prune_expired()
+        except Exception:
+            _log.exception("goodreads canary: id_cache prune failed (non-fatal)")
+
+        if not soft_blocked:
+            _log.info(
+                "goodreads canary: 200 OK (state=active)",
+            )
+            return
+
+        # Soft-block: notify if the gate is on.
+        s = load_settings()
+        if not ntfy.is_event_enabled("goodreads_canary_failed"):
+            _log.info(
+                "goodreads canary: soft-block detected — ntfy gate off, "
+                "no notification sent",
+            )
+            return
+        ntfy_url = s.get("ntfy_url", "")
+        ntfy_topic = s.get("ntfy_topic", "")
+        if not ntfy_url or not ntfy_topic:
+            _log.info(
+                "goodreads canary: soft-block detected — ntfy unconfigured, "
+                "skipping notification",
+            )
+            return
+        try:
+            await ntfy.send(
+                url=ntfy_url, topic=ntfy_topic,
+                title="Goodreads soft-blocked",
+                message=(
+                    "Weekly canary detected a Cloudflare soft-block. "
+                    "Open Settings > Sources > Goodreads and run a probe "
+                    "to confirm + investigate. Discovery scans will skip "
+                    "Goodreads until the session state is marked active."
+                ),
+                priority=3,
+                tags=["warning"],
+            )
+        except Exception:
+            _log.exception("goodreads canary ntfy send failed (non-fatal)")
+
+    scheduler.add_job(
+        _canary,
+        trigger=CronTrigger(day_of_week="mon", hour=3, minute=0),
+        id="goodreads_canary",
+        name="Goodreads session canary",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )

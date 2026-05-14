@@ -54,7 +54,7 @@ from app.orchestrator.cookie_keepalive import run_loop as cookie_keepalive_loop
 from app.orchestrator.cookie_retry import run_loop as cookie_retry_loop
 from app.orchestrator.dispatch import DispatcherDeps, handle_announce
 from app.orchestrator.review_timeout import run_loop as review_timeout_loop
-from app.orchestrator.scheduler import register_digest_jobs
+from app.orchestrator.scheduler import register_digest_jobs, register_goodreads_canary
 from app.notify.digests import DigestContext
 from app.notify.ntfy import aclose as ntfy_aclose
 from app.auth_db import init_auth_db
@@ -746,6 +746,14 @@ async def lifespan(app: FastAPI):
         _log.info(
             "Digest jobs skipped (daily_digest_enabled=false or ntfy_url empty)"
         )
+
+    # v2.13.0 Stage 6 — weekly Goodreads canary. Unconditional (no
+    # opt-out) because the only side effect on a healthy session is
+    # one Goodreads request per week + an id_cache prune. ntfy
+    # notification on detected soft-block is gated by
+    # `notify_on_goodreads_canary_failed` (default True).
+    register_goodreads_canary(scheduler)
+    _log.info("Goodreads canary registered (Mon 03:00)")
 
     # ── Discovery domain startup ─────────────────────────────
     # Library discovery, per-library DB init, initial Calibre sync.
