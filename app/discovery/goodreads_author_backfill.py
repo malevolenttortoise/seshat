@@ -265,6 +265,31 @@ async def _persist_author_goodreads_id(author_id: int, goodreads_id: str) -> Non
         await db.close()
 
 
+def _resolve_calibre_db_path(override: Optional[str] = None) -> Optional[str]:
+    """Resolve the path to Calibre's metadata.db.
+
+    Multi-library installs (Calibre + ABS + others) keep per-library
+    paths in `state._discovered_libraries`. The legacy
+    `app.config.CALIBRE_DB_PATH` constant defaults to a path that
+    only exists in single-library setups. Prefer the discovered
+    per-library path when available; fall back to the config
+    constant otherwise.
+    """
+    if override:
+        return override
+    try:
+        from app import state
+        for lib in state._discovered_libraries:
+            if lib.get("app_type", "calibre") != "calibre":
+                continue
+            sdb = lib.get("source_db_path")
+            if sdb:
+                return str(sdb)
+    except Exception:
+        pass
+    return str(CALIBRE_DB_PATH) if CALIBRE_DB_PATH else None
+
+
 def _pick_calibre_book_with_goodreads_for(
     author_name: str, calibre_db_path: Optional[str] = None,
 ) -> Optional[str]:
@@ -280,7 +305,7 @@ def _pick_calibre_book_with_goodreads_for(
 
     Read-only against Calibre's DB. No writes ever.
     """
-    cal_path = calibre_db_path or CALIBRE_DB_PATH
+    cal_path = _resolve_calibre_db_path(calibre_db_path)
     if not cal_path:
         return None
     try:
