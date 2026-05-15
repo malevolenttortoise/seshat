@@ -2724,6 +2724,32 @@ async def _try_source(source, author_name, author_id, our_titles, languages, sou
                     f"  [{source_name}] stored-id lookup failed (non-fatal): {e}"
                 )
 
+        # v2.13.0 — when source is Goodreads + no stored author_id,
+        # try the reverse-lookup helper before letting search_author
+        # no-op. Resolves the goodreads_id from any owned book that
+        # has either a direct `books.goodreads_id` OR an ISBN/ASIN
+        # the resolver chain can map to a goodreads_book_id. One
+        # /book/show fetch via the bypass; result cached to
+        # authors.goodreads_id forever. Brand-new authors get
+        # Goodreads coverage starting on their first scan if any
+        # of their books has a resolvable identifier.
+        if not stored_id and source_name == "goodreads" and author_id is not None:
+            try:
+                from app.discovery.goodreads_author_backfill import (
+                    resolve_author_goodreads_id,
+                )
+                resolved = await resolve_author_goodreads_id(author_id)
+                if resolved:
+                    stored_id = resolved
+                    logger.info(
+                        f"  [{source_name}] reverse-lookup resolved id={resolved} "
+                        f"from owned book (cached to authors.goodreads_id)"
+                    )
+            except Exception as e:
+                logger.debug(
+                    f"  [{source_name}] reverse-lookup failed (non-fatal): {e}"
+                )
+
         if stored_id:
             # Fabricate an AuthorResult so the rest of this function
             # proceeds through its get_author_books path naturally.

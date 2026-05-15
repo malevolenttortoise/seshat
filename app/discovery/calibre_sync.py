@@ -101,6 +101,46 @@ async def _write_calibre_snapshot(
     ))
 
 
+async def _apply_calibre_ids(db, book_id: int, calibre_ids: dict) -> int:
+    """v2.13.0 — fill `books.{source}_id` columns from Calibre's
+    `identifiers` table (mined upstream in `_read_calibre_books`).
+
+    Only fills EMPTY slots (NULL or empty string). Never clobbers an
+    ID populated by another source — that source may have more
+    current data than Calibre's snapshot. The only exception is ISBN
+    which is handled by the pre-existing INSERT/diff path; here we
+    skip it.
+
+    Returns the number of columns updated. Logs at debug level on
+    miss so backfill UAT can spot the per-book contribution.
+    """
+    if not calibre_ids:
+        return 0
+    # Map Seshat column names → calibre_ids dict keys. ISBN is omitted
+    # because the pre-v2.13.0 INSERT/diff path already handles it.
+    targets = (
+        "goodreads_id", "amazon_id", "asin", "google_books_id",
+        "kobo_id", "audible_id", "fictiondb_id", "hardcover_id",
+        "openlibrary_id",
+    )
+    updates = 0
+    for col in targets:
+        val = calibre_ids.get(col)
+        if not val:
+            continue
+        # Only set when currently empty — don't clobber other-source
+        # writes. Conditional UPDATE in a single statement so we don't
+        # need a SELECT-then-UPDATE roundtrip per column.
+        cur = await db.execute(
+            f"UPDATE books SET {col} = ? "
+            f"WHERE id = ? AND ({col} IS NULL OR {col} = '')",
+            (val, book_id),
+        )
+        if cur.rowcount and cur.rowcount > 0:
+            updates += 1
+    return updates
+
+
 async def _apply_calibre_diff(db, book_id: int, book: dict) -> tuple[int, int]:
     """Per-field diff between Calibre's incoming values and the
     Seshat-live `books` row, routed by `user_edited_fields`.
@@ -274,12 +314,55 @@ def _read_calibre_db(
                 WHERE bsl.book = ?
             """, (book_id,)).fetchall()
 
-            # Get ISBN
-            isbn_row = conn.execute("""
-                SELECT val FROM identifiers
-                WHERE book = ? AND type IN ('isbn', 'isbn13', 'isbn10')
-                LIMIT 1
-            """, (book_id,)).fetchone()
+            # v2.13.0 — pull EVERY identifier Calibre has for this
+            # book (not just ISBN). Calibre's metadata-fetch routinely
+            # populates `goodreads`, `amazon`, `mobi-asin`, `asin`,
+            # `google` from its enrichment plugins; pre-v2.13.0 we
+            # silently discarded all of these. Mining them now gives
+            # the Goodreads author backfill a much larger seed pool
+            # (Mark's library: 2631 books with goodreads, 1148 with
+            # isbn, ~3300 with Amazon ASIN variants, all currently
+            # dropped on the floor by the ISBN-only query that used
+            # to live here).
+            ids_rows = conn.execute("""
+                SELECT type, val FROM identifiers WHERE book = ?
+            """, (book_id,)).fetchall()
+            calibre_ids: dict[str, str] = {}
+            for r in ids_rows:
+                t = (r["type"] or "").lower()
+                v = (r["val"] or "").strip()
+                if not v:
+                    continue
+                # Normalize Calibre's identifier-type vocabulary to
+                # Seshat's `books.{source}_id` column names. Repeat
+                # types pick the FIRST value (matches the pre-v2.13.0
+                # ISBN behaviour). Unknown types are dropped.
+                if t in ("isbn", "isbn13", "isbn10"):
+                    calibre_ids.setdefault("isbn", v.replace("-", ""))
+                elif t == "goodreads":
+                    calibre_ids.setdefault("goodreads_id", v)
+                elif t in ("amazon", "asin", "mobi-asin"):
+                    # Calibre stores Amazon's 10-char ASIN under any
+                    # of these. Seshat splits Amazon-storefront ASIN
+                    # from generic ASIN, but for backfill purposes
+                    # we treat them as interchangeable seed material.
+                    calibre_ids.setdefault("asin", v)
+                    calibre_ids.setdefault("amazon_id", v)
+                elif t == "google":
+                    calibre_ids.setdefault("google_books_id", v)
+                elif t == "kobo":
+                    calibre_ids.setdefault("kobo_id", v)
+                elif t == "audible":
+                    calibre_ids.setdefault("audible_id", v)
+                elif t == "fictiondb":
+                    calibre_ids.setdefault("fictiondb_id", v)
+                elif t in ("hardcover",):
+                    calibre_ids.setdefault("hardcover_id", v)
+                elif t in ("openlibrary", "ol"):
+                    calibre_ids.setdefault("openlibrary_id", v)
+                # else: bookfusion / barnesnoble / skoob / ff /
+                # publisher-specific — not currently consumed by any
+                # Seshat metadata source. Quietly skipped.
 
             # Get tags
             tags = conn.execute("""
@@ -336,7 +419,13 @@ def _read_calibre_db(
                 "series_index": bk["series_index"],
                 "book_path": bk["book_path"],
                 "cover_path": cover_path,
-                "isbn": isbn_row["val"] if isbn_row else None,
+                "isbn": calibre_ids.get("isbn"),
+                # v2.13.0 — additional identifiers mined from Calibre.
+                # Consumers in `_apply_book_diff` / `_upsert_book_row`
+                # in lookup.py read these and write to the matching
+                # `books.{source}_id` columns. None values are
+                # ignored (no clobber of already-set IDs).
+                "calibre_ids": calibre_ids,
                 "authors": [{"id": a["id"], "name": a["name"], "sort": a["sort"]} for a in authors],
                 "series": [{"id": s["id"], "name": s["name"]} for s in series_list],
                 "tags": ", ".join(t["name"] for t in tags) if tags else None,
@@ -932,6 +1021,11 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
                     (our_author_id, our_series_id, row["id"]),
                 )
                 await _apply_calibre_diff(db, row["id"], book)
+                # v2.13.0 — fill any empty identifier columns from
+                # Calibre's `identifiers` table mining.
+                await _apply_calibre_ids(
+                    db, row["id"], book.get("calibre_ids") or {},
+                )
                 await _write_calibre_snapshot(
                     db, row["id"], book, cal_series_name
                 )
@@ -1021,6 +1115,11 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
                     """, (our_author_id, our_series_id,
                           book["book_id"], target_id))
                     await _apply_calibre_diff(db, target_id, book)
+                    # v2.13.0 — fill any empty identifier columns from
+                    # Calibre's `identifiers` table mining.
+                    await _apply_calibre_ids(
+                        db, target_id, book.get("calibre_ids") or {},
+                    )
                     await _write_calibre_snapshot(
                         db, target_id, book, cal_series_name
                     )
@@ -1047,6 +1146,13 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
                           book["description"], book["tags"], book["rating"],
                           book["language"], book["publisher"], book["formats"]))
                     new_book_id = cur.lastrowid
+                    # v2.13.0 — fill identifier columns mined from
+                    # Calibre's `identifiers` table. Brand-new INSERT
+                    # so every column starts NULL; _apply_calibre_ids
+                    # fills whatever Calibre had.
+                    await _apply_calibre_ids(
+                        db, new_book_id, book.get("calibre_ids") or {},
+                    )
                     await _write_calibre_snapshot(
                         db, new_book_id, book, cal_series_name
                     )
@@ -1164,6 +1270,26 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
             "last_check_at": time.time(),
             "sync_mode": mode,
         })
+
+        # v2.13.0 — fire-and-forget Goodreads author-id backfill.
+        # Sweeps every author missing `authors.goodreads_id` whose
+        # books have at least one resolvable identifier (Calibre may
+        # have just freshly mined some). One /book/show fetch per
+        # author at the 5s+jitter rate; results cached forever to
+        # `authors.goodreads_id` so future Goodreads source-scans
+        # short-circuit. Non-blocking — sync returns immediately.
+        try:
+            import asyncio
+            from app.discovery.goodreads_author_backfill import (
+                backfill_missing_author_ids,
+            )
+            asyncio.create_task(backfill_missing_author_ids())
+        except Exception:
+            logger.exception(
+                "Calibre sync: failed to spawn Goodreads author-id "
+                "backfill task (non-fatal)"
+            )
+
         return {
             "books_found": books_found,
             "books_new": books_new,
