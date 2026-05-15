@@ -2650,17 +2650,29 @@ async def _compute_series_suggestions(author_id, series_collector):
         await db.close()
 
 
-# v2.13.0 — sources whose `authors.{name}_id` column exists in the
-# books-DB schema. When that column is populated for a given author,
-# `_try_source` skips the `search_author()` call and goes straight to
-# `get_author_books(stored_id)`. Wraps every source that uses the
-# dynamic `UPDATE authors SET {source}_id = ?` write pattern in
-# lookup.py. Excluded: `mam` (uses a different ID lookup path),
-# `audible` (no author-level ID column), `openlibrary` (uses
-# `openlibrary_id` on books not authors).
-_AUTHOR_ID_COLUMN_SOURCES = frozenset({
-    "goodreads", "hardcover", "amazon", "kobo", "ibdb", "google_books",
-})
+# v2.13.0 — sources where `_try_source` can safely skip the
+# `search_author()` call when `authors.{name}_id` is already populated
+# in our DB, and go straight to `get_author_books(stored_id)`.
+#
+# Restricted to sources whose `search_author` ONLY resolves an ID and
+# doesn't pre-populate books inline:
+#   - `goodreads` — `search_author` is policy-locked to no-op anyway
+#     (`/search` is robots-disallowed for `*` user-agents). Without
+#     this short-circuit, the source contributes zero books to scans
+#     even when we already know the goodreads_id.
+#   - `amazon` — `search_author` only resolves the 10-char Author
+#     Store ID via /author/<name> + /s fallback. `get_author_books`
+#     does the actual /stores/author/{id}/allbooks + /juvec fetches.
+#     Stored-id short-circuit saves one /author HTTP roundtrip.
+#
+# Other sources (`hardcover`, `kobo`, `ibdb`, `google_books`) are
+# excluded because their `search_author` does dual duty — resolves
+# the author AND pre-populates `books`/`series` from the same query
+# response. Skipping it loses all those books, and `get_author_books`
+# doesn't fetch them the same way (verified by UAT 2026-05-14:
+# Hardcover went from 22 books pre-populated → "No books returned"
+# when the short-circuit fired for it).
+_AUTHOR_ID_COLUMN_SOURCES = frozenset({"goodreads", "amazon"})
 
 
 async def _try_source(source, author_name, author_id, our_titles, languages, source_name, existing_titles=None, hidden_titles=None, full_scan=False, owned_only=False, series_collector=None, on_new_book=None, exclude_audiobooks=True, linked_author_ids=None, link_type_by_id=None, start_at=0):
