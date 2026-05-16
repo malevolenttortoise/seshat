@@ -42,6 +42,18 @@ two new tiers that exploit the v2.13.0 author-id backfill.
   name and returns the first non-empty `goodreads_id`. Required
   because per-book enrichment runs library-agnostic (acquisition
   linkback happens later in the pipeline).
+- **MAM ISBN/ASIN extraction** — `get_torrent_info` now requests
+  the search API's optional `isbn` field by setting `"isbn": True`
+  at the JSON payload root (probe-confirmed trigger flag). The
+  returned value is classified via `_classify_identifier`:
+  `ASIN:Xxx` prefix → `MetaRecord.asin`; bare `B0XXXXXXXX` pattern
+  → `MetaRecord.asin` (defensive — uploader forgot the prefix);
+  bare digits with optional dashes or `ISBN:` prefix →
+  `MetaRecord.isbn`. Surfaces the identifier MAM's web UI displays
+  under "Identifier" but the search API previously dropped on the
+  floor. Critical multiplier for v2.13.2's value: T1-T3 of the
+  resolver chain can now actually fire for books where MAM has the
+  identifier set but no author goodreads_id is backfilled.
 
 ### Changed
 

@@ -106,6 +106,12 @@ def _info_to_record(info: TorrentInfo) -> MetaRecord:
         description=description,
         language=None,  # info.language_id is a numeric ID, not a name
         tags=tags,
+        # v2.13.2: surface MAM's optional ISBN/ASIN upload-form field
+        # so downstream sources (GoodreadsSource T1-T3, Hardcover,
+        # OpenLibrary) can use the identifier for direct lookup.
+        # Empty when the uploader didn't fill the form's ISBN/ASIN box.
+        isbn=info.isbn or None,
+        asin=info.asin or None,
         source="mam",
         source_url=f"https://www.myanonamouse.net/t/{info.torrent_id}",
         external_id=info.torrent_id,

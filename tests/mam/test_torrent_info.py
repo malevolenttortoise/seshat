@@ -12,6 +12,7 @@ import pytest
 from app.mam.torrent_info import (
     TorrentInfo,
     TorrentInfoError,
+    _classify_identifier,
     _to_bool,
     get_torrent_info,
     invalidate_cache,
@@ -192,3 +193,71 @@ class TestToBool:
 
     def test_empty_string(self):
         assert _to_bool("") is False
+
+
+# ─── v2.13.2: ISBN/ASIN classifier ──────────────────────────
+
+
+class TestClassifyIdentifier:
+    """`_classify_identifier` splits MAM's free-text ISBN/ASIN field."""
+
+    def test_none_returns_empty_pair(self):
+        assert _classify_identifier(None) == ("", "")
+
+    def test_empty_string_returns_empty_pair(self):
+        assert _classify_identifier("") == ("", "")
+
+    def test_whitespace_only_returns_empty_pair(self):
+        assert _classify_identifier("   ") == ("", "")
+
+    def test_non_string_returns_empty_pair(self):
+        # Defensive — MAM API field is always string-or-None today,
+        # but the parser shouldn't crash on unexpected shapes.
+        assert _classify_identifier(123) == ("", "")
+        assert _classify_identifier(["B0XXXXX"]) == ("", "")
+
+    def test_bare_isbn_13(self):
+        # Failure Frame Vol 13 — confirmed via probe 2026-05-16.
+        assert _classify_identifier("9798902092261") == ("9798902092261", "")
+
+    def test_bare_isbn_13_with_dashes(self):
+        # Failure Frame Vol 1 ebook — MAM returned this exact form.
+        assert _classify_identifier("979-8895615560") == ("9798895615560", "")
+
+    def test_isbn_10_with_x_checksum(self):
+        # The X checksum character on ISBN-10 must be preserved.
+        assert _classify_identifier("043942089X") == ("043942089X", "")
+
+    def test_asin_prefix_uppercase(self):
+        # Per MAM upload-form convention.
+        assert _classify_identifier("ASIN:B0H1XKSFHQ") == ("", "B0H1XKSFHQ")
+
+    def test_asin_prefix_lowercase(self):
+        # Defensive — uploaders may not match the documented case.
+        assert _classify_identifier("asin:b0h1xksfhq") == ("", "B0H1XKSFHQ")
+
+    def test_asin_prefix_mixed_with_whitespace(self):
+        assert _classify_identifier("  Asin:  B0H1XKSFHQ  ") == ("", "B0H1XKSFHQ")
+
+    def test_bare_asin_uploader_forgot_prefix(self):
+        # MAM upload form says "For ASIN please prefix with 'ASIN:'"
+        # but uploaders sometimes forget. Sniff B0+8 alphanumerics.
+        assert _classify_identifier("B0H1XKSFHQ") == ("", "B0H1XKSFHQ")
+
+    def test_bare_asin_lowercase_sniffed(self):
+        assert _classify_identifier("b0h1xksfhq") == ("", "B0H1XKSFHQ")
+
+    def test_isbn_prefix_defensive(self):
+        # Upload form doesn't tell uploaders to use "ISBN:" but it's a
+        # natural mistake — handle it gracefully.
+        assert _classify_identifier("ISBN:9781234567890") == ("9781234567890", "")
+        assert _classify_identifier("isbn:978-1-2345-6789-0") == ("9781234567890", "")
+
+    def test_garbage_treated_as_isbn_digits_only(self):
+        # If MAM ever returns something unrecognized, fall through to
+        # the ISBN path so we don't drop the value silently.
+        assert _classify_identifier("9781234abc567") == ("9781234567", "")
+
+    def test_alphabetic_garbage_returns_empty(self):
+        # Pure letters can't be either ISBN or ASIN — drop.
+        assert _classify_identifier("hello world") == ("", "")

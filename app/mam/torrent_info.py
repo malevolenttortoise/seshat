@@ -63,6 +63,13 @@ class TorrentInfo:
     filetype: str = ""
     uploader_id: int = 0
     uploader_name: str = ""
+    # v2.13.2: ISBN/ASIN extracted from MAM's optional ISBN/ASIN
+    # upload-form field. The MAM search API returns a single `isbn`
+    # value where uploaders prefix ASINs with "ASIN:" (per the
+    # upload form's help text) and leave ISBNs un-prefixed. Empty
+    # string when the uploader didn't set the field.
+    isbn: str = ""
+    asin: str = ""
 
 
 # ─── In-memory cache ────────────────────────────────────────
@@ -104,6 +111,11 @@ async def get_torrent_info(
 
     _log.info("Fetching MAM torrent info for tid=%s", torrent_id)
 
+    # v2.13.2: `isbn: True` at the payload root tells MAM to include
+    # the optional ISBN/ASIN field in the response. Confirmed via
+    # probe — without this flag, the field key is omitted entirely;
+    # with it, MAM returns either an empty value or the uploader's
+    # entry (e.g. "9798902092261" or "ASIN:B0H1XKSFHQ").
     payload = json.dumps({
         "tor": {
             "id": torrent_id,
@@ -114,6 +126,7 @@ async def get_torrent_info(
             "startNumber": "0",
         },
         "perpage": 1,
+        "isbn": True,
     })
 
     try:
@@ -138,6 +151,8 @@ async def get_torrent_info(
 
     item = items[0]
 
+    parsed_isbn, parsed_asin = _classify_identifier(item.get("isbn"))
+
     info = TorrentInfo(
         torrent_id=str(item.get("id", torrent_id)),
         vip=_to_bool(item.get("vip")),
@@ -156,6 +171,8 @@ async def get_torrent_info(
         filetype=str(item.get("filetype", "")),
         uploader_id=_parse_ownership_id(item.get("ownership")),
         uploader_name=_parse_ownership_name(item.get("ownership")),
+        isbn=parsed_isbn,
+        asin=parsed_asin,
     )
 
     _cache[torrent_id] = (now, info)
@@ -224,6 +241,59 @@ def _to_bool(value) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in ("1", "true", "yes")
     return False
+
+
+# v2.13.2: ASINs on Amazon's modern catalog (Kindle) start with "B0" +
+# 8 alphanumerics. The MAM upload form's help text explicitly tells
+# uploaders to prefix ASIN values with "ASIN:" (because the autofill
+# button doesn't handle ASIN). But uploaders sometimes forget the
+# prefix — defensive ASIN sniffing catches the bare-B0 case.
+import re as _re
+_ASIN_BARE_RX = _re.compile(r"^B0[A-Z0-9]{8}$")
+
+
+def _classify_identifier(raw) -> tuple[str, str]:
+    """Split MAM's `isbn` field value into `(isbn, asin)`.
+
+    MAM stores one optional identifier per torrent in a single
+    free-text field. Uploaders follow a convention documented on the
+    upload form: prefix ASINs with `ASIN:` (the autofill button only
+    handles ISBN). v2.13.2: probe confirmed the same field also
+    sometimes contains bare ISBN-13 with or without dashes (e.g.
+    `9798902092261`, `979-8895615560`) and prefixed ASIN entries
+    (e.g. `ASIN:B0H1XKSFHQ`).
+
+    Classification:
+      - None / empty / non-string         → ("", "")
+      - case-insensitive "ASIN:" prefix   → ("", stripped uppercase)
+      - bare 10-char `B0XXXXXXXX` pattern → ("", uppercased) — defensive
+      - case-insensitive "ISBN:" prefix   → (stripped digits-only, "")
+      - anything else                     → treat as ISBN, digits-only
+    """
+    if not isinstance(raw, str):
+        return "", ""
+    text = raw.strip()
+    if not text:
+        return "", ""
+
+    low = text.lower()
+    if low.startswith("asin:"):
+        return "", text[5:].strip().upper()
+    if low.startswith("isbn:"):
+        digits = _re.sub(r"[^0-9Xx]", "", text[5:])
+        return digits.upper(), ""
+
+    # Bare ASIN-shaped values (uploader forgot the prefix).
+    upper = text.upper()
+    if _ASIN_BARE_RX.match(upper):
+        return "", upper
+
+    # Default: treat as ISBN. Strip dashes / spaces; preserve trailing
+    # `X` checksum character on ISBN-10.
+    digits = _re.sub(r"[^0-9Xx]", "", text)
+    if not digits:
+        return "", ""
+    return digits.upper(), ""
 
 
 def mam_cover_url(torrent_id: str) -> str:
