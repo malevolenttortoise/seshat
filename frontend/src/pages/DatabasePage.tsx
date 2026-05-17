@@ -9,7 +9,7 @@
 // /api/v1/db/table/{name}/row/{id}. Every edit is type-coerced + NOT NULL
 // validated server-side; the pending tray surfaces any returned errors in
 // place of a blind optimistic update.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Btn } from "../components/Btn";
 import { Spin } from "../components/Spin";
 import { api } from "../api";
@@ -61,6 +61,28 @@ const PER_PAGE = 50;
 type RowKey = string;
 type PendingEdits = Record<RowKey, Record<string, unknown>>;
 
+// v2.14.x #F — per-column max-widths. Unbounded ellipsis on every cell
+// (the pre-#F default of 320px-everywhere) made wide text columns push
+// numeric columns off-screen. Tighter caps mean the table fits more
+// columns into the viewport; the hover title still shows the full
+// value when ellipsis fires.
+const WIDE_TEXT_COLS = new Set([
+  "description", "source_url", "cover_url", "cover_phash", "bio",
+  "audio_formats", "file_path", "image_url", "mam_url", "formats",
+  "tags", "raw",
+]);
+function colMaxWidth(col: string, type: string | undefined): number {
+  const t = (type || "").toUpperCase();
+  if (
+    t.includes("INT") || t.includes("REAL") ||
+    t.includes("NUMERIC") || t.includes("FLOAT") || t.includes("DOUBLE")
+  ) return 90;
+  if (WIDE_TEXT_COLS.has(col)) return 280;
+  return 180;
+}
+
+const HIDDEN_COLS_KEY = (table: string) => `seshat:db-hidden-cols:${table}`;
+
 export default function DatabasePage() {
   const vp = useViewport();
   if (useMobileCodepath(vp)) return <MobileDatabasePage />;
@@ -88,6 +110,15 @@ function DesktopDatabasePage() {
   const [focusCell, setFocusCell] = useState<{ rowKey: RowKey; col: string } | null>(null);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState<RowKey | null>(null);
+
+  // v2.14.x #F — sort + column-visibility state. `sort=null` means
+  // natural insert order (matches pre-#F behavior). Hidden columns
+  // persist per-table in localStorage so users don't have to re-hide
+  // the giant `description` column every visit.
+  const [sort, setSort] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [hiddenCols, setHiddenCols] = useState<Set<string>>(new Set());
+  const [colMenuOpen, setColMenuOpen] = useState(false);
 
   useEffect(() => {
     api.get<TablesResponse>("/v1/db/tables")
@@ -117,6 +148,10 @@ function DesktopDatabasePage() {
       per_page: String(PER_PAGE),
     });
     if (search.trim()) params.set("search", search.trim());
+    if (sort) {
+      params.set("sort", sort);
+      params.set("sort_dir", sortDir);
+    }
     api.get<RowsResponse>(`/v1/db/table/${selected}?${params}`)
       .then((r) => {
         setRows(r.rows);
@@ -125,17 +160,94 @@ function DesktopDatabasePage() {
       })
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));
-  }, [selected, page, search]);
+  }, [selected, page, search, sort, sortDir]);
 
-  // Clear pending edits on table switch or search/page change — saving
+  // Clear pending edits on table switch or search/page/sort change — saving
   // across a different view would be surprising.
-  useEffect(() => { setEdits({}); setFocusCell(null); }, [selected, page, search]);
+  useEffect(() => { setEdits({}); setFocusCell(null); }, [selected, page, search, sort, sortDir]);
+
+  // Click-outside-to-close for the Columns visibility menu. Without
+  // this, the menu stays open until the user clicks the trigger again,
+  // which is fine but slightly annoying when they just want to pick
+  // one column and move on.
+  const colMenuRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!colMenuOpen) return;
+    function onDown(e: MouseEvent) {
+      if (!colMenuRef.current) return;
+      if (e.target instanceof Node && colMenuRef.current.contains(e.target)) return;
+      setColMenuOpen(false);
+    }
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [colMenuOpen]);
+
+  // Reset sort + load saved column-visibility whenever the table changes.
+  // Hidden-cols are per-table so the user's last-set visibility for THIS
+  // table comes back on revisit.
+  useEffect(() => {
+    if (!selected) return;
+    setSort(null);
+    setSortDir("asc");
+    try {
+      const raw = localStorage.getItem(HIDDEN_COLS_KEY(selected));
+      const parsed = raw ? JSON.parse(raw) : [];
+      setHiddenCols(new Set(Array.isArray(parsed) ? parsed : []));
+    } catch {
+      setHiddenCols(new Set());
+    }
+  }, [selected]);
 
   const pkCol = schema?.columns.find((c) => c.primary_key)?.name;
   const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
-  const columns = rows && rows.length > 0 ? Object.keys(rows[0]) : [];
+  const allColumns = rows && rows.length > 0 ? Object.keys(rows[0]) : [];
+  // After hidden-cols filter — what actually renders in thead/tbody.
+  // PK is never hideable so the row-action column has a stable anchor.
+  const columns = allColumns.filter((c) => !hiddenCols.has(c) || c === pkCol);
   const pendingCount = Object.values(edits).reduce(
     (acc, r) => acc + Object.keys(r).length, 0,
+  );
+
+  // Sort header click → cycle natural → asc → desc → natural.
+  function onSortClick(col: string) {
+    if (sort !== col) { setSort(col); setSortDir("asc"); setPage(1); return; }
+    if (sortDir === "asc") { setSortDir("desc"); setPage(1); return; }
+    setSort(null); setSortDir("asc"); setPage(1);
+  }
+
+  function toggleColHidden(col: string) {
+    if (col === pkCol) return; // PK always visible
+    setHiddenCols((prev) => {
+      const next = new Set(prev);
+      if (next.has(col)) next.delete(col); else next.add(col);
+      try {
+        localStorage.setItem(
+          HIDDEN_COLS_KEY(selected),
+          JSON.stringify(Array.from(next)),
+        );
+      } catch { /* localStorage full / disabled — drop silently */ }
+      return next;
+    });
+  }
+
+  function showAllCols() {
+    setHiddenCols(new Set());
+    try { localStorage.removeItem(HIDDEN_COLS_KEY(selected)); } catch {
+      /* drop silently */
+    }
+  }
+
+  // Pagination JSX hoisted as a const so it can render BOTH above and
+  // below the table without code duplication. Two mounted copies share
+  // state through the closure (page, totalPages, loading, setPage).
+  const pagerJsx = (
+    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+      <Btn variant="ghost" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1 || loading}>←</Btn>
+      <span style={{ fontSize: 12, color: t.textDim, padding: "0 8px" }}>
+        {page} / {totalPages}
+      </span>
+      <Btn variant="ghost" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page >= totalPages || loading}>→</Btn>
+    </div>
   );
 
   function rowKey(row: Record<string, unknown>): RowKey {
@@ -189,11 +301,16 @@ function DesktopDatabasePage() {
       setEdits({});
       setFocusCell(null);
       // Refresh the rows so pending-colored cells revert to plain display
-      // with the committed values.
+      // with the committed values. Preserve the active sort so the row
+      // order doesn't jump under the user post-commit.
       const params = new URLSearchParams({
         page: String(page), per_page: String(PER_PAGE),
       });
       if (search.trim()) params.set("search", search.trim());
+      if (sort) {
+        params.set("sort", sort);
+        params.set("sort_dir", sortDir);
+      }
       const fresh = await api.get<RowsResponse>(
         `/v1/db/table/${selected}?${params}`,
       );
@@ -287,7 +404,7 @@ function DesktopDatabasePage() {
             <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
               <input
                 type="search"
-                placeholder="Search text columns…"
+                placeholder="Search text + numbers…"
                 value={search}
                 onChange={(e) => { setSearch(e.target.value); setPage(1); }}
                 style={{ padding: "7px 10px", fontSize: 12, background: t.bg2, border: `1px solid ${t.borderL}`, borderRadius: 6, color: t.text2, minWidth: 240, fontFamily: "inherit" }}
@@ -296,12 +413,66 @@ function DesktopDatabasePage() {
                 {total.toLocaleString()} row{total === 1 ? "" : "s"}
                 {search && ` matching “${search}”`}
               </span>
-              <div style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center" }}>
-                <Btn variant="ghost" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1 || loading}>←</Btn>
-                <span style={{ fontSize: 12, color: t.textDim, padding: "0 8px" }}>
-                  {page} / {totalPages}
-                </span>
-                <Btn variant="ghost" onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page >= totalPages || loading}>→</Btn>
+              <div style={{ position: "relative" }} ref={colMenuRef}>
+                <Btn
+                  variant="ghost"
+                  onClick={() => setColMenuOpen((o) => !o)}
+                  disabled={!schema || allColumns.length === 0}
+                  title="Show / hide columns"
+                >
+                  Columns{hiddenCols.size > 0 ? ` (${allColumns.length - hiddenCols.size}/${allColumns.length})` : ""}
+                </Btn>
+                {colMenuOpen && (
+                  <div
+                    role="menu"
+                    style={{
+                      position: "absolute", top: "calc(100% + 4px)", left: 0,
+                      background: t.bg2, border: `1px solid ${t.borderL}`,
+                      borderRadius: 8, padding: 8, zIndex: 20,
+                      minWidth: 220, maxHeight: 360, overflowY: "auto",
+                      boxShadow: "0 4px 16px rgba(0,0,0,0.3)",
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 6px 8px", borderBottom: `1px solid ${t.borderL}`, marginBottom: 4 }}>
+                      <span style={{ fontSize: 11, color: t.textDim, textTransform: "uppercase", fontWeight: 700 }}>Visible columns</span>
+                      <button
+                        onClick={showAllCols}
+                        disabled={hiddenCols.size === 0}
+                        style={{ background: "none", border: "none", color: hiddenCols.size === 0 ? t.textDim : t.accent, cursor: hiddenCols.size === 0 ? "default" : "pointer", fontSize: 11, padding: 0 }}
+                      >
+                        Show all
+                      </button>
+                    </div>
+                    {allColumns.map((c) => {
+                      const checked = !hiddenCols.has(c);
+                      const isPk = c === pkCol;
+                      return (
+                        <label
+                          key={c}
+                          style={{
+                            display: "flex", alignItems: "center", gap: 8,
+                            padding: "4px 6px", fontSize: 12,
+                            color: isPk ? t.textDim : t.text2,
+                            cursor: isPk ? "default" : "pointer",
+                            fontFamily: "ui-monospace, Consolas, monospace",
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            disabled={isPk}
+                            onChange={() => toggleColHidden(c)}
+                          />
+                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c}</span>
+                          {isPk && <span style={{ color: t.accent, fontSize: 10 }}>★ PK</span>}
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+              <div style={{ marginLeft: "auto" }}>
+                {pagerJsx}
               </div>
             </div>
 
@@ -346,10 +517,31 @@ function DesktopDatabasePage() {
                       <th style={{ width: 28, borderBottom: `1px solid ${t.borderL}` }}></th>
                       {columns.map((c) => {
                         const meta = schema?.columns.find((sc) => sc.name === c);
+                        const mx = colMaxWidth(c, meta?.type);
+                        const isActive = sort === c;
+                        const arrow = isActive ? (sortDir === "asc" ? " ↑" : " ↓") : "";
                         return (
-                          <th key={c} style={{ padding: "8px 10px", textAlign: "left", fontWeight: 600, color: t.textDim, borderBottom: `1px solid ${t.borderL}`, whiteSpace: "nowrap" }}>
+                          <th
+                            key={c}
+                            onClick={() => onSortClick(c)}
+                            title={`Click to sort by ${c}`}
+                            style={{
+                              padding: "8px 10px", textAlign: "left",
+                              fontWeight: 600,
+                              color: isActive ? t.accent : t.textDim,
+                              background: isActive ? t.accent + "15" : undefined,
+                              borderBottom: `1px solid ${t.borderL}`,
+                              whiteSpace: "nowrap",
+                              cursor: "pointer",
+                              userSelect: "none",
+                              maxWidth: mx,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                            }}
+                          >
                             {c}
                             {meta?.primary_key && <span style={{ color: t.accent, marginLeft: 4 }}>★</span>}
+                            <span style={{ color: t.accent }}>{arrow}</span>
                           </th>
                         );
                       })}
@@ -388,10 +580,11 @@ function DesktopDatabasePage() {
                             const v = cellValue(row, c);
                             const editable = !!pkCol && !isPk;
                             const isFocused = focusCell?.rowKey === rk && focusCell?.col === c;
+                            const mx = colMaxWidth(c, meta?.type);
 
                             if (isFocused && editable) {
                               return (
-                                <td key={c} style={{ padding: 0, verticalAlign: "top", background: t.accent + "22" }}>
+                                <td key={c} style={{ padding: 0, verticalAlign: "top", background: t.accent + "22", maxWidth: mx }}>
                                   <input
                                     autoFocus
                                     defaultValue={v === null || v === undefined ? "" : String(v)}
@@ -432,7 +625,7 @@ function DesktopDatabasePage() {
                                   color: hasPending ? t.accent : t.text2,
                                   background: hasPending ? t.accent + "15" : undefined,
                                   verticalAlign: "top",
-                                  maxWidth: 320,
+                                  maxWidth: mx,
                                   overflow: "hidden",
                                   textOverflow: "ellipsis",
                                   whiteSpace: "nowrap",
@@ -449,6 +642,26 @@ function DesktopDatabasePage() {
                     })}
                   </tbody>
                 </table>
+              </div>
+            ) : null}
+
+            {/* Bottom pagination — duplicate of the top toolbar's pager
+               so the user can flip pages without scrolling back up. Only
+               shows when there's more than one page (avoids dangling UI
+               on a tiny table). */}
+            {rows && rows.length > 0 && totalPages > 1 ? (
+              <div
+                style={{
+                  display: "flex", justifyContent: "flex-end",
+                  alignItems: "center", gap: 10,
+                  marginTop: 12, paddingTop: 12,
+                  borderTop: `1px solid ${t.borderL}`,
+                }}
+              >
+                <span style={{ fontSize: 12, color: t.textDim }}>
+                  {total.toLocaleString()} row{total === 1 ? "" : "s"}
+                </span>
+                {pagerJsx}
               </div>
             ) : null}
           </div>

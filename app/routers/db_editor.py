@@ -177,29 +177,77 @@ async def list_rows(
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=200),
     search: Optional[str] = Query(None),
+    sort: Optional[str] = Query(None),
+    sort_dir: str = Query("asc"),
 ) -> RowsResponse:
     """Paginated row list for a whitelisted table.
 
     `search` does a case-insensitive substring match against every
-    TEXT column in the table. Keeps the query simple — no per-column
-    filter UI yet; the MVP scope expects the user to use browser
-    find-in-page for narrower queries.
+    TEXT column. When the value parses cleanly as a number, it
+    additionally matches INTEGER/REAL columns by equality — typing
+    `42` finds rows whose `id = 42` or `page_count = 42`, not just
+    rows whose TEXT columns happen to contain "42".
+
+    `sort` names a column to ORDER BY (validated against the table's
+    schema so we never interpolate user-supplied identifiers into SQL).
+    `sort_dir` is `asc` or `desc`; anything else falls back to asc.
     """
     _check_table(name)
     db = await _get_db(name)
     try:
-        # Column set for the search filter.
+        # Column set for the search + sort filters.
         sch = await db.execute(f"PRAGMA table_info([{name}])")
         col_info = await sch.fetchall()
+        all_cols = [str(r[1]) for r in col_info]
         text_cols = [str(r[1]) for r in col_info if "TEXT" in str(r[2] or "").upper()]
+        # SQLite is loose about type names — INTEGER/INT, REAL/FLOAT/
+        # DOUBLE/NUMERIC all show up. Match anything that smells
+        # numeric so the search-by-number path catches the columns
+        # users actually have.
+        numeric_cols = [
+            str(r[1]) for r in col_info
+            if any(tok in str(r[2] or "").upper()
+                   for tok in ("INT", "REAL", "NUMERIC", "FLOAT", "DOUBLE"))
+        ]
 
         where = ""
         params: list[Any] = []
-        if search and text_cols:
-            needle = f"%{search}%"
-            clauses = [f"[{c}] LIKE ?" for c in text_cols]
-            where = " WHERE " + " OR ".join(clauses)
-            params = [needle] * len(text_cols)
+        if search:
+            clauses: list[str] = []
+            if text_cols:
+                needle = f"%{search}%"
+                clauses.extend(f"[{c}] LIKE ?" for c in text_cols)
+                params.extend([needle] * len(text_cols))
+            # Numeric branch: only fires when the input parses as a
+            # number AND there's at least one numeric column to match.
+            # Integer-typed inputs match INTEGER columns; float inputs
+            # match REAL columns too. SQLite's implicit casts handle
+            # the cross-type comparisons cleanly.
+            num_val: Any = None
+            try:
+                num_val = int(search)
+            except ValueError:
+                try:
+                    num_val = float(search)
+                except ValueError:
+                    num_val = None
+            if num_val is not None and numeric_cols:
+                clauses.extend(f"[{c}] = ?" for c in numeric_cols)
+                params.extend([num_val] * len(numeric_cols))
+            if clauses:
+                where = " WHERE " + " OR ".join(clauses)
+            else:
+                # Search supplied but nothing to match against — emit
+                # an empty result instead of returning every row.
+                where = " WHERE 1=0"
+
+        # ORDER BY clause. Validate sort col against the table's
+        # actual schema; anything outside it (or omitted) falls back
+        # to the natural row order.
+        order_sql = ""
+        if sort and sort in all_cols:
+            direction = "DESC" if str(sort_dir).lower() == "desc" else "ASC"
+            order_sql = f" ORDER BY [{sort}] {direction}"
 
         count_cur = await db.execute(
             f"SELECT COUNT(*) FROM [{name}]{where}", params,
@@ -209,7 +257,7 @@ async def list_rows(
 
         offset = (page - 1) * per_page
         cur = await db.execute(
-            f"SELECT * FROM [{name}]{where} LIMIT ? OFFSET ?",
+            f"SELECT * FROM [{name}]{where}{order_sql} LIMIT ? OFFSET ?",
             [*params, per_page, offset],
         )
         rows = await cur.fetchall()
