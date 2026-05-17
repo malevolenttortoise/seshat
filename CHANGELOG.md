@@ -7,6 +7,51 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [2.14.2] — 2026-05-16
+
+Hotfix for v2.14.1 Database Manager rework. UAT 2026-05-16 surfaced
+two issues on the `books` table (15,954 rows, many wide columns):
+
+  - **Page numbers unreachable**: the user had to either hide nearly
+    every column or horizontally scroll the entire page to reach
+    the pager at the right end of the toolbar.
+  - **Search felt frozen**: typing a query made the table feel
+    unresponsive to scrolling and page navigation.
+
+Both traced to the same family of bugs:
+
+### Fixed — grid layout (the actual layout bug)
+
+- **`min-width: 0` on the right-pane grid item**. CSS Grid with
+  `gridTemplateColumns: "220px 1fr"` has a long-standing trap: the
+  `1fr` column doesn't actually constrain to `1fr` of remaining
+  space — it expands to fit the min-content of its children. With
+  a wide table inside (the books table easily 2000px+ of cumulative
+  column widths), the grid cell grew beyond viewport, pushing the
+  right-aligned top pager + bottom pagination row off-screen.
+  Adding `min-width: 0` forces the cell to respect `1fr` and lets
+  the table's own `overflow: auto` handle horizontal scrolling
+  internally. Both pagers are now visible without horizontal page
+  scroll.
+
+### Fixed — search debounce
+
+- **300ms debounce** on the search input. Pre-fix, every keystroke
+  fired its own `/v1/db/table/{name}` fetch — typing "wolf" fired
+  4 sequential requests, each one briefly disabling the pager
+  buttons (`disabled={loading || …}`) and re-rendering the table.
+  The combined effect felt like the page was frozen against
+  scroll + paging. Debounced search waits 300ms after the last
+  keystroke before firing, so a settled query is one request,
+  not N. Empty-string clears flush immediately so clearing the
+  search shows all-rows instantly.
+
+Both fixes are frontend-only (DatabasePage.tsx). No backend or
+schema changes; v2.14.1's sort + numeric-search behavior is
+unchanged.
+
+---
+
 ## [2.14.1] — 2026-05-16
 
 Database Manager rework (#F) + floating "Jump to Top" button (#G).

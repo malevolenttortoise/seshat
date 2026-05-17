@@ -98,6 +98,13 @@ function DesktopDatabasePage() {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
+  // v2.14.2 — debounced mirror of `search`. The fetch effect depends
+  // on this, not on `search` directly, so every keystroke during
+  // typing doesn't fire its own /v1/db/table fetch. UAT 2026-05-16:
+  // typing "wolf" used to fire 4 sequential fetches, briefly
+  // disabling the pager between each, which felt like the page was
+  // unresponsive during search.
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -140,6 +147,15 @@ function DesktopDatabasePage() {
       .catch((e) => setError(String(e)));
   }, [selected]);
 
+  // Debounce: 300ms after the user stops typing, mirror `search` →
+  // `debouncedSearch`. Empty strings flush immediately so the user
+  // sees "all rows" the instant they clear the input.
+  useEffect(() => {
+    if (search === "") { setDebouncedSearch(""); return; }
+    const id = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(id);
+  }, [search]);
+
   useEffect(() => {
     if (!selected) return;
     setLoading(true);
@@ -147,7 +163,7 @@ function DesktopDatabasePage() {
       page: String(page),
       per_page: String(PER_PAGE),
     });
-    if (search.trim()) params.set("search", search.trim());
+    if (debouncedSearch.trim()) params.set("search", debouncedSearch.trim());
     if (sort) {
       params.set("sort", sort);
       params.set("sort_dir", sortDir);
@@ -160,11 +176,11 @@ function DesktopDatabasePage() {
       })
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));
-  }, [selected, page, search, sort, sortDir]);
+  }, [selected, page, debouncedSearch, sort, sortDir]);
 
   // Clear pending edits on table switch or search/page/sort change — saving
   // across a different view would be surprising.
-  useEffect(() => { setEdits({}); setFocusCell(null); }, [selected, page, search, sort, sortDir]);
+  useEffect(() => { setEdits({}); setFocusCell(null); }, [selected, page, debouncedSearch, sort, sortDir]);
 
   // Click-outside-to-close for the Columns visibility menu. Without
   // this, the menu stays open until the user clicks the trigger again,
@@ -301,12 +317,12 @@ function DesktopDatabasePage() {
       setEdits({});
       setFocusCell(null);
       // Refresh the rows so pending-colored cells revert to plain display
-      // with the committed values. Preserve the active sort so the row
-      // order doesn't jump under the user post-commit.
+      // with the committed values. Preserve the active sort + active
+      // (committed) search so the row order + filter don't jump post-commit.
       const params = new URLSearchParams({
         page: String(page), per_page: String(PER_PAGE),
       });
-      if (search.trim()) params.set("search", search.trim());
+      if (debouncedSearch.trim()) params.set("search", debouncedSearch.trim());
       if (sort) {
         params.set("sort", sort);
         params.set("sort_dir", sortDir);
@@ -399,8 +415,15 @@ function DesktopDatabasePage() {
             })()}
           </div>
 
-          {/* Right pane: rows */}
-          <div>
+          {/* Right pane: rows.
+             minWidth:0 is load-bearing. Without it the grid's `1fr`
+             column expands to the table's min-content (the sum of
+             every column's intrinsic width), which on a wide table
+             like `books` blows past the viewport. That pushed the
+             right-aligned top pager off-screen — UAT 2026-05-16
+             found you had to either hide columns or scroll the
+             whole page horizontally to reach the page numbers. */}
+          <div style={{ minWidth: 0 }}>
             <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 12, flexWrap: "wrap" }}>
               <input
                 type="search"
