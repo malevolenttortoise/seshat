@@ -14,6 +14,7 @@ import { OfflineBanner } from "./components/OfflineBanner";
 import { LibrarySyncBanner } from "./components/LibrarySyncBanner";
 import { InstallPrompt } from "./components/InstallPrompt";
 import { JumpToTop } from "./components/JumpToTop";
+import { GlobalSearchBar, type SearchNavTarget } from "./components/GlobalSearchBar";
 import { MobileNavDrawer } from "./components/MobileNavDrawer";
 import { SseEventsProvider } from "./providers/SseEventsProvider";
 import { useViewport } from "./hooks/useViewport";
@@ -176,6 +177,8 @@ function SeshatApp() {
   const [navOpen, setNavOpen] = useState(false);
 
   const [auth, setAuth] = useState<AuthState>({ loading: true, authenticated: false, firstRun: false });
+  // Mobile-only — toggles the fullscreen GlobalSearchBar overlay.
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   // Library-level first-run gate — orthogonal to auth.firstRun (which
   // only covers "no admin account exists yet"). A user who finishes
   // the account-create flow but then lands on an empty library /
@@ -204,6 +207,48 @@ function SeshatApp() {
   const switchSection = (s: Section) => {
     setSection(s);
     try { localStorage.setItem("seshat_section", s); } catch { /* */ }
+  };
+
+  // v2.15.0 #B — turn a GlobalSearchBar result selection into the
+  // right nav() call. Settings + Series + Book results dispatch
+  // a `seshat:focus` window event after navigation so the target
+  // page can scroll-to / open the matching element.
+  const navFromSearch = (target: SearchNavTarget) => {
+    switch (target.kind) {
+      case "page":
+        if (target.section) setSection(target.section);
+        nav(target.page_id);
+        return;
+      case "settings-section":
+        nav("settings");
+        setTimeout(() => window.dispatchEvent(new CustomEvent("seshat:focus", {
+          detail: { kind: "settings-section", section_id: target.section_id },
+        })), 50);
+        return;
+      case "author":
+        // Existing pattern — Author Detail reads pageArg as the
+        // numeric author id. library_slug is currently not consumed
+        // by nav; the page resolves it via the author's stamped slug.
+        nav("disc-author-detail", target.author_id);
+        return;
+      case "series":
+        nav("disc-series");
+        setTimeout(() => window.dispatchEvent(new CustomEvent("seshat:focus", {
+          detail: { kind: "series", series_id: target.series_id, library_slug: target.library_slug },
+        })), 50);
+        return;
+      case "book":
+        // No single-book page exists yet. Land on the library page
+        // (owned books) and dispatch a focus event; DiscBooksPage
+        // can open BookSidebar for that ID if it chooses to wire
+        // a listener. For v2.15.0 the navigation alone is the
+        // baseline behavior; deep-link is a polish follow-up.
+        nav("disc-library");
+        setTimeout(() => window.dispatchEvent(new CustomEvent("seshat:focus", {
+          detail: { kind: "book", book_id: target.book_id, library_slug: target.library_slug },
+        })), 50);
+        return;
+    }
   };
 
   // Auth check
@@ -326,23 +371,44 @@ function SeshatApp() {
         </div>
 
         {isMobile ? (
-          // Mobile: hamburger button. Drawer renders at the bottom of
-          // the SeshatApp tree so it overlays the whole viewport.
-          <button
-            onClick={() => setNavOpen(true)}
-            aria-label="Open navigation"
-            style={{
-              background: "transparent",
-              border: "none",
-              cursor: "pointer",
-              padding: "8px 10px",
-              fontSize: 22,
-              color: t.text2,
-              lineHeight: 1,
-            }}
-          >
-            ☰
-          </button>
+          // Mobile: search icon + hamburger. Search opens a fullscreen
+          // overlay (mounted at the bottom of the SeshatApp tree);
+          // the nav drawer is a separate overlay also mounted at
+          // the bottom.
+          <>
+            <button
+              onClick={() => setMobileSearchOpen(true)}
+              aria-label="Open search"
+              style={{
+                background: "transparent",
+                border: "none",
+                cursor: "pointer",
+                padding: "8px 10px",
+                fontSize: 18,
+                color: t.text2,
+                lineHeight: 1,
+                display: "flex",
+                alignItems: "center",
+              }}
+            >
+              🔍
+            </button>
+            <button
+              onClick={() => setNavOpen(true)}
+              aria-label="Open navigation"
+              style={{
+                background: "transparent",
+                border: "none",
+                cursor: "pointer",
+                padding: "8px 10px",
+                fontSize: 22,
+                color: t.text2,
+                lineHeight: 1,
+              }}
+            >
+              ☰
+            </button>
+          </>
         ) : (
           <>
             {/* Section switcher */}
@@ -369,7 +435,7 @@ function SeshatApp() {
             </div>
 
             {/* Section nav items */}
-            <div style={{ display: "flex", gap: 4, flex: 1 }}>
+            <div style={{ display: "flex", gap: 4, flex: 1, minWidth: 0 }}>
               {activeNav.map(item => (
                 <button
                   key={item.id}
@@ -392,6 +458,13 @@ function SeshatApp() {
                   <span>{item.label}</span>
                 </button>
               ))}
+            </div>
+
+            {/* v2.15.0 #B — global search bar between section nav
+               items and the right-rail tool icons. Sits in the
+               navbar's flex row so it stays available on every page. */}
+            <div style={{ marginRight: 10 }}>
+              <GlobalSearchBar onNavigate={navFromSearch} />
             </div>
 
             {/* Right icons */}
@@ -476,6 +549,50 @@ function SeshatApp() {
           onCycleTheme={cycle}
           onLogout={handleLogout}
         />
+      ) : null}
+
+      {/* v2.15.0 #B — mobile fullscreen search overlay. Sits above
+         the page content and the nav drawer (the drawer uses z-index
+         201, the search uses 220 so it covers a drawer that's
+         already open). Closes on result-tap, on Escape, or via the
+         backdrop tap. */}
+      {isMobile && mobileSearchOpen ? (
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setMobileSearchOpen(false);
+          }}
+          style={{
+            position: "fixed", inset: 0, zIndex: 220,
+            background: t.bg + "f0", backdropFilter: "blur(6px)",
+            paddingTop: "calc(48px + env(safe-area-inset-top, 0px))",
+            paddingLeft: 12, paddingRight: 12,
+            display: "flex", flexDirection: "column", gap: 8,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ flex: 1 }}>
+              <GlobalSearchBar
+                onNavigate={(target) => {
+                  setMobileSearchOpen(false);
+                  navFromSearch(target);
+                }}
+                autoFocus
+                fullWidth
+              />
+            </div>
+            <button
+              onClick={() => setMobileSearchOpen(false)}
+              aria-label="Close search"
+              style={{
+                background: "transparent", border: "none",
+                color: t.text2, fontSize: 18, padding: 8,
+                cursor: "pointer", lineHeight: 1,
+              }}
+            >
+              ✕
+            </button>
+          </div>
+        </div>
       ) : null}
     </div>
   );
