@@ -7,6 +7,86 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [2.14.1] — 2026-05-16
+
+Database Manager rework (#F) + floating "Jump to Top" button (#G).
+Both backlog items from the v2.14.x candidate list. Bundled into a
+single patch since the Jump to Top button is small enough that
+isolating it as its own minor would have been overkill.
+
+### Added — #F Database Manager rework
+
+Backend (`app/routers/db_editor.py`):
+
+- **`sort` + `sort_dir` query params** on
+  `GET /api/v1/db/table/{name}`. Sort column is validated against
+  the table's schema (`PRAGMA table_info`), so user-supplied
+  identifiers never reach the interpolated `ORDER BY` — anything
+  outside the column list silently falls back to natural order.
+  `sort_dir` accepts `asc` or `desc`; anything else defaults to
+  asc.
+- **Numeric-aware `search`**. When the search input parses cleanly
+  as an int or float AND the table has any INT/REAL/NUMERIC/FLOAT/
+  DOUBLE columns, the WHERE clause unions equality matches on those
+  columns with the existing TEXT LIKE clauses. Typing `42` now
+  finds rows whose `id = 42` or `page_count = 42`, not just rows
+  whose text columns happen to contain "42".
+
+Frontend (`frontend/src/pages/DatabasePage.tsx`):
+
+- **Per-column max-widths** via a `colMaxWidth(col, type)` helper.
+  Numeric columns get 90px (fixed-width feel); wide-content text
+  columns (description, source_url, cover_url, cover_phash, bio,
+  file_path, image_url, mam_url, formats, tags, raw) get 280px;
+  everything else gets 180px. Hover-title still surfaces the full
+  value when ellipsis fires. Pre-v2.14.1 was a uniform 320px cap
+  which made wide columns dominate and pushed narrow numeric
+  columns off-screen.
+- **Clickable column headers**. Click cycles natural → asc → desc
+  → natural. Active column shows ↑/↓ + accent color + tinted bg.
+  Page resets to 1 on sort change.
+- **Bottom pagination row** when `totalPages > 1`. Shares the same
+  pager JSX as the top toolbar via a hoisted `pagerJsx` const —
+  no code duplication.
+- **Column visibility menu**. "Columns" button in the toolbar
+  opens a dropdown checklist; PK is locked visible (the row-action
+  column needs a stable anchor). Hidden columns persist per-table
+  in localStorage at key `seshat:db-hidden-cols:{table}`, so the
+  user's preferences come back on revisit. "Show all" link clears
+  the set + drops the localStorage entry. Click-outside-to-close.
+- **Search placeholder** updated from "Search text columns…" to
+  "Search text + numbers…" to advertise the numeric-aware
+  behavior.
+
+### Added — #G Floating "Jump to Top" button
+
+- New `frontend/src/components/JumpToTop.tsx` mounted in App's root
+  layout (inside `SseEventsProvider`, after `InstallPrompt`).
+  44x44 circular button, `position: fixed; bottom: 16; right: 16`,
+  z-index 50. Click → `window.scrollTo({top: 0, behavior: "smooth"})`.
+  Always visible (no scroll-position gate — Mark prefers
+  consistency: "every single page regardless if you can scroll
+  down or not").
+- z-index 50 keeps it below every overlay (BookSidebar 100,
+  MobileNavDrawer 201, Toaster 9999, InstallPrompt 60) so the PWA
+  banner / sidebar / toasts always cover it cleanly.
+
+### Tests
+
+- New `tests/routers/test_db_editor.py` — 12 tests across four
+  classes covering sort asc/desc on int + text columns, sort-
+  injection rejection, sort_dir fallback, numeric-search inclusion,
+  numeric-vs-no-match, numeric+text-substring overlap, case-
+  insensitive text search, and combined search + sort composition.
+
+### Mobile
+
+Mobile DatabasePage is unchanged. It uses cards (not a table) so
+it has no horizontal-overflow or sort-by-column issue. Numeric
+search comes through for free since both pages share the same API.
+
+---
+
 ## [2.14.0] — 2026-05-16
 
 Author Detail UX polish — three concrete pain points carried over from
