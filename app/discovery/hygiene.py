@@ -296,11 +296,18 @@ async def _fetch_hardcover_book_mappings(
     # operator runs Hygiene shortly after a Calibre sync.
     BATCH = 50
     out: dict[int, dict[str, str]] = {}
+    # Platform names in Hardcover's `book_mappings.platform.name` are
+    # LOWERCASE (`goodreads`, `openlibrary`, `google`) — confirmed by
+    # UAT 2026-05-17 against the live API. The TitleCase form used in
+    # v2.16.0/v2.16.1 matched zero rows (`_in` is case-sensitive),
+    # producing `candidates=5300 updated=0` against Mark's library.
+    # The extraction loop in `hardcover.py` already case-folds before
+    # comparison, so the filter is the only place case-sensitivity bit.
     query = """
     query HygieneBookMappings($ids: [Int!]) {
       books(where: {id: {_in: $ids}}) {
         id
-        book_mappings(where: {platform: {name: {_in: ["Goodreads", "OpenLibrary", "Google"]}}}) {
+        book_mappings(where: {platform: {name: {_in: ["goodreads", "openlibrary", "google"]}}}) {
           external_id
           platform { name }
         }

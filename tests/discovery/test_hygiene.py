@@ -475,6 +475,30 @@ class TestIdentifierDedup:
 # ─── Coordinator — empty-library no-op ──────────────────────────────
 
 
+class TestHygieneHardcoverQueryShape:
+    """v2.16.2 regression — the batched book_mappings query used by
+    `_fetch_hardcover_book_mappings` MUST filter platforms by their
+    lowercase canonical names. Hardcover's live API returns
+    `platform.name = "goodreads"` / `"openlibrary"` / `"google"` and
+    GraphQL `_in` is case-sensitive; the TitleCase form shipped in
+    v2.16.0 / v2.16.1 returned zero rows against Mark's library
+    (UAT 2026-05-17, 5300 candidates with 0 stamps).
+    """
+
+    def test_query_uses_lowercase_platform_names(self):
+        # We can't reach the local `query` constant inside the
+        # async helper directly, so probe the module source.
+        import inspect
+        from app.discovery import hygiene as hyg
+        src = inspect.getsource(hyg._fetch_hardcover_book_mappings)
+        assert '_in: ["goodreads", "openlibrary", "google"]' in src
+        assert '"Goodreads"' not in src
+        assert '"OpenLibrary"' not in src
+
+
+# ─── Coordinator — empty-library no-op ──────────────────────────────
+
+
 class TestRunAllEmptyLibrary:
     async def test_chain_completes_on_empty_db(self, hygiene_dbs):
         """A fresh DB with no books / authors should run all 6 jobs

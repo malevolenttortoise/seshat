@@ -481,3 +481,25 @@ class TestNoSearchQueryRegression:
             "bibliographies (the Jim Butcher 0-books bug)"
         )
         await src.close()
+
+
+class TestBookMappingsPlatformCase:
+    """v2.16.2 regression — the platform-name filter in the BookData
+    fragment MUST be lowercase. Hardcover's `book_mappings.platform.name`
+    is `goodreads` / `openlibrary` / `google` (lowercase). GraphQL
+    `_in` is case-sensitive, so the TitleCase form shipped in v2.16.0
+    / v2.16.1 returned zero rows against the live API — UAT
+    2026-05-17 caught 5300 candidate books with zero stamps."""
+
+    def test_fragment_uses_lowercase_platform_names(self):
+        from app.discovery.sources.hardcover import FRAGMENTS
+
+        assert '"goodreads"' in FRAGMENTS
+        assert '"openlibrary"' in FRAGMENTS
+        assert '"google"' in FRAGMENTS
+        assert '"Goodreads"' not in FRAGMENTS
+        assert '"OpenLibrary"' not in FRAGMENTS
+        # Title-case "Google" alone is unambiguous-enough that a
+        # presence check would mis-fire on doc comments. Just check
+        # the filter clause shape:
+        assert '_in: ["goodreads", "openlibrary", "google"]' in FRAGMENTS

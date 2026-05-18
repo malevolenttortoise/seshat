@@ -7,6 +7,45 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [2.16.2] — 2026-05-18
+
+UAT-caught hotfix to v2.16.0's Hardcover `book_mappings` extraction
+GraphQL filter.
+
+### Fixed — platform-name filter now lowercase (matches Hardcover's live API)
+
+The BookData fragment in `app/discovery/sources/hardcover.py` and
+the batched query in `app/discovery/hygiene.py` Job 2 used
+TitleCase platform names (`["Goodreads", "OpenLibrary", "Google"]`)
+in their `book_mappings.platform.name._in` filter. Hardcover's
+live API returns these platform names **lowercase**
+(`goodreads`, `openlibrary`, `google` — confirmed via direct probe
+against book id 1945439 / SAO Novel 01). Hasura's `_in` operator
+is case-sensitive, so the filter matched zero rows in production
+even when the data was there.
+
+UAT 2026-05-17 against Mark's library: Job 2 swept **5300
+candidate books** with `hardcover_id IS NOT NULL` and stamped
+**0 cross-source IDs** — silently. The extraction loop in
+`hardcover.py` already case-folds platform names before comparison,
+so the filter was the only place case bit. Fix is a one-line
+swap to lowercase in both query strings, plus two regression
+tests (`TestBookMappingsPlatformCase` in
+`test_hardcover_search.py`, `TestHygieneHardcoverQueryShape` in
+`test_hygiene.py`) that pin the lowercase form in both module
+source strings.
+
+### Known issue (not blocking v2.16.2) — Job 3 ABS Phase-2 wall-time
+
+UAT also surfaced that `backfill_missing_author_ids`'s Phase-2
+ABS sweep can touch 600+ author candidates at ~7s each (Goodreads
+rate-limit), yielding ~70-minute wall-time on a real library.
+Phase-1 still completes in a few minutes. v2.16.2 ships the
+case fix; a follow-up (v2.17.x candidate) will add a per-library
+`limit=` cap on Phase-2 so the Hygiene chain stays bounded.
+
+---
+
 ## [2.16.1] — 2026-05-17
 
 UAT-caught hotfix to v2.16.0's Data Hygiene Job 1.

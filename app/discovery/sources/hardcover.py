@@ -164,7 +164,7 @@ fragment BookData on books {
   canonical_id
   image: cached_image
   contributions { author { name id } }
-  book_mappings(where: {platform: {name: {_in: ["Goodreads", "OpenLibrary", "Google"]}}}) {
+  book_mappings(where: {platform: {name: {_in: ["goodreads", "openlibrary", "google"]}}}) {
     external_id
     platform { name }
   }
