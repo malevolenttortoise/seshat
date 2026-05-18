@@ -7,6 +7,45 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [2.16.1] — 2026-05-17
+
+UAT-caught hotfix to v2.16.0's Data Hygiene Job 1.
+
+### Fixed — empty-author cleanup now preserves cross-library mirror rows
+
+v2.16.0's `job_empty_cleanup` deleted any author with 0 books in
+**this** library that wasn't on `authors_allowed`. That rule
+silently destroys the v2.12.1 dual-row mirror pattern: authors
+who have ebooks in Calibre get an empty mirror row in ABS (and
+vice versa) so cross-format scans surface audiobooks alongside
+ebooks. UAT 2026-05-17 against prod caught **93 ABS-side mirror
+rows + 20 Calibre-side rows** that the first cut would have
+deleted (V. E. Schwab, J. J. Bookerson, etc.) before any chain
+ran.
+
+The fix: the Hygiene coordinator now pre-computes the union of
+normalized author names that have ≥1 book in any library
+(`_load_cross_library_book_names`) and passes it to every
+per-library `job_empty_cleanup` call. An author is preserved if
+their normalized name is in EITHER the global allowlist OR the
+cross-library set. True orphans (no books anywhere, not
+allowlisted) still get deleted.
+
+The empty-cleanup log line now also reports `kept_by_cross_library=N`
+so re-runs are observable. Three new tests pin the rule
+(`test_preserves_cross_library_mirror_authors`,
+`test_cross_library_does_not_protect_true_orphans`,
+`test_load_cross_library_book_names_unions_across_libs`).
+
+### Internal — UAT plan revision
+
+`files/seshat-v2.16.0-uat-plan.md` carries through; the §4.2 Job 1
+log-line check should now include `kept_by_cross_library` and the
+spot-check should confirm `V. E. Schwab` (or any known cross-library
+author) still has rows in BOTH per-library DBs after the run.
+
+---
+
 ## [2.16.0] — 2026-05-17
 
 Two prerequisite gap fixes uncovered by the 2026-05-16 stress test,

@@ -191,6 +191,114 @@ class TestEmptyCleanup:
         )).fetchone()
         assert leftover["c"] == 0
 
+    async def test_preserves_cross_library_mirror_authors(self, hygiene_dbs):
+        """v2.16.1 hotfix — an author with 0 books in THIS library
+        but ≥1 book in ANOTHER library must NOT be deleted. The
+        v2.12.1 dual-row pattern creates these mirrors so cross-
+        format scans (audiobook discovery for ebook authors and
+        vice versa) work.
+
+        UAT 2026-05-17 against prod found 93 ABS-side mirror rows
+        of Calibre authors (V. E. Schwab, J. J. Bookerson, etc.)
+        that the v2.16.0 cut of Job 1 would have wiped.
+        """
+        from app.metadata.author_names import normalize_author_name
+
+        db = hygiene_dbs
+        # Author is empty in this library...
+        mirror = await _insert_author(db, "Mirror Author")
+        # ...but the coordinator's cross-library set has the name
+        # because they have books in some other library.
+        cross_lib = frozenset({normalize_author_name("Mirror Author")})
+
+        stats = hygiene._zero_stats()
+        await hygiene.job_empty_cleanup(
+            "testlib", stats,
+            cross_library_book_names=cross_lib,
+        )
+
+        survivors = await (await db.execute(
+            "SELECT id FROM authors"
+        )).fetchall()
+        ids = {r["id"] for r in survivors}
+        assert mirror in ids, (
+            "cross-library mirror author must survive empty-cleanup"
+        )
+        assert stats["deleted_authors"] == 0
+
+    async def test_load_cross_library_book_names_unions_across_libs(
+        self, hygiene_dbs, monkeypatch, tmp_path,
+    ):
+        """The coordinator's pre-pass walks every configured library
+        and unions the set of normalized author names that have at
+        least one book somewhere. Setup: a second library with one
+        book-bearing author; coordinator sees the union.
+        """
+        # Library 1 (the fixture's): one book-bearing author.
+        await _insert_author(hygiene_dbs, "Lib1 Author")
+        rid = await _insert_book(hygiene_dbs)  # noqa: F841
+        # Re-target the book to the just-created author.
+        await hygiene_dbs.execute(
+            "UPDATE books SET author_id = "
+            "(SELECT id FROM authors WHERE name = 'Lib1 Author') "
+            "WHERE id = (SELECT MAX(id) FROM books)"
+        )
+        await hygiene_dbs.commit()
+
+        # Library 2 — different slug, one book-bearing author with a
+        # distinct name.
+        await disco_db.init_db("otherlib")
+        other = await disco_db.get_db("otherlib")
+        try:
+            from app.metadata.author_names import normalize_author_name
+            await other.execute(
+                "INSERT INTO authors (name, sort_name, normalized_name) "
+                "VALUES (?, ?, ?)",
+                ("Lib2 Author", "Lib2 Author",
+                 normalize_author_name("Lib2 Author")),
+            )
+            await other.execute(
+                "INSERT INTO books (title, author_id, source, owned, hidden) "
+                "VALUES ('B', "
+                "(SELECT id FROM authors WHERE name = 'Lib2 Author'), "
+                "'test', 0, 0)"
+            )
+            await other.commit()
+        finally:
+            await other.close()
+
+        libs = [
+            {"slug": "testlib", "name": "T", "content_type": "ebook"},
+            {"slug": "otherlib", "name": "O", "content_type": "audiobook"},
+        ]
+        names = await hygiene._load_cross_library_book_names(libs)
+        assert "lib1 author" in names
+        assert "lib2 author" in names
+
+    async def test_cross_library_does_not_protect_true_orphans(
+        self, hygiene_dbs,
+    ):
+        """Belt-and-suspenders: cross-library protection must only
+        cover authors whose names appear in the set. A truly
+        unknown 0-book author still gets deleted."""
+        db = hygiene_dbs
+        orphan = await _insert_author(db, "Unknown Orphan")
+        # Cross-library set lists a DIFFERENT name — orphan isn't
+        # protected by the new rule, isn't on the allowlist, gets
+        # deleted normally.
+        cross_lib = frozenset({"someone else"})
+
+        stats = hygiene._zero_stats()
+        await hygiene.job_empty_cleanup(
+            "testlib", stats,
+            cross_library_book_names=cross_lib,
+        )
+        gone = await (await db.execute(
+            "SELECT id FROM authors WHERE id = ?", (orphan,),
+        )).fetchone()
+        assert gone is None
+        assert stats["deleted_authors"] == 1
+
 
 # ─── Job 2 — Hardcover identifier backfill ──────────────────────────
 

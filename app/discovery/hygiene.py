@@ -126,16 +126,75 @@ async def _load_allowed_norms() -> frozenset[str]:
     return allowed
 
 
+async def _load_cross_library_book_names(libs: list[dict]) -> frozenset[str]:
+    """Return the union of normalized author names that have ≥1 book
+    in any library.
+
+    Used by `job_empty_cleanup` as a cross-library preservation rule:
+    the v2.12.1 dual-row pattern creates mirror author rows in every
+    library so cross-format scans see each author from either side.
+    A naive "zero books in THIS library AND not allowlisted" delete
+    rule (v2.16.0's first cut) silently destroyed those mirrors —
+    V. E. Schwab / J. J. Bookerson / 91 others in UAT 2026-05-17.
+
+    The fix: pre-compute the set of names that have books somewhere,
+    pass it to every per-library cleanup, and refuse to delete any
+    author whose normalized name is in either the cross-library set
+    or the global allowlist.
+
+    Returns an EMPTY frozenset on empty input so the no-libraries
+    test path still works (the empty-cleanup default is no
+    cross-library protection, matching v2.16.0 semantics).
+    """
+    names: set[str] = set()
+    for lib in libs:
+        slug = lib.get("slug")
+        if not slug:
+            continue
+        try:
+            db = await get_library_db(slug)
+        except Exception:
+            logger.warning(
+                "hygiene: cross-library names: could not open %s — skipping",
+                slug,
+            )
+            continue
+        try:
+            cur = await db.execute(
+                "SELECT DISTINCT a.normalized_name "
+                "FROM authors a "
+                "JOIN books b ON b.author_id = a.id "
+                "WHERE a.normalized_name IS NOT NULL "
+                "  AND a.normalized_name != ''"
+            )
+            rows = await cur.fetchall()
+            for r in rows:
+                v = r[0]
+                if v:
+                    names.add(str(v))
+        finally:
+            await db.close()
+    return frozenset(names)
+
+
 # ─── Job 1 — Empty author + series cleanup ──────────────────────────
 
-async def job_empty_cleanup(slug: str, stats: dict[str, Any]) -> None:
+async def job_empty_cleanup(
+    slug: str,
+    stats: dict[str, Any],
+    *,
+    cross_library_book_names: frozenset[str] = frozenset(),
+) -> None:
     """Delete authors with 0 books and series with 0 books in the
-    library named by `slug`. Preserves `authors_allowed` by name.
+    library named by `slug`. Preserves two cohorts:
 
-    Author preservation: an author row is kept regardless of book
-    count if its name (normalized) appears in the global
-    `authors_allowed` table. The check uses the same normalization
-    Seshat applies everywhere else (`normalize_author_name`).
+      1. **`authors_allowed` by name** — the global allowlist is the
+         user's authorial-allowlist of record.
+      2. **Cross-library mirror rows** — authors who have ≥1 book in
+         ANY other library. The v2.12.1 dual-row pattern requires
+         these mirrors for cross-format scans to surface audiobooks
+         alongside ebooks (and vice versa); deleting them silently
+         is a v2.16.0 regression caught during UAT.
 
     Series preservation: there's no series-allowlist concept; any
     series with zero member books is fair game.
@@ -143,6 +202,13 @@ async def job_empty_cleanup(slug: str, stats: dict[str, Any]) -> None:
     Order matters — series cleanup runs FIRST so an author whose
     only book pointed at a now-defunct series doesn't get
     misidentified as empty during the author pass.
+
+    `cross_library_book_names` is built once by the coordinator
+    (`_load_cross_library_book_names`) and passed in so every
+    per-library invocation sees the same set. The default empty
+    frozenset preserves the v2.16.0 single-library test behavior
+    (callers that don't supply it get the same delete-anything-not-
+    allowlisted semantics as before).
     """
     db = await get_library_db(slug)
     try:
@@ -152,7 +218,7 @@ async def job_empty_cleanup(slug: str, stats: dict[str, Any]) -> None:
         stats["deleted_series"] += deleted_series
 
         # Author cleanup — count books per author, skip allowlisted
-        # names, delete the rest.
+        # names, skip cross-library mirrors, delete the rest.
         allowed_norms = await _load_allowed_norms()
 
         cur = await db.execute(
@@ -163,10 +229,14 @@ async def job_empty_cleanup(slug: str, stats: dict[str, Any]) -> None:
         candidates = await cur.fetchall()
         deletable: list[int] = []
         kept_allowlist = 0
+        kept_cross_library = 0
         for r in candidates:
             norm = normalize_author_name(r["name"] or "")
             if norm and norm in allowed_norms:
                 kept_allowlist += 1
+                continue
+            if norm and norm in cross_library_book_names:
+                kept_cross_library += 1
                 continue
             deletable.append(int(r["id"]))
 
@@ -188,8 +258,9 @@ async def job_empty_cleanup(slug: str, stats: dict[str, Any]) -> None:
 
         logger.info(
             "hygiene[%s] empty-cleanup: deleted_authors=%d deleted_series=%d "
-            "kept_by_allowlist=%d",
-            slug, len(deletable), deleted_series, kept_allowlist,
+            "kept_by_allowlist=%d kept_by_cross_library=%d",
+            slug, len(deletable), deleted_series,
+            kept_allowlist, kept_cross_library,
         )
     except Exception as e:
         msg = f"empty-cleanup ({slug}): {type(e).__name__}: {e}"
@@ -714,11 +785,28 @@ async def run_all() -> dict[str, Any]:
     original_active = get_active_library()
     try:
         # Job 1 — per-library empty cleanup.
+        # Build the cross-library "has books somewhere" name set once
+        # so every per-library invocation sees the same view. Without
+        # this, mirror author rows from the v2.12.1 dual-row pattern
+        # (Calibre author with no audiobook books in ABS, ABS author
+        # with no ebook books in Calibre) get deleted because each
+        # library sees them as locally empty. UAT 2026-05-17 caught
+        # this against 93 ABS mirror rows that would have been wiped.
         _set_phase(0)
+        cross_lib_names = await _load_cross_library_book_names(libs)
+        logger.info(
+            "hygiene: cross-library names: %d author(s) with books "
+            "somewhere — will be preserved by empty-cleanup even when "
+            "their per-library count is zero",
+            len(cross_lib_names),
+        )
         for lib in libs:
             slug = lib["slug"]
             _set_phase(0, library=slug)
-            await job_empty_cleanup(slug, stats)
+            await job_empty_cleanup(
+                slug, stats,
+                cross_library_book_names=cross_lib_names,
+            )
         state._hygiene_progress["jobs"].append({
             "name": JOB_NAMES[0],
             "deleted_authors": stats["deleted_authors"],
