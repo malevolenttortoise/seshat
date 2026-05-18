@@ -104,7 +104,16 @@ async def get_authors(search: str = Query(None), sort: str = Query("name"), sort
             rows = await (await db.execute(sql, params)).fetchall()
             return [dict(r) for r in rows]
 
-        rows = await run_across_libraries(content_type, q)
+        # v2.17.1 — always fetch across EVERY library (passing "all"
+        # to run_across_libraries) so the merged counts are global
+        # regardless of which format tab the user clicked. The
+        # content_type the user requested gets applied AFTER merge as
+        # a list filter on `content_types`. Pre-fix the Audiobooks
+        # tab only queried audiobook libraries, so a cross-format
+        # author like Emrys Ambrosius (5 ebooks + 1 audiobook) was
+        # shown with just the audiobook counts (1/0) instead of the
+        # global 1/5. Same issue mirror-image on Ebooks tab.
+        rows = await run_across_libraries("all", q)
         # Merge per-normalized-name so Pierce Brown in Calibre and
         # Pierce Brown in ABS collapse to one row with summed stats.
         from app.works.normalize import normalize_author
@@ -156,6 +165,15 @@ async def get_authors(search: str = Query(None), sort: str = Query("name"), sort
         }.get(sort, lambda x: ((x.get("sort_name") or x.get("name") or "").lower(),))
         reverse = sort_dir == "desc"
         authors = sorted(merged.values(), key=sort_fn, reverse=reverse)
+        # v2.17.1 — post-merge content_type filter. The frontend's
+        # "Audiobooks" / "Ebooks" tabs scope which authors to show,
+        # but each author's counts are already global from the merge
+        # above. "all" passes everything through.
+        if content_type and content_type != "all":
+            authors = [
+                a for a in authors
+                if content_type in (a.get("content_types") or [])
+            ]
         return {"authors": authors}
 
     db = await get_db()

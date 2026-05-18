@@ -91,6 +91,161 @@ async def test_series_with_one_visible_book_still_appears(client):
     assert series[0]["author_book_count"] == 1
 
 
+async def test_authors_list_counts_are_global_on_every_tab(
+    tmp_path, monkeypatch,
+):
+    """v2.17.1 — author tile counts on the Authors page should be
+    GLOBAL (summed across libraries) regardless of which format tab
+    the user clicked. The tab filters which authors appear; the
+    counts always show the full picture.
+
+    Repro from UAT 2026-05-18: Emrys Ambrosius has 5 ebooks (Calibre)
+    + 1 audiobook (ABS). v2.17.0 showed "1 owned / 0 missing" on the
+    Audiobooks tab (per-library) and the correct "1 owned / 5
+    missing" on the All tab. After fix, every tab shows the global
+    "1 owned / 5 missing"; the Audiobooks tab simply also includes
+    Emrys in the list (because she has audiobooks).
+    """
+    from app import config as app_config
+    from app import state
+    from app.discovery import database as disco_db
+    from app.discovery.database import get_db
+    from app.discovery.routers.authors import router
+
+    monkeypatch.setattr(app_config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(disco_db, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(state, "_discovered_libraries", [
+        {"slug": "calibre", "content_type": "ebook", "name": "Calibre"},
+        {"slug": "abs", "content_type": "audiobook", "name": "ABS"},
+    ])
+
+    for slug in ("calibre", "abs"):
+        disco_db.set_active_library(slug)
+        await disco_db.init_db(slug)
+
+    # Calibre side — 5 unowned ebooks.
+    disco_db.set_active_library("calibre")
+    db = await get_db("calibre")
+    try:
+        await db.execute("INSERT INTO authors (name, sort_name) VALUES ('Emrys Ambrosius', 'Ambrosius')")
+        for i in range(5):
+            await db.execute(
+                "INSERT INTO books (title, author_id, owned, hidden) "
+                "VALUES (?, 1, 0, 0)",
+                (f"Ebook {i+1}",),
+            )
+        await db.commit()
+    finally:
+        await db.close()
+    # ABS side — 1 owned audiobook.
+    disco_db.set_active_library("abs")
+    db = await get_db("abs")
+    try:
+        await db.execute("INSERT INTO authors (name, sort_name) VALUES ('Emrys Ambrosius', 'Ambrosius')")
+        await db.execute(
+            "INSERT INTO books (title, author_id, owned, hidden) "
+            "VALUES ('Audio 1', 1, 1, 0)"
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+    app = FastAPI()
+    app.include_router(router)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test",
+    ) as c:
+        # All tab — author present with global counts.
+        r_all = (await c.get(
+            "/api/discovery/authors?content_type=all&search=Emrys"
+        )).json()["authors"]
+        # Audiobooks tab — author present (because they have audio),
+        # but counts must be the same global 1/5/6 (not 1/0/1).
+        r_audio = (await c.get(
+            "/api/discovery/authors?content_type=audiobook&search=Emrys"
+        )).json()["authors"]
+        # Ebooks tab — same shape.
+        r_ebook = (await c.get(
+            "/api/discovery/authors?content_type=ebook&search=Emrys"
+        )).json()["authors"]
+
+    for label, rows in (("all", r_all), ("audiobook", r_audio), ("ebook", r_ebook)):
+        assert len(rows) == 1, f"{label}: expected 1 author row, got {len(rows)}"
+        a = rows[0]
+        assert a["owned_count"] == 1, f"{label}: expected owned=1, got {a['owned_count']}"
+        assert a["missing_count"] == 5, f"{label}: expected missing=5, got {a['missing_count']}"
+        assert a["total_books"] == 6, f"{label}: expected total=6, got {a['total_books']}"
+        # The 📖🎧 badge data is the same across tabs — both formats
+        # populated on every tab so the frontend can render the dual
+        # icon consistently.
+        assert set(a.get("content_types") or []) == {"ebook", "audiobook"}
+
+    disco_db.set_active_library(None)
+
+
+async def test_authors_list_audiobook_only_excluded_from_ebook_tab(
+    tmp_path, monkeypatch,
+):
+    """v2.17.1 — the post-merge content_type filter correctly
+    excludes authors that don't have books in the requested format.
+    An audiobook-only author appears on All + Audiobooks but NOT on
+    Ebooks.
+    """
+    from app import config as app_config
+    from app import state
+    from app.discovery import database as disco_db
+    from app.discovery.database import get_db
+    from app.discovery.routers.authors import router
+
+    monkeypatch.setattr(app_config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(disco_db, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(state, "_discovered_libraries", [
+        {"slug": "calibre", "content_type": "ebook", "name": "Calibre"},
+        {"slug": "abs", "content_type": "audiobook", "name": "ABS"},
+    ])
+
+    for slug in ("calibre", "abs"):
+        disco_db.set_active_library(slug)
+        await disco_db.init_db(slug)
+
+    # Audiobook-only author with no Calibre presence.
+    disco_db.set_active_library("abs")
+    db = await get_db("abs")
+    try:
+        await db.execute("INSERT INTO authors (name, sort_name) VALUES ('Eugene Astakhov', 'Astakhov')")
+        await db.execute(
+            "INSERT INTO books (title, author_id, owned, hidden) "
+            "VALUES ('Audio', 1, 1, 0)"
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+    app = FastAPI()
+    app.include_router(router)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test",
+    ) as c:
+        r_all = (await c.get(
+            "/api/discovery/authors?content_type=all&search=Astakhov"
+        )).json()["authors"]
+        r_audio = (await c.get(
+            "/api/discovery/authors?content_type=audiobook&search=Astakhov"
+        )).json()["authors"]
+        r_ebook = (await c.get(
+            "/api/discovery/authors?content_type=ebook&search=Astakhov"
+        )).json()["authors"]
+
+    assert len(r_all) == 1
+    assert len(r_audio) == 1
+    assert len(r_ebook) == 0, (
+        "audiobook-only author must not appear on Ebooks tab "
+        "(post-merge content_type filter)"
+    )
+
+    disco_db.set_active_library(None)
+
+
 async def test_bulk_hide_authors_books_cascades_across_libraries(
     tmp_path, monkeypatch,
 ):

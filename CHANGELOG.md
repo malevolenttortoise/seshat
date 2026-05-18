@@ -7,6 +7,35 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [2.17.1] — 2026-05-18
+
+UAT-caught hotfix to v2.17.0 Bug B / Bug A: Authors-page tile
+counts are now GLOBAL on every format tab, not just All.
+
+### Fixed — author tile counts now global on Audiobooks + Ebooks tabs too
+
+v2.17.0's merge ran the cross-library aggregation only when the user
+was on the "All" tab. The Audiobooks / Ebooks tabs queried just the
+matching-type libraries, so a cross-format author's tile showed only
+that format's counts. UAT 2026-05-18: Emrys Ambrosius (5 ebooks in
+Calibre + 1 audiobook in ABS) showed "1 owned / 0 missing" on the
+Audiobooks tab — the per-library count — instead of the global
+"1 owned / 5 missing".
+
+Fix: the `/authors` endpoint now ALWAYS calls `run_across_libraries`
+with content_type="all" so the merged counts always sum every
+library. The user-requested content_type is applied AFTER merge as
+a list filter — an audiobook-only author is excluded from the
+Ebooks tab, but a cross-format author shows their global counts on
+every tab where they qualify.
+
+Two new tests
+(`test_authors_list_counts_are_global_on_every_tab` +
+`test_authors_list_audiobook_only_excluded_from_ebook_tab`) pin
+the new shape.
+
+---
+
 ## [2.17.0] — 2026-05-18
 
 Cross-library polish minor. Four user-reported items landed in one
