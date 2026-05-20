@@ -1118,6 +1118,38 @@ async def _stage_for_review(
     # Store both cover paths so the UI can show both + let user pick.
     metadata_dict["cover_mam"] = mam_cover_str
     metadata_dict["cover_enriched"] = enricher_cover_str
+
+    # v2.17.7 — surface owned-book duplicates in the review UI. If the
+    # user already owns this book under a row with no confirmed MAM
+    # URL, render a banner with a "Claim torrent for owned" action.
+    # Same matcher the announce-time claim uses, so what the UI sees
+    # is consistent with what dispatch would have caught earlier (the
+    # announce hook only catches the no-ambiguity case; this surface
+    # additionally helps with multi-owned-row ambiguity).
+    try:
+        from app.orchestrator.owned_announce_claim import find_owned_matches
+        owned_matches = await find_owned_matches(
+            title=prep.metadata.title or "",
+            author_blob=prep.metadata.author or "",
+            category=(grab.category if grab else "") or "",
+        )
+        if owned_matches:
+            metadata_dict["duplicate_of_owned"] = [
+                {
+                    "library_slug": m.library_slug,
+                    "book_id": m.book_id,
+                    "title": m.title,
+                    "mam_status": m.mam_status,
+                    "calibre_id": m.calibre_id,
+                }
+                for m in owned_matches
+            ]
+    except Exception:
+        _log.exception(
+            "pipeline: duplicate-of-owned lookup crashed for grab_id=%d "
+            "(non-fatal)", event.grab_id,
+        )
+
     await review_storage.create_entry(
         db,
         grab_id=event.grab_id,

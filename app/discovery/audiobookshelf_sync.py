@@ -430,9 +430,46 @@ async def sync_audiobookshelf(library: dict) -> dict:
         # (user deleted the file, renamed the folder, etc.). Same safety
         # net as Calibre: zero-book payloads are treated as transient
         # read errors and skip the prune.
+        #
+        # Before pruning, salvage MAM linkage from any disappearing
+        # rows. ABS doesn't have an exact CWA-merge analogue, but
+        # users can manually reorganize folders (rename, re-import
+        # under a different folder) that leaves a freshly-linked row
+        # orphaned next to its replacement.
         books_pruned = 0
+        books_linkage_transferred = 0
         if current_abs_ids:
             ph = ",".join("?" * len(current_abs_ids))
+            to_prune = await (await db.execute(
+                f"SELECT id FROM books WHERE source='audiobookshelf' "
+                f"AND audiobookshelf_id NOT IN ({ph})",
+                current_abs_ids,
+            )).fetchall()
+            if to_prune:
+                from app.database import get_db as get_pipeline_db
+                from app.discovery.book_merge import (
+                    transfer_linkage_before_prune,
+                )
+                pipeline_db = await get_pipeline_db()
+                try:
+                    for row in to_prune:
+                        try:
+                            moved = await transfer_linkage_before_prune(
+                                db, pipeline_db,
+                                library_slug=library["slug"],
+                                disappearing_book_id=int(row["id"]),
+                            )
+                            if moved:
+                                books_linkage_transferred += 1
+                        except Exception:
+                            logger.exception(
+                                "ABS sync: linkage transfer crashed for "
+                                "disappearing book id=%d (continuing to prune)",
+                                int(row["id"]),
+                            )
+                    await pipeline_db.commit()
+                finally:
+                    await pipeline_db.close()
             cur = await db.execute(
                 f"DELETE FROM books WHERE source='audiobookshelf' "
                 f"AND audiobookshelf_id NOT IN ({ph})",
@@ -442,9 +479,11 @@ async def sync_audiobookshelf(library: dict) -> dict:
             if books_pruned:
                 logger.info(
                     f"ABS sync: pruned {books_pruned} stale row(s) "
-                    f"no longer in ABS"
+                    f"no longer in ABS "
+                    f"(linkage transferred: {books_linkage_transferred})"
                 )
         progress["books_pruned"] = books_pruned
+        progress["books_linkage_transferred"] = books_linkage_transferred
 
         await db.commit()
         await db.execute(

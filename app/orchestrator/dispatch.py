@@ -481,6 +481,44 @@ async def _dispatch_with_decision(
                 announce_id=announce_id,
             )
 
+        # v2.17.7 — claim-for-owned gate. If the announce matches a
+        # book already in a library with no confirmed MAM URL, claim
+        # the torrent_id for that owned row and skip the grab. Closes
+        # the duplicate-download path for books the user owned before
+        # the upload existed on MAM. Runs BEFORE format-dedup so we
+        # don't even consider holding/queuing a torrent we don't want
+        # the file for. Failure to claim falls through silently.
+        try:
+            from app.orchestrator.owned_announce_claim import (
+                try_claim_announce_for_owned,
+            )
+            claim_result = await try_claim_announce_for_owned(
+                announce=announce,
+            )
+        except Exception:
+            _log.exception(
+                "claim-for-owned: crashed during lookup for tid=%s "
+                "(falling through to normal grab)",
+                announce.torrent_id,
+            )
+            claim_result = None
+        if claim_result is not None and claim_result.claimed:
+            await grabs_storage.update_announce_decision(
+                db, announce_id=announce_id,
+                action="skip", reason="claimed_for_owned",
+            )
+            _emit(deps, "claimed_for_owned", {
+                "torrent_id": announce.torrent_id,
+                "library_slug": claim_result.library_slug,
+                "book_id": claim_result.book_id,
+                "book_title": claim_result.book_title,
+            })
+            return DispatchResult(
+                action="skip",
+                reason="claimed_for_owned",
+                announce_id=announce_id,
+            )
+
         # v2.9.0 — format-priority dedup gate. Runs only when the
         # caller asked us to AND the user has any priority list
         # configured. Three possible outcomes:

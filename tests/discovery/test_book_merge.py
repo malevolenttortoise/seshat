@@ -373,3 +373,169 @@ class TestAuditAndErrors:
                 library_slug="testlib",
                 winner_id=a, loser_id=b, reason="test",
             )
+
+
+# ─── transfer_linkage_before_prune (v2.17.7) ────────────────
+
+
+class TestTransferLinkageBeforePrune:
+    """Sync-time salvage: when a calibre_id disappears (CWA Merge
+    Duplicates folded it into another), the disappearing row's MAM
+    linkage should land on the surviving owned sibling instead of
+    being deleted with the row."""
+
+    async def test_carries_mam_url_to_sibling(self, merge_dbs):
+        from app.discovery.book_merge import transfer_linkage_before_prune
+        discovery, pipeline = merge_dbs
+        a_id = await _insert_author(discovery, "St. Arkham")
+        # The freshly-link_new_book'd row that's about to be pruned.
+        loser = await _insert_book(
+            discovery, title="Amber's Hollow",
+            author_id=a_id, source="calibre", owned=1,
+            calibre_id=9999,
+            mam_url="https://www.myanonamouse.net/t/1243514",
+            mam_torrent_id="1243514",
+            mam_status="found",
+        )
+        # The pre-existing owned row that survives the CWA merge.
+        survivor = await _insert_book(
+            discovery, title="Amber's Hollow",
+            author_id=a_id, source="calibre", owned=1,
+            calibre_id=3684,
+            goodreads_id="244216304",
+            mam_status="not_found",
+        )
+
+        moved = await transfer_linkage_before_prune(
+            discovery, pipeline,
+            library_slug="testlib",
+            disappearing_book_id=loser,
+        )
+        assert moved is True
+
+        row = await (await discovery.execute(
+            "SELECT mam_url, mam_torrent_id, mam_status, goodreads_id "
+            "FROM books WHERE id = ?", (survivor,),
+        )).fetchone()
+        assert row["mam_url"] == "https://www.myanonamouse.net/t/1243514"
+        assert row["mam_torrent_id"] == "1243514"
+        assert row["mam_status"] == "found"
+        # Survivor's existing identifier preserved.
+        assert row["goodreads_id"] == "244216304"
+
+    async def test_no_mam_torrent_id_skips(self, merge_dbs):
+        from app.discovery.book_merge import transfer_linkage_before_prune
+        discovery, pipeline = merge_dbs
+        a_id = await _insert_author(discovery, "A")
+        loser = await _insert_book(
+            discovery, title="X", author_id=a_id,
+            source="calibre", owned=1, calibre_id=11,
+        )
+        await _insert_book(
+            discovery, title="X", author_id=a_id,
+            source="calibre", owned=1, calibre_id=22,
+        )
+        moved = await transfer_linkage_before_prune(
+            discovery, pipeline,
+            library_slug="testlib",
+            disappearing_book_id=loser,
+        )
+        assert moved is False  # Nothing to carry; bail.
+
+    async def test_survivor_already_found_skipped(self, merge_dbs):
+        """Don't clobber an existing 'found' linkage with another
+        torrent's URL — survivor wins by default when both have data."""
+        from app.discovery.book_merge import transfer_linkage_before_prune
+        discovery, pipeline = merge_dbs
+        a_id = await _insert_author(discovery, "A")
+        loser = await _insert_book(
+            discovery, title="X", author_id=a_id,
+            source="calibre", owned=1, calibre_id=11,
+            mam_torrent_id="111", mam_status="found",
+            mam_url="https://www.myanonamouse.net/t/111",
+        )
+        survivor = await _insert_book(
+            discovery, title="X", author_id=a_id,
+            source="calibre", owned=1, calibre_id=22,
+            mam_torrent_id="222", mam_status="found",
+            mam_url="https://www.myanonamouse.net/t/222",
+        )
+        moved = await transfer_linkage_before_prune(
+            discovery, pipeline,
+            library_slug="testlib",
+            disappearing_book_id=loser,
+        )
+        assert moved is False
+        row = await (await discovery.execute(
+            "SELECT mam_torrent_id FROM books WHERE id = ?",
+            (survivor,),
+        )).fetchone()
+        assert row["mam_torrent_id"] == "222"  # untouched
+
+    async def test_no_sibling_no_op(self, merge_dbs):
+        from app.discovery.book_merge import transfer_linkage_before_prune
+        discovery, pipeline = merge_dbs
+        a_id = await _insert_author(discovery, "A")
+        loser = await _insert_book(
+            discovery, title="X", author_id=a_id,
+            source="calibre", owned=1, calibre_id=11,
+            mam_torrent_id="111", mam_status="found",
+        )
+        moved = await transfer_linkage_before_prune(
+            discovery, pipeline,
+            library_slug="testlib",
+            disappearing_book_id=loser,
+        )
+        assert moved is False
+
+    async def test_ambiguous_multi_sibling_bails(self, merge_dbs):
+        from app.discovery.book_merge import transfer_linkage_before_prune
+        discovery, pipeline = merge_dbs
+        a_id = await _insert_author(discovery, "A")
+        loser = await _insert_book(
+            discovery, title="X", author_id=a_id,
+            source="calibre", owned=1, calibre_id=11,
+            mam_torrent_id="111", mam_status="found",
+        )
+        await _insert_book(
+            discovery, title="X", author_id=a_id,
+            source="calibre", owned=1, calibre_id=22,
+        )
+        await _insert_book(
+            discovery, title="X", author_id=a_id,
+            source="calibre", owned=1, calibre_id=33,
+        )
+        moved = await transfer_linkage_before_prune(
+            discovery, pipeline,
+            library_slug="testlib",
+            disappearing_book_id=loser,
+        )
+        assert moved is False
+
+    async def test_redirects_book_grab_links(self, merge_dbs):
+        from app.discovery.book_merge import transfer_linkage_before_prune
+        discovery, pipeline = merge_dbs
+        a_id = await _insert_author(discovery, "A")
+        loser = await _insert_book(
+            discovery, title="X", author_id=a_id,
+            source="calibre", owned=1, calibre_id=11,
+            mam_torrent_id="111", mam_status="found",
+        )
+        survivor = await _insert_book(
+            discovery, title="X", author_id=a_id,
+            source="calibre", owned=1, calibre_id=22,
+            mam_status="not_found",
+        )
+        await _insert_grab_link(
+            pipeline, grab_id=42, slug="testlib", book_id=loser,
+        )
+        moved = await transfer_linkage_before_prune(
+            discovery, pipeline,
+            library_slug="testlib",
+            disappearing_book_id=loser,
+        )
+        assert moved is True
+        row = await (await pipeline.execute(
+            "SELECT book_id FROM book_grab_links WHERE grab_id = 42",
+        )).fetchone()
+        assert row["book_id"] == survivor

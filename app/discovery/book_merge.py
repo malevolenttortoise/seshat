@@ -375,3 +375,138 @@ def pick_winner_id(book_a: dict, book_b: dict) -> int:
     if sb > sa:
         return int(book_b["id"])
     return min(int(book_a["id"]), int(book_b["id"]))
+
+
+# ─── Sync-time prune linkage transfer ──────────────────────────
+
+
+async def transfer_linkage_before_prune(
+    discovery_db: aiosqlite.Connection,
+    pipeline_db: aiosqlite.Connection,
+    *,
+    library_slug: str,
+    disappearing_book_id: int,
+) -> bool:
+    """Move a disappearing row's MAM linkage onto an owned sibling.
+
+    Use case: CWA's "Merge Duplicates" folds calibre_id X into
+    calibre_id Y inside Calibre, leaving X dead. On next sync, the
+    row for X is about to be pruned. Without this helper the
+    mam_url/torrent_id that `link_new_book` wrote to row X is
+    silently lost — the surviving row Y keeps its stale
+    `mam_status='not_found'` and the user has to manually rescan.
+
+    Conservative match rules — bail (return False) when:
+      - The disappearing row has no mam_torrent_id (nothing to carry).
+      - No sibling matches by (author_id, normalized title).
+      - 2+ siblings match (ambiguous — defer rather than guess).
+      - The unique sibling already has `mam_status='found'` (don't
+        clobber a confirmed linkage with another torrent's data).
+
+    On a positive match: COALESCE the disappearing row's identity
+    fields onto the sibling (sibling's existing values win, the
+    disappearing row only fills gaps), overwrite the sibling's
+    mam_url/torrent_id/status/etc. with the disappearing row's
+    values, redirect any book_grab_links from the disappearing row
+    to the sibling, and write a `book_merges` audit row tagged
+    `reason='prune_linkage_transfer'`. Returns True.
+
+    The actual DELETE of the disappearing row is the caller's
+    responsibility — this helper only moves data sideways. Caller
+    must commit both connections after this returns (we don't,
+    to keep the prune transaction atomic).
+    """
+    loser = await _fetch_book(discovery_db, disappearing_book_id)
+    if loser is None:
+        return False
+    mtid = loser["mam_torrent_id"]
+    if not mtid or (isinstance(mtid, str) and not mtid.strip()):
+        return False
+
+    # Same-author, same-title (article-insensitive) owned Calibre
+    # sibling — same matching shape calibre_sync.py uses for the
+    # ownership-flip pass at line 1192. Excludes self.
+    candidates = await (await discovery_db.execute(
+        """
+        SELECT id, mam_status
+        FROM books
+        WHERE author_id = ?
+          AND id != ?
+          AND owned = 1
+          AND source = 'calibre'
+          AND (
+              LOWER(TRIM(title)) = LOWER(TRIM(?))
+              OR REPLACE(LOWER(TRIM(title)), 'the ', '') =
+                 REPLACE(LOWER(TRIM(?)), 'the ', '')
+          )
+        """,
+        (loser["author_id"], disappearing_book_id,
+         loser["title"], loser["title"]),
+    )).fetchall()
+    if len(candidates) != 1:
+        return False
+    survivor_id = int(candidates[0]["id"])
+    if (candidates[0]["mam_status"] or "") == "found":
+        return False
+
+    survivor = await _fetch_book(discovery_db, survivor_id)
+    if survivor is None:
+        return False
+
+    # Fields to push: identifiers + metadata get coalesce(survivor,
+    # loser) — survivor's value wins, loser fills gaps. mam_* fields
+    # are unconditionally overwritten with the loser's values because
+    # we've already gated on `survivor.mam_status != 'found'`, so the
+    # loser's `'found'` linkage is strictly better information.
+    coalesced: dict[str, Any] = {}
+    for f in _IDENTITY_FIELDS:
+        if f.startswith("mam_") or f == "source_url":
+            coalesced[f] = loser[f] if loser[f] not in (None, "") else survivor[f]
+        else:
+            coalesced[f] = _coalesce(survivor[f], loser[f])
+    for f in _METADATA_FIELDS:
+        coalesced[f] = _coalesce(survivor[f], loser[f])
+
+    set_clause = ", ".join(f"{c} = ?" for c in coalesced.keys())
+    values = list(coalesced.values()) + [survivor_id]
+    await discovery_db.execute(
+        f"UPDATE books SET {set_clause} WHERE id = ?", values,
+    )
+
+    # Redirect book_grab_links. Same UNIQUE(library_slug, book_id)
+    # collision handling as merge_books: if the survivor already has
+    # a link, drop the loser's instead of moving it.
+    survivor_link = await (await pipeline_db.execute(
+        "SELECT grab_id FROM book_grab_links "
+        "WHERE library_slug = ? AND book_id = ?",
+        (library_slug, survivor_id),
+    )).fetchone()
+    if survivor_link is None:
+        await pipeline_db.execute(
+            "UPDATE book_grab_links SET book_id = ? "
+            "WHERE library_slug = ? AND book_id = ?",
+            (survivor_id, library_slug, disappearing_book_id),
+        )
+    else:
+        await pipeline_db.execute(
+            "DELETE FROM book_grab_links "
+            "WHERE library_slug = ? AND book_id = ?",
+            (library_slug, disappearing_book_id),
+        )
+
+    snapshot_json = json.dumps(dict(loser), default=str, sort_keys=True)
+    await discovery_db.execute(
+        "INSERT INTO book_merges "
+        "(winner_id, loser_id, loser_snapshot_json, reason) "
+        "VALUES (?, ?, ?, ?)",
+        (survivor_id, disappearing_book_id, snapshot_json,
+         "prune_linkage_transfer"),
+    )
+
+    _log.info(
+        "transfer_linkage_before_prune: moved mam linkage from "
+        "loser=%d to survivor=%d slug=%s (mam_torrent_id=%s)",
+        disappearing_book_id, survivor_id, library_slug,
+        loser["mam_torrent_id"],
+    )
+    return True

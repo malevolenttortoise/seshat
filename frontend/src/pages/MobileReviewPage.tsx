@@ -47,6 +47,14 @@ interface ReviewItem {
       source?: string;
       confidence?: number;
     };
+    // v2.17.7 — owned-book duplicate hints. See ReviewPage.tsx.
+    duplicate_of_owned?: {
+      library_slug: string;
+      book_id: number;
+      title: string;
+      mam_status: string;
+      calibre_id: number | null;
+    }[];
   };
   cover_path: string | null;
   status: string;
@@ -105,6 +113,23 @@ export default function MobileReviewPage() {
     setBusyId(id);
     try {
       await api.post(`/v1/review/${id}/reject`, { note: "rejected via UI" });
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const claimForOwned = async (
+    id: number, library_slug: string, book_id: number,
+  ) => {
+    if (!confirm("Pin this MAM URL to the existing owned book and reject this duplicate import?")) return;
+    setBusyId(id);
+    try {
+      await api.post(`/v1/review/${id}/claim-for-owned`, {
+        library_slug, book_id, note: "claimed for owned via mobile UI",
+      });
       await refresh();
     } catch (e) {
       setError(String(e));
@@ -239,6 +264,7 @@ export default function MobileReviewPage() {
             onReject={reject}
             onSave={saveEdits}
             onReEnrich={reEnrich}
+            onClaimForOwned={claimForOwned}
             busy={busyId === item.id}
           />
         ))
@@ -253,6 +279,7 @@ function ReviewCard({
   onReject,
   onSave,
   onReEnrich,
+  onClaimForOwned,
   busy,
 }: {
   item: ReviewItem;
@@ -263,6 +290,7 @@ function ReviewCard({
     id: number,
     metadata: Record<string, unknown>,
   ) => Promise<boolean>;
+  onClaimForOwned: (id: number, library_slug: string, book_id: number) => void;
   busy: boolean;
 }) {
   const t = useTheme();
@@ -487,6 +515,35 @@ function ReviewCard({
         </MobileSection>
       )}
 
+      {/* v2.17.7 — duplicate-of-owned banner. Surfaces owned rows
+          missing a MAM URL whose title+author matches this grab. */}
+      {item.metadata.duplicate_of_owned && item.metadata.duplicate_of_owned.length > 0 && (
+        <div
+          style={{
+            padding: "8px 10px",
+            borderRadius: 8,
+            background: t.accent + "15",
+            border: `1px solid ${t.accent}44`,
+            fontSize: 12,
+            color: t.text2,
+            lineHeight: 1.4,
+          }}
+        >
+          <div style={{ fontWeight: 600, color: t.accent, marginBottom: 4 }}>
+            You already own this book
+          </div>
+          <div>
+            The owned copy is in <code style={{ fontSize: 11 }}>
+              {item.metadata.duplicate_of_owned[0].library_slug}
+            </code>
+            {item.metadata.duplicate_of_owned[0].calibre_id != null && (
+              <span> · calibre #{item.metadata.duplicate_of_owned[0].calibre_id}</span>
+            )}
+            . Claim pins the MAM URL to that row and rejects this duplicate.
+          </div>
+        </div>
+      )}
+
       {/* Secondary action chips — Edit toggle + Re-enrich. Re-enrich
           is available whether the form is open or not so the user
           can re-scrape with edits as the seed without committing. */}
@@ -497,6 +554,17 @@ function ReviewCard({
         <MobileChip onClick={reEnrich} leadingIcon="↻">
           Re-enrich
         </MobileChip>
+        {item.metadata.duplicate_of_owned && item.metadata.duplicate_of_owned.length === 1 && (
+          <MobileChip
+            onClick={() => onClaimForOwned(
+              item.id,
+              item.metadata.duplicate_of_owned![0].library_slug,
+              item.metadata.duplicate_of_owned![0].book_id,
+            )}
+          >
+            Claim for owned
+          </MobileChip>
+        )}
       </div>
 
       {/* Primary action buttons */}

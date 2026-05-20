@@ -1220,8 +1220,41 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
         else:
             current_ids = [book["book_id"] for book in calibre_data["books"]]
         books_pruned = 0
+        books_linkage_transferred = 0
         if current_ids:
             ph = ",".join("?" * len(current_ids))
+            # Before pruning, salvage MAM linkage from any disappearing
+            # rows that hold a freshly-linked torrent. The motivating
+            # case is CWA "Merge Duplicates": Seshat row X was
+            # link_new_book'd to MAM torrent T after Calibre added it,
+            # then CWA merged calibre_id X into an existing owned
+            # calibre_id Y. The row for X is about to be pruned and
+            # the mam_url/torrent_id would vanish with it — but the
+            # owned sibling Y is the rightful holder of that linkage.
+            to_prune = await (await db.execute(
+                f"SELECT id FROM books WHERE source='calibre' "
+                f"AND calibre_id NOT IN ({ph})",
+                current_ids,
+            )).fetchall()
+            if to_prune:
+                from app.discovery.book_merge import (
+                    transfer_linkage_before_prune,
+                )
+                for row in to_prune:
+                    try:
+                        moved = await transfer_linkage_before_prune(
+                            db, pipeline_db,
+                            library_slug=slug,
+                            disappearing_book_id=int(row["id"]),
+                        )
+                        if moved:
+                            books_linkage_transferred += 1
+                    except Exception:
+                        logger.exception(
+                            "Calibre sync: linkage transfer crashed for "
+                            "disappearing book id=%d (continuing to prune)",
+                            int(row["id"]),
+                        )
             cur = await db.execute(
                 f"DELETE FROM books WHERE source='calibre' "
                 f"AND calibre_id NOT IN ({ph})",
@@ -1231,9 +1264,11 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
             if books_pruned:
                 logger.info(
                     f"Calibre sync: pruned {books_pruned} stale row(s) "
-                    f"no longer in metadata.db"
+                    f"no longer in metadata.db "
+                    f"(linkage transferred: {books_linkage_transferred})"
                 )
         progress["books_pruned"] = books_pruned
+        progress["books_linkage_transferred"] = books_linkage_transferred
 
         await db.commit()
 

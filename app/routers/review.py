@@ -554,6 +554,100 @@ async def re_enrich(review_id: int, body: SaveRequest) -> ReviewItem:
         await db.close()
 
 
+class ClaimForOwnedRequest(BaseModel):
+    """Body for /claim-for-owned: which owned row to claim for.
+
+    The UI gets candidate rows from `metadata.duplicate_of_owned`,
+    which carries `library_slug` + `book_id` per the multi-library
+    slug rule. The user picks one (UI defaults to the first when
+    only one is present) and the server claims the torrent for that
+    specific row.
+    """
+    library_slug: str
+    book_id: int
+    note: Optional[str] = None
+
+
+@router.post("/{review_id}/claim-for-owned", response_model=ReviewActionResponse)
+async def claim_for_owned(
+    review_id: int, body: ClaimForOwnedRequest,
+) -> ReviewActionResponse:
+    """Claim this review's MAM torrent for an existing owned row.
+
+    Writes mam_url/torrent_id/'found' status onto the owned row in
+    the named library, then rejects the review entry (deletes the
+    staged file). Equivalent to what the announce-time hook does,
+    surfaced for cases the hook couldn't auto-resolve (e.g. multiple
+    owned rows tied for the title+author match, or the announce
+    arrived before the user added the book to their library).
+    """
+    db = await get_db()
+    try:
+        row = await review_storage.get_entry(db, review_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="review not found")
+        if row.status != review_storage.STATUS_PENDING:
+            return ReviewActionResponse(
+                ok=False, id=review_id, status=row.status,
+                error=f"already in status {row.status}",
+            )
+
+        grab = await grabs_storage.get_grab(db, row.grab_id)
+        if grab is None or not grab.mam_torrent_id:
+            raise HTTPException(
+                status_code=409,
+                detail="grab row missing mam_torrent_id — cannot claim",
+            )
+
+        from app.orchestrator.owned_announce_claim import write_claim_to_owned
+        ok = await write_claim_to_owned(
+            library_slug=body.library_slug,
+            book_id=body.book_id,
+            mam_torrent_id=grab.mam_torrent_id,
+            category=grab.category or "",
+        )
+        if not ok:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "owned row not found in the named library "
+                    "(slug or book_id mismatch)"
+                ),
+            )
+
+        # Remove the staged file — we've claimed the torrent for an
+        # already-owned book and don't need the duplicate copy on
+        # disk. Seeding original stays in the download dir.
+        try:
+            staged_dir = Path(row.staged_path)
+            if staged_dir.exists():
+                shutil.rmtree(str(staged_dir), ignore_errors=True)
+        except Exception:
+            _log.exception(
+                "claim-for-owned: failed to remove staged dir for "
+                "review_id=%d", review_id,
+            )
+
+        note = body.note or (
+            f"claimed for owned book {body.library_slug}:{body.book_id}"
+        )
+        await review_storage.set_status(
+            db, review_id, review_storage.STATUS_REJECTED,
+            decision_note=note,
+        )
+        _log.info(
+            "claim-for-owned: review_id=%d claimed grab=%d tid=%s for "
+            "%s:%d",
+            review_id, row.grab_id, grab.mam_torrent_id,
+            body.library_slug, body.book_id,
+        )
+        return ReviewActionResponse(
+            ok=True, id=review_id, status=review_storage.STATUS_REJECTED,
+        )
+    finally:
+        await db.close()
+
+
 @router.post("/{review_id}/reject", response_model=ReviewActionResponse)
 async def reject(review_id: int, body: RejectRequest) -> ReviewActionResponse:
     db = await get_db()

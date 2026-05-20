@@ -70,6 +70,18 @@ interface ReviewItem {
       asin?: string;
       abridged?: boolean;
     };
+    // v2.17.7 — populated server-side at staging time. Lists owned
+    // rows whose normalized title+author match this grab and whose
+    // mam_status isn't 'found'. The UI surfaces a banner + a
+    // "Claim for owned book" button so the user can pin the MAM URL
+    // to the existing row instead of importing a duplicate.
+    duplicate_of_owned?: {
+      library_slug: string;
+      book_id: number;
+      title: string;
+      mam_status: string;
+      calibre_id: number | null;
+    }[];
   };
   cover_path: string | null;
   status: string;
@@ -151,6 +163,23 @@ function DesktopReviewPage() {
     setBusyId(id);
     try {
       await api.post(`/v1/review/${id}/reject`, { note: "rejected via UI" });
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function claimForOwned(
+    id: number, library_slug: string, book_id: number,
+  ) {
+    setBusyId(id);
+    try {
+      await api.post(`/v1/review/${id}/claim-for-owned`, {
+        library_slug, book_id,
+        note: "claimed for owned via UI",
+      });
       await refresh();
     } catch (e) {
       setError(String(e));
@@ -285,6 +314,7 @@ function DesktopReviewPage() {
                 onSave={(meta) => saveEdits(group[0].id, meta)}
                 onReEnrich={(meta) => reEnrich(group[0].id, meta)}
                 onReject={() => reject(group[0].id)}
+                onClaimForOwned={(slug, bid) => claimForOwned(group[0].id, slug, bid)}
               />
             ) : (
               <BundleWrapper key={group[0].bundle_group_id} items={group}>
@@ -298,6 +328,7 @@ function DesktopReviewPage() {
                     onSave={(meta) => saveEdits(item.id, meta)}
                     onReEnrich={(meta) => reEnrich(item.id, meta)}
                     onReject={() => reject(item.id)}
+                    onClaimForOwned={(slug, bid) => claimForOwned(item.id, slug, bid)}
                   />
                 ))}
               </BundleWrapper>
@@ -371,6 +402,7 @@ function ReviewCard({
   onSave,
   onReEnrich,
   onReject,
+  onClaimForOwned,
   bundlePosition,
 }: {
   item: ReviewItem;
@@ -379,6 +411,7 @@ function ReviewCard({
   onSave: (metadata: Record<string, unknown>) => void;
   onReEnrich: (metadata: Record<string, unknown>) => Promise<boolean>;
   onReject: () => void;
+  onClaimForOwned: (library_slug: string, book_id: number) => void;
   bundlePosition?: { index: number; total: number };
 }) {
   const theme = useTheme();
@@ -615,6 +648,62 @@ function ReviewCard({
           </div>
         ) : null}
 
+        {/* v2.17.7 — duplicate-of-owned banner. Server populates
+            `metadata.duplicate_of_owned` when the grab's normalized
+            title+author matches one or more owned rows missing a
+            confirmed MAM URL. Clicking "Claim for owned" pins the
+            grab's torrent_id to the named row and rejects this
+            review without delivering the duplicate file. */}
+        {m.duplicate_of_owned && m.duplicate_of_owned.length > 0 && (
+          <div
+            style={{
+              marginTop: 10,
+              padding: "8px 10px",
+              borderRadius: 8,
+              background: theme.accent + "15",
+              border: `1px solid ${theme.accent}55`,
+              fontSize: 12,
+              color: theme.text2,
+              lineHeight: 1.5,
+            }}
+          >
+            <div style={{ fontWeight: 600, color: theme.accent }}>
+              {m.duplicate_of_owned.length === 1
+                ? "You already own this book"
+                : `You already own this book (${m.duplicate_of_owned.length} matches)`}
+            </div>
+            <div style={{ marginTop: 4 }}>
+              The owned copy has no MAM URL yet. Claiming this torrent
+              for it pins the link without importing a duplicate file.
+            </div>
+            <ul style={{ margin: "6px 0 0 16px", padding: 0 }}>
+              {m.duplicate_of_owned.map((d) => (
+                <li key={`${d.library_slug}:${d.book_id}`}>
+                  <code style={{ fontSize: 11, color: theme.textDim }}>
+                    {d.library_slug}
+                  </code>
+                  {d.calibre_id != null && (
+                    <span style={{ color: theme.textDim }}>
+                      {" "}· calibre #{d.calibre_id}
+                    </span>
+                  )}
+                  {m.duplicate_of_owned!.length > 1 && (
+                    <Btn
+                      variant="secondary"
+                      size="sm"
+                      disabled={busy}
+                      onClick={() => onClaimForOwned(d.library_slug, d.book_id)}
+                      style={{ marginLeft: 8 }}
+                    >
+                      Claim
+                    </Btn>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         <dl
           style={{
             marginTop: 10,
@@ -743,6 +832,19 @@ function ReviewCard({
         >
           {editing ? "Cancel edit" : "Edit"}
         </Btn>
+        {m.duplicate_of_owned && m.duplicate_of_owned.length === 1 && (
+          <Btn
+            variant="secondary"
+            disabled={busy}
+            onClick={() => onClaimForOwned(
+              m.duplicate_of_owned![0].library_slug,
+              m.duplicate_of_owned![0].book_id,
+            )}
+            title="Pin this MAM torrent to the existing owned book and reject this duplicate import"
+          >
+            Claim for owned
+          </Btn>
+        )}
         <Btn variant="danger" disabled={busy} onClick={onReject}>
           Reject
         </Btn>
