@@ -294,6 +294,76 @@ CREATE INDEX IF NOT EXISTS idx_work_links_work_id ON work_links(work_id);
 CREATE INDEX IF NOT EXISTS idx_work_links_lib_book ON work_links(library_slug, book_id);
 CREATE INDEX IF NOT EXISTS idx_work_links_content_type ON work_links(content_type);
 
+-- ── Cross-library author identity (v2.20.0) ──────────────────
+-- `persons` is the canonical "this is one human author" record;
+-- `author_links` maps per-library `authors` rows (which live in their
+-- own per-library DBs) onto a person_id. Together they replace the
+-- de-facto "an author exists per library" model with "an author exists
+-- once, libraries reference them," fixing the cross-library mirror
+-- pain we hit during the Amazon and Goodreads audits.
+--
+-- `pen_name_links_v2` is the cross-library successor to per-library
+-- `pen_name_links` — same intra-library aliasing concept, but keyed
+-- on person_id so pen names are also cross-library by construction.
+-- The per-library `pen_name_links` tables stay for safety; the
+-- one-time migration in `app/discovery/author_identity.py` copies
+-- their rows here, resolving both endpoints via author_links.
+--
+-- `author_id` references per-library `authors.id` — NOT a foreign
+-- key here (can't FK across SQLite files). App-level helpers in
+-- `app/discovery/author_identity.py` keep the cross-DB references
+-- consistent and prune orphans.
+CREATE TABLE IF NOT EXISTS persons (
+    id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+    canonical_name           TEXT NOT NULL,
+    normalized_name          TEXT NOT NULL,
+    display_name_override    TEXT,
+    bio                      TEXT,
+    image_url                TEXT,
+    last_updated_at          REAL NOT NULL DEFAULT (strftime('%s', 'now')),
+    created_at               REAL NOT NULL DEFAULT (strftime('%s', 'now')),
+    UNIQUE(normalized_name)
+);
+CREATE INDEX IF NOT EXISTS idx_persons_normalized ON persons(normalized_name);
+
+CREATE TABLE IF NOT EXISTS author_links (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    person_id       INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+    library_slug    TEXT NOT NULL,
+    author_id       INTEGER NOT NULL,
+    link_source     TEXT NOT NULL DEFAULT 'auto',
+    link_confidence TEXT NOT NULL DEFAULT 'high',
+    created_at      REAL NOT NULL DEFAULT (strftime('%s', 'now')),
+    UNIQUE(library_slug, author_id)
+);
+CREATE INDEX IF NOT EXISTS idx_author_links_person ON author_links(person_id);
+CREATE INDEX IF NOT EXISTS idx_author_links_lib_author ON author_links(library_slug, author_id);
+
+CREATE TABLE IF NOT EXISTS pen_name_links_v2 (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    canonical_person_id   INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+    alias_person_id       INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+    link_type             TEXT NOT NULL DEFAULT 'pen_name',
+    created_at            REAL NOT NULL DEFAULT (strftime('%s', 'now')),
+    UNIQUE(canonical_person_id, alias_person_id)
+);
+CREATE INDEX IF NOT EXISTS idx_pen_name_v2_canonical ON pen_name_links_v2(canonical_person_id);
+CREATE INDEX IF NOT EXISTS idx_pen_name_v2_alias ON pen_name_links_v2(alias_person_id);
+
+-- v2.20.0 Phase 3 — audit log for source-ID edits made through the
+-- author-detail badge UI. One row per PATCH /persons/{id}/source-id
+-- write. Used by future "history of fixes" view + revert tooling.
+CREATE TABLE IF NOT EXISTS author_id_audit_log (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    person_id    INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+    source_name  TEXT NOT NULL,
+    old_value    TEXT,
+    new_value    TEXT,
+    changed_at   REAL NOT NULL DEFAULT (strftime('%s', 'now'))
+);
+CREATE INDEX IF NOT EXISTS idx_author_id_audit_person ON author_id_audit_log(person_id);
+CREATE INDEX IF NOT EXISTS idx_author_id_audit_changed ON author_id_audit_log(changed_at);
+
 -- ── Per-author format preference ────────────────────────────
 -- Keyed by normalized author name (lowercased, whitespace-collapsed)
 -- so a preference set on "Brandon Sanderson" in a Calibre library
@@ -553,6 +623,64 @@ MIGRATIONS: list[str] = [
     "ON pending_holds(state, release_at)",
     "CREATE INDEX IF NOT EXISTS idx_pending_holds_dedup_key "
     "ON pending_holds(dedup_key)",
+    # v2.20.0 — cross-library author identity. Tables also live in
+    # SCHEMA above (CREATE IF NOT EXISTS makes the migration step a
+    # no-op for fresh installs); the migration here is what brings
+    # older DBs forward. The one-time DATA migration that walks
+    # per-library `authors` tables and populates `persons` +
+    # `author_links` lives in `app/discovery/author_identity.py` and
+    # runs from `main.py` after all per-library `init_db()` calls
+    # have completed — can't be expressed as a single SQL statement.
+    """CREATE TABLE IF NOT EXISTS persons (
+        id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+        canonical_name           TEXT NOT NULL,
+        normalized_name          TEXT NOT NULL,
+        display_name_override    TEXT,
+        bio                      TEXT,
+        image_url                TEXT,
+        last_updated_at          REAL NOT NULL DEFAULT (strftime('%s', 'now')),
+        created_at               REAL NOT NULL DEFAULT (strftime('%s', 'now')),
+        UNIQUE(normalized_name)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_persons_normalized ON persons(normalized_name)",
+    """CREATE TABLE IF NOT EXISTS author_links (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        person_id       INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+        library_slug    TEXT NOT NULL,
+        author_id       INTEGER NOT NULL,
+        link_source     TEXT NOT NULL DEFAULT 'auto',
+        link_confidence TEXT NOT NULL DEFAULT 'high',
+        created_at      REAL NOT NULL DEFAULT (strftime('%s', 'now')),
+        UNIQUE(library_slug, author_id)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_author_links_person ON author_links(person_id)",
+    "CREATE INDEX IF NOT EXISTS idx_author_links_lib_author "
+    "ON author_links(library_slug, author_id)",
+    """CREATE TABLE IF NOT EXISTS pen_name_links_v2 (
+        id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+        canonical_person_id   INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+        alias_person_id       INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+        link_type             TEXT NOT NULL DEFAULT 'pen_name',
+        created_at            REAL NOT NULL DEFAULT (strftime('%s', 'now')),
+        UNIQUE(canonical_person_id, alias_person_id)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_pen_name_v2_canonical "
+    "ON pen_name_links_v2(canonical_person_id)",
+    "CREATE INDEX IF NOT EXISTS idx_pen_name_v2_alias "
+    "ON pen_name_links_v2(alias_person_id)",
+    # v2.20.0 Phase 3 — audit log for source-ID badge edits.
+    """CREATE TABLE IF NOT EXISTS author_id_audit_log (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        person_id    INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+        source_name  TEXT NOT NULL,
+        old_value    TEXT,
+        new_value    TEXT,
+        changed_at   REAL NOT NULL DEFAULT (strftime('%s', 'now'))
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_author_id_audit_person "
+    "ON author_id_audit_log(person_id)",
+    "CREATE INDEX IF NOT EXISTS idx_author_id_audit_changed "
+    "ON author_id_audit_log(changed_at)",
 ]
 
 

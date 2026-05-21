@@ -11,6 +11,13 @@ import { fmtDuration, fmtNum } from "../lib/format";
 import { BookSidebar } from "../components/BookSidebar";
 import { toast } from "../lib/toast";
 import {
+  loadAuthorDetailViaPerson,
+  type AuthorDetail,
+  type PersonHit,
+  type PersonSearchResponse,
+} from "../lib/authorDetail";
+import { SourceBadgeRow } from "../components/SourceBadgeRow";
+import {
   MobileBtn,
   MobileChip,
   MobileSection,
@@ -31,30 +38,6 @@ import type {
   ScanStatusResponse,
   Series,
 } from "../types";
-
-interface AuthorDetail extends Author {
-  series?: Series[];
-  standalone_books?: Book[];
-  active_library_slug?: string;
-  active_content_type?: string;
-  cross_library?: Record<string, CrossLibraryEntry>;
-  // v2.17.0 Bug B — summed counts across primary + every
-  // cross_library entry. Set by the backend when
-  // include_cross_library=1 is passed.
-  global_stats?: {
-    owned: number;
-    missing: number;
-    total: number;
-    series_count: number;
-  };
-}
-
-interface CrossLibraryEntry {
-  library_name: string;
-  content_type: string;
-  app_type?: string;
-  author: AuthorDetail;
-}
 
 interface ScanStartedResponse {
   status?: string;
@@ -254,7 +237,8 @@ export default function MobileAuthorDetailPage({
   // pen-name management
   const [penLinks, setPenLinks] = useState<PenNameLink[]>([]);
   const [penQ, setPenQ] = useState("");
-  const [penResults, setPenResults] = useState<Author[]>([]);
+  // v2.20.0 Phase 4 — search now returns person hits.
+  const [penResults, setPenResults] = useState<PersonHit[]>([]);
   const [penBusy, setPenBusy] = useState(false);
 
   // Parse "slug:id" arg shape for cross-library nav.
@@ -275,11 +259,9 @@ export default function MobileAuthorDetailPage({
   const loadA = useCallback(
     (signal?: AbortSignal) => {
       setLd(true);
-      const qs = authorSlug
-        ? `?include_cross_library=1&slug=${encodeURIComponent(authorSlug)}`
-        : `?include_cross_library=1`;
-      return api
-        .get<AuthorDetail>(`/discovery/authors/${authorIdNum}${qs}`, signal)
+      // v2.20.0 — shared loader resolves the canonical person and
+      // adapts the unified /persons/{person_id} view to AuthorDetail.
+      return loadAuthorDetailViaPerson(authorIdNum, authorSlug, signal)
         .then((d) => {
           setA(d);
           setLd(false);
@@ -355,16 +337,18 @@ export default function MobileAuthorDetailPage({
     }
     const tm = setTimeout(() => {
       api
-        .get<AuthorsResponse>(
-          `/discovery/authors?search=${encodeURIComponent(penQ)}`,
+        .get<PersonSearchResponse>(
+          `/discovery/persons/search?q=${encodeURIComponent(penQ)}`,
         )
         .then((r) =>
-          setPenResults((r.authors || []).filter((x) => x.id !== authorIdNum)),
+          setPenResults(
+            (r.persons || []).filter((x) => x.person_id !== a?.person_id),
+          ),
         )
         .catch(() => {});
     }, 300);
     return () => clearTimeout(tm);
-  }, [penQ, authorIdNum]);
+  }, [penQ, a?.person_id]);
 
   const closeSb = () => {
     if (!sb) return;
@@ -566,18 +550,23 @@ export default function MobileAuthorDetailPage({
     setMamRef(false);
   };
 
-  const linkPen = async (aliasId: number, linkType = "pen_name") => {
+  const linkPen = async (aliasPersonId: number, linkType = "pen_name") => {
+    if (!a?.person_id) {
+      toast.error("Author not yet linked to a canonical person");
+      return;
+    }
     setPenBusy(true);
     try {
-      await api.post("/discovery/authors/link-pen-names", {
-        canonical_author_id: authorIdNum,
-        alias_author_id: aliasId,
+      await api.post("/discovery/persons/link-pen-names", {
+        canonical_person_id: a.person_id,
+        alias_person_id: aliasPersonId,
         link_type: linkType,
       });
       const r = await api.get<PenNamesResponse>(
         `/discovery/authors/${authorIdNum}/pen-names`,
       );
       setPenLinks(r.links || []);
+      await loadA();
       setPenQ("");
       setPenResults([]);
       toast.success("Linked");
@@ -968,6 +957,18 @@ export default function MobileAuthorDetailPage({
         </div>
       ) : null}
 
+      {/* v2.20.0 Phase 3 — source-ID badges. Wraps in a MobileSection
+          for mobile-native collapse UX. */}
+      {a.person_id ? (
+        <MobileSection title="Source IDs" defaultOpen={false}>
+          <SourceBadgeRow
+            personId={a.person_id}
+            sourceIds={a.source_ids || {}}
+            onUpdate={() => loadA()}
+          />
+        </MobileSection>
+      ) : null}
+
       {/* Bio */}
       {a.bio && (
         <MobileSection title="Bio" defaultOpen={false}>
@@ -1044,9 +1045,9 @@ export default function MobileAuthorDetailPage({
             onChange={(e) => setPenQ(e.target.value)}
             placeholder="Search authors to link"
           />
-          {penResults.map((author) => (
+          {penResults.map((p) => (
             <div
-              key={author.id}
+              key={p.person_id}
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -1069,11 +1070,17 @@ export default function MobileAuthorDetailPage({
                   whiteSpace: "nowrap",
                 }}
               >
-                {author.name}
+                {p.display_name}{" "}
+                {p.content_types.includes("ebook") && (
+                  <span title="Ebook">📖</span>
+                )}
+                {p.content_types.includes("audiobook") && (
+                  <span title="Audiobook">🎧</span>
+                )}
               </div>
               <MobileBtn
                 variant="ghost"
-                onClick={() => linkPen(author.id, "pen_name")}
+                onClick={() => linkPen(p.person_id, "pen_name")}
                 disabled={penBusy}
                 style={{ minHeight: 36, fontSize: 13 }}
               >

@@ -16,6 +16,12 @@ export interface NavItem {
   id: string;
   label: string;
   icon: string;
+  // v2.20.0 — top-level nav can group related items under a parent.
+  // Items WITH children behave as a folder (mobile: section header,
+  // desktop: dropdown trigger); items WITHOUT children behave as a
+  // normal nav button. Parent navigation is disabled — clicking the
+  // parent only opens its children.
+  children?: NavItem[];
 }
 
 export type Section = "discovery" | "pipeline";
@@ -179,11 +185,38 @@ export function MobileNavDrawer({
         >
           {section === "discovery" ? "Discovery" : "Pipeline"}
         </div>
-        {navItems.map((item) =>
-          itemBtn(item.label, item.icon, activePage === item.id, () =>
-            onNavigate(item.id),
-          ),
-        )}
+        {navItems.map((item) => {
+          // v2.20.0 — items with children render as a section divider
+          // followed by the children flat. Mobile UX prefers visible-
+          // by-default lists over tap-to-expand collapses for nav.
+          if (item.children && item.children.length > 0) {
+            return (
+              <div key={item.id}>
+                <div
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    color: t.tg,
+                    textTransform: "uppercase",
+                    letterSpacing: "0.04em",
+                    padding: "10px 16px 4px 16px",
+                  }}
+                >
+                  {item.icon} {item.label}
+                </div>
+                {item.children.map((c) =>
+                  itemBtn(c.label, c.icon, activePage === c.id, () =>
+                    onNavigate(c.id),
+                  ),
+                )}
+              </div>
+            );
+          }
+          return itemBtn(
+            item.label, item.icon, activePage === item.id,
+            () => onNavigate(item.id),
+          );
+        })}
 
         <div
           style={{

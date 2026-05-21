@@ -15,10 +15,17 @@ from fastapi import FastAPI
 @pytest.fixture
 async def discovery_db(tmp_path, monkeypatch):
     from app import config as app_config
+    from app import database
     from app.discovery import database as disco_db
 
     monkeypatch.setattr(app_config, "DATA_DIR", tmp_path)
     monkeypatch.setattr(disco_db, "DATA_DIR", tmp_path)
+    # v2.20.0 — `/authors/{aid}` now reads `author_links` to surface
+    # `person_id`; the global DB must exist or the response 500s with
+    # `no such table: author_links`.
+    monkeypatch.setattr(app_config, "APP_DB_PATH", tmp_path / "seshat.db")
+    monkeypatch.setattr(database, "APP_DB_PATH", tmp_path / "seshat.db")
+    await database.init_db()
     disco_db.set_active_library("test")
     await disco_db.init_db("test")
     # Register the library so `_author_detail_for_slug` resolves
@@ -107,13 +114,17 @@ async def test_authors_list_counts_are_global_on_every_tab(
     Emrys in the list (because she has audiobooks).
     """
     from app import config as app_config
-    from app import state
+    from app import database, state
     from app.discovery import database as disco_db
     from app.discovery.database import get_db
     from app.discovery.routers.authors import router
 
     monkeypatch.setattr(app_config, "DATA_DIR", tmp_path)
     monkeypatch.setattr(disco_db, "DATA_DIR", tmp_path)
+    # v2.20.0 — /authors list dedup uses author_links from the global DB.
+    monkeypatch.setattr(app_config, "APP_DB_PATH", tmp_path / "seshat.db")
+    monkeypatch.setattr(database, "APP_DB_PATH", tmp_path / "seshat.db")
+    await database.init_db()
     monkeypatch.setattr(state, "_discovered_libraries", [
         {"slug": "calibre", "content_type": "ebook", "name": "Calibre"},
         {"slug": "abs", "content_type": "audiobook", "name": "ABS"},
@@ -195,13 +206,17 @@ async def test_authors_list_sorts_by_last_name(
     correctly grouped them under A. Both layers now agree.
     """
     from app import config as app_config
-    from app import state
+    from app import database, state
     from app.discovery import database as disco_db
     from app.discovery.database import get_db
     from app.discovery.routers.authors import router
 
     monkeypatch.setattr(app_config, "DATA_DIR", tmp_path)
     monkeypatch.setattr(disco_db, "DATA_DIR", tmp_path)
+    # v2.20.0 — /authors list dedup uses author_links from the global DB.
+    monkeypatch.setattr(app_config, "APP_DB_PATH", tmp_path / "seshat.db")
+    monkeypatch.setattr(database, "APP_DB_PATH", tmp_path / "seshat.db")
+    await database.init_db()
     monkeypatch.setattr(state, "_discovered_libraries", [
         {"slug": "calibre", "content_type": "ebook", "name": "Calibre"},
     ])
@@ -265,13 +280,17 @@ async def test_authors_list_audiobook_only_excluded_from_ebook_tab(
     Ebooks.
     """
     from app import config as app_config
-    from app import state
+    from app import database, state
     from app.discovery import database as disco_db
     from app.discovery.database import get_db
     from app.discovery.routers.authors import router
 
     monkeypatch.setattr(app_config, "DATA_DIR", tmp_path)
     monkeypatch.setattr(disco_db, "DATA_DIR", tmp_path)
+    # v2.20.0 — /authors list dedup uses author_links from the global DB.
+    monkeypatch.setattr(app_config, "APP_DB_PATH", tmp_path / "seshat.db")
+    monkeypatch.setattr(database, "APP_DB_PATH", tmp_path / "seshat.db")
+    await database.init_db()
     monkeypatch.setattr(state, "_discovered_libraries", [
         {"slug": "calibre", "content_type": "ebook", "name": "Calibre"},
         {"slug": "abs", "content_type": "audiobook", "name": "ABS"},
@@ -329,13 +348,17 @@ async def test_bulk_hide_authors_books_cascades_across_libraries(
     mirror pattern isn't disturbed.
     """
     from app import config as app_config
-    from app import state
+    from app import database, state
     from app.discovery import database as disco_db
     from app.discovery.database import get_db
     from app.discovery.routers.authors import router
 
     monkeypatch.setattr(app_config, "DATA_DIR", tmp_path)
     monkeypatch.setattr(disco_db, "DATA_DIR", tmp_path)
+    # v2.20.0 — /authors list dedup uses author_links from the global DB.
+    monkeypatch.setattr(app_config, "APP_DB_PATH", tmp_path / "seshat.db")
+    monkeypatch.setattr(database, "APP_DB_PATH", tmp_path / "seshat.db")
+    await database.init_db()
     monkeypatch.setattr(state, "_discovered_libraries", [
         {"slug": "calibre", "content_type": "ebook", "name": "Calibre"},
         {"slug": "abs", "content_type": "audiobook", "name": "ABS"},
@@ -410,13 +433,17 @@ async def test_bulk_delete_authors_books_skips_library_synced(
     counts so the toast can summarize the partial outcome.
     """
     from app import config as app_config
-    from app import state
+    from app import database, state
     from app.discovery import database as disco_db
     from app.discovery.database import get_db
     from app.discovery.routers.authors import router
 
     monkeypatch.setattr(app_config, "DATA_DIR", tmp_path)
     monkeypatch.setattr(disco_db, "DATA_DIR", tmp_path)
+    # v2.20.0 — /authors list dedup uses author_links from the global DB.
+    monkeypatch.setattr(app_config, "APP_DB_PATH", tmp_path / "seshat.db")
+    monkeypatch.setattr(database, "APP_DB_PATH", tmp_path / "seshat.db")
+    await database.init_db()
     monkeypatch.setattr(state, "_discovered_libraries", [
         {"slug": "calibre", "content_type": "ebook", "name": "Calibre"},
     ])
@@ -486,13 +513,18 @@ async def test_global_stats_sums_primary_plus_cross_library(
     should show "1 owned, 4 missing".
     """
     from app import config as app_config
-    from app import state
+    from app import database, state
     from app.discovery import database as disco_db
     from app.discovery.database import get_db
     from app.discovery.routers.authors import router
 
     monkeypatch.setattr(app_config, "DATA_DIR", tmp_path)
     monkeypatch.setattr(disco_db, "DATA_DIR", tmp_path)
+    # v2.20.0 — `/authors/{aid}` reads `author_links`; ensure the
+    # global identity DB exists in the test env.
+    monkeypatch.setattr(app_config, "APP_DB_PATH", tmp_path / "seshat.db")
+    monkeypatch.setattr(database, "APP_DB_PATH", tmp_path / "seshat.db")
+    await database.init_db()
     monkeypatch.setattr(state, "_discovered_libraries", [
         {"slug": "calibre", "content_type": "ebook", "name": "Calibre"},
         {"slug": "abs", "content_type": "audiobook", "name": "Audiobookshelf"},

@@ -279,6 +279,23 @@ async def sync_audiobookshelf(library: dict) -> dict:
                         (author_name, sort_name, abs_library_id),
                     )
                     author_id_map[author_name] = cur.lastrowid
+                    # v2.20.0 — link the new ABS-sourced author into the
+                    # cross-library identity graph. Best-effort.
+                    try:
+                        from app.discovery import author_identity
+                        from app.discovery.database import get_active_library
+                        active_slug = get_active_library()
+                        if active_slug:
+                            await author_identity.get_or_create_person(
+                                active_slug, author_id_map[author_name],
+                                name=author_name,
+                            )
+                    except Exception:
+                        logger.debug(
+                            "audiobookshelf_sync: identity-link failed "
+                            "for '%s' (non-fatal)",
+                            author_name, exc_info=True,
+                        )
                     # v2.12.1 #2 — dual author-row pattern. Stub this
                     # author into every ebook library so the
                     # cross-library Scan Ebooks button can always run

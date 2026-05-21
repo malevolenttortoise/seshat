@@ -54,6 +54,15 @@ class AuthorHit(BaseModel):
     library_name: Optional[str] = None
     content_type: Optional[str] = None
     book_count: Optional[int] = None
+    # v2.20.0 Phase 4 — canonical person identity when this author is
+    # linked. Frontend uses it for cross-library dedup before render
+    # (one card per person, not one per (slug, author_id) pair).
+    person_id: Optional[int] = None
+    # Stamped on the winning hit during cross-library dedup: every
+    # library this person appears in. Lets the dropdown render
+    # "Found in: ebooks, audiobooks" badges per result.
+    library_slugs: Optional[list[str]] = None
+    content_types: Optional[list[str]] = None
 
 
 class SeriesHit(BaseModel):
@@ -157,6 +166,14 @@ async def search(
     author_rows = await run_across_libraries("all", search_authors)
     series_rows = await run_across_libraries("all", search_series)
 
+    # v2.20.0 Phase 4 — dedupe author hits by canonical person_id. Two
+    # libraries' "William D. Arand" rows should produce ONE dropdown
+    # entry, not two. Resolve person_id for every (slug, author_id)
+    # pair in a single global-DB query, then keep the first hit per
+    # person (search_authors already ranked exact-prefix matches first
+    # within each library; cross-library ties resolve by order).
+    author_rows = await _dedupe_authors_by_person(author_rows)
+
     # Trim cross-library aggregation back down to `limit` total per
     # category. Per-library queries each return up to `limit`; on a
     # two-library install we'd otherwise return 2*limit hits. Owned
@@ -172,3 +189,84 @@ async def search(
         authors=[AuthorHit(**r) for r in author_rows],
         series=[SeriesHit(**r) for r in series_rows],
     )
+
+
+async def _dedupe_authors_by_person(rows: list[dict]) -> list[dict]:
+    """v2.20.0 Phase 4 helper. Collapse (library_slug, author_id) →
+    person_id and dedupe. Rows without a resolved person_id are kept
+    as-is (defensive — they normally only appear when an author was
+    inserted between sync hooks before the next migration sweep).
+
+    Adds `library_slugs`, `content_types`, and `person_id` to each
+    surviving row so the dropdown can render library-found badges
+    next to the result name.
+    """
+    if not rows:
+        return rows
+    from app import state
+    from app.database import get_db as get_global_db
+
+    pairs = [
+        (r.get("library_slug"), r.get("id"))
+        for r in rows
+        if r.get("library_slug") and r.get("id") is not None
+    ]
+    if not pairs:
+        return rows
+    gdb = await get_global_db()
+    try:
+        # Single SELECT covers every pair via a tuple-IN. SQLite param
+        # limits are well above the 16 (=2 libraries * 8 limit) we'll
+        # typically see; chunk only if we ever raise the cap.
+        cur = await gdb.execute(
+            "SELECT library_slug, author_id, person_id FROM author_links "
+            "WHERE (library_slug, author_id) IN ("
+            + ",".join(["(?,?)"] * len(pairs))
+            + ")",
+            [v for pair in pairs for v in pair],
+        )
+        link_map: dict[tuple[str, int], int] = {
+            (r["library_slug"], r["author_id"]): r["person_id"]
+            for r in await cur.fetchall()
+        }
+    finally:
+        await gdb.close()
+
+    deduped: dict[int, dict] = {}
+    unlinked: list[dict] = []
+    for r in rows:
+        slug = r.get("library_slug")
+        aid = r.get("id")
+        pid = link_map.get((slug, aid)) if slug and aid is not None else None
+        if pid is None:
+            unlinked.append(r)
+            continue
+        if pid in deduped:
+            # Already have a hit for this person — append library info.
+            base = deduped[pid]
+            base["library_slugs"].append(slug)
+            ct = next(
+                (l.get("content_type") for l in state._discovered_libraries
+                 if l.get("slug") == slug),
+                None,
+            )
+            if ct and ct not in base["content_types"]:
+                base["content_types"].append(ct)
+            # Sum book_count so the count reflects all libraries.
+            base["book_count"] = (
+                (base.get("book_count") or 0) + (r.get("book_count") or 0)
+            )
+            continue
+        # First hit for this person.
+        ct = next(
+            (l.get("content_type") for l in state._discovered_libraries
+             if l.get("slug") == slug),
+            None,
+        )
+        deduped[pid] = {
+            **r,
+            "person_id": pid,
+            "library_slugs": [slug],
+            "content_types": [ct] if ct else [],
+        }
+    return list(deduped.values()) + unlinked

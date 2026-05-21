@@ -25,6 +25,19 @@ from fastapi import APIRouter, Body, HTTPException, Query
 
 from app import state
 from app.config import load_settings
+from app.database import get_db as get_global_db
+from app.discovery.author_identity import (
+    MIRRORABLE_SOURCE_ID_COLUMNS,
+    get_person,
+    linked_authors,
+    mirror_source_id,
+    person_id_for,
+)
+from app.metadata.source_url_parsers import (
+    canonical_author_url,
+    known_sources,
+    parse_source_id,
+)
 from app.discovery.database import get_db, get_active_library, HF, cleanup_empty_series
 from app.discovery.routers.series import _recompute_series_author
 from app.discovery.lookup import lookup_author
@@ -114,13 +127,42 @@ async def get_authors(search: str = Query(None), sort: str = Query("name"), sort
         # shown with just the audiobook counts (1/0) instead of the
         # global 1/5. Same issue mirror-image on Ebooks tab.
         rows = await run_across_libraries("all", q)
-        # Merge per-normalized-name so Pierce Brown in Calibre and
-        # Pierce Brown in ABS collapse to one row with summed stats.
+        # v2.20.0 Phase 4 — dedupe by person_id when present, falling
+        # back to normalized_name for rows that aren't (yet) linked.
+        # This is more accurate than name-only matching across
+        # libraries: punctuation drift (C.W. vs Charles W.) merges
+        # correctly via author_links, and name collisions across
+        # libraries (two different "John Smith"s, marked low_confidence
+        # at migration time) stay split — which the legacy name-match
+        # path silently smooshed together.
         from app.works.normalize import normalize_author
+        # Pre-fetch every author_link for the libraries we're about
+        # to merge so the per-row person_id lookup is a single dict
+        # hit rather than a roundtrip per row.
+        gdb_local = await get_global_db()
+        try:
+            link_rows = await (await gdb_local.execute(
+                "SELECT library_slug, author_id, person_id FROM author_links"
+            )).fetchall()
+            person_id_lookup: dict[tuple[str, int], int] = {
+                (lr["library_slug"], lr["author_id"]): lr["person_id"]
+                for lr in link_rows
+            }
+        finally:
+            await gdb_local.close()
         merged: dict[str, dict] = {}
         for r in rows:
-            key = normalize_author(r.get("name", ""))
-            if not key:
+            slug = r.get("library_slug")
+            aid = r.get("id")
+            person_id = (
+                person_id_lookup.get((slug, aid))
+                if slug and aid is not None else None
+            )
+            if person_id is not None:
+                key = f"pid:{person_id}"
+            else:
+                key = f"norm:{normalize_author(r.get('name', ''))}"
+            if not key or key == "norm:":
                 continue
             if key in merged:
                 base = merged[key]
@@ -313,29 +355,47 @@ async def get_author(aid: int, include_cross_library: bool = False, slug: Option
         raise HTTPException(404)
 
     if include_cross_library:
+        cross: dict[str, Any] = {}
+        # v2.20.0 — prefer author_links lookup over the lossy
+        # normalized_name match. author_links is the migration-
+        # populated identity graph; a single hop resolves every linked
+        # per-library row regardless of whether the names normalize
+        # identically (C.W. Lamb vs Charles W. Lamb, etc). Fall back to
+        # normalized_name matching when the author isn't (yet) linked
+        # — covers freshly-synced rows that the next migration sweep
+        # will pick up.
+        person_id = await person_id_for(primary_slug, aid)
+        matched_slugs: set[str] = set()
+        if person_id is not None:
+            for slug, other_aid in await linked_authors(person_id):
+                if slug == primary_slug:
+                    continue
+                detail = await _author_detail_for_slug(slug, other_aid)
+                if detail is None:
+                    continue
+                lib_meta = next(
+                    (l for l in state._discovered_libraries
+                     if l.get("slug") == slug),
+                    {},
+                )
+                cross[slug] = {
+                    "library_name": lib_meta.get("display_name")
+                        or lib_meta.get("name") or slug,
+                    "content_type": lib_meta.get("content_type", "ebook"),
+                    "app_type": lib_meta.get("app_type", ""),
+                    "author": detail,
+                }
+                matched_slugs.add(slug)
+
+        # Defensive fallback: walk libraries the identity graph didn't
+        # cover via normalized_name. Same lossy match the pre-v2.20
+        # path used; only kicks in for the edge case described above.
         from app.works.normalize import normalize_author
         target_norm = normalize_author(a["name"])
-        cross: dict[str, Any] = {}
         if target_norm:
             for lib in state._discovered_libraries:
-                if lib["slug"] == primary_slug:
+                if lib["slug"] == primary_slug or lib["slug"] in matched_slugs:
                     continue
-                # Find an author in the other library whose normalized
-                # name matches. We pull every author row and compare
-                # in Python because SQLite lacks a portable
-                # equivalent to our Python-side normalize_author —
-                # author counts per library are small (low thousands)
-                # so this is fine.
-                #
-                # v2.12.1: query EVERY author row, not just those with
-                # books. The dual-author-row pattern auto-creates stub
-                # rows in the other-type library when an author lands
-                # in either type — stubs have zero books but still need
-                # to surface here so the AuthorDetail page can render
-                # both tabs (otherwise the Ebook / Audiobook tabs
-                # disappear when one side is empty, hiding the cross-
-                # library Scan {Ebooks,Audiobooks} button on top of
-                # smooshing the views together).
                 other_db = await get_db(lib["slug"])
                 try:
                     rows = await (await other_db.execute(
@@ -374,23 +434,6 @@ async def get_author(aid: int, include_cross_library: bool = False, slug: Option
         # an audiobook-only author has Calibre-side ebook discoveries
         # waiting). Frontend reads `a.global_stats` for the top-of-page
         # tile; per-tab views keep showing their per-library numbers.
-        def _stats_for_author_block(block: dict[str, Any]) -> dict[str, int]:
-            sa = block.get("standalone_books") or []
-            ser = block.get("series") or []
-            sa_owned = sum(1 for b in sa if (b.get("owned") or 0) == 1)
-            sa_total = len(sa)
-            ser_owned = sum(int(s.get("owned_count") or 0) for s in ser)
-            ser_total = sum(
-                int(s.get("author_book_count") or s.get("book_count") or 0)
-                for s in ser
-            )
-            return {
-                "owned": sa_owned + ser_owned,
-                "total": sa_total + ser_total,
-                "series_names": {
-                    str(s.get("name") or "") for s in ser if s.get("name")
-                },
-            }
         primary_stats = _stats_for_author_block(a)
         global_owned = primary_stats["owned"]
         global_total = primary_stats["total"]
@@ -407,7 +450,824 @@ async def get_author(aid: int, include_cross_library: bool = False, slug: Option
             "total": global_total,
             "series_count": len(all_series_names),
         }
+
+    # v2.20.0 — additively expose the canonical person_id. Frontend can
+    # use it to switch over to /discovery/persons/{person_id} for a
+    # cleaner cross-library view without bespoke routing logic. None
+    # when the author row isn't (yet) linked to a person — e.g. a row
+    # inserted between init_db() and the next migration sweep.
+    a["person_id"] = await person_id_for(primary_slug, aid)
     return a
+
+
+def _stats_for_author_block(block: dict[str, Any]) -> dict[str, Any]:
+    """Sum owned/total and collect unique series names for an
+    `_author_detail_for_slug`-shaped block. Shared between the legacy
+    `cross_library` aggregation and the new `/persons/{person_id}`
+    endpoint so both produce identical totals."""
+    sa = block.get("standalone_books") or []
+    ser = block.get("series") or []
+    sa_owned = sum(1 for b in sa if (b.get("owned") or 0) == 1)
+    sa_total = len(sa)
+    ser_owned = sum(int(s.get("owned_count") or 0) for s in ser)
+    ser_total = sum(
+        int(s.get("author_book_count") or s.get("book_count") or 0)
+        for s in ser
+    )
+    return {
+        "owned": sa_owned + ser_owned,
+        "total": sa_total + ser_total,
+        "series_names": {
+            str(s.get("name") or "") for s in ser if s.get("name")
+        },
+    }
+
+
+# NOTE: this static-prefix route is defined BEFORE the parameterized
+# `/persons/{person_id}` route below — FastAPI routes are matched in
+# registration order, and the int-typed `{person_id}` path otherwise
+# 422s on a request like `/persons/search` (string can't convert).
+@router.get("/persons/search")
+async def search_persons(
+    q: str = Query(..., min_length=1, max_length=200),
+    limit: int = Query(20, ge=1, le=100),
+):
+    """v2.20.0 Phase 4 — cross-library person search.
+
+    Returns one result per `persons` row, with the libraries the
+    person appears in collated from `author_links`. The query is
+    normalized through the Phase 1 canonical normalizer so typing
+    `D. L. Bacon` matches `D.L. Bacon`'s person row.
+
+    Match strategy (in priority order):
+      1. `persons.normalized_name LIKE %normalized_q%` — punctuation-
+         tolerant match (the primary path for cross-library dedup).
+      2. `persons.canonical_name LIKE %q%` COLLATE NOCASE — defensive
+         fallback for cases where the user typed a literal string the
+         normalizer would mangle.
+      3. `persons.display_name_override LIKE %q%` COLLATE NOCASE —
+         catches manual overrides that diverge from the canonical.
+
+    Results sorted by exact-prefix-match first, then alphabetical.
+    """
+    from app.metadata.author_names import normalize_author_name
+
+    normalized = normalize_author_name(q)
+    needle_norm = f"%{normalized}%" if normalized else ""
+    needle_raw = f"%{q.strip()}%"
+    prefix_raw = f"{q.strip()}%"
+
+    gdb = await get_global_db()
+    try:
+        # Single SQL covers the three match strategies via OR. The
+        # ranking ORDER BY puts exact-prefix matches first.
+        params: list = [needle_raw, needle_raw]
+        clauses: list[str] = [
+            "canonical_name LIKE ? COLLATE NOCASE",
+            "display_name_override LIKE ? COLLATE NOCASE",
+        ]
+        if needle_norm:
+            params.append(needle_norm)
+            clauses.append("normalized_name LIKE ?")
+        sql = (
+            "SELECT id, canonical_name, normalized_name, "
+            "       display_name_override "
+            f"FROM persons WHERE ({' OR '.join(clauses)}) "  # nosec B608
+            "ORDER BY "
+            "  CASE WHEN canonical_name LIKE ? COLLATE NOCASE THEN 0 ELSE 1 END, "
+            "  canonical_name COLLATE NOCASE "
+            "LIMIT ?"
+        )
+        params.append(prefix_raw)
+        params.append(limit)
+        person_rows = await (await gdb.execute(sql, params)).fetchall()
+
+        # Collate author_links per person so the response can show
+        # library_slugs / content_types badges per result.
+        results = []
+        for p_row in person_rows:
+            link_rows = await (await gdb.execute(
+                "SELECT library_slug, author_id "
+                "FROM author_links WHERE person_id = ?",
+                (p_row["id"],),
+            )).fetchall()
+            library_slugs = [r["library_slug"] for r in link_rows]
+            author_ids_by_slug = {
+                r["library_slug"]: r["author_id"] for r in link_rows
+            }
+            content_types = []
+            for slug in library_slugs:
+                lib = next(
+                    (l for l in state._discovered_libraries
+                     if l.get("slug") == slug),
+                    None,
+                )
+                if lib:
+                    ct = lib.get("content_type", "ebook")
+                    if ct not in content_types:
+                        content_types.append(ct)
+            results.append({
+                "person_id": p_row["id"],
+                "canonical_name": p_row["canonical_name"],
+                "display_name": (
+                    p_row["display_name_override"]
+                    or p_row["canonical_name"]
+                ),
+                "normalized_name": p_row["normalized_name"],
+                "library_slugs": library_slugs,
+                "author_ids_by_slug": author_ids_by_slug,
+                "content_types": content_types,
+            })
+        return {"q": q, "persons": results}
+    finally:
+        await gdb.close()
+
+
+@router.get("/persons/triage")
+async def get_triage_state():
+    """v2.20.0 Phase 5 — surface link issues for manual triage.
+
+    Returns three buckets:
+      - `low_confidence`: persons whose author_links the migration
+        flagged as risky (multiple linked rows from different
+        libraries with no shared source IDs — classic "John Smith"
+        collision pattern).
+      - `unlinked_authors`: per-library author rows with NO row in
+        `author_links`. These appear when a sync hook missed the
+        `get_or_create_person` call (defensive — shouldn't happen
+        post-Phase-1 + Phase-2 wiring) or when the migration ran
+        before the row existed.
+      - `normalized_collisions`: persons that share a normalized_name
+        with at least one other person. The migration's UNIQUE
+        constraint prevents this for new persons, but legacy rows
+        from before the unique index landed could collide.
+
+    The Database Manager UI displays these as triage targets.
+    """
+    gdb = await get_global_db()
+    try:
+        # Low-confidence persons.
+        low_rows = await (await gdb.execute(
+            "SELECT DISTINCT al.person_id, p.canonical_name, "
+            "       p.display_name_override, p.normalized_name "
+            "FROM author_links al "
+            "JOIN persons p ON p.id = al.person_id "
+            "WHERE al.link_confidence = 'low' "
+            "ORDER BY p.canonical_name COLLATE NOCASE"
+        )).fetchall()
+        low_confidence = []
+        for r in low_rows:
+            link_rows = await (await gdb.execute(
+                "SELECT library_slug, author_id, link_confidence "
+                "FROM author_links WHERE person_id = ?",
+                (r["person_id"],),
+            )).fetchall()
+            low_confidence.append({
+                "person_id": r["person_id"],
+                "canonical_name": r["canonical_name"],
+                "display_name": (
+                    r["display_name_override"] or r["canonical_name"]
+                ),
+                "normalized_name": r["normalized_name"],
+                "links": [
+                    {
+                        "library_slug": lr["library_slug"],
+                        "author_id": lr["author_id"],
+                        "link_confidence": lr["link_confidence"],
+                    }
+                    for lr in link_rows
+                ],
+            })
+
+        # Normalized-name collisions (persons sharing a normalized_name).
+        coll_rows = await (await gdb.execute(
+            "SELECT normalized_name, COUNT(*) AS n FROM persons "
+            "GROUP BY normalized_name HAVING n > 1"
+        )).fetchall()
+        normalized_collisions = []
+        for r in coll_rows:
+            persons = await (await gdb.execute(
+                "SELECT id, canonical_name, display_name_override "
+                "FROM persons WHERE normalized_name = ?",
+                (r["normalized_name"],),
+            )).fetchall()
+            normalized_collisions.append({
+                "normalized_name": r["normalized_name"],
+                "persons": [
+                    {
+                        "person_id": p["id"],
+                        "canonical_name": p["canonical_name"],
+                        "display_name": (
+                            p["display_name_override"] or p["canonical_name"]
+                        ),
+                    }
+                    for p in persons
+                ],
+            })
+    finally:
+        await gdb.close()
+
+    # Unlinked per-library authors — walk every library's authors
+    # table, collect rows whose (library_slug, author_id) isn't in
+    # author_links. Expensive but bounded by the library size.
+    unlinked_authors: list[dict] = []
+    from app.discovery.author_identity import _open_per_library
+    gdb = await get_global_db()
+    try:
+        link_set: set[tuple[str, int]] = set()
+        cur = await gdb.execute("SELECT library_slug, author_id FROM author_links")
+        for r in await cur.fetchall():
+            link_set.add((r["library_slug"], r["author_id"]))
+    finally:
+        await gdb.close()
+
+    for lib in state._discovered_libraries:
+        slug = lib.get("slug")
+        if not slug:
+            continue
+        try:
+            ldb = await _open_per_library(slug)
+        except Exception:
+            continue
+        try:
+            has_authors = await (await ldb.execute(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type='table' AND name='authors' LIMIT 1"
+            )).fetchone()
+            if not has_authors:
+                continue
+            rows = await (await ldb.execute(
+                "SELECT id, name, normalized_name FROM authors"
+            )).fetchall()
+        finally:
+            await ldb.close()
+        for ar in rows:
+            if (slug, ar["id"]) in link_set:
+                continue
+            unlinked_authors.append({
+                "library_slug": slug,
+                "author_id": ar["id"],
+                "name": ar["name"],
+                "normalized_name": ar["normalized_name"],
+            })
+
+    return {
+        "low_confidence": low_confidence,
+        "unlinked_authors": unlinked_authors,
+        "normalized_collisions": normalized_collisions,
+    }
+
+
+@router.post("/persons/{person_id}/unlink-author")
+async def unlink_author_from_person(person_id: int, data: dict = Body(...)):
+    """v2.20.0 Phase 5 — detach one (library_slug, author_id) from a
+    person. Creates a new persons row for the orphaned author so its
+    identity is preserved.
+
+    Body: `{library_slug, author_id}`. The pair must currently be
+    linked to `person_id` or we 400.
+    """
+    library_slug = data.get("library_slug")
+    author_id = data.get("author_id")
+    if not library_slug or author_id is None:
+        raise HTTPException(400, "library_slug and author_id are required")
+
+    if await get_person(person_id) is None:
+        raise HTTPException(404, f"Person {person_id} not found")
+
+    from app.discovery.author_identity import _open_per_library
+    from app.metadata.author_names import normalize_author_name
+
+    gdb = await get_global_db()
+    try:
+        existing = await (await gdb.execute(
+            "SELECT id FROM author_links "
+            "WHERE person_id = ? AND library_slug = ? AND author_id = ?",
+            (person_id, library_slug, author_id),
+        )).fetchone()
+        if not existing:
+            raise HTTPException(
+                400,
+                f"Author {library_slug}/{author_id} is not linked to "
+                f"person {person_id}",
+            )
+        # Read author's display name from the per-library DB to seed
+        # the new persons row.
+        per_lib = await _open_per_library(library_slug)
+        try:
+            arow = await (await per_lib.execute(
+                "SELECT name, bio, image_url FROM authors WHERE id = ?",
+                (author_id,),
+            )).fetchone()
+        finally:
+            await per_lib.close()
+        if not arow:
+            raise HTTPException(
+                404,
+                f"Author {library_slug}/{author_id} not found in per-library DB",
+            )
+        name = arow["name"]
+        normalized = normalize_author_name(name) or (
+            f"__split_{library_slug}_{author_id}"
+        )
+        # If the normalizer collides with the existing person's
+        # normalized_name, attach a slug+id sentinel so we don't break
+        # the UNIQUE(normalized_name) constraint on persons.
+        existing_with_norm = await (await gdb.execute(
+            "SELECT id FROM persons WHERE normalized_name = ?",
+            (normalized,),
+        )).fetchone()
+        if existing_with_norm:
+            normalized = f"{normalized}__split_{library_slug}_{author_id}"
+        cur = await gdb.execute(
+            "INSERT INTO persons "
+            "(canonical_name, normalized_name, bio, image_url) "
+            "VALUES (?, ?, ?, ?)",
+            (name, normalized, arow["bio"], arow["image_url"]),
+        )
+        new_person_id = cur.lastrowid
+        # Move the link.
+        await gdb.execute(
+            "UPDATE author_links SET person_id = ?, link_source = 'manual' "
+            "WHERE id = ?",
+            (new_person_id, existing["id"]),
+        )
+        # If the old person now has no links, drop it.
+        remaining = await (await gdb.execute(
+            "SELECT COUNT(*) AS n FROM author_links WHERE person_id = ?",
+            (person_id,),
+        )).fetchone()
+        old_person_dropped = remaining["n"] == 0
+        if old_person_dropped:
+            await gdb.execute("DELETE FROM persons WHERE id = ?", (person_id,))
+        await gdb.commit()
+        return {
+            "status": "ok",
+            "new_person_id": new_person_id,
+            "old_person_dropped": old_person_dropped,
+        }
+    finally:
+        await gdb.close()
+
+
+@router.post("/persons/{person_id}/link-author")
+async def link_author_to_person(person_id: int, data: dict = Body(...)):
+    """v2.20.0 Phase 5 — manually attach a (library_slug, author_id)
+    to a person. If the pair is currently linked to a DIFFERENT
+    person, that link is moved (and the source person is dropped if
+    it becomes orphan).
+
+    Body: `{library_slug, author_id}`.
+    """
+    library_slug = data.get("library_slug")
+    author_id = data.get("author_id")
+    if not library_slug or author_id is None:
+        raise HTTPException(400, "library_slug and author_id are required")
+
+    if await get_person(person_id) is None:
+        raise HTTPException(404, f"Person {person_id} not found")
+
+    # Verify the per-library row exists.
+    from app.discovery.author_identity import _open_per_library
+    per_lib = await _open_per_library(library_slug)
+    try:
+        arow = await (await per_lib.execute(
+            "SELECT id FROM authors WHERE id = ?", (author_id,),
+        )).fetchone()
+    finally:
+        await per_lib.close()
+    if not arow:
+        raise HTTPException(
+            404,
+            f"Author {library_slug}/{author_id} not found in per-library DB",
+        )
+
+    gdb = await get_global_db()
+    try:
+        existing = await (await gdb.execute(
+            "SELECT id, person_id FROM author_links "
+            "WHERE library_slug = ? AND author_id = ?",
+            (library_slug, author_id),
+        )).fetchone()
+        old_person_dropped = False
+        if existing:
+            if existing["person_id"] == person_id:
+                return {"status": "already_linked"}
+            old_person_id = existing["person_id"]
+            await gdb.execute(
+                "UPDATE author_links SET person_id = ?, link_source = 'manual' "
+                "WHERE id = ?",
+                (person_id, existing["id"]),
+            )
+            # Drop old person if orphaned.
+            remaining = await (await gdb.execute(
+                "SELECT COUNT(*) AS n FROM author_links "
+                "WHERE person_id = ?",
+                (old_person_id,),
+            )).fetchone()
+            if remaining["n"] == 0:
+                await gdb.execute(
+                    "DELETE FROM persons WHERE id = ?", (old_person_id,),
+                )
+                old_person_dropped = True
+        else:
+            await gdb.execute(
+                "INSERT INTO author_links "
+                "(person_id, library_slug, author_id, link_source) "
+                "VALUES (?, ?, ?, 'manual')",
+                (person_id, library_slug, author_id),
+            )
+        await gdb.commit()
+        return {"status": "ok", "old_person_dropped": old_person_dropped}
+    finally:
+        await gdb.close()
+
+
+@router.post("/persons/{person_id}/approve-links")
+async def approve_person_links(person_id: int):
+    """v2.20.0 Phase 5 — confirm that a flagged-low-confidence person's
+    links really do all belong to the same human.
+
+    Flips every `author_links` row for this person to
+    `link_confidence='high'` + `link_source='manual'`. The `manual`
+    source tag is what `_flag_low_confidence_links` checks to skip
+    re-flagging on subsequent `recompute-consolidation` runs, so the
+    approval survives — no need to re-approve after every recompute.
+
+    Returns the count of links flipped. 404 if the person doesn't exist.
+    """
+    if await get_person(person_id) is None:
+        raise HTTPException(404, f"Person {person_id} not found")
+    gdb = await get_global_db()
+    try:
+        cur = await gdb.execute(
+            "UPDATE author_links "
+            "SET link_confidence = 'high', link_source = 'manual' "
+            "WHERE person_id = ?",
+            (person_id,),
+        )
+        await gdb.commit()
+        approved = cur.rowcount or 0
+        logger.info(
+            f"Approved {approved} link(s) for person {person_id} "
+            f"(now exempt from low-confidence re-flagging)"
+        )
+        return {"status": "ok", "approved": approved}
+    finally:
+        await gdb.close()
+
+
+@router.post("/persons/recompute-consolidation")
+async def recompute_consolidation():
+    """v2.20.0 Phase 5 — re-run the Phase 1 consolidation pass
+    (tiebreak canonical_name/bio/image_url) and low-confidence flag
+    pass on every multi-linked person. Useful after Mark fixes a
+    batch of normalized_name mismatches via manual link/unlink.
+    """
+    from app.discovery.author_identity import (
+        _consolidate_persons,
+        _flag_low_confidence_links,
+    )
+    library_slugs = [
+        l["slug"] for l in state._discovered_libraries if l.get("slug")
+    ]
+    gdb = await get_global_db()
+    try:
+        await _consolidate_persons(gdb, library_slugs)
+        # Reset link_confidence to 'high' before re-flagging so links
+        # the user manually fixed get a fresh assessment.
+        await gdb.execute(
+            "UPDATE author_links SET link_confidence = 'high'"
+        )
+        await gdb.commit()
+        flagged = await _flag_low_confidence_links(gdb, library_slugs)
+        return {"status": "ok", "flagged": flagged}
+    finally:
+        await gdb.close()
+
+
+@router.get("/persons/{person_id}")
+async def get_person_detail(person_id: int):
+    """Unified cross-library author detail (v2.20.0 Phase 2).
+
+    Returns one merged view of an author across every library they
+    appear in. The shape mirrors the existing per-library
+    `/authors/{aid}` block, but instead of one author row + a
+    `cross_library` dict keyed by slug, we return:
+
+      - canonical identity from the `persons` row
+      - `source_ids`: union of per-library `authors.{source}_id`
+         columns (post-Phase-1 mirror, these are identical across
+         linked rows; the union is defensive)
+      - `libraries`: one entry per `author_links` row, each carrying
+         the per-library author detail block (series, standalone_books)
+      - `pen_names`: from `pen_name_links_v2`, both directions
+      - `global_stats`: owned/missing/total summed across libraries,
+         distinct series_names counted once
+      - `low_confidence`: any linked row flagged at migration time
+
+    Frontend `/author/{person_id}` consumes this directly; no per-
+    library slug routing needed.
+    """
+    p = await get_person(person_id)
+    if p is None:
+        raise HTTPException(404, f"Person {person_id} not found")
+
+    links = await linked_authors(person_id)
+    if not links:
+        # Shouldn't happen post-migration (every person has ≥ 1 link),
+        # but defensive — return the canonical identity with an empty
+        # libraries list rather than 500-ing the page.
+        return {
+            "person_id": p.id,
+            "canonical_name": p.canonical_name,
+            "display_name": p.display_name,
+            "normalized_name": p.normalized_name,
+            "display_name_override": p.display_name_override,
+            "bio": p.bio,
+            "image_url": p.image_url,
+            "source_ids": {},
+            "libraries": [],
+            "pen_names": [],
+            "global_stats": {"owned": 0, "missing": 0, "total": 0, "series_count": 0},
+            "low_confidence": False,
+        }
+
+    # Build per-library blocks. Each entry reuses
+    # `_author_detail_for_slug` so the standalone_books cover-src logic,
+    # series-aggregate stats, and work_siblings are identical to the
+    # per-library detail page.
+    libraries_out: list[dict[str, Any]] = []
+    union_source_ids: dict[str, Optional[str]] = {}
+    global_owned = 0
+    global_total = 0
+    all_series_names: set[str] = set()
+
+    for slug, aid in links:
+        detail = await _author_detail_for_slug(slug, aid)
+        if detail is None:
+            # Orphan link — the per-library author row was deleted. The
+            # `prune_orphan_links` sweep is responsible for cleaning
+            # these up; we just skip them here so the endpoint stays
+            # functional in the meantime.
+            continue
+        lib_meta = next(
+            (l for l in state._discovered_libraries if l.get("slug") == slug),
+            {},
+        )
+        libraries_out.append({
+            "library_slug": slug,
+            "library_name": lib_meta.get("display_name")
+                or lib_meta.get("name") or slug,
+            "content_type": lib_meta.get("content_type", "ebook"),
+            "app_type": lib_meta.get("app_type", ""),
+            "author_id": aid,
+            "author": detail,
+        })
+        # Union source IDs — first non-empty wins (Phase 1 mirror
+        # ensures they agree, but a row inserted between mirror passes
+        # may still be lagging). Limited to MIRRORABLE_SOURCE_ID_COLUMNS
+        # so the response only surfaces external-web sources — the
+        # library-local `audiobookshelf_id` / `calibre_id` are sync
+        # identifiers, not user-facing source IDs, and Phase 3's badge
+        # UI only renders the web sources.
+        for col in MIRRORABLE_SOURCE_ID_COLUMNS:
+            v = detail.get(col)
+            if v and union_source_ids.get(col[:-3]) is None:
+                # Strip the "_id" suffix so the JSON key is
+                # "amazon" not "amazon_id".
+                union_source_ids[col[:-3]] = str(v)
+        # Stats.
+        s = _stats_for_author_block(detail)
+        global_owned += s["owned"]
+        global_total += s["total"]
+        all_series_names |= s["series_names"]
+
+    # Pen names from `pen_name_links_v2`. We return BOTH directions so
+    # the UI can render "Also known as ..." (this person is canonical
+    # of) and "Pen name for ..." (this person is an alias of) without
+    # client-side reshape.
+    gdb = await get_global_db()
+    try:
+        pn_rows = await (await gdb.execute(
+            "SELECT pl.id, pl.link_type, "
+            "       pl.canonical_person_id, pl.alias_person_id, "
+            "       cp.canonical_name AS canonical_name, "
+            "       cp.display_name_override AS canonical_override, "
+            "       ap.canonical_name AS alias_name, "
+            "       ap.display_name_override AS alias_override "
+            "FROM pen_name_links_v2 pl "
+            "JOIN persons cp ON pl.canonical_person_id = cp.id "
+            "JOIN persons ap ON pl.alias_person_id = ap.id "
+            "WHERE pl.canonical_person_id = ? OR pl.alias_person_id = ?",
+            (person_id, person_id),
+        )).fetchall()
+        pen_names = []
+        for r in pn_rows:
+            if r["canonical_person_id"] == person_id:
+                # This person is canonical; the other end is alias.
+                pen_names.append({
+                    "link_id": r["id"],
+                    "person_id": r["alias_person_id"],
+                    "canonical_name": r["alias_name"],
+                    "display_name": r["alias_override"] or r["alias_name"],
+                    "link_type": r["link_type"],
+                    "direction": "alias_of_this",
+                })
+            else:
+                pen_names.append({
+                    "link_id": r["id"],
+                    "person_id": r["canonical_person_id"],
+                    "canonical_name": r["canonical_name"],
+                    "display_name": r["canonical_override"] or r["canonical_name"],
+                    "link_type": r["link_type"],
+                    "direction": "this_is_alias_of",
+                })
+
+        low_conf_row = await (await gdb.execute(
+            "SELECT 1 FROM author_links "
+            "WHERE person_id = ? AND link_confidence = 'low' LIMIT 1",
+            (person_id,),
+        )).fetchone()
+        low_confidence = low_conf_row is not None
+    finally:
+        await gdb.close()
+
+    return {
+        "person_id": p.id,
+        "canonical_name": p.canonical_name,
+        "display_name": p.display_name,
+        "normalized_name": p.normalized_name,
+        "display_name_override": p.display_name_override,
+        "bio": p.bio,
+        "image_url": p.image_url,
+        "source_ids": union_source_ids,
+        "libraries": libraries_out,
+        "pen_names": pen_names,
+        "global_stats": {
+            "owned": global_owned,
+            "missing": max(0, global_total - global_owned),
+            "total": global_total,
+            "series_count": len(all_series_names),
+        },
+        "low_confidence": low_confidence,
+    }
+
+
+# ─── Phase 3 — Source-ID badge management ─────────────────
+
+
+def _normalize_source_key(source: str) -> str:
+    """Strip the `_id` suffix the badge UI may include. The API
+    contract is `source_name='amazon'`, but `'amazon_id'` is the
+    column name and a reasonable thing for a client to send. Accept
+    both."""
+    return source[:-3] if source.endswith("_id") else source
+
+
+@router.get("/persons/{person_id}/source-id/preview")
+async def preview_source_id(
+    person_id: int,
+    source: str = Query(...),
+    value: str = Query(""),
+):
+    """Parse a pasted ID or URL without committing — the badge edit
+    modal calls this on every keystroke so the user sees a live
+    "parsed as X → URL Y" hint before saving. Empty value previews
+    as `parsed=null, url=null` (clearing the ID)."""
+    source = _normalize_source_key(source)
+    if source not in known_sources():
+        raise HTTPException(400, f"unknown source: {source!r}")
+    p = await get_person(person_id)
+    if p is None:
+        raise HTTPException(404, f"Person {person_id} not found")
+    try:
+        parsed = parse_source_id(source, value)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    url = canonical_author_url(source, parsed) if parsed else None
+    return {
+        "source": source,
+        "parsed": parsed,
+        "url": url,
+    }
+
+
+@router.patch("/persons/{person_id}/source-id")
+async def patch_source_id(person_id: int, data: dict = Body(...)):
+    """Commit a source-ID edit from the badge UI.
+
+    Body: `{"source": "amazon", "value": "<id or URL>"}`. Empty value
+    clears the ID (writes NULL via `mirror_source_id`). Parses the
+    value canonically, writes through to every linked per-library
+    `authors.{source}_id` column, logs an audit row.
+
+    Returns the canonical ID + URL preview + count of mirrored rows.
+    """
+    source = _normalize_source_key(data.get("source", ""))
+    value = data.get("value", "")
+    if not source:
+        raise HTTPException(400, "source is required")
+    if source not in known_sources():
+        raise HTTPException(400, f"unknown source: {source!r}")
+    column = f"{source}_id"
+    if column not in MIRRORABLE_SOURCE_ID_COLUMNS:
+        raise HTTPException(
+            400,
+            f"{source!r} is not editable via the badge UI "
+            f"(library-local sync identifier)",
+        )
+    p = await get_person(person_id)
+    if p is None:
+        raise HTTPException(404, f"Person {person_id} not found")
+
+    # Empty or whitespace-only value → clear.
+    canonical: Optional[str]
+    if value is None or not str(value).strip():
+        canonical = None
+    else:
+        try:
+            canonical = parse_source_id(source, str(value))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        if canonical is None:
+            raise HTTPException(
+                400,
+                f"unrecognized {source} value: paste an ID or "
+                f"a {source} URL",
+            )
+
+    # Read old value (union from any linked library row) for audit.
+    links = await linked_authors(person_id)
+    old_value: Optional[str] = None
+    for slug, aid in links:
+        from app.discovery.author_identity import _open_per_library
+        per_lib = await _open_per_library(slug)
+        try:
+            row = await (await per_lib.execute(
+                f"SELECT {column} FROM authors WHERE id = ?",  # nosec B608
+                (aid,),
+            )).fetchone()
+            if row and row[0]:
+                old_value = str(row[0])
+                break
+        finally:
+            await per_lib.close()
+
+    touched = 0
+    if links:
+        # Mirror via the existing helper so the call respects the
+        # MIRRORABLE_SOURCE_ID_COLUMNS guard. Pick any linked row as
+        # the entry point — mirror walks all linked rows anyway.
+        first_slug, first_aid = links[0]
+        touched = await mirror_source_id(
+            first_slug, first_aid, column, canonical,
+        )
+
+    # Audit log row.
+    gdb = await get_global_db()
+    try:
+        await gdb.execute(
+            "INSERT INTO author_id_audit_log "
+            "(person_id, source_name, old_value, new_value) "
+            "VALUES (?, ?, ?, ?)",
+            (person_id, source, old_value, canonical),
+        )
+        await gdb.commit()
+    finally:
+        await gdb.close()
+
+    return {
+        "person_id": person_id,
+        "source": source,
+        "parsed": canonical,
+        "url": canonical_author_url(source, canonical) if canonical else None,
+        "old_value": old_value,
+        "mirrored_rows": touched,
+    }
+
+
+@router.get("/persons/{person_id}/source-id/history")
+async def get_source_id_history(person_id: int, limit: int = Query(50)):
+    """Return the audit log for source-ID edits on this person, newest
+    first. Limit defaults to 50 — Phase 5 triage UI may use this to
+    show "history of fixes" alongside the badge row."""
+    p = await get_person(person_id)
+    if p is None:
+        raise HTTPException(404, f"Person {person_id} not found")
+    gdb = await get_global_db()
+    try:
+        rows = await (await gdb.execute(
+            "SELECT id, source_name, old_value, new_value, changed_at "
+            "FROM author_id_audit_log "
+            "WHERE person_id = ? "
+            "ORDER BY changed_at DESC, id DESC "
+            "LIMIT ?",
+            (person_id, max(1, min(limit, 500))),
+        )).fetchall()
+        return {"history": [dict(r) for r in rows]}
+    finally:
+        await gdb.close()
 
 
 def _spawn_lookup_task(scan_type: str, total: int, runner) -> None:
@@ -1727,18 +2587,283 @@ async def link_pen_names(data: dict = Body(...)):
         logger.info(
             f"Linked authors as {link_type}: {canonical_id} ↔ {alias_id}"
         )
+        # v2.20.0 — also write the global pen_name_links_v2 row so the
+        # unified `/persons/{person_id}` view picks up newly-created
+        # links without waiting for the next migration sweep. Best-
+        # effort: if either author isn't yet in author_links (e.g. a
+        # row inserted between sync hooks), we log + skip the v2 write.
+        # The legacy row already landed above, so cross-library scans
+        # still respect the link via the existing per-library code path.
+        await _dual_write_pen_name_to_v2(
+            get_active_library(), canonical_id, alias_id, link_type,
+        )
         return {"status": "ok", "link_id": cur.lastrowid, "link_type": link_type}
     finally:
         await db.close()
 
 
+async def _dual_write_pen_name_to_v2(
+    library_slug: str,
+    canonical_author_id: int,
+    alias_author_id: int,
+    link_type: str,
+) -> None:
+    """Resolve a (canonical_author_id, alias_author_id) pair in the
+    given library context to (canonical_person_id, alias_person_id)
+    via author_links, and INSERT into pen_name_links_v2. Idempotent —
+    UNIQUE collisions are swallowed."""
+    canonical_person = await person_id_for(library_slug, canonical_author_id)
+    alias_person = await person_id_for(library_slug, alias_author_id)
+    if canonical_person is None or alias_person is None:
+        logger.debug(
+            "dual_write_pen_name_to_v2: unresolved person_id "
+            "(%s/%d -> %s, %s/%d -> %s) — skipping v2 write",
+            library_slug, canonical_author_id, canonical_person,
+            library_slug, alias_author_id, alias_person,
+        )
+        return
+    if canonical_person == alias_person:
+        # Same person on both ends — typo-fix case, not a real link.
+        return
+    gdb = await get_global_db()
+    try:
+        try:
+            await gdb.execute(
+                "INSERT INTO pen_name_links_v2 "
+                "(canonical_person_id, alias_person_id, link_type) "
+                "VALUES (?, ?, ?)",
+                (canonical_person, alias_person, link_type),
+            )
+            await gdb.commit()
+        except Exception as exc:
+            # UNIQUE collision is expected when the migration already
+            # populated this pair; any other error gets logged but
+            # doesn't fail the legacy write that already landed.
+            logger.debug(
+                "dual_write_pen_name_to_v2: v2 INSERT skipped (%s)", exc,
+            )
+    finally:
+        await gdb.close()
+
+
+@router.post("/persons/link-pen-names")
+async def link_pen_names_via_persons(data: dict = Body(...)):
+    """v2.20.0 Phase 4 — person-level pen-name linking.
+
+    Body: `{canonical_person_id, alias_person_id, link_type}`. Writes
+    a row to `pen_name_links_v2` keyed by person_id. Also writes the
+    legacy per-library `pen_name_links` row when both persons share
+    at least one library (so source-scan dedup, which still reads
+    per-library, picks up the link). Falls back to v2-only when the
+    persons have no library overlap.
+    """
+    canonical_pid = data.get("canonical_person_id")
+    alias_pid = data.get("alias_person_id")
+    link_type = (data.get("link_type") or "pen_name").lower()
+    if link_type not in VALID_LINK_TYPES:
+        raise HTTPException(
+            400, f"link_type must be one of {sorted(VALID_LINK_TYPES)}",
+        )
+    if not canonical_pid or not alias_pid:
+        raise HTTPException(
+            400, "Both canonical_person_id and alias_person_id required",
+        )
+    if canonical_pid == alias_pid:
+        raise HTTPException(400, "Cannot link a person to themselves")
+    # Verify both persons exist.
+    if await get_person(canonical_pid) is None:
+        raise HTTPException(404, f"Person {canonical_pid} not found")
+    if await get_person(alias_pid) is None:
+        raise HTTPException(404, f"Person {alias_pid} not found")
+
+    gdb = await get_global_db()
+    try:
+        # Reclassify if a v2 link already exists (either direction).
+        existing = await (await gdb.execute(
+            "SELECT id, link_type FROM pen_name_links_v2 "
+            "WHERE (canonical_person_id=? AND alias_person_id=?) "
+            "   OR (canonical_person_id=? AND alias_person_id=?)",
+            (canonical_pid, alias_pid, alias_pid, canonical_pid),
+        )).fetchone()
+        if existing:
+            if existing["link_type"] != link_type:
+                await gdb.execute(
+                    "UPDATE pen_name_links_v2 SET link_type=? WHERE id=?",
+                    (link_type, existing["id"]),
+                )
+                await gdb.commit()
+                logger.info(
+                    f"Reclassified person link {existing['id']}: "
+                    f"{existing['link_type']} → {link_type}"
+                )
+                return {
+                    "status": "updated",
+                    "v2_link_id": existing["id"],
+                    "link_type": link_type,
+                }
+            return {
+                "status": "already_linked",
+                "v2_link_id": existing["id"],
+                "link_type": link_type,
+            }
+
+        cur = await gdb.execute(
+            "INSERT INTO pen_name_links_v2 "
+            "(canonical_person_id, alias_person_id, link_type) "
+            "VALUES (?, ?, ?)",
+            (canonical_pid, alias_pid, link_type),
+        )
+        await gdb.commit()
+        v2_id = cur.lastrowid
+    finally:
+        await gdb.close()
+
+    # Best-effort legacy per-library write — pen_name_links lives in
+    # per-library DBs and is what source-scan dedup reads. We pick
+    # a library where BOTH persons have a row (so the legacy schema's
+    # FK to per-library authors holds).
+    canonical_links = await linked_authors(canonical_pid)
+    alias_links = await linked_authors(alias_pid)
+    canonical_by_slug = {s: a for s, a in canonical_links}
+    legacy_link_id = None
+    for slug, alias_aid in alias_links:
+        canonical_aid = canonical_by_slug.get(slug)
+        if canonical_aid is None:
+            continue
+        # Both endpoints present in `slug` — write the legacy row.
+        try:
+            ldb = await get_db(slug)
+        except Exception:
+            continue
+        try:
+            # Skip if a legacy row already exists for this pair.
+            existing_legacy = await (await ldb.execute(
+                "SELECT id FROM pen_name_links WHERE "
+                "(canonical_author_id=? AND alias_author_id=?) OR "
+                "(canonical_author_id=? AND alias_author_id=?)",
+                (canonical_aid, alias_aid, alias_aid, canonical_aid),
+            )).fetchone()
+            if existing_legacy:
+                legacy_link_id = existing_legacy["id"]
+            else:
+                cur = await ldb.execute(
+                    "INSERT INTO pen_name_links "
+                    "(canonical_author_id, alias_author_id, link_type) "
+                    "VALUES (?, ?, ?)",
+                    (canonical_aid, alias_aid, link_type),
+                )
+                await ldb.commit()
+                legacy_link_id = cur.lastrowid
+            # One legacy row per pair is enough — pen-name dedup is
+            # per-library and reads only the local table.
+            break
+        finally:
+            await ldb.close()
+
+    logger.info(
+        f"Linked persons as {link_type}: {canonical_pid} ↔ {alias_pid} "
+        f"(v2={v2_id}, legacy={legacy_link_id})"
+    )
+    return {
+        "status": "ok",
+        "v2_link_id": v2_id,
+        "legacy_link_id": legacy_link_id,
+        "link_type": link_type,
+    }
+
+
+@router.delete("/persons/pen-name-link/{v2_link_id}")
+async def unlink_persons_pen_name(v2_link_id: int):
+    """v2.20.0 Phase 4 — delete a person-level pen-name link.
+
+    Drops the v2 row, then walks per-library DBs to remove any
+    legacy `pen_name_links` rows whose endpoints resolve to the
+    same (canonical_person_id, alias_person_id) pair via author_links.
+    """
+    gdb = await get_global_db()
+    try:
+        row = await (await gdb.execute(
+            "SELECT canonical_person_id, alias_person_id "
+            "FROM pen_name_links_v2 WHERE id=?",
+            (v2_link_id,),
+        )).fetchone()
+        if not row:
+            return {"status": "not_found"}
+        canonical_pid = row["canonical_person_id"]
+        alias_pid = row["alias_person_id"]
+        await gdb.execute(
+            "DELETE FROM pen_name_links_v2 WHERE id=?", (v2_link_id,),
+        )
+        await gdb.commit()
+    finally:
+        await gdb.close()
+
+    # Find + delete legacy per-library rows that match this pair.
+    canonical_links = await linked_authors(canonical_pid)
+    alias_links = await linked_authors(alias_pid)
+    canonical_by_slug = {s: a for s, a in canonical_links}
+    for slug, alias_aid in alias_links:
+        canonical_aid = canonical_by_slug.get(slug)
+        if canonical_aid is None:
+            continue
+        try:
+            ldb = await get_db(slug)
+        except Exception:
+            continue
+        try:
+            await ldb.execute(
+                "DELETE FROM pen_name_links WHERE "
+                "(canonical_author_id=? AND alias_author_id=?) OR "
+                "(canonical_author_id=? AND alias_author_id=?)",
+                (canonical_aid, alias_aid, alias_aid, canonical_aid),
+            )
+            await ldb.commit()
+        finally:
+            await ldb.close()
+    return {"status": "ok"}
+
+
 @router.delete("/authors/pen-name-link/{link_id}")
 async def unlink_pen_names(link_id: int):
-    """Remove a pen-name link."""
+    """Remove a pen-name link.
+
+    v2.20.0 — also drops the matching pen_name_links_v2 row so the
+    unified `/persons/{person_id}` view stays in sync. The v2 row is
+    identified by resolving the legacy row's (canonical_author_id,
+    alias_author_id) to person_ids via author_links — best-effort,
+    same as the dual-write path.
+    """
     db = await get_db()
     try:
+        legacy = await (await db.execute(
+            "SELECT canonical_author_id, alias_author_id "
+            "FROM pen_name_links WHERE id=?",
+            (link_id,),
+        )).fetchone()
         await db.execute("DELETE FROM pen_name_links WHERE id=?", (link_id,))
         await db.commit()
-        return {"status": "ok"}
     finally:
         await db.close()
+    if legacy:
+        canonical_person = await person_id_for(
+            get_active_library(), legacy["canonical_author_id"],
+        )
+        alias_person = await person_id_for(
+            get_active_library(), legacy["alias_author_id"],
+        )
+        if canonical_person is not None and alias_person is not None:
+            gdb = await get_global_db()
+            try:
+                # Match in both directions — the v2 row may have been
+                # inserted with the endpoints swapped.
+                await gdb.execute(
+                    "DELETE FROM pen_name_links_v2 "
+                    "WHERE (canonical_person_id=? AND alias_person_id=?) "
+                    "   OR (canonical_person_id=? AND alias_person_id=?)",
+                    (canonical_person, alias_person,
+                     alias_person, canonical_person),
+                )
+                await gdb.commit()
+            finally:
+                await gdb.close()
+    return {"status": "ok"}

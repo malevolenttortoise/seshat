@@ -4,9 +4,10 @@
 //   Discovery: Library, Authors, Missing, Upcoming, MAM Search, Suggestions
 //   Pipeline:  Review, New Authors, Weekly Ignored, Author Lists, Delayed
 //   Shared:    Dashboard, Settings, Logs, Database, Filters
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { ThemeProvider, useTheme, useThemeControls } from "./theme";
+import type { Theme, NavFn } from "./types";
 import { Spin } from "./components/Spin";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import Toaster from "./components/Toaster";
@@ -15,7 +16,7 @@ import { LibrarySyncBanner } from "./components/LibrarySyncBanner";
 import { InstallPrompt } from "./components/InstallPrompt";
 import { JumpToTop } from "./components/JumpToTop";
 import { GlobalSearchBar, type SearchNavTarget } from "./components/GlobalSearchBar";
-import { MobileNavDrawer } from "./components/MobileNavDrawer";
+import { MobileNavDrawer, type NavItem } from "./components/MobileNavDrawer";
 import { SseEventsProvider } from "./providers/SseEventsProvider";
 import { useViewport } from "./hooks/useViewport";
 
@@ -31,6 +32,7 @@ import FiltersPage from "./pages/FiltersPage";
 import MigrationPage from "./pages/MigrationPage";
 import PipelineMamPage from "./pages/MamPage";
 import DatabasePage from "./pages/DatabasePage";
+import AuthorTriagePage from "./pages/AuthorTriagePage";
 import LogsPage from "./pages/LogsPage";
 import SettingsPage from "./pages/SettingsPage";
 
@@ -59,16 +61,29 @@ type Section = "discovery" | "pipeline";
 
 // ─── Navigation definitions ─────────────────────────────────
 
+// v2.20.0 — Discovery nav collapses Works / Metadata / Series /
+// Author Triage under a single "Tools" parent dropdown. The bare
+// nav was overflowing into the global search bar at typical 1800px
+// widths; grouping the four catalog-maintenance pages frees room
+// while still keeping them one click + hover away.
 const DISCOVERY_NAV = [
   { id: "disc-library",     label: "Library",     icon: "📖" },
   { id: "disc-authors",     label: "Authors",     icon: "◉" },
   { id: "disc-missing",     label: "Missing",     icon: "◌" },
   { id: "disc-upcoming",    label: "Upcoming",    icon: "📅" },
-  { id: "disc-works",       label: "Works",       icon: "🔗" },
   { id: "disc-mam",         label: "MAM Search",  icon: "🔍" },
-  { id: "disc-metadata", label: "Metadata", icon: "📋" },
-  { id: "disc-series",      label: "Series",      icon: "🗂️" },
   { id: "disc-hidden",      label: "Hidden",      icon: "🚫" },
+  {
+    id: "disc-tools",
+    label: "Tools",
+    icon: "🛠",
+    children: [
+      { id: "disc-works",    label: "Works",          icon: "🔗" },
+      { id: "disc-metadata", label: "Metadata",       icon: "📋" },
+      { id: "disc-series",   label: "Series",         icon: "🗂️" },
+      { id: "author-triage", label: "Author Triage",  icon: "⚙️" },
+    ],
+  },
 ];
 
 const PIPELINE_NAV = [
@@ -85,6 +100,7 @@ const WIDE_PAGES = new Set([
   "disc-library", "disc-authors", "disc-author-detail",
   "disc-missing", "disc-upcoming", "disc-mam", "disc-metadata",
   "disc-series", "disc-hidden", "disc-importexport", "disc-works",
+  "author-triage",
   "pipe-review", "pipe-tentative", "pipe-ignored", "pipe-authors",
   "pipe-delayed", "pipe-migration",
   "logs", "database",
@@ -157,6 +173,7 @@ function renderPage(
     case "settings":           return <SettingsPage />;
     case "logs":               return <LogsPage />;
     case "database":           return <DatabasePage />;
+    case "author-triage":      return <AuthorTriagePage onNav={nav} />;
 
     default:                   return <PipelineDashboard onNav={nav} />;
   }
@@ -442,26 +459,13 @@ function SeshatApp() {
             {/* Section nav items */}
             <div style={{ display: "flex", gap: 4, flex: 1, minWidth: 0 }}>
               {activeNav.map(item => (
-                <button
+                <NavButton
                   key={item.id}
-                  onClick={() => nav(item.id)}
-                  style={{
-                    background: page === item.id ? t.abg : "transparent",
-                    color: page === item.id ? t.accent : t.tm,
-                    border: "none",
-                    borderRadius: 6,
-                    padding: "6px 12px",
-                    fontSize: 14,
-                    fontWeight: page === item.id ? 600 : 400,
-                    cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 6,
-                  }}
-                >
-                  <span>{item.icon}</span>
-                  <span>{item.label}</span>
-                </button>
+                  item={item}
+                  page={page}
+                  nav={nav}
+                  t={t}
+                />
               ))}
             </div>
 
@@ -602,6 +606,132 @@ function SeshatApp() {
     </div>
   );
 }
+
+// v2.20.0 — desktop nav button. Items WITHOUT children render as a
+// direct link; items WITH children render as a dropdown trigger that
+// toggles a menu of children. The dropdown closes on click-outside,
+// Esc, or selecting a child. Parent is highlighted when the current
+// page is any of its children.
+function NavButton({
+  item, page, nav, t,
+}: {
+  item: NavItem;
+  page: string;
+  nav: NavFn;
+  t: Theme;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  const hasChildren = !!item.children?.length;
+  const isActive = hasChildren
+    ? !!item.children?.some((c) => c.id === page)
+    : page === item.id;
+
+  // Click-outside + Esc close.
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const baseBtnStyle: React.CSSProperties = {
+    background: isActive ? t.abg : "transparent",
+    color: isActive ? t.accent : t.tm,
+    border: "none",
+    borderRadius: 6,
+    padding: "6px 12px",
+    fontSize: 14,
+    fontWeight: isActive ? 600 : 400,
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+  };
+
+  if (!hasChildren) {
+    return (
+      <button onClick={() => nav(item.id)} style={baseBtnStyle}>
+        <span>{item.icon}</span>
+        <span>{item.label}</span>
+      </button>
+    );
+  }
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        style={baseBtnStyle}
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        <span>{item.icon}</span>
+        <span>{item.label}</span>
+        <span style={{ fontSize: 10, opacity: 0.7 }}>▾</span>
+      </button>
+      {open ? (
+        <div
+          role="menu"
+          style={{
+            position: "absolute",
+            top: "100%",
+            left: 0,
+            marginTop: 4,
+            background: t.bg2,
+            border: `1px solid ${t.border}`,
+            borderRadius: 8,
+            boxShadow: "0 4px 16px rgba(0,0,0,0.3)",
+            minWidth: 180,
+            padding: 4,
+            zIndex: 200,
+          }}
+        >
+          {item.children!.map((child) => (
+            <button
+              key={child.id}
+              role="menuitem"
+              onClick={() => {
+                nav(child.id);
+                setOpen(false);
+              }}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                width: "100%",
+                padding: "8px 12px",
+                background: page === child.id ? t.abg : "transparent",
+                color: page === child.id ? t.accent : t.tm,
+                border: "none",
+                borderRadius: 4,
+                fontSize: 14,
+                fontWeight: page === child.id ? 600 : 400,
+                textAlign: "left",
+                cursor: "pointer",
+              }}
+            >
+              <span style={{ width: 20, textAlign: "center" }}>{child.icon}</span>
+              <span>{child.label}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 
 export default function App() {
   return (

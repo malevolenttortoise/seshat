@@ -220,13 +220,21 @@ class TestLegacyDbUpgrade:
                     is_reingest INTEGER NOT NULL DEFAULT 0
                 );
             """)
-            # v2.8.1's migration count is 26 (12 pre-v2.7 + 8 v2.7 + 1 v2.8
-            # + earlier additions). The exact number matters less than that
-            # it's >= the pre-v2.9.0 count so v2.9.0 entries run as the
-            # only new migrations. We pick a safe lower bound by reading
-            # the current MIGRATIONS length minus v2.9.0's 7 entries.
+            # Locate the first v2.9.0 migration entry by content
+            # (`announces ADD COLUMN filetype`). Setting user_version
+            # to its INDEX stamps every prior entry as applied; init_db
+            # will then run only the v2.9.0+ entries (which is what
+            # this test asserts about). Searching by content is robust
+            # to future migrations being appended to the list — earlier
+            # versions of this test used `len(MIGRATIONS) - 7` which
+            # silently broke whenever a new release appended entries
+            # (v2.20.0 added 11 new entries; the offset stopped pointing
+            # at the v2.9 starting line).
             from app.database import MIGRATIONS as _MIGRATIONS
-            v281_count = len(_MIGRATIONS) - 7
+            v281_count = next(
+                i for i, m in enumerate(_MIGRATIONS)
+                if "announces ADD COLUMN filetype" in m
+            )
             await db.execute(f"PRAGMA user_version = {v281_count}")
             await db.commit()
 

@@ -23,11 +23,17 @@ from fastapi import FastAPI
 async def two_libraries(tmp_path, monkeypatch):
     """Two discovery DBs seeded with a mix of overlapping + distinct
     authors + series + books across an ebook and an audiobook library."""
-    from app import config as app_config, state
+    from app import config as app_config, database, state
     from app.discovery import database as disco_db
 
     monkeypatch.setattr(app_config, "DATA_DIR", tmp_path)
     monkeypatch.setattr(disco_db, "DATA_DIR", tmp_path)
+    # v2.20.0 Phase 4 — /v1/search now dedupes author hits via the
+    # global author_links table; the test env needs the global DB
+    # initialized for the dedup helper to succeed.
+    monkeypatch.setattr(app_config, "APP_DB_PATH", tmp_path / "seshat.db")
+    monkeypatch.setattr(database, "APP_DB_PATH", tmp_path / "seshat.db")
+    await database.init_db()
 
     libs = [
         {"slug": "ebooks", "name": "Ebooks", "display_name": "Ebooks",

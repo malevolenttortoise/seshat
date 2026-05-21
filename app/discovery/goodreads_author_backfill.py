@@ -264,6 +264,17 @@ async def _persist_author_goodreads_id(author_id: int, goodreads_id: str) -> Non
     finally:
         await db.close()
 
+    # v2.20.0 — mirror to other libraries' linked author rows.
+    try:
+        from app.discovery.author_identity import mirror_source_id
+        from app.discovery.database import get_active_library
+        slug = get_active_library()
+        if slug:
+            await mirror_source_id(slug, author_id, "goodreads_id", goodreads_id)
+    except Exception:
+        # Best-effort; the per-library write above already landed.
+        pass
+
 
 def _resolve_calibre_db_path(override: Optional[str] = None) -> Optional[str]:
     """Resolve the path to Calibre's metadata.db.

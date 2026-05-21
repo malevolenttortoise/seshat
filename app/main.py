@@ -788,6 +788,38 @@ async def lifespan(app: FastAPI):
         for lib in state._discovered_libraries:
             await init_discovery_db(lib["slug"])
 
+        # v2.20.0 — one-time cross-library author identity migration.
+        # Walks every per-library `authors` table and populates
+        # `persons` + `author_links` in seshat.db, then consolidates
+        # canonical names + flags low-confidence collisions + migrates
+        # `pen_name_links` to `pen_name_links_v2`. Idempotent — the
+        # migration sentinel skips when every author is already linked.
+        # Runs AFTER per-library init_db completes so the per-library
+        # schemas are guaranteed to exist before we read them.
+        try:
+            from app.discovery.author_identity import (
+                migrate_to_cross_library_identity,
+            )
+            lib_slugs = [l["slug"] for l in state._discovered_libraries]
+            mig_result = await migrate_to_cross_library_identity(lib_slugs)
+            if not mig_result.get("skipped"):
+                _log.info(
+                    "Cross-library author identity migration: "
+                    "%d persons, %d author_links, %d low-confidence, "
+                    "%d pen_name_links",
+                    mig_result.get("created_persons", 0),
+                    mig_result.get("created_links", 0),
+                    mig_result.get("low_confidence", 0),
+                    mig_result.get("pen_name_migrated", 0),
+                )
+        except Exception:
+            _log.exception(
+                "Cross-library author identity migration failed "
+                "(non-fatal — per-library writes still work; the "
+                "unified author detail page will be empty until "
+                "this succeeds)"
+            )
+
         active = settings.get("active_library") or first_slug
         valid_slugs = [l["slug"] for l in state._discovered_libraries]
         if active not in valid_slugs:

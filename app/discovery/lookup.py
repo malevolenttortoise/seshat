@@ -821,6 +821,29 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
         up.append("last_lookup_at = ?"); pr.append(time.time()); pr.append(author_id)
         if up: await db.execute(f"UPDATE authors SET {', '.join(up)} WHERE id = ?", pr)
 
+        # v2.20.0 — mirror the source-ID write across linked per-library
+        # author rows so a discovery scan in calibre-library populates
+        # the matching abs-audio-library row's `{source}_id` for free.
+        # No-op when the author hasn't been linked yet (pre-migration
+        # state or a brand-new row before the sync-insert hook fires).
+        if result.external_id:
+            try:
+                from app.discovery.author_identity import mirror_source_id
+                from app.discovery.database import get_active_library
+                active_slug = get_active_library()
+                if active_slug:
+                    await mirror_source_id(
+                        active_slug, author_id,
+                        source_name, result.external_id,
+                    )
+            except Exception as exc:
+                # Mirror is best-effort — the per-library write above
+                # has already landed. Log + continue.
+                logger.debug(
+                    "mirror_source_id failed for author_id=%d %s=%s: %s",
+                    author_id, source_name, result.external_id, exc,
+                )
+
         # SELECT includes pub_date, description, expected_date so the
         # owned-book metadata logic in _update_existing can compare against
         # what's currently stored without a second round-trip per book.

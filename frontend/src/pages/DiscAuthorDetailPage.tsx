@@ -22,6 +22,13 @@ import { Section } from "../components/Section";
 import { BGrid, BList } from "../components/BookViews";
 import { BookSidebar } from "../components/BookSidebar";
 import { toast } from "../lib/toast";
+import {
+  loadAuthorDetailViaPerson,
+  type AuthorDetail,
+  type PersonHit,
+  type PersonSearchResponse,
+} from "../lib/authorDetail";
+import { SourceBadgeRow } from "../components/SourceBadgeRow";
 import { useViewport } from "../hooks/useViewport";
 import { useMobileCodepath } from "../components/mobile";
 import MobileAuthorDetailPage from "./MobileAuthorDetailPage";
@@ -38,38 +45,6 @@ import type {
   ScanStatusResponse,
   Series,
 } from "../types";
-
-// ─── Types for the author-detail response ─────────────────
-// The /authors/{id} endpoint returns an Author row with two extra
-// projections (`series`, `standalone_books`) + optional cross-library
-// fields when `include_cross_library=1` is passed. We type the fields
-// the UI actually reads; fields the server returns but we don't
-// display stay unlisted.
-interface AuthorDetail extends Author {
-  series?: Series[];
-  standalone_books?: Book[];
-  active_library_slug?: string;
-  active_content_type?: string;
-  cross_library?: Record<string, CrossLibraryEntry>;
-  // v2.17.0 — owned / missing / total / series_count summed across
-  // primary + every cross_library entry. Backend only sets this when
-  // include_cross_library=1 is passed (i.e. on the author-detail
-  // page); single-library installs and other callers see undefined
-  // and the frontend falls back to per-library computation.
-  global_stats?: {
-    owned: number;
-    missing: number;
-    total: number;
-    series_count: number;
-  };
-}
-
-interface CrossLibraryEntry {
-  library_name: string;
-  content_type: string;
-  app_type?: string;
-  author: AuthorDetail;
-}
 
 // Response envelope for the scan / lookup / full-rescan triggers —
 // they all return a small payload with the background task name and
@@ -509,7 +484,9 @@ function DesktopAuthorDetailPage({
 
   const [penLinks, setPenLinks] = useState<PenNameLink[]>([]);
   const [penQ, setPenQ] = useState("");
-  const [penResults, setPenResults] = useState<Author[]>([]);
+  // v2.20.0 Phase 4 — search returns person hits (deduped across
+  // libraries) instead of per-library author rows.
+  const [penResults, setPenResults] = useState<PersonHit[]>([]);
   const [penBusy, setPenBusy] = useState(false);
   const [penType, setPenType] = usePersist<string>("adp_pen_type", "pen_name");
 
@@ -528,31 +505,39 @@ function DesktopAuthorDetailPage({
     }
     const tm = setTimeout(() => {
       api
-        .get<AuthorsResponse>(
-          `/discovery/authors?search=${encodeURIComponent(penQ)}`,
+        .get<PersonSearchResponse>(
+          `/discovery/persons/search?q=${encodeURIComponent(penQ)}`,
         )
         .then((r) =>
           setPenResults(
-            (r.authors || []).filter((x) => x.id !== authorIdNum),
+            (r.persons || []).filter((x) => x.person_id !== a?.person_id),
           ),
         )
         .catch(() => {});
     }, 300);
     return () => clearTimeout(tm);
-  }, [penQ, authorIdNum]);
+  }, [penQ, a?.person_id]);
 
-  const linkPen = async (aliasId: number) => {
+  const linkPen = async (aliasPersonId: number) => {
+    if (!a?.person_id) {
+      toast.error("Author not yet linked to a canonical person");
+      return;
+    }
     setPenBusy(true);
     try {
-      await api.post("/discovery/authors/link-pen-names", {
-        canonical_author_id: authorIdNum,
-        alias_author_id: aliasId,
+      await api.post("/discovery/persons/link-pen-names", {
+        canonical_person_id: a.person_id,
+        alias_person_id: aliasPersonId,
         link_type: penType,
       });
+      // Refresh both the legacy per-library chip list AND the unified
+      // person view (which reads pen_names from v2). Reloading the
+      // page-level state pulls in the fresh person.pen_names too.
       const r = await api.get<PenNamesResponse>(
         `/discovery/authors/${authorIdNum}/pen-names`,
       );
       setPenLinks(r.links || []);
+      await loadA();
       setPenQ("");
       setPenResults([]);
       toast.success(
@@ -600,11 +585,12 @@ function DesktopAuthorDetailPage({
   const loadA = useCallback(
     (signal?: AbortSignal) => {
       setLd(true);
-      const qs = authorSlug
-        ? `?include_cross_library=1&slug=${encodeURIComponent(authorSlug)}`
-        : `?include_cross_library=1`;
-      return api
-        .get<AuthorDetail>(`/discovery/authors/${authorIdNum}${qs}`, signal)
+      // v2.20.0 — `loadAuthorDetailViaPerson` resolves the author's
+      // canonical person_id and fetches /discovery/persons/{person_id}
+      // for the unified cross-library view, adapting the response to
+      // the existing AuthorDetail shape. Falls back to the legacy
+      // /authors/{aid} response when the row isn't yet linked.
+      return loadAuthorDetailViaPerson(authorIdNum, authorSlug, signal)
         .then((d) => {
           setA(d);
           setLd(false);
@@ -1391,6 +1377,19 @@ function DesktopAuthorDetailPage({
         </div>
       </div>
 
+      {/* v2.20.0 Phase 3 — source-ID badges. Only renders when the
+          author is linked to a canonical person (person_id present);
+          otherwise this row stays hidden. Clicking a badge opens the
+          edit modal which writes through to every linked per-library
+          row via the PATCH endpoint. */}
+      {a.person_id ? (
+        <SourceBadgeRow
+          personId={a.person_id}
+          sourceIds={a.source_ids || {}}
+          onUpdate={() => loadA()}
+        />
+      ) : null}
+
       {/* ── Author-Link Search (shown when user clicks "+ link author") ── */}
       {penQ.length > 0 ? (
         <div
@@ -1506,20 +1505,33 @@ function DesktopAuthorDetailPage({
                   overflowY: "auto",
                 }}
               >
-                {penResults.map((r) => (
+                {penResults.map((p) => (
                   <div
-                    key={r.id}
-                    onClick={() => linkPen(r.id)}
+                    key={p.person_id}
+                    onClick={() => linkPen(p.person_id)}
                     style={{
                       padding: "8px 12px",
                       cursor: "pointer",
                       fontSize: 12,
                       color: t.text2,
                       borderBottom: `1px solid ${t.borderL}`,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
                     }}
                   >
-                    {r.name}{" "}
-                    <span style={{ color: t.tg }}>({r.total_books || 0} books)</span>
+                    <span style={{ flex: 1 }}>{p.display_name}</span>
+                    {p.content_types.includes("ebook") && (
+                      <span title="Ebook">📖</span>
+                    )}
+                    {p.content_types.includes("audiobook") && (
+                      <span title="Audiobook">🎧</span>
+                    )}
+                    <span style={{ color: t.tg, fontSize: 10 }}>
+                      {p.library_slugs.length === 1
+                        ? "1 library"
+                        : `${p.library_slugs.length} libraries`}
+                    </span>
                   </div>
                 ))}
               </div>

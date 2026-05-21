@@ -825,6 +825,27 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
                             "calibre_sync: stub-mirror failed for '%s' "
                             "(non-fatal)", incoming_name, exc_info=True,
                         )
+                    # v2.20.0 — link the new author into the cross-library
+                    # identity graph so subsequent source-ID writes (and
+                    # the unified author detail page) see them. The
+                    # `mirror_new_author_to_other_type_libs` call above
+                    # may have inserted matching stub rows in other
+                    # libraries; those stubs get their own
+                    # get_or_create_person() at INSERT time below.
+                    try:
+                        from app.discovery import author_identity
+                        from app.discovery.database import get_active_library
+                        active_slug = get_active_library()
+                        if active_slug:
+                            await author_identity.get_or_create_person(
+                                active_slug, author_map[cal_id],
+                                name=incoming_name,
+                            )
+                    except Exception:
+                        logger.debug(
+                            "calibre_sync: identity-link failed for '%s' "
+                            "(non-fatal)", incoming_name, exc_info=True,
+                        )
 
         # Pass 2: upsert series
         #
