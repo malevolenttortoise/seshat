@@ -270,22 +270,84 @@ class TestMirrorSourceId:
         with pytest.raises(ValueError):
             await mirror_source_id("calibre-library", aid, "made_up_id", "x")
 
-    async def test_writes_to_all_linked_libraries(self, cross_lib_env):
+    async def test_writes_to_other_linked_libraries(self, cross_lib_env):
+        """v2.20.1 — mirror writes to OTHER libraries (excluding the
+        caller's own slug). The caller is expected to have already
+        written its row; re-writing via a second connection would
+        deadlock against the caller's still-open write transaction."""
         aid1 = await cross_lib_env["add_author"]("calibre-library", "William D. Arand")
         aid2 = await cross_lib_env["add_author"]("abs-audio-library", "William D. Arand")
         await get_or_create_person("calibre-library", aid1)
         await get_or_create_person("abs-audio-library", aid2)
 
-        touched = await mirror_source_id("calibre-library", aid1, "amazon_id", "B01AY7PSG4")
-        assert touched == 2  # both linked rows updated
+        # Simulate the caller having already written its own row.
+        # (In production this is the `UPDATE authors SET {source}_id`
+        # immediately preceding the mirror call.)
+        from app.discovery.author_identity import _open_per_library
+        cdb = await _open_per_library("calibre-library")
+        try:
+            await cdb.execute(
+                "UPDATE authors SET amazon_id=? WHERE id=?",
+                ("B01AY7PSG4", aid1),
+            )
+            await cdb.commit()
+        finally:
+            await cdb.close()
+
+        touched = await mirror_source_id(
+            "calibre-library", aid1, "amazon_id", "B01AY7PSG4",
+        )
+        # Caller's slug skipped; ONE other library touched.
+        assert touched == 1
 
         v1 = await cross_lib_env["read_amazon_id"]("calibre-library", aid1)
         v2 = await cross_lib_env["read_amazon_id"]("abs-audio-library", aid2)
         assert v1 == "B01AY7PSG4"
         assert v2 == "B01AY7PSG4"
 
+    async def test_does_not_deadlock_against_open_caller_write(
+        self, cross_lib_env,
+    ):
+        """v2.20.1 regression — when the caller holds an open write
+        transaction on its per-library DB (the lookup.py pattern), the
+        mirror MUST NOT try to re-open + write the same DB or it'll
+        busy-timeout against the caller's lock. This test reproduces
+        the original "database is locked" error from v2.20.0."""
+        aid1 = await cross_lib_env["add_author"]("calibre-library", "William D. Arand")
+        aid2 = await cross_lib_env["add_author"]("abs-audio-library", "William D. Arand")
+        await get_or_create_person("calibre-library", aid1)
+        await get_or_create_person("abs-audio-library", aid2)
+
+        # Open a write transaction on calibre-library and DO NOT commit.
+        # The mirror is invoked while this connection still holds the
+        # write lock — pre-fix behavior was to deadlock + raise; post-
+        # fix the mirror skips the caller's slug and completes cleanly.
+        from app.discovery.author_identity import _open_per_library
+        cdb = await _open_per_library("calibre-library")
+        try:
+            # Lower busy_timeout so a hypothetical regression fails
+            # this test in milliseconds, not 30 seconds.
+            await cdb.execute("PRAGMA busy_timeout=500")
+            await cdb.execute(
+                "UPDATE authors SET amazon_id=? WHERE id=?",
+                ("B01AY7PSG4", aid1),
+            )
+            # NOTE: no commit here — write lock held.
+            touched = await mirror_source_id(
+                "calibre-library", aid1, "amazon_id", "B01AY7PSG4",
+            )
+            assert touched == 1  # only abs-audio-library
+            await cdb.commit()
+        finally:
+            await cdb.close()
+
+        # The other library got the value.
+        assert await cross_lib_env["read_amazon_id"]("abs-audio-library", aid2) == "B01AY7PSG4"
+
     async def test_mirror_handles_null(self, cross_lib_env):
-        """Mirror with value=None clears the column on every linked row."""
+        """Mirror with value=None clears the column on every OTHER
+        linked row (caller's row left alone — caller wrote its own
+        NULL via its own connection)."""
         aid1 = await cross_lib_env["add_author"](
             "calibre-library", "Wataru Watari", amazon_id="B0GZYW93RP",
         )
@@ -296,7 +358,9 @@ class TestMirrorSourceId:
         await get_or_create_person("abs-audio-library", aid2)
 
         await mirror_source_id("calibre-library", aid1, "amazon_id", None)
-        assert await cross_lib_env["read_amazon_id"]("calibre-library", aid1) is None
+        # Caller's row untouched (caller would have NULLed it themselves).
+        assert await cross_lib_env["read_amazon_id"]("calibre-library", aid1) == "B0GZYW93RP"
+        # Mirror cleared the OTHER library's value.
         assert await cross_lib_env["read_amazon_id"]("abs-audio-library", aid2) is None
 
     async def test_noop_when_not_linked(self, cross_lib_env):
@@ -308,12 +372,14 @@ class TestMirrorSourceId:
         assert touched == 0
 
     async def test_accepts_unsuffixed_source_name(self, cross_lib_env):
-        """Convenience: 'amazon' is normalized to 'amazon_id' internally."""
+        """Convenience: 'amazon' is normalized to 'amazon_id' internally.
+        Single-library author has no OTHER linked rows to mirror to
+        (caller's own slug is skipped), so touched=0."""
         aid = await cross_lib_env["add_author"]("calibre-library", "Test Author")
         await get_or_create_person("calibre-library", aid)
         touched = await mirror_source_id("calibre-library", aid, "amazon", "B0TEST00")
-        assert touched == 1
-        assert await cross_lib_env["read_amazon_id"]("calibre-library", aid) == "B0TEST00"
+        # Caller's slug skipped; no other linked libraries → 0 rows touched.
+        assert touched == 0
 
 
 # ─── migrate_to_cross_library_identity ───────────────────────

@@ -357,18 +357,23 @@ async def mirror_source_id(
     source_name: str,
     value: Optional[str],
 ) -> int:
-    """Write `authors.{source_name}_id = value` to every per-library
-    `authors` row linked to the same person as `(library_slug, author_id)`.
+    """Propagate `authors.{source_name}_id = value` to every OTHER
+    per-library `authors` row linked to the same person as
+    `(library_slug, author_id)`.
 
-    Returns the number of rows touched (including the row identified
-    by the caller's own `(library_slug, author_id)` — the mirror is
-    *inclusive*, not "everywhere except the caller's row").
+    Returns the number of rows touched, **excluding the caller's own
+    `(library_slug, author_id)` row** — the caller is expected to have
+    already written its own slug's value before invoking the mirror;
+    re-writing the same value from a second connection would deadlock
+    against the caller's still-open write transaction (v2.20.1 fix —
+    "database is locked" errors during author scans).
 
     Caller usage pattern: after an UPDATE writes `{source}_id` in the
     caller's library DB, call `mirror_source_id(slug, author_id,
-    source_name + "_id" if not already suffixed, value)`. The mirror
-    is idempotent — re-writing the same value to the caller's own
-    row is a no-op as far as the data goes.
+    source_name + "_id" if not already suffixed, value)`. The caller
+    does NOT need to commit before invoking the mirror — the mirror
+    skips the caller's slug entirely, so the caller's transaction
+    can stay open across the call.
 
     Defensive: `source_name` MUST be in `MIRRORABLE_SOURCE_ID_COLUMNS`.
     `audiobookshelf_id` and `calibre_id` are deliberately excluded
@@ -401,6 +406,17 @@ async def mirror_source_id(
     links = await linked_authors(person_id)
     touched = 0
     for slug, aid in links:
+        # v2.20.1 — skip the caller's own slug. The caller already
+        # wrote this value via its own connection's UPDATE before
+        # invoking the mirror; opening a SECOND connection to the
+        # same per-library DB to re-write the same value would
+        # deadlock against the caller's still-open write transaction
+        # (the caller hasn't committed yet — by design, since the
+        # caller may have follow-up writes to bundle into the same
+        # transaction). This was the source of v2.20.0's "database
+        # is locked" DEBUG spam during author scans.
+        if slug == library_slug:
+            continue
         try:
             per_lib = await _open_per_library(slug)
         except Exception as exc:

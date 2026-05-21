@@ -1216,11 +1216,24 @@ async def patch_source_id(person_id: int, data: dict = Body(...)):
 
     touched = 0
     if links:
-        # Mirror via the existing helper so the call respects the
-        # MIRRORABLE_SOURCE_ID_COLUMNS guard. Pick any linked row as
-        # the entry point — mirror walks all linked rows anyway.
+        # v2.20.1 — mirror_source_id is now exclusive (skips the
+        # caller's slug to avoid self-deadlock against an open write
+        # transaction in the lookup path). The PATCH endpoint has no
+        # such transaction, so write the entry-point row first, THEN
+        # mirror to the rest. `touched + 1` accounts for the manual
+        # write below.
+        from app.discovery.author_identity import _open_per_library
         first_slug, first_aid = links[0]
-        touched = await mirror_source_id(
+        per_lib = await _open_per_library(first_slug)
+        try:
+            await per_lib.execute(
+                f"UPDATE authors SET {column} = ? WHERE id = ?",  # nosec B608
+                (canonical, first_aid),
+            )
+            await per_lib.commit()
+        finally:
+            await per_lib.close()
+        touched = 1 + await mirror_source_id(
             first_slug, first_aid, column, canonical,
         )
 
