@@ -7,6 +7,89 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [2.19.0] — 2026-05-20
+
+Amazon Author-Store discovery hardened against Akamai soft-blocks.
+Cuts cascading 429 failures + reduces per-author request count for
+typical scans from 3 → 1. Reference incident: 2026-05-20 16:17 → 16:19
+where two consecutive author scans (Hanako Arashi → Mark Arrows)
+both returned HTTP 429 with identical 2296-byte CAPTCHA bodies
+because nothing told the second scan the IP was jailed.
+
+### Added — IP-level soft-block penalty box
+
+When amazon.com returns HTTP 429, a thin-body CAPTCHA interstitial,
+or a `JuvecError` carrying the soft-block signal, AmazonSource and
+the author-ID resolver now stamp a shared module-level
+`_blocked_until` timestamp and short-circuit every subsequent
+amazon.com request until the cooldown expires. Default cooldown
+600s (10 min); honors `Retry-After` when present, clamped to
+[60s, 3600s]. The penalty box never shortens an in-flight cooldown
+— only extends.
+
+`search_author`, `get_author_books`, `resolve_amazon_author_id`,
+and all three resolver tiers (book-pivot, vanity URL, /s search)
+check `is_amazon_blocked()` at entry and return None immediately
+with an INFO log. The Arashi → Arrows cascade pattern is now
+impossible: the second scan would log
+`SKIPPED — soft-block cooldown (Xs remaining)` and never touch
+the wire.
+
+### Added — SSR-bypass for non-prolific authors
+
+`AmazonSource._collect_products` now skips the `/juvec`
+filter-application POST entirely when the SSR `/stores/author/{id}/allbooks`
+page already carries the full catalog
+(`page_data.total_result_count <= len(page_data.products)`). The
+Python-side format filter (Stage 3) handles binding-symbol matching
+for SSR products, identical to what server-side filtering would
+have produced. Cuts a typical author scan from 3 requests (allbooks
+GET + filter POST + detail batch POST) to 1 — the largest
+single reduction in amazon.com request density we can ship without
+changing pipeline shape.
+
+Pagination + /juvec still fire for prolific authors whose total
+exceeds the page-1 product slice (~85 entries). The legacy
+`default_filter` shortcut for the `allFormats / All Languages`
+configuration is preserved as a redundant safety branch.
+
+### Added — DuckDuckGo Tier-2c fallback for author-ID resolution
+
+Opt-in via `metadata_sources.amazon.use_ddg_fallback` (default
+False). When the amazon.com tiers (Tier 1 book pivot, Tier 2a
+vanity URL, Tier 2b /s search) return clean misses, fall back to
+a DuckDuckGo site-restricted search
+(`site:amazon.com "{author}" /stores/author`) and parse the result
+page for `/stores/.../author/{B0XXXXXXXX}` URLs. Handles both
+direct hrefs and DDG's tracking-redirect shape (`/l/?uddg=...`).
+
+Pattern borrowed verbatim from Calibre's `search_engines.py` — DDG
+HTML endpoint, `kp=-2` safe-search off, transient `httpx` session.
+Useful primarily when amazon.com's `/s` is degraded or genuinely
+has no anchor matches for an author whose vanity slug doesn't
+normalize cleanly.
+
+### Changed — `JuvecError` carries structured failure metadata
+
+`JuvecError` now exposes `status_code`, `retry_after_s`, and
+`thin_body_bytes` so AmazonSource can distinguish "legitimate
+scan miss" from "Akamai jailed our IP" without string-matching
+the message. The new `is_soft_block_signal` property drives the
+penalty-box recording in the `get_author_books` exception handler.
+
+### Behavior change to note
+
+`_tier1_book_pivot` returning a thin-body response now trips the
+penalty box and short-circuits Tier 2 in the same call. The
+previous behavior was to fall through to Tier 2 silently. The new
+behavior matches the v2.19.0 design intent — once Akamai flags
+the IP, every amazon.com endpoint will fail, so continuing wastes
+request slots. The existing `test_tier1_thin_body_treated_as_failure`
+test was retitled `test_tier1_thin_body_trips_penalty_box` and its
+assertions inverted to reflect this.
+
+---
+
 ## [2.17.2] — 2026-05-18
 
 UAT-caught: Authors list now sorts by last name (matching the

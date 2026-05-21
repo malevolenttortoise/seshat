@@ -39,7 +39,11 @@ import urllib.parse
 from typing import Any, Optional
 
 from app.discovery.amazon_author_id_resolver import (
+    amazon_block_remaining_s,
+    is_amazon_blocked,
+    record_amazon_soft_block,
     resolve_amazon_author_id,
+    parse_retry_after,
 )
 from app.discovery.sources.base import (
     AuthorResult,
@@ -120,6 +124,7 @@ class AmazonSource(BaseSource):
         audiobook_format_filter: str = "audible_audiobook",
         language: str = "English",
         burst_delay_s: float = 0.8,
+        use_ddg_fallback: bool = False,
     ):
         """
         Args:
@@ -142,12 +147,18 @@ class AmazonSource(BaseSource):
                 `content.languageFilter` list (e.g. "English").
             burst_delay_s: Inter-/juvec-POST sleep within one author
                 scan. Default 0.8s.
+            use_ddg_fallback: v2.19.0 — when True, the resolver falls
+                back to a DuckDuckGo site-restricted search after the
+                amazon.com tiers fail. Opt-in via the
+                `amazon_use_ddg_fallback` source-config setting.
+                Off by default.
         """
         super().__init__(rate_limit=rate_limit)
         self.format_filter = format_filter
         self.audiobook_format_filter = audiobook_format_filter
         self.language = language
         self.burst_delay_s = burst_delay_s
+        self.use_ddg_fallback = use_ddg_fallback
         self._session: Any | None = None
         self._session_init_attempted = False
         # Set externally by lookup.py before each scan; tells the
@@ -199,12 +210,24 @@ class AmazonSource(BaseSource):
         `UPDATE authors SET {source}_id` pattern, so subsequent
         scans can short-circuit the resolver.
         """
+        # v2.19.0 — penalty box: if amazon.com is in soft-block
+        # cooldown, every downstream HTTP call would just walk into
+        # the same wall. Bail early; the cascade stops here.
+        if is_amazon_blocked():
+            logger.info(
+                "amazon: search_author %r SKIPPED — soft-block cooldown "
+                "(%.0fs remaining)",
+                author_name, amazon_block_remaining_s(),
+            )
+            return None
+
         session = self._get_session()
         if session is None:
             return None
 
         author_id = await resolve_amazon_author_id(
             author_name, session=session,
+            use_ddg_fallback=self.use_ddg_fallback,
         )
         if not author_id:
             logger.info(
@@ -260,6 +283,16 @@ class AmazonSource(BaseSource):
         # layer dedupes downstream.
         del existing_titles, owned_titles, owned_only
 
+        # v2.19.0 — penalty box: bail early if amazon.com is in
+        # soft-block cooldown.
+        if is_amazon_blocked():
+            logger.info(
+                "amazon: get_author_books %r SKIPPED — soft-block cooldown "
+                "(%.0fs remaining)",
+                author_id, amazon_block_remaining_s(),
+            )
+            return None
+
         session = self._get_session()
         if session is None:
             return None
@@ -273,6 +306,7 @@ class AmazonSource(BaseSource):
             author_name = author_id
             amazon_author_id = await resolve_amazon_author_id(
                 author_name, session=session,
+                use_ddg_fallback=self.use_ddg_fallback,
             )
             if not amazon_author_id:
                 logger.info(
@@ -308,6 +342,14 @@ class AmazonSource(BaseSource):
                 "amazon: /juvec collection failed for %s: %s",
                 amazon_author_id, exc,
             )
+            # v2.19.0 — if the failure was a soft-block signal (429 or
+            # thin-body), record the IP-level penalty box so the next
+            # author scan short-circuits instead of cascading.
+            if exc.is_soft_block_signal:
+                record_amazon_soft_block(
+                    f"/juvec for {amazon_author_id}: {exc}",
+                    retry_after_s=exc.retry_after_s,
+                )
             # Fall back to whatever the SSR populated
             products = list(page_data.products)
 
@@ -354,10 +396,34 @@ class AmazonSource(BaseSource):
         status = getattr(resp, "status_code", None)
         body = getattr(resp, "text", None) or ""
         if status != 200:
+            # v2.19.0 — explicit 429 trips the IP-level penalty box.
+            # Other non-200s stay as one-off failures (the caller logs +
+            # returns empty for this author).
+            if status == 429:
+                headers = getattr(resp, "headers", None)
+                raw_ra = None
+                if headers is not None:
+                    try:
+                        raw_ra = (
+                            headers.get("Retry-After")
+                            or headers.get("retry-after")
+                        )
+                    except Exception:
+                        raw_ra = None
+                record_amazon_soft_block(
+                    f"allbooks GET {url} returned HTTP 429",
+                    retry_after_s=parse_retry_after(raw_ra),
+                )
             raise _AllBooksFetchError(
                 f"HTTP {status} (body {len(body)} bytes)"
             )
         if len(body) < 50_000:
+            # v2.19.0 — thin body at 200 OK is the CAPTCHA-interstitial
+            # signature; record IP-level block so the next scan doesn't
+            # walk into the same wall.
+            record_amazon_soft_block(
+                f"allbooks GET {url} returned 200 with {len(body)}-byte body"
+            )
             raise _AllBooksFetchError(
                 f"thin body ({len(body)} bytes) — likely Akamai soft-block"
             )
@@ -380,9 +446,38 @@ class AmazonSource(BaseSource):
         right `format_filter` setting throughout the workflow.
         """
         active_filter = self._active_format_filter()
-        # If the configured filter matches the SSR page's default
-        # (allFormats / All Languages), we already have ~85 products
-        # in page_data. Otherwise, re-query under the filter.
+        # v2.19.0 — SSR-bypass shortcut.
+        #
+        # The /stores/author/{id}/allbooks SSR page already carries the
+        # complete catalog when `page_data.total_result_count <=
+        # len(page_data.products)`: every ASIN the author has under the
+        # default-filter view is populated inline, and Stage 3 below will
+        # Python-filter by binding_symbol to surface only the configured
+        # format. Skipping /juvec entirely in that case cuts a typical
+        # scan from 3 requests (allbooks + filter POST + detail batch)
+        # down to 1, which is the biggest single reduction in
+        # amazon.com request density we can ship.
+        #
+        # The previous default_filter branch (allFormats / All Languages)
+        # already short-circuited /juvec for the rare configuration
+        # where Seshat asked for the SSR's exact default view. The
+        # broader condition below covers the same case plus every other
+        # author whose total catalog fits in the SSR page's product
+        # array — that's the vast majority of non-prolific authors.
+        if (
+            page_data.total_result_count > 0
+            and len(page_data.products) >= page_data.total_result_count
+        ):
+            logger.debug(
+                "amazon: SSR-bypass — %d SSR products >= "
+                "total_result_count=%d; skipping /juvec entirely",
+                len(page_data.products), page_data.total_result_count,
+            )
+            return list(page_data.products)
+
+        # Legacy default-filter shortcut — kept for the explicit
+        # allFormats / All Languages configuration where the SSR page's
+        # native default-view matches what we want to scan.
         default_filter = (
             active_filter == "allFormats"
             and self.language == "All Languages"

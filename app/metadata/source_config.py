@@ -135,7 +135,14 @@ _DEFAULT_NEW_INSTALL_STATE: dict[str, dict[str, Any]] = {
     # Audible-distributed digital format — dominant audio offering on
     # Amazon); UI exposes "Audio CD" / "MP3 CD" / "Preloaded Digital
     # Audio" for the niches.
-    "amazon":      {"ebook_enrich": True,  "ebook_scan": True,  "audiobook_enrich": True,  "audiobook_scan": True,  "mandatory": False, "format": "kindle", "language": "English", "audiobook_format": "audible_audiobook"},
+    # v2.19.0 — `use_ddg_fallback` opt-in: when True, the Author-Store
+    # ID resolver falls back to a DuckDuckGo site-restricted search
+    # after the amazon.com tiers (vanity URL + /s search) come up
+    # empty. Useful when amazon.com 429s us during ID resolution OR
+    # genuinely has no anchor matches indexed under the queried name.
+    # Off by default — DDG is a Calibre-borrowed pattern with no
+    # native rate-limit signal, so we only fire it when explicitly asked.
+    "amazon":      {"ebook_enrich": True,  "ebook_scan": True,  "audiobook_enrich": True,  "audiobook_scan": True,  "mandatory": False, "format": "kindle", "language": "English", "audiobook_format": "audible_audiobook", "use_ddg_fallback": False},
     "hardcover":   {"ebook_enrich": True,  "ebook_scan": True,  "audiobook_enrich": True,  "audiobook_scan": True,  "mandatory": True},
     # Kobo — v2.11.0 ships parallel detail-fetch via asyncio.Semaphore.
     # `concurrency` sets the worker count; each worker still respects

@@ -37,10 +37,127 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 import urllib.parse
 from typing import Any
 
 logger = logging.getLogger("seshat.discovery.amazon.author_id_resolver")
+
+
+# ─── IP-level soft-block penalty box (shared with AmazonSource) ──
+#
+# When amazon.com returns 429 or a CAPTCHA-shaped thin body, Akamai
+# has put our IP in penalty box at the IP level — every subsequent
+# amazon.com request will fail until the box clears. Without this,
+# the failure cascades across author scans: on 2026-05-20, Hanako
+# Arashi 429'd at 16:17, then Mark Arrows 429'd 2 min later with an
+# identical 2296-byte CAPTCHA body, because nothing told the next
+# scan the IP was jailed. The penalty box stops the cascade by
+# short-circuiting further amazon.com calls until the cooldown
+# expires (or until Amazon's Retry-After header says to retry).
+#
+# State is process-local module-state. A container restart resets
+# it — but the cooldown timestamp is wall-clock seconds, so even if
+# we did persist it the post-restart check would still work.
+
+_BLOCK_COOLDOWN_DEFAULT_S = 600.0  # 10 min — matches Akamai's typical CAPTCHA TTL
+_BLOCK_COOLDOWN_MIN_S = 60.0       # never less than 1 min
+_BLOCK_COOLDOWN_MAX_S = 3600.0     # never more than 1 hour
+
+_blocked_until: float = 0.0  # wall-clock epoch seconds; 0.0 = not blocked
+_block_reason: str = ""
+_block_count: int = 0
+
+
+def is_amazon_blocked() -> bool:
+    """True if amazon.com requests are currently in soft-block cooldown."""
+    return _blocked_until > time.time()
+
+
+def amazon_block_remaining_s() -> float:
+    """Seconds remaining in the current penalty box (0 if not blocked)."""
+    remaining = _blocked_until - time.time()
+    return max(0.0, remaining)
+
+
+def record_amazon_soft_block(
+    reason: str,
+    *,
+    retry_after_s: float | None = None,
+) -> None:
+    """Activate the amazon.com soft-block cooldown.
+
+    `retry_after_s` honors Amazon's Retry-After header when present
+    (clamped to [60, 3600]). Falls back to the 10-min default when
+    no header is provided or it doesn't parse cleanly.
+
+    Idempotent: re-calling while already blocked refreshes the
+    timestamp only if the new cooldown extends past the current one.
+    """
+    global _blocked_until, _block_reason, _block_count
+    cooldown = (
+        retry_after_s if retry_after_s is not None
+        else _BLOCK_COOLDOWN_DEFAULT_S
+    )
+    cooldown = max(_BLOCK_COOLDOWN_MIN_S, min(_BLOCK_COOLDOWN_MAX_S, cooldown))
+    new_until = time.time() + cooldown
+    # Only extend; never shorten a longer cooldown that's already in flight.
+    if new_until > _blocked_until:
+        _blocked_until = new_until
+        _block_reason = reason
+        _block_count += 1
+        logger.warning(
+            "amazon: soft-block cooldown activated (%.0fs) — reason: %s "
+            "[block #%d this process]",
+            cooldown, reason, _block_count,
+        )
+
+
+def parse_retry_after(value: str | None) -> float | None:
+    """Parse a Retry-After header into seconds.
+
+    Supports both forms RFC 7231 allows:
+      - delta-seconds: ``"60"`` → 60.0
+      - HTTP-date:     ``"Wed, 21 Oct 2026 07:28:00 GMT"`` → seconds-until
+
+    Returns None on parse failure (caller falls back to the default
+    cooldown)."""
+    if not value:
+        return None
+    value = value.strip()
+    try:
+        return float(value)
+    except ValueError:
+        pass
+    try:
+        from datetime import datetime, timezone
+        from email.utils import parsedate_to_datetime
+        dt = parsedate_to_datetime(value)
+        if dt is None:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        delta = (dt - datetime.now(timezone.utc)).total_seconds()
+        return max(0.0, delta)
+    except Exception:
+        return None
+
+
+def _get_response_retry_after(resp: Any) -> float | None:
+    """Pull the Retry-After header off a curl_cffi / httpx response.
+
+    Returns parsed seconds, or None when the header is absent /
+    unparseable. Defensive — different HTTP clients expose headers
+    via slightly different attribute shapes."""
+    headers = getattr(resp, "headers", None)
+    if headers is None:
+        return None
+    # Both curl_cffi and httpx headers support case-insensitive .get().
+    try:
+        raw = headers.get("Retry-After") or headers.get("retry-after")
+    except Exception:
+        raw = None
+    return parse_retry_after(raw)
 
 
 # ─── URL endpoints ───────────────────────────────────────────────
@@ -98,6 +215,12 @@ async def _tier1_book_pivot(
     error, page parse miss, Akamai soft-block). Caller falls through
     to Tier 2.
     """
+    if is_amazon_blocked():
+        logger.info(
+            "tier1: SKIP %s — amazon.com is in soft-block cooldown "
+            "(%.0fs remaining)", asin, amazon_block_remaining_s(),
+        )
+        return None
     url = _DP_URL_TEMPLATE.format(asin=asin)
     try:
         resp = await session.get(url, timeout=timeout)
@@ -107,6 +230,14 @@ async def _tier1_book_pivot(
 
     status = getattr(resp, "status_code", None)
     body = getattr(resp, "text", None) or ""
+    # v2.19.0 — explicit 429 → trip the IP-level penalty box so the
+    # next author scan doesn't walk straight into the same wall.
+    if status == 429:
+        record_amazon_soft_block(
+            f"tier1 GET {url} returned HTTP 429",
+            retry_after_s=_get_response_retry_after(resp),
+        )
+        return None
     if status != 200 or not body:
         logger.debug(
             "tier1: GET %s returned status=%s body_len=%d (no extract)",
@@ -118,6 +249,9 @@ async def _tier1_book_pivot(
         logger.warning(
             "tier1: GET %s thin body (%d bytes) — likely Akamai soft-block",
             url, len(body),
+        )
+        record_amazon_soft_block(
+            f"tier1 GET {url} returned 200 with {len(body)}-byte body"
         )
         return None
 
@@ -168,6 +302,12 @@ async def _tier2_vanity_url(
     Returns the author ID on success, None on 404 / no redirect /
     no extractable ID. Caller falls through to /s search variants.
     """
+    if is_amazon_blocked():
+        logger.info(
+            "tier2 vanity: SKIP %r — amazon.com is in soft-block cooldown "
+            "(%.0fs remaining)", author_name, amazon_block_remaining_s(),
+        )
+        return None
     slug = _normalize_name(author_name)
     if not slug:
         return None
@@ -178,6 +318,14 @@ async def _tier2_vanity_url(
         logger.debug("tier2 vanity: GET %s failed: %s", url, exc)
         return None
     status = getattr(resp, "status_code", None)
+    # v2.19.0 — explicit 429 → trip the penalty box. 404 stays a quiet
+    # "slug not indexed" miss (no block recorded).
+    if status == 429:
+        record_amazon_soft_block(
+            f"tier2 vanity GET {url} returned HTTP 429",
+            retry_after_s=_get_response_retry_after(resp),
+        )
+        return None
     if status != 200:
         # 404 expected when the slug isn't indexed; fall through quietly.
         logger.debug("tier2 vanity: %s returned status=%s", url, status)
@@ -217,6 +365,12 @@ async def _tier2_search(
     Returns the author ID on the first variant that produces an
     anchor match, None if all three are empty.
     """
+    if is_amazon_blocked():
+        logger.info(
+            "tier2 search: SKIP %r — amazon.com is in soft-block cooldown "
+            "(%.0fs remaining)", author_name, amazon_block_remaining_s(),
+        )
+        return None
     variants = [
         {"k": author_name, "i": "digital-text"},
         {"k": author_name},
@@ -232,6 +386,14 @@ async def _tier2_search(
 
         status = getattr(resp, "status_code", None)
         body = getattr(resp, "text", None) or ""
+        # v2.19.0 — explicit 429 → trip the penalty box and bail the
+        # whole variant loop; we know the IP is jailed.
+        if status == 429:
+            record_amazon_soft_block(
+                f"tier2 search GET {url} returned HTTP 429",
+                retry_after_s=_get_response_retry_after(resp),
+            )
+            return None
         if status != 200 or not body:
             logger.debug(
                 "tier2 search: %s returned status=%s body_len=%d (skipping)",
@@ -239,12 +401,19 @@ async def _tier2_search(
             )
             continue
         if len(body) < 50_000:
+            # v2.19.0 — thin body is the CAPTCHA-interstitial signature.
+            # Record once and bail all variants; trying the others would
+            # just generate two more thin-body responses against the same
+            # IP-level jail. Caller falls through to Tier 2c (DDG).
             logger.warning(
                 "tier2 search: %s thin body (%d bytes) — likely Akamai "
-                "soft-block; trying next variant",
+                "soft-block; bailing all variants",
                 url, len(body),
             )
-            continue
+            record_amazon_soft_block(
+                f"tier2 search GET {url} returned 200 with {len(body)}-byte body"
+            )
+            return None
 
         result = _pick_best_author_id_from_search(body, author_name)
         if result:
@@ -321,6 +490,105 @@ def _pick_best_author_id_from_search(
     return None
 
 
+# ─── Tier 2c: DuckDuckGo search-engine fallback (opt-in) ─────────
+
+
+_DDG_HTML_URL = "https://duckduckgo.com/html/"
+
+# Default UA mirrors AmazonSource's. DDG accepts most desktop UAs.
+_DDG_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64; rv:143.0) "
+        "Gecko/20100101 Firefox/143.0"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Upgrade-Insecure-Requests": "1",
+}
+
+
+def _extract_amazon_author_id_from_ddg_html(html: str) -> str | None:
+    """Find the first /stores/.../author/{id} URL in a DDG result page.
+
+    Handles two shapes:
+      1. Direct anchor hrefs that contain the canonical Amazon URL.
+      2. DDG's tracking-redirect shape (``/l/?uddg=<encoded-url>&kh=-1``)
+         where the real Amazon URL is URL-encoded inside `uddg`.
+    """
+    if not html:
+        return None
+    m = _VANITY_REDIRECT_RE.search(html)
+    if m:
+        return m.group("id")
+    # DDG sometimes wraps result links through `/l/?uddg=...`. Pull all
+    # `uddg=` values and decode them in case the canonical URL is there.
+    for raw in re.findall(r'uddg=([^&"\'<>\s]+)', html):
+        decoded = urllib.parse.unquote(raw)
+        m = _VANITY_REDIRECT_RE.search(decoded)
+        if m:
+            return m.group("id")
+    return None
+
+
+async def _tier2c_ddg_search(
+    author_name: str,
+    *,
+    timeout: float,
+) -> str | None:
+    """DuckDuckGo search-engine fallback for Amazon Author Store ID.
+
+    When amazon.com puts our IP in the soft-block penalty box, DDG
+    still surfaces the canonical /stores/.../author/{id} URL because
+    its crawler hits amazon.com at much lower density than we do.
+    Single GET, no Akamai-bypass dance — DDG doesn't gate scrapers
+    the way Amazon does.
+
+    Borrows Calibre's `search_engines.py` patterns: html endpoint,
+    `kp=-2` safe-search off, URL-unwrap for DDG's tracking-redirect
+    shape (``/l/?uddg=...``).
+
+    Returns the resolved 10-char author ID or None on miss / error.
+    Opt-in only — the public `resolve_amazon_author_id` entry point
+    routes through this when `use_ddg_fallback=True`.
+    """
+    try:
+        import httpx
+    except ImportError:
+        logger.warning(
+            "tier2c ddg: httpx not available — cannot fall back to DDG"
+        )
+        return None
+
+    # Query shape: `site:amazon.com "{author}" /stores/author` —
+    # constrains hits to amazon.com pages that mention the author and
+    # carry the /stores/author URL fragment, which catches both the
+    # `/stores/{Display-Name}/author/{id}` canonical URL and the older
+    # `/{slug}/e/{id}` short form when DDG indexes either one.
+    query = f'site:amazon.com "{author_name}" /stores/author'
+    params = {"q": query, "kp": "-2"}
+    url = f"{_DDG_HTML_URL}?{urllib.parse.urlencode(params)}"
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=timeout,
+            headers=_DDG_HEADERS,
+            follow_redirects=True,
+        ) as client:
+            resp = await client.get(url)
+    except Exception as exc:
+        logger.debug("tier2c ddg: GET %s failed: %s", url, exc)
+        return None
+
+    if resp.status_code != 200 or not resp.text:
+        logger.debug(
+            "tier2c ddg: status=%s body_len=%d (no extract)",
+            resp.status_code, len(resp.text or ""),
+        )
+        return None
+
+    return _extract_amazon_author_id_from_ddg_html(resp.text)
+
+
 # ─── Session factory (mirrors AmazonSource pattern) ─────────────
 
 
@@ -356,6 +624,7 @@ async def resolve_amazon_author_id(
     known_book_asin: str | None = None,
     session: Any | None = None,
     timeout: float = 15.0,
+    use_ddg_fallback: bool = False,
 ) -> str | None:
     """Resolve an Amazon Author Store ID for ``author_name``.
 
@@ -370,13 +639,28 @@ async def resolve_amazon_author_id(
             with ``.status_code`` and ``.text`` attributes. If None,
             a default Chrome-120 impersonating session is built.
         timeout: Per-request timeout in seconds (default 15.0).
+        use_ddg_fallback: When True, fall back to a DuckDuckGo
+            site-restricted search after the amazon.com tiers fail
+            (v2.19.0; opt-in via the ``amazon_use_ddg_fallback``
+            source-config setting). Mirrors Calibre's
+            search_engines.py pattern for the same purpose.
 
     Returns:
         The 10-char Amazon Author Store ID (e.g. "B001IGFHW6"), or
-        None if both tiers failed (caller should log + skip Amazon
+        None if every tier failed (caller should log + skip Amazon
         discovery for this author).
     """
     if not author_name or not author_name.strip():
+        return None
+
+    # v2.19.0 — if amazon.com is in soft-block cooldown, every tier
+    # below would just walk into the same wall. Short-circuit early.
+    if is_amazon_blocked():
+        logger.info(
+            "resolve_amazon_author_id: SKIP %r — amazon.com in soft-block "
+            "cooldown (%.0fs remaining)",
+            author_name, amazon_block_remaining_s(),
+        )
         return None
 
     owns_session = False
@@ -429,12 +713,35 @@ async def resolve_amazon_author_id(
             )
             return result
 
+        # Tier 2c (v2.19.0): DuckDuckGo site-restricted search. Only
+        # fires when `use_ddg_fallback=True` (set by AmazonSource from
+        # the `amazon_use_ddg_fallback` source-config setting). Useful
+        # when the amazon.com tiers were 429'd / Akamai-blocked OR
+        # genuinely returned no anchor matches — DDG's index of
+        # /stores/.../author/{id} URLs covers many authors whose
+        # vanity slug doesn't match Amazon's normalized name index.
+        if use_ddg_fallback:
+            # If we're here because the earlier tiers tripped the IP
+            # penalty box, the check above already short-circuited and
+            # we never got this far. If we're here because the tiers
+            # simply found no match, DDG is a worthwhile second look.
+            result = await _tier2c_ddg_search(
+                author_name, timeout=timeout,
+            )
+            if result:
+                logger.info(
+                    "resolved amazon_author_id %r for %r via tier-2c "
+                    "(DDG fallback)", result, author_name,
+                )
+                return result
+
         logger.info(
             "amazon_author_id resolution FAILED for %r "
             "(tier-1 %s, tier-2a vanity URL miss, "
-            "tier-2b search returned no anchor matches)",
+            "tier-2b search returned no anchor matches%s)",
             author_name,
             "skipped (no known_book_asin)" if not known_book_asin else "miss",
+            ", tier-2c DDG miss" if use_ddg_fallback else "",
         )
         return None
     finally:

@@ -814,3 +814,223 @@ class TestAmazonFormatAsins:
         assert mistborn.amazon_format_asins is not None
         decoded = _json.loads(mistborn.amazon_format_asins)
         assert list(decoded.keys()) == sorted(decoded.keys())
+
+
+# ─── v2.19.0: SSR-bypass shortcut + penalty-box entry gates ──────
+
+
+import pytest  # noqa: E402  (deliberately co-located with v2.19.0 block)
+import app.discovery.amazon_author_id_resolver as resolver_module  # noqa: E402
+from app.discovery.sources.amazon_widget_parser import (  # noqa: E402
+    AllBooksPageData,
+    Product as ParsedProduct,
+)
+
+
+@pytest.fixture(autouse=True)
+def _reset_penalty_box_for_source_tests():
+    """Mirror the resolver test fixture — clear the shared module-level
+    penalty-box state between tests."""
+    resolver_module._blocked_until = 0.0
+    resolver_module._block_reason = ""
+    resolver_module._block_count = 0
+    yield
+    resolver_module._blocked_until = 0.0
+    resolver_module._block_reason = ""
+    resolver_module._block_count = 0
+
+
+def _make_product(asin: str, title: str, binding: str = "kindle_edition") -> ParsedProduct:
+    return ParsedProduct(
+        asin=asin,
+        title=title,
+        contributors=("Test Author",),
+        binding_symbol=binding,
+        binding_display=binding.replace("_", " ").title(),
+        series_title=None,
+        series_position=None,
+        series_total=None,
+        detail_page_link=f"/dp/{asin}",
+        cover_url=None,
+        media_matrix=(),
+        genres=(),
+    )
+
+
+def _make_page_data(
+    *, products: list[ParsedProduct], total_result_count: int,
+) -> AllBooksPageData:
+    """Synthetic SSR page-data with the minimal fields _collect_products
+    cares about."""
+    return AllBooksPageData(
+        author_id="B0TEST0000",
+        store_id="store",
+        root_page_id="root",
+        version="1",
+        slate_token="",
+        fresh_cart_csrf_token="",
+        amazon_api_csrf_token="",
+        visit_id="visit",
+        obfuscated_marketplace_id="ATVPDKIKX0DER",
+        asin_list=tuple(p.asin for p in products),
+        products=tuple(products),
+        total_result_count=total_result_count,
+        total_count=total_result_count,
+        available_languages=(),
+        sort_options=(),
+        raw_content={},
+    )
+
+
+class TestSSRBypass:
+    """v2.19.0: when the SSR allbooks page carries the full catalog
+    (total_result_count <= len(products)), skip /juvec entirely.
+    Cuts a typical 3-request scan down to 1 request."""
+
+    async def test_ssr_carries_full_catalog_skips_juvec(self):
+        """5 products + total_result_count=5 → no /juvec POSTs fire,
+        SSR products flow straight to Stage-3 filtering."""
+        products = [
+            _make_product(f"B000{i:06d}", f"Book {i}")
+            for i in range(5)
+        ]
+        page_data = _make_page_data(products=products, total_result_count=5)
+
+        session = MockSession(post_responses=[])  # any POST would fail
+        source = AmazonSource(burst_delay_s=0.0)
+        source._session = session
+        source._session_init_attempted = True
+
+        from app.discovery.sources.amazon_juvec_client import JuvecClient
+        client = JuvecClient(page_data, session, burst_delay_s=0.0)
+        collected = await source._collect_products(client, page_data)
+
+        # SSR products returned verbatim, no /juvec called.
+        assert len(collected) == 5
+        assert session.post_calls == []
+
+    async def test_ssr_short_falls_through_to_juvec(self):
+        """3 SSR products + total_result_count=20 → /juvec MUST fire
+        to paginate to the rest of the catalog. SSR-bypass must NOT
+        kick in just because some products exist."""
+        products = [
+            _make_product(f"B000{i:06d}", f"Book {i}")
+            for i in range(3)
+        ]
+        page_data = _make_page_data(products=products, total_result_count=20)
+
+        # Filter-application response shows the same 3 + asin list of 3 +
+        # total=3 (Python-side it's a smaller filtered catalog). We just
+        # need to confirm /juvec was *called* — the exact shape isn't
+        # the assertion.
+        filter_resp = _juvec_response_json(
+            asin_list=["B0001", "B0002", "B0003"],
+            total=3,
+            products=[
+                _product_dict("B0001", "Book 1"),
+                _product_dict("B0002", "Book 2"),
+                _product_dict("B0003", "Book 3"),
+            ],
+        )
+        session = MockSession(post_responses=[MockResponse(200, filter_resp)])
+        source = AmazonSource(burst_delay_s=0.0)
+        source._session = session
+        source._session_init_attempted = True
+
+        from app.discovery.sources.amazon_juvec_client import JuvecClient
+        client = JuvecClient(page_data, session, burst_delay_s=0.0)
+        await source._collect_products(client, page_data)
+
+        # /juvec MUST have been called — SSR's 3 products is less than
+        # total_result_count=20.
+        assert len(session.post_calls) >= 1
+
+    async def test_ssr_bypass_skipped_when_total_count_is_zero(self):
+        """Defensive — a parser miss could leave total_result_count=0
+        with products still populated. SSR-bypass guard requires
+        `total_result_count > 0` to avoid mistaking that for a clean
+        empty catalog."""
+        products = [_make_product("B000TEST01", "Book")]
+        page_data = _make_page_data(products=products, total_result_count=0)
+
+        # Force /juvec to be available; if SSR-bypass falsely fired we
+        # wouldn't hit it, but we want to assert the OPPOSITE here.
+        # The default-filter branch will trigger since format kindle
+        # vs default, so a POST is expected.
+        filter_resp = _juvec_response_json(
+            asin_list=["B000TEST01"], total=1,
+            products=[_product_dict("B000TEST01", "Book")],
+        )
+        session = MockSession(post_responses=[MockResponse(200, filter_resp)])
+        source = AmazonSource(burst_delay_s=0.0)
+        source._session = session
+        source._session_init_attempted = True
+
+        from app.discovery.sources.amazon_juvec_client import JuvecClient
+        client = JuvecClient(page_data, session, burst_delay_s=0.0)
+        await source._collect_products(client, page_data)
+
+        # /juvec called — SSR-bypass should NOT have engaged because
+        # total_result_count=0 is the "I don't know yet" signal.
+        assert len(session.post_calls) >= 1
+
+
+class TestPenaltyBoxEntryGates:
+    """v2.19.0: AmazonSource.search_author and get_author_books should
+    short-circuit with no HTTP calls when the IP penalty box is active."""
+
+    async def test_search_author_skips_when_blocked(self):
+        resolver_module.record_amazon_soft_block("test")
+
+        session = MockSession()
+        source = AmazonSource()
+        source._session = session
+        source._session_init_attempted = True
+
+        result = await source.search_author("Brandon Sanderson")
+        assert result is None
+        # No HTTP calls — the gate stopped us before the resolver fired.
+        assert session.get_calls == []
+        assert session.post_calls == []
+
+    async def test_get_author_books_skips_when_blocked(self):
+        resolver_module.record_amazon_soft_block("test")
+
+        session = MockSession()
+        source = AmazonSource(burst_delay_s=0.0)
+        source._session = session
+        source._session_init_attempted = True
+
+        result = await source.get_author_books("B001IGFHW6")
+        assert result is None
+        assert session.get_calls == []
+        assert session.post_calls == []
+
+
+class TestSoftBlockRecording:
+    """v2.19.0: _fetch_allbooks and the JuvecError handler should
+    record an IP-level soft-block when they see 429 or thin body."""
+
+    async def test_allbooks_429_records_block(self):
+        session = MockSession(get_routes={
+            "/stores/author/": MockResponse(429, "blocked"),
+        })
+        source = AmazonSource(burst_delay_s=0.0)
+        source._session = session
+        source._session_init_attempted = True
+
+        result = await source.get_author_books("B001IGFHW6")
+        assert result is None  # allbooks failure → caller returns None
+        assert resolver_module.is_amazon_blocked()
+
+    async def test_allbooks_thin_body_records_block(self):
+        session = MockSession(get_routes={
+            "/stores/author/": MockResponse(200, "<html>captcha</html>"),
+        })
+        source = AmazonSource(burst_delay_s=0.0)
+        source._session = session
+        source._session_init_attempted = True
+
+        result = await source.get_author_books("B001IGFHW6")
+        assert result is None
+        assert resolver_module.is_amazon_blocked()

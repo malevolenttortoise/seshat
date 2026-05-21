@@ -247,6 +247,8 @@ def reload_sources():
             _amazon_entry.get("audiobook_format") or "audible_audiobook"
         ),
         language=_amazon_entry.get("language") or "English",
+        # v2.19.0 opt-in DDG fallback for author-ID resolution.
+        use_ddg_fallback=bool(_amazon_entry.get("use_ddg_fallback")),
     )
     ibdb = IbdbSource(rate_limit=get_source_rate_limit(s, "ibdb"))
     google_books = GoogleBooksSource(

@@ -72,7 +72,36 @@ _DEFAULT_SORT = "author-sidecar-rank"
 class JuvecError(Exception):
     """A /juvec POST failed in a way the caller should treat as a
     scan-blocker for this author. Includes a brief reason; callers
-    log + return empty results."""
+    log + return empty results.
+
+    v2.19.0 — carries optional structured fields so AmazonSource can
+    distinguish "legitimate scan miss" from "Akamai jailed our IP"
+    without string-matching the message. Both fields are None when
+    the failure is something other than an HTTP non-200 (e.g. parse
+    error)."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        retry_after_s: float | None = None,
+        thin_body_bytes: int | None = None,
+    ):
+        super().__init__(message)
+        self.status_code = status_code
+        self.retry_after_s = retry_after_s
+        self.thin_body_bytes = thin_body_bytes
+
+    @property
+    def is_soft_block_signal(self) -> bool:
+        """True when the failure looks like an Akamai soft-block
+        (HTTP 429 OR a 200-with-thin-body CAPTCHA interstitial)."""
+        if self.status_code == 429:
+            return True
+        if self.thin_body_bytes is not None:
+            return True
+        return False
 
 
 class JuvecClient:
@@ -327,14 +356,32 @@ class JuvecClient:
                     )
                     await asyncio.sleep(min(2.0 * attempt, 5.0))
                     continue
+                # v2.19.0 — parse Retry-After when present so the
+                # caller's penalty-box honors Amazon's stated cooldown.
+                retry_after_s = None
+                if status == 429:
+                    from app.discovery.amazon_author_id_resolver import (
+                        parse_retry_after,
+                    )
+                    headers = getattr(resp, "headers", None)
+                    if headers is not None:
+                        try:
+                            raw_ra = headers.get("Retry-After") or headers.get("retry-after")
+                        except Exception:
+                            raw_ra = None
+                        retry_after_s = parse_retry_after(raw_ra)
                 raise JuvecError(
-                    f"juvec {label}: HTTP {status} (body {len(text or '')} bytes)"
+                    f"juvec {label}: HTTP {status} (body {len(text or '')} bytes)",
+                    status_code=status,
+                    retry_after_s=retry_after_s,
                 )
 
             if not text:
                 raise JuvecError(
                     f"juvec {label}: HTTP 200 with empty body — "
-                    f"likely Akamai soft-block"
+                    f"likely Akamai soft-block",
+                    status_code=status,
+                    thin_body_bytes=0,
                 )
 
             # Akamai thin-body guard. Real /juvec responses are 50KB+
@@ -343,7 +390,9 @@ class JuvecClient:
             if len(text) < 1_000:
                 raise JuvecError(
                     f"juvec {label}: HTTP 200 with thin body ({len(text)} "
-                    f"bytes) — likely Akamai soft-block"
+                    f"bytes) — likely Akamai soft-block",
+                    status_code=status,
+                    thin_body_bytes=len(text),
                 )
 
             try:

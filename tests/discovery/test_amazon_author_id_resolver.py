@@ -13,9 +13,14 @@ test rig stays curl_cffi-free.
 from __future__ import annotations
 
 from app.discovery.amazon_author_id_resolver import (
+    _extract_amazon_author_id_from_ddg_html,
     _extract_author_id_from_html,
     _normalize_name,
     _pick_best_author_id_from_search,
+    amazon_block_remaining_s,
+    is_amazon_blocked,
+    parse_retry_after,
+    record_amazon_soft_block,
     resolve_amazon_author_id,
 )
 
@@ -283,25 +288,39 @@ class TestResolveAmazonAuthorId:
         result = await resolve_amazon_author_id("   ", session=session)
         assert result is None
 
-    async def test_tier1_thin_body_treated_as_failure(self):
-        """A 200 OK with body <50 KB is the Akamai thin-body soft-
-        block signature. Should fall through to Tier 2 rather than
-        try to extract from a block-page."""
-        session = MockSession({
-            "/dp/": MockResponse(200, "<html>thin body</html>"),
-            "/s?": MockResponse(
-                200, _search_html(("Brandon-Sanderson", "B001IGFHW6")),
-            ),
-        })
-        result = await resolve_amazon_author_id(
-            "Brandon Sanderson",
-            known_book_asin="B002GYI9C4",
-            session=session,
-        )
-        assert result == "B001IGFHW6"
-        # Must have fired both tiers.
+    async def test_tier1_thin_body_trips_penalty_box(self):
+        """v2.19.0 — a 200 OK with body <50 KB at tier-1 is the Akamai
+        thin-body CAPTCHA signature. Records an IP-level soft-block
+        and short-circuits ALL subsequent tiers in the same call (and
+        any later resolver calls until the cooldown expires). This
+        is intentional: continuing to tier-2 would just walk into the
+        same wall and burn another amazon.com request slot."""
+        # Reset any prior block state from earlier test classes that
+        # ran inside the same module (the autouse fixture is module-
+        # local to the v2.19.0 test block, not this class).
+        import app.discovery.amazon_author_id_resolver as _r
+        _r._blocked_until = 0.0
+        try:
+            session = MockSession({
+                "/dp/": MockResponse(200, "<html>thin body</html>"),
+                "/s?": MockResponse(
+                    200, _search_html(("Brandon-Sanderson", "B001IGFHW6")),
+                ),
+            })
+            result = await resolve_amazon_author_id(
+                "Brandon Sanderson",
+                known_book_asin="B002GYI9C4",
+                session=session,
+            )
+            # Tier-1 thin body trips the penalty box → tier-2 is
+            # gated → final result is None.
+            assert result is None
+            assert _r.is_amazon_blocked()
+        finally:
+            _r._blocked_until = 0.0
+        # Tier-1 fired, tier-2 was gated by the penalty box → no /s? call.
         assert any("/dp/" in c for c in session.calls)
-        assert any("/s?" in c for c in session.calls)
+        assert not any("/s?" in c for c in session.calls)
 
     async def test_session_close_called_when_owned(self):
         """When the resolver builds its own session (no `session=`
@@ -535,3 +554,232 @@ class TestMultiVariantSearch:
         # Confirms all 3 variants were tried.
         search_calls = [c for c in session.calls if "/s?" in c]
         assert len(search_calls) == 3
+
+
+# ─── v2.19.0: penalty-box state + Retry-After parsing ────────────
+
+
+import pytest  # noqa: E402  (deliberately co-located with the v2.19.0 block)
+import app.discovery.amazon_author_id_resolver as resolver_module  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _reset_penalty_box():
+    """Clear module-level penalty-box state between tests so one test's
+    block doesn't leak into the next. The v2.19.0 state is intentionally
+    process-wide, so tests must scrub it explicitly."""
+    resolver_module._blocked_until = 0.0
+    resolver_module._block_reason = ""
+    resolver_module._block_count = 0
+    yield
+    resolver_module._blocked_until = 0.0
+    resolver_module._block_reason = ""
+    resolver_module._block_count = 0
+
+
+class TestParseRetryAfter:
+    def test_integer_seconds(self):
+        assert parse_retry_after("60") == 60.0
+        assert parse_retry_after("  120  ") == 120.0
+
+    def test_float_seconds_accepted(self):
+        assert parse_retry_after("0.5") == 0.5
+
+    def test_http_date_form(self):
+        # A date 60 seconds in the future. Don't pin to an exact value
+        # (test runtime jitter) — just assert close-to-60-and-positive.
+        from datetime import datetime, timedelta, timezone
+        from email.utils import format_datetime
+        future = datetime.now(timezone.utc) + timedelta(seconds=60)
+        ra = parse_retry_after(format_datetime(future))
+        assert ra is not None
+        assert 55 <= ra <= 65
+
+    def test_garbage_returns_none(self):
+        assert parse_retry_after("not-a-thing") is None
+        assert parse_retry_after("") is None
+        assert parse_retry_after(None) is None
+
+
+class TestPenaltyBoxState:
+    def test_record_sets_blocked_state(self):
+        assert not is_amazon_blocked()
+        record_amazon_soft_block("test", retry_after_s=120)
+        assert is_amazon_blocked()
+        remaining = amazon_block_remaining_s()
+        assert 119 <= remaining <= 121
+
+    def test_retry_after_clamped_to_min(self):
+        record_amazon_soft_block("test", retry_after_s=5)  # below 60s floor
+        assert is_amazon_blocked()
+        assert 59 <= amazon_block_remaining_s() <= 61
+
+    def test_retry_after_clamped_to_max(self):
+        record_amazon_soft_block("test", retry_after_s=99999)  # above 1h cap
+        assert is_amazon_blocked()
+        # Cap is 3600 (1 hour).
+        assert 3599 <= amazon_block_remaining_s() <= 3601
+
+    def test_default_cooldown_when_no_retry_after(self):
+        record_amazon_soft_block("test")  # no retry_after_s
+        # Default is 600s (10 min).
+        assert 599 <= amazon_block_remaining_s() <= 601
+
+    def test_record_extends_but_does_not_shorten(self):
+        # First block: 10-minute cooldown.
+        record_amazon_soft_block("first")
+        first_remaining = amazon_block_remaining_s()
+        assert first_remaining > 500
+
+        # Second block with a SHORTER cooldown — should NOT replace
+        # the longer one already in flight.
+        record_amazon_soft_block("second", retry_after_s=60)
+        second_remaining = amazon_block_remaining_s()
+        # Still close to the original 10 min.
+        assert second_remaining > 500
+
+        # Third block with a LONGER cooldown — should extend.
+        record_amazon_soft_block("third", retry_after_s=3000)
+        third_remaining = amazon_block_remaining_s()
+        assert third_remaining > 2900
+
+    def test_not_blocked_after_manual_expiry(self):
+        import time as _time
+        record_amazon_soft_block("test", retry_after_s=120)
+        # Simulate expiry by rewinding the timestamp.
+        resolver_module._blocked_until = _time.time() - 1
+        assert not is_amazon_blocked()
+        assert amazon_block_remaining_s() == 0.0
+
+
+class TestResolverShortCircuits:
+    async def test_resolver_skipped_when_blocked(self):
+        """resolve_amazon_author_id should return None without making
+        a single HTTP call when the penalty box is active."""
+        record_amazon_soft_block("test")
+        # Even with a session that would otherwise succeed, no HTTP
+        # call should be made.
+        good_session = MockSession({
+            "/author/jnchaney": MockResponse(
+                200, "",
+                url="https://www.amazon.com/stores/J-N-Chaney/author/B00ABC1234",
+            ),
+        })
+        result = await resolve_amazon_author_id(
+            "J. N. Chaney", session=good_session,
+        )
+        assert result is None
+        assert good_session.calls == []  # no HTTP calls made
+
+
+class TestTier1RecordsBlock:
+    async def test_429_records_block(self):
+        session = MockSession({"/dp/": MockResponse(429, "blocked")})
+        result = await resolve_amazon_author_id(
+            "X", known_book_asin="B0DEADBEEF", session=session,
+        )
+        # Tier 1 returns None, but the block has been recorded.
+        assert result is None
+        assert is_amazon_blocked()
+
+    async def test_thin_body_records_block(self):
+        # Thin body (< 50KB) at 200 OK is the CAPTCHA signature.
+        session = MockSession({
+            "/dp/": MockResponse(200, "<html>tiny captcha page</html>"),
+        })
+        result = await resolve_amazon_author_id(
+            "X", known_book_asin="B0DEADBEEF", session=session,
+        )
+        assert result is None
+        assert is_amazon_blocked()
+
+
+class TestTier2VanityRecordsBlock:
+    async def test_429_records_block(self):
+        session = MockSession({"/author/": MockResponse(429, "blocked")})
+        result = await resolve_amazon_author_id(
+            "Anyone", session=session,
+        )
+        assert result is None
+        assert is_amazon_blocked()
+
+
+class TestTier2SearchRecordsBlock:
+    async def test_429_bails_all_variants(self):
+        session = MockSession({"/s?": MockResponse(429, "blocked")})
+        result = await resolve_amazon_author_id(
+            "Common Name", session=session,
+        )
+        assert result is None
+        assert is_amazon_blocked()
+        # Should bail immediately after the first 429 — not try all 3
+        # variants.
+        search_calls = [c for c in session.calls if "/s?" in c]
+        assert len(search_calls) == 1
+
+    async def test_thin_body_bails_all_variants(self):
+        # 200 OK with thin body (< 50KB) is the CAPTCHA signature; all
+        # three /s variants would just get the same wall, so bail.
+        session = MockSession({
+            "/s?": MockResponse(200, "<html>captcha</html>"),
+        })
+        result = await resolve_amazon_author_id(
+            "Common Name", session=session,
+        )
+        assert result is None
+        assert is_amazon_blocked()
+        search_calls = [c for c in session.calls if "/s?" in c]
+        assert len(search_calls) == 1
+
+
+# ─── v2.19.0: DDG Tier 2c parser ─────────────────────────────────
+
+
+class TestDDGHtmlExtractor:
+    def test_direct_href_finds_id(self):
+        # Calibre-shape DDG result with a direct amazon.com URL.
+        html = """
+        <html><body>
+            <a href="https://www.amazon.com/stores/Brandon-Sanderson/author/B001IGFHW6">
+            Brandon Sanderson - Amazon</a>
+        </body></html>
+        """
+        assert _extract_amazon_author_id_from_ddg_html(html) == "B001IGFHW6"
+
+    def test_uddg_encoded_form_finds_id(self):
+        # DDG's tracking-redirect shape with the real URL URL-encoded
+        # inside the `uddg=` query parameter.
+        import urllib.parse as _u
+        target = "https://www.amazon.com/stores/J-N-Chaney/author/B00ABC1234"
+        encoded = _u.quote(target, safe="")
+        html = f'<a href="/l/?uddg={encoded}&kh=-1">J. N. Chaney</a>'
+        assert _extract_amazon_author_id_from_ddg_html(html) == "B00ABC1234"
+
+    def test_no_match_returns_none(self):
+        html = "<html><body>no relevant links here</body></html>"
+        assert _extract_amazon_author_id_from_ddg_html(html) is None
+
+    def test_empty_html_returns_none(self):
+        assert _extract_amazon_author_id_from_ddg_html("") is None
+
+
+class TestResolverDDGOptIn:
+    async def test_ddg_skipped_when_disabled(self):
+        """With use_ddg_fallback=False (default), Tier 2c shouldn't fire
+        even when all amazon.com tiers return clean misses."""
+        # Vanity URL: 404. /s: 200 with empty body (no anchor matches).
+        session = MockSession({
+            "/author/": MockResponse(404, ""),
+            "/s?": MockResponse(200, _fat_body("<html>nothing</html>")),
+        })
+        result = await resolve_amazon_author_id(
+            "Mystery Author", session=session, use_ddg_fallback=False,
+        )
+        assert result is None
+        # No DDG call should have happened (the MockSession only
+        # routes amazon.com; DDG would go through httpx which would
+        # fail outside of an integration test). We assert by absence
+        # of any tier-2c log line — but the simplest assertion is
+        # that the result is None with the existing 3 variants tried.
+        search_calls = [c for c in session.calls if "/s?" in c]
+        assert len(search_calls) == 3  # all 3 variants tried, no DDG bail-in
