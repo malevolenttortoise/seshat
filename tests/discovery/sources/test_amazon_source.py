@@ -405,6 +405,69 @@ class TestGetAuthorBooks:
             f"expected POSTs for pages [1, 2]; got {pages_requested}"
         )
 
+    async def test_all_formats_filter_passes_every_product_through(self):
+        """v2.21.0 schema-v2 — the metadata cache worker scans with
+        `format_filter='allFormats'` so a single Amazon round-trip
+        covers every library this author lives in. Pre-fix, Stage 3
+        of `get_author_books` ran
+        `target_binding = FILTER_TO_BINDING.get('allFormats',
+        'allFormats')` and then filtered with
+        `p.binding_symbol == 'allFormats'` — no product matches that,
+        so the filter zeroed out every book. This regression caught
+        in UAT 2026-05-22 when B08RK22LZX scanned and returned 0
+        books to both libraries' partitions.
+
+        With the passthrough, `allFormats` returns all products with
+        their actual `binding_symbol` intact so downstream consumers
+        can partition per-library themselves.
+        """
+        # Synthetic /juvec response with mixed-binding products
+        # (kindle, paperback, audio). The fix must pass all three
+        # through.
+        page = _juvec_response_json(
+            asin_list=["B0KIN0001", "B0PAP0001", "B0AUD0001"],
+            total=3,
+            products=[
+                _product_dict("B0KIN0001", "Kindle Book",
+                              contributors=["Test Author"],
+                              binding="kindle_edition"),
+                _product_dict("B0PAP0001", "Paperback Book",
+                              contributors=["Test Author"],
+                              binding="paperback"),
+                _product_dict("B0AUD0001", "Audiobook",
+                              contributors=["Test Author"],
+                              binding="audio_download"),
+            ],
+        )
+        session = MockSession(
+            get_routes={
+                "/stores/author/B001IGFHW6/allbooks": MockResponse(
+                    200, SANDERSON_HTML,
+                ),
+            },
+            post_responses=[MockResponse(200, page)],
+        )
+        source = AmazonSource(
+            burst_delay_s=0.0,
+            format_filter="allFormats",
+            language="English",  # not "All Languages" — so /juvec
+                                 # does get called (not SSR-bypass)
+        )
+        source._session = session
+        source._session_init_attempted = True
+
+        result = await source.get_author_books("B001IGFHW6")
+        assert result is not None
+        all_books = list(result.books)
+        for s in result.series:
+            all_books.extend(s.books)
+        # All three bindings survive — Stage 3 filter is a no-op
+        # for allFormats.
+        formats = sorted(b.format for b in all_books if b.format)
+        assert "kindle_edition" in formats
+        assert "paperback" in formats
+        assert "audio_download" in formats
+
     async def test_default_filter_skips_filter_application_post(self):
         """When format='allFormats' + language='All Languages' (the
         page defaults), the source uses the SSR-populated products

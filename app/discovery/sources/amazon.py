@@ -368,16 +368,27 @@ class AmazonSource(BaseSource):
         # cross-format alternates may sneak in on edge cases).
         # v2.11.1: `_active_format_filter()` picks ebook vs audiobook
         # filter based on `self._content_type` set by lookup.py.
+        # v2.21.0 schema-v2: when the caller passes `allFormats` (the
+        # metadata cache worker does this so a single Amazon round-
+        # trip covers every library this author lives in), the Stage
+        # 3 filter has to be a passthrough — `FILTER_TO_BINDING` has
+        # no `allFormats` entry, so the comparison would otherwise
+        # zero out every product. Downstream consumers receive books
+        # with their actual `binding_symbol` and partition per-
+        # library themselves.
         active_filter = self._active_format_filter()
-        target_binding = FILTER_TO_BINDING.get(active_filter, active_filter)
-        filtered = [
-            p for p in products if p.binding_symbol == target_binding
-        ]
-        if len(filtered) < len(products):
-            logger.debug(
-                "amazon: filtered %d products to %d matching binding=%r",
-                len(products), len(filtered), target_binding,
-            )
+        if active_filter == "allFormats":
+            filtered = list(products)
+        else:
+            target_binding = FILTER_TO_BINDING.get(active_filter, active_filter)
+            filtered = [
+                p for p in products if p.binding_symbol == target_binding
+            ]
+            if len(filtered) < len(products):
+                logger.debug(
+                    "amazon: filtered %d products to %d matching binding=%r",
+                    len(products), len(filtered), target_binding,
+                )
 
         # Stage 4: convert to BookResults grouped by series
         return self._build_author_result(
