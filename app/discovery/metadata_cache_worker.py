@@ -460,15 +460,32 @@ def _flatten_author_result_to_book_rows(
     the read-time filter (`metadata_cache_reader._format_matches`)
     something concrete to match against, including for the
     FILTER_TO_BINDING translation it does for the user-facing input.
+
+    Dedupes by `book_asin` because AmazonSource occasionally returns
+    the same ASIN twice in one scan — mediaMatrix variants reusing a
+    canonical ASIN, or pagination handing back a product that was
+    already detail-fetched on page 1. Without the dedupe the
+    subsequent `INSERT INTO {books}` trips the
+    `(author_id, library_slug, book_asin)` UNIQUE constraint and the
+    whole tick crashes (UAT 2026-05-22: two scans crashed at 17:49
+    and 18:25 from this exact path, B000AP9Y66 and B001H6GPWS, both
+    leaving the queue row stuck in `in_progress`). First occurrence
+    wins; the duplicate would have the same canonical fields anyway.
     """
     binding_format = FILTER_TO_BINDING.get(format_filter, format_filter)
     rows: list[tuple] = []
+    seen_asins: set[str] = set()
+    duplicates_dropped = 0
     all_books: list[Any] = list(author_result.books or [])
     for series in author_result.series or []:
         all_books.extend(series.books or [])
     for book in all_books:
         if not book.external_id:
             continue
+        if book.external_id in seen_asins:
+            duplicates_dropped += 1
+            continue
+        seen_asins.add(book.external_id)
         rows.append((
             author_id, library_slug, book.external_id,
             book.title or "",
@@ -480,6 +497,12 @@ def _flatten_author_result_to_book_rows(
             None,  # raw_json — reserved for richer future shapes
             now,
         ))
+    if duplicates_dropped:
+        logger.debug(
+            "metadata_cache_worker: dropped %d duplicate ASIN(s) "
+            "from %s/%s scan (mediaMatrix overlap / pagination)",
+            duplicates_dropped, author_id, library_slug,
+        )
     return rows
 
 
@@ -811,28 +834,72 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
         result, author_id=author_id, library_slug=library_slug,
         now=now, format_filter=fmt, language=language,
     )
-    db = await metadata_cache.get_db(source_name)
+
+    # v2.21.0 Phase D hotfix — wrap the cache-write block in a
+    # try/except so a write-time failure (UNIQUE constraint
+    # violations, disk-full, schema drift) doesn't leave the queue
+    # row stuck at `status='in_progress'` until the next container
+    # restart. Without this guard the run_loop's outer catch-and-
+    # continue swallows the exception but the row stays locked,
+    # eventually blocking re-scans of that author.
     try:
-        await _upsert_state_row(
-            db, source_name,
-            author_id=author_id, library_slug=library_slug,
-            seshat_author_id=seshat_author_id,
-            now=now, outcome="ok", book_count=len(cache_rows),
+        db = await metadata_cache.get_db(source_name)
+        try:
+            await _upsert_state_row(
+                db, source_name,
+                author_id=author_id, library_slug=library_slug,
+                seshat_author_id=seshat_author_id,
+                now=now, outcome="ok", book_count=len(cache_rows),
+            )
+            await _replace_book_rows(
+                db, source_name,
+                author_id=author_id, library_slug=library_slug,
+                rows=cache_rows,
+            )
+            await _mark_queue_row_pending(
+                db, source_name,
+                author_id=author_id, library_slug=library_slug,
+                next_scan_due_at=now + _NORMAL_RESCAN_CADENCE_S,
+                reset_failures=True,
+            )
+            await _record_scan_completed(db, source_name, now)
+        finally:
+            await db.close()
+    except Exception as exc:
+        logger.exception(
+            "metadata_cache_worker: cache-write failed for %s/%s "
+            "(%s) — resetting queue row to pending so the next "
+            "iteration can retry",
+            author_id, library_slug, exc,
         )
-        await _replace_book_rows(
-            db, source_name,
+        # Best-effort recovery: put the queue row back to pending +
+        # bump consecutive_failures so a recurring write failure
+        # eventually flips to failed_permanent instead of looping
+        # forever. Use a fresh connection — the previous one may
+        # be in a bad state.
+        try:
+            db = await metadata_cache.get_db(source_name)
+            try:
+                await _mark_queue_row_failure(
+                    db, source_name,
+                    author_id=author_id, library_slug=library_slug,
+                    next_scan_due_at=now + _NORMAL_RESCAN_CADENCE_S,
+                )
+            finally:
+                await db.close()
+        except Exception:
+            logger.exception(
+                "metadata_cache_worker: queue-row recovery also "
+                "failed — row will be cleaned up by the startup "
+                "recover_stuck_in_progress on the next restart"
+            )
+        return TickResult(
+            source_name=source_name, outcome="error",
             author_id=author_id, library_slug=library_slug,
-            rows=cache_rows,
+            queue_size=queue_size,
+            error=f"cache write failed: {type(exc).__name__}: {exc}",
+            next_sleep_s=random.uniform(_JITTER_MIN_S, _JITTER_MAX_S),
         )
-        await _mark_queue_row_pending(
-            db, source_name,
-            author_id=author_id, library_slug=library_slug,
-            next_scan_due_at=now + _NORMAL_RESCAN_CADENCE_S,
-            reset_failures=True,
-        )
-        await _record_scan_completed(db, source_name, now)
-    finally:
-        await db.close()
 
     logger.info(
         "metadata_cache_worker: scanned %s/%s — %d books cached",
@@ -889,6 +956,20 @@ async def run_loop(
             logger.exception(
                 "metadata_cache_worker: tick crashed unexpectedly"
             )
+            # Belt-and-suspenders: if tick() raised before reaching
+            # its own internal queue-row-recovery (the post-scan
+            # cache-write try/except), any popped row would stay
+            # locked at `status='in_progress'` until the next
+            # process restart. Re-run the recovery sweep so future
+            # iterations can re-pop those rows.
+            try:
+                await recover_stuck_in_progress(source_name)
+            except Exception:
+                logger.exception(
+                    "metadata_cache_worker: post-crash stuck-row "
+                    "recovery also failed — rows will be cleaned "
+                    "up on the next container restart"
+                )
             result = TickResult(
                 source_name=source_name, outcome="error",
                 next_sleep_s=_IDLE_SLEEP_S, error="tick exception",

@@ -562,6 +562,167 @@ class TestQueuePopOrdering:
 # ─── Crash recovery ───────────────────────────────────────────
 
 
+class TestDuplicateAsinDedup:
+    """v2.21.0 Phase D hotfix — AmazonSource sometimes returns the
+    same `book_asin` twice in one scan (mediaMatrix overlap or
+    pagination duplicates). Pre-fix the `INSERT INTO {books}` tripped
+    the (author_id, library_slug, book_asin) UNIQUE constraint and
+    crashed the entire tick, leaving the queue row stuck at
+    `status='in_progress'` (UAT 2026-05-22 caught two such crashes on
+    B000AP9Y66 and B001H6GPWS)."""
+
+    async def test_duplicate_asin_in_books_list_is_deduped(
+        self, worker_under, monkeypatch,
+    ):
+        # Build an AuthorResult with the same external_id twice in
+        # the standalone books list. Pre-fix the worker would hit the
+        # UNIQUE constraint; with the dedupe it should keep the
+        # first occurrence and drop the second silently.
+        async def _fake_scan(author_id, library_slug, session):
+            from app.discovery.sources.base import AuthorResult, BookResult
+            return AuthorResult(
+                name=author_id, external_id=author_id,
+                books=[
+                    BookResult(
+                        title="The Same Book",
+                        external_id="B0SAMEASIN",
+                        source="amazon",
+                        language="English",
+                    ),
+                    BookResult(
+                        title="Same Book — Different Variant Row",
+                        external_id="B0SAMEASIN",  # duplicate
+                        source="amazon",
+                        language="English",
+                    ),
+                ],
+                series=[],
+            ), None
+        monkeypatch.setattr(
+            metadata_cache_worker, "_perform_amazon_scan", _fake_scan,
+        )
+        await _seed_queue_row(
+            author_id="B0DEDUP0001", library_slug="books-lib",
+        )
+        result = await metadata_cache_worker.tick()
+        assert result.outcome == "ok"
+        # Exactly one book row landed despite two in the input list.
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+        try:
+            cur = await db.execute(
+                f"SELECT title FROM {metadata_cache.books_table()} "
+                f"WHERE author_id = ?",
+                ("B0DEDUP0001",),
+            )
+            rows = await cur.fetchall()
+        finally:
+            await db.close()
+        assert len(rows) == 1
+        assert rows[0][0] == "The Same Book"  # first wins
+
+    async def test_duplicate_asin_across_books_and_series_is_deduped(
+        self, worker_under, monkeypatch,
+    ):
+        async def _fake_scan(author_id, library_slug, session):
+            from app.discovery.sources.base import (
+                AuthorResult, BookResult, SeriesResult,
+            )
+            return AuthorResult(
+                name=author_id, external_id=author_id,
+                books=[
+                    BookResult(
+                        title="Standalone Edition",
+                        external_id="B0OVERLAP1",
+                        source="amazon",
+                    ),
+                ],
+                series=[
+                    SeriesResult(
+                        name="Some Series",
+                        books=[
+                            BookResult(
+                                title="Series Edition",
+                                external_id="B0OVERLAP1",  # dupe
+                                source="amazon",
+                            ),
+                        ],
+                    ),
+                ],
+            ), None
+        monkeypatch.setattr(
+            metadata_cache_worker, "_perform_amazon_scan", _fake_scan,
+        )
+        await _seed_queue_row(
+            author_id="B0DEDUP0002", library_slug="books-lib",
+        )
+        result = await metadata_cache_worker.tick()
+        assert result.outcome == "ok"
+        # Tick succeeds + no UNIQUE constraint crash.
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+        try:
+            cur = await db.execute(
+                f"SELECT title FROM {metadata_cache.books_table()} "
+                f"WHERE author_id = ?",
+                ("B0DEDUP0002",),
+            )
+            rows = await cur.fetchall()
+        finally:
+            await db.close()
+        assert len(rows) == 1
+        # First-occurrence-wins ordering: books[] iterates before
+        # series[], so the standalone keeps.
+        assert rows[0][0] == "Standalone Edition"
+
+
+class TestCacheWriteFailureRecovery:
+    """v2.21.0 Phase D hotfix — a write-time exception in the
+    cache-write block must NOT leave the queue row stuck at
+    `status='in_progress'`. Pre-fix the tick() outer exception path
+    swallowed the crash but the row stayed locked until the next
+    container restart triggered `recover_stuck_in_progress`."""
+
+    async def test_write_failure_resets_queue_row_to_pending(
+        self, worker_under, monkeypatch,
+    ):
+        async def _fake_scan(author_id, library_slug, session):
+            return _author_result("Book A", author_id=author_id), None
+        monkeypatch.setattr(
+            metadata_cache_worker, "_perform_amazon_scan", _fake_scan,
+        )
+
+        # Force a UNIQUE-constraint-style failure by sabotaging the
+        # books-replace step. The cleanest way: patch
+        # `_replace_book_rows` to always raise.
+        async def _boom(*_a, **_kw):
+            raise RuntimeError("simulated cache-write failure")
+        monkeypatch.setattr(
+            metadata_cache_worker, "_replace_book_rows", _boom,
+        )
+
+        await _seed_queue_row(
+            author_id="B0WRITEFAIL", library_slug="books-lib",
+        )
+        result = await metadata_cache_worker.tick()
+        assert result.outcome == "error"
+        assert "cache write failed" in (result.error or "")
+
+        # Critically: queue row is back to `pending`, with
+        # consecutive_failures incremented so a recurring failure
+        # eventually flips to failed_permanent.
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+        try:
+            cur = await db.execute(
+                f"SELECT status, consecutive_failures FROM "
+                f"{metadata_cache.queue_table()} WHERE author_id = ?",
+                ("B0WRITEFAIL",),
+            )
+            row = await cur.fetchone()
+        finally:
+            await db.close()
+        assert row[0] == "pending"
+        assert row[1] == 1
+
+
 class TestCrashRecovery:
     async def test_recover_resets_in_progress_rows(self, worker_under):
         # Manually seed a stuck in_progress row.
