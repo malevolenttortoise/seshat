@@ -630,6 +630,26 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
     sleep without a try/except wrap on every call site."""
     now = time.time()
 
+    # Heartbeat fires on EVERY tick, before any short-circuit gate.
+    # This lets the operator distinguish "worker disabled" from
+    # "worker crashed / never started" by checking
+    # `last_heartbeat_at` on the worker_state row — a recent
+    # heartbeat with `today_scan_count == 0` means "alive but
+    # disabled / cooled down / queue empty", whereas a stale
+    # heartbeat means the supervised task died.
+    try:
+        hb_db = await metadata_cache.get_db(source_name)
+        try:
+            await _stamp_heartbeat(hb_db, source_name, now)
+        finally:
+            await hb_db.close()
+    except Exception:
+        # A heartbeat failure shouldn't block the rest of the tick;
+        # log + continue so the worker still tries to do work.
+        logger.exception(
+            "metadata_cache_worker: heartbeat stamp failed (non-fatal)"
+        )
+
     if not state._discovered_libraries:
         return TickResult(
             source_name=source_name, outcome="no_libraries",
@@ -655,7 +675,6 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
 
     db = await metadata_cache.get_db(source_name)
     try:
-        await _stamp_heartbeat(db, source_name, now)
         queue_row = await _pop_next_queue_row(db, source_name, now)
         if queue_row is None:
             return TickResult(

@@ -21,7 +21,7 @@ import pytest
 from app import state
 from app.discovery import metadata_cache, metadata_cache_worker
 from app.discovery.database import set_active_library
-from app.discovery.sources.base import AuthorResult, BookResult, SeriesResult
+from app.discovery.sources.base import AuthorResult, BookResult
 
 
 # ─── Fixtures ───────────────────────────────────────────────────
@@ -639,6 +639,55 @@ class TestHeartbeat:
         # — the operator's "is the worker alive" check is that field.
         before = time.time()
         await metadata_cache_worker.tick()
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+        try:
+            cur = await db.execute(
+                f"SELECT last_heartbeat_at FROM "
+                f"{metadata_cache.worker_state_table()} WHERE id = 1"
+            )
+            hb = (await cur.fetchone())[0]
+        finally:
+            await db.close()
+        assert hb is not None
+        assert hb >= before
+
+    async def test_disabled_tick_still_stamps_heartbeat(
+        self, worker_under,
+    ):
+        """The heartbeat MUST fire even when the worker is disabled.
+        Without this, an operator inspecting worker_state can't tell
+        "disabled" from "crashed / never spawned" — both show
+        `last_heartbeat_at = NULL`. Pinned regression from Phase D
+        UAT 2026-05-22 where the production worker started disabled
+        and `last_heartbeat_at` stayed NULL through three full
+        iterations."""
+        worker_under["settings"]["metadata_cache"]["amazon"]["enabled"] = False
+        before = time.time()
+        result = await metadata_cache_worker.tick()
+        assert result.outcome == "disabled"
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+        try:
+            cur = await db.execute(
+                f"SELECT last_heartbeat_at FROM "
+                f"{metadata_cache.worker_state_table()} WHERE id = 1"
+            )
+            hb = (await cur.fetchone())[0]
+        finally:
+            await db.close()
+        assert hb is not None
+        assert hb >= before
+
+    async def test_cooldown_tick_still_stamps_heartbeat(
+        self, worker_under,
+    ):
+        """Same rationale as disabled — a cooldown tick is still a
+        tick, and the heartbeat must reflect that the worker is
+        alive and aware of the cooldown."""
+        from app.discovery import amazon_author_id_resolver as r
+        r.record_amazon_soft_block("test", retry_after_s=120)
+        before = time.time()
+        result = await metadata_cache_worker.tick()
+        assert result.outcome == "cooldown"
         db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
         try:
             cur = await db.execute(
