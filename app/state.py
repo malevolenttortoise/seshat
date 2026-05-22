@@ -87,6 +87,17 @@ _irc_status: Dict[str, Any] = {
 _budget_watcher_task: Optional[asyncio.Task] = None
 
 
+# ─── Metadata cache worker state (v2.21.0 Phase D) ───────────
+# Background task that drains the Amazon metadata cache queue
+# (`metadata_cache_amazon_queue`) by scanning Amazon Author Store
+# pages at humanized cadence and writing the results into
+# `metadata_cache_amazon_state` + `metadata_cache_amazon_books`. See
+# `app/discovery/metadata_cache_worker.py:run_loop`. Disabled by
+# default — operator enables via the `metadata_cache.amazon.enabled`
+# setting once UAT confirms the worker behaves on their network.
+_metadata_cache_amazon_worker_task: Optional[asyncio.Task] = None
+
+
 # ─── Cookie keep-alive state ────────────────────────────────
 # Long-running background loop that hits MAM's search endpoint on a
 # fixed interval to ensure the cookie auto-rotation has SOMETHING to

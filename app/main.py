@@ -849,6 +849,38 @@ async def lifespan(app: FastAPI):
                 "will rebuild the queue lazily as authors are scanned)"
             )
 
+        # v2.21.0 Phase D — background metadata cache worker.
+        # Runs every ~30-90s (jittered) and pops one queue row per
+        # iteration: fresh curl_cffi session, behavioral warmup, scan
+        # via AmazonSource, cache write. Cooldown / 202 / escalation
+        # are honored. Recovery resets stuck `in_progress` rows back
+        # to `pending` on startup. Disabled by default — operator
+        # opts in via `metadata_cache.amazon.enabled` in settings so a
+        # fresh v2.21.0 deploy doesn't blast Akamai immediately.
+        try:
+            from app.discovery import metadata_cache_worker
+
+            async def _metadata_cache_amazon_worker_factory():
+                await metadata_cache_worker.run_loop(
+                    source_name=metadata_cache.SOURCE_AMAZON,
+                )
+
+            state._metadata_cache_amazon_worker_task = state.supervised_task(
+                _metadata_cache_amazon_worker_factory,
+                name="metadata-cache-amazon-worker",
+            )
+            _log.info(
+                "metadata_cache_worker: amazon worker task spawned "
+                "(disabled by default — enable via "
+                "metadata_cache.amazon.enabled)"
+            )
+        except Exception:
+            _log.exception(
+                "metadata_cache_worker: failed to spawn amazon worker "
+                "(non-fatal — the cache reader still serves whatever "
+                "is in the cache; new authors just won't get scanned)"
+            )
+
         active = settings.get("active_library") or first_slug
         valid_slugs = [l["slug"] for l in state._discovered_libraries]
         if active not in valid_slugs:
@@ -1119,6 +1151,8 @@ async def lifespan(app: FastAPI):
             "_economy_vip_task",
             "_economy_upload_task",
             "_startup_sync_task",
+            # v2.21.0 Phase D — Amazon metadata cache worker.
+            "_metadata_cache_amazon_worker_task",
         ):
             task = getattr(state, task_attr, None)
             if task is not None and not task.done():
