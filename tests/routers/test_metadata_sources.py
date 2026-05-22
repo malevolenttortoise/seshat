@@ -147,31 +147,35 @@ class TestPutReloadsDiscoverySources:
     enricher path; the discovery-side singletons in lookup.py were
     untouched."""
 
-    async def test_put_propagates_amazon_rate_to_singleton(
+    async def test_put_propagates_amazon_language_to_singleton(
         self, isolated_settings,
     ):
+        """v2.21.0 Phase C — `lookup.amazon` is now a CachedSource
+        (no HTTP / no rate_limit), so the original N9 rate-limit
+        assertion no longer applies to the synchronous path. The
+        equivalent bug-class regression now lives on `language`,
+        which IS propagated to the cache reader as a read-time
+        filter. (The Phase D worker carries the rate_limit; that
+        path has its own propagation test once the worker ships.)
+        """
         from app.discovery import lookup as lookup_module
 
         # Pre-PUT: rebuild from settings so the test starts from a
         # known-good baseline matching what app startup would do.
         lookup_module.reload_sources()
-        baseline_rate = lookup_module.amazon.rate_limit
 
         async with await _client(_make_app()) as ac:
             resp = await ac.get("/api/v1/metadata-sources")
             state = resp.json()["state"]
-            target_rate = baseline_rate + 27.0  # any distinct value
-            state["sources"]["amazon"]["rate_limit"] = target_rate
+            target_language = "Spanish"  # any distinct non-default
+            state["sources"]["amazon"]["language"] = target_language
             put = await ac.put("/api/v1/metadata-sources", json=state)
             assert put.status_code == 200, put.text
 
-        # The PUT handler should have re-instantiated the discovery
-        # singletons; the live `amazon` instance now carries the new
-        # rate.
-        assert lookup_module.amazon.rate_limit == target_rate, (
-            f"reload_sources didn't propagate the saved rate_limit. "
-            f"Settings: {target_rate}, runtime: "
-            f"{lookup_module.amazon.rate_limit}"
+        assert lookup_module.amazon.language == target_language, (
+            f"reload_sources didn't propagate the saved language. "
+            f"Settings: {target_language}, runtime: "
+            f"{lookup_module.amazon.language}"
         )
 
     async def test_put_propagates_amazon_format_to_singleton(
@@ -272,22 +276,27 @@ class TestResetToDefaults:
         self, isolated_settings,
     ):
         """Same propagation as PUT (N9): after reset, the live
-        `lookup.amazon` instance reflects the default rate_limit."""
+        `lookup.amazon` instance reflects the default config.
+
+        v2.21.0 Phase C — `lookup.amazon` is a CachedSource (no HTTP),
+        so the original assertion against `rate_limit` was retired.
+        `format_filter` propagates instead and pins the same bug
+        class (PUT/reset → singleton sync)."""
         from app.discovery import lookup as lookup_module
         lookup_module.reload_sources()
         async with await _client(_make_app()) as ac:
-            # Push a non-default rate to confirm propagation actually
+            # Push a non-default format to confirm propagation actually
             # ran (otherwise pre-existing state could give a false
             # green).
             resp = await ac.get("/api/v1/metadata-sources")
             state = resp.json()["state"]
-            state["sources"]["amazon"]["rate_limit"] = 99.0
+            state["sources"]["amazon"]["format"] = "paperback"
             await ac.put("/api/v1/metadata-sources", json=state)
-            assert lookup_module.amazon.rate_limit == 99.0
+            assert lookup_module.amazon.format_filter == "paperback"
 
             await ac.post("/api/v1/metadata-sources/reset")
-        # Default rate for Amazon is 30.0 per KNOWN_SOURCES.
-        assert lookup_module.amazon.rate_limit == 30.0
+        # Default format for Amazon is "kindle" per KNOWN_SOURCES.
+        assert lookup_module.amazon.format_filter == "kindle"
 
 
 class TestKoboConcurrency:

@@ -39,7 +39,13 @@ from app.discovery.sources.hardcover import HardcoverSource
 from app.discovery.sources.openlibrary import OpenLibrarySource
 from app.discovery.sources.goodreads import GoodreadsSource
 from app.discovery.sources.kobo import KoboSource
-from app.discovery.sources.amazon import AmazonSource
+# v2.21.0 Phase C — Amazon discovery moved behind a SQLite cache. The
+# live `AmazonSource` class still exists (the background worker built
+# in Phase D will use it to populate the cache), but lookup.py never
+# calls amazon.com directly anymore — `make_amazon_cached_source()`
+# returns a `CachedSource` (drop-in) reading from
+# `metadata_cache_amazon.db`.
+from app.discovery.metadata_cache_reader import make_amazon_cached_source
 from app.discovery.sources.ibdb import IbdbSource
 from app.discovery.sources.google_books import GoogleBooksSource
 from app.discovery.sources.audible import AudibleDiscoverySource
@@ -196,7 +202,13 @@ def _extract_source_slug(source_name: str, url: str | None) -> str | None:
 hardcover = HardcoverSource()
 goodreads = GoodreadsSource()
 kobo = KoboSource()
-amazon = AmazonSource()
+# v2.21.0 Phase C — `amazon` is now a CachedSource (cache-backed,
+# zero HTTP). The previous AmazonSource live class is invoked only
+# by the background worker (Phase D) when populating the cache. The
+# module-level instance + signature are unchanged so the dispatcher,
+# the `_on_book` callback wiring, and `_content_type` injection all
+# keep working.
+amazon = make_amazon_cached_source()
 ibdb = IbdbSource()
 google_books = GoogleBooksSource()
 openlibrary = OpenLibrarySource()
@@ -234,21 +246,24 @@ def reload_sources():
     # `audiobook_format_filter` based on `_content_type` set by the
     # dispatcher.
     _amazon_entry = (s.get("metadata_sources") or {}).get("amazon") or {}
+    # v2.21.0 Phase C — synchronous Amazon reads now go through a
+    # cache-backed source. The `rate_limit` and `use_ddg_fallback`
+    # kwargs the live source took drop away (no HTTP from the cache
+    # reader); `format_filter` / `audiobook_format` / `language` still
+    # apply as read-time filters against the cached books. The Phase D
+    # worker will construct a separate `AmazonSource` to populate the
+    # cache, keyed off the same settings via `get_source_rate_limit`.
+    #
     # `or "kindle"` (not `.get(..., "kindle")`) so a stored null —
     # which the panel save persists when the user never touched the
-    # dropdown — coerces back to the ship-default. Otherwise the
-    # source receives `format_filter=None` and emits
-    # `authorFilters.format=[null]` on /juvec, which Amazon answers
-    # with an echo-shape empty response (no products / no ASINList).
-    amazon = AmazonSource(
-        rate_limit=get_source_rate_limit(s, "amazon"),
+    # dropdown — coerces back to the ship-default. Otherwise the cache
+    # reader filters against `format=None` and drops every row.
+    amazon = make_amazon_cached_source(
         format_filter=_amazon_entry.get("format") or "kindle",
         audiobook_format_filter=(
             _amazon_entry.get("audiobook_format") or "audible_audiobook"
         ),
         language=_amazon_entry.get("language") or "English",
-        # v2.19.0 opt-in DDG fallback for author-ID resolution.
-        use_ddg_fallback=bool(_amazon_entry.get("use_ddg_fallback")),
     )
     ibdb = IbdbSource(rate_limit=get_source_rate_limit(s, "ibdb"))
     google_books = GoogleBooksSource(
