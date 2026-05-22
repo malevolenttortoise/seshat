@@ -65,9 +65,46 @@ SOURCE_AMAZON = "amazon"
 SUPPORTED_SOURCES: frozenset[str] = frozenset({SOURCE_AMAZON})
 
 
+# Static per-source DB filename map. Used instead of an f-string
+# interpolation in `get_db_path` so CodeQL's `py/path-injection`
+# taint analysis can see the filename comes from a closed set, not
+# from user input. The runtime check `source not in SUPPORTED_SOURCES`
+# already prevents injection, but the static map makes the safety
+# property analytically obvious.
+_DB_FILENAMES: dict[str, str] = {
+    SOURCE_AMAZON: "metadata_cache_amazon.db",
+}
+
+
+# Same idea for table names — the SQL builder dropped the f-string
+# interpolation in favor of static-per-suffix lookups so a future
+# CodeQL pass on the (currently-fine) SQL paths can't surface a
+# false-positive either. Adding a new source = one new dict entry
+# below + an entry in `_DB_FILENAMES` + extending SUPPORTED_SOURCES.
+_TABLE_NAMES: dict[str, dict[str, str]] = {
+    SOURCE_AMAZON: {
+        "state": "metadata_cache_amazon_state",
+        "books": "metadata_cache_amazon_books",
+        "queue": "metadata_cache_amazon_queue",
+        "worker_state": "metadata_cache_amazon_worker_state",
+    },
+}
+
+
 def _table_name(source: str, suffix: str) -> str:
-    """Build the source-prefixed table name for a logical suffix."""
-    return f"metadata_cache_{source}_{suffix}"
+    """Look up the source-prefixed table name for a logical suffix.
+
+    Pulled from a static `(source, suffix) → table_name` map rather
+    than f-string interpolation so the table identifier comes from a
+    closed set even if `source` somehow bypasses the upstream
+    SUPPORTED_SOURCES check.
+    """
+    try:
+        return _TABLE_NAMES[source][suffix]
+    except KeyError:
+        raise ValueError(
+            f"unknown metadata cache table: source={source!r} suffix={suffix!r}"
+        )
 
 
 def state_table(source: str = SOURCE_AMAZON) -> str:
@@ -88,10 +125,18 @@ def worker_state_table(source: str = SOURCE_AMAZON) -> str:
 
 def get_db_path(source: str = SOURCE_AMAZON) -> Path:
     """Per-source DB file path. One file per source so backups,
-    vacuums, and wipes target a single source cleanly."""
+    vacuums, and wipes target a single source cleanly.
+
+    The filename is looked up from a static map (`_DB_FILENAMES`)
+    rather than f-string-interpolated so `source` never flows into a
+    path expression. Closes a CodeQL `py/path-injection` finding —
+    the upstream `SUPPORTED_SOURCES` check already prevented
+    injection at runtime, but the static lookup makes the safety
+    property analytically obvious.
+    """
     if source not in SUPPORTED_SOURCES:
         raise ValueError(f"unknown metadata cache source: {source!r}")
-    return DATA_DIR / f"metadata_cache_{source}.db"
+    return DATA_DIR / _DB_FILENAMES[source]
 
 
 # ─── Schema migrations (per-source, source-templated) ───────────
