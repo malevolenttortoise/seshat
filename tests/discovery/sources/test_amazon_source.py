@@ -828,9 +828,16 @@ from app.discovery.sources.amazon_widget_parser import (  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
-def _reset_penalty_box_for_source_tests():
+def _reset_penalty_box_for_source_tests(monkeypatch):
     """Mirror the resolver test fixture — clear the shared module-level
-    penalty-box state between tests."""
+    penalty-box state between tests.
+
+    v2.20.3 also stubs `_persist_block_state` so `record_amazon_soft_block`
+    doesn't write to the real settings.json under the user's data dir.
+    """
+    monkeypatch.setattr(
+        resolver_module, "_persist_block_state", lambda **_: None,
+    )
     resolver_module._blocked_until = 0.0
     resolver_module._block_reason = ""
     resolver_module._block_count = 0
@@ -1034,6 +1041,24 @@ class TestSoftBlockRecording:
         result = await source.get_author_books("B001IGFHW6")
         assert result is None
         assert resolver_module.is_amazon_blocked()
+
+    async def test_allbooks_202_records_block(self):
+        """v2.20.3 — Akamai's sensor-challenge response (HTTP 202) was
+        silently swallowed pre-v2.20.3: the `status != 200` branch
+        logged it and returned, but the cooldown never tripped. Now
+        202 is classified alongside 429 so the cascade stops."""
+        session = MockSession(get_routes={
+            "/stores/author/": MockResponse(202, "sensor challenge body"),
+        })
+        source = AmazonSource(burst_delay_s=0.0)
+        source._session = session
+        source._session_init_attempted = True
+
+        result = await source.get_author_books("B001IGFHW6")
+        assert result is None
+        assert resolver_module.is_amazon_blocked(), (
+            "HTTP 202 from allbooks must trip the IP-level cooldown"
+        )
 
     async def test_allbooks_full_chrome_captcha_records_block(self):
         """v2.20.2 — 200 OK + non-thin body (>=50KB) but no ProductGrid

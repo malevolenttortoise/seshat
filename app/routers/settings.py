@@ -72,6 +72,17 @@ _RUNTIME_STATE_KEYS: frozenset[str] = frozenset({
     "goodreads_session_state",
     "goodreads_session_state_since",
     "goodreads_session_last_status",
+    # v2.20.3 — Amazon Akamai soft-block cooldown state. Written by
+    # `app/discovery/amazon_author_id_resolver.py:record_amazon_soft_block`
+    # whenever Akamai returns 429 / 202 / thin-body / no-ProductGrid.
+    # Persistence closes the bug where a container restart wiped the
+    # in-memory `_blocked_until` and let the next author scan walk
+    # straight into another 429 before the IP-level penalty cleared.
+    # Cooldown clears naturally when `time.time() > amazon_blocked_until`;
+    # no manual reset endpoint today (v2.21.0 will add one).
+    "amazon_blocked_until",
+    "amazon_block_reason",
+    "amazon_blocked_since",
 })
 
 

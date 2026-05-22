@@ -559,15 +559,30 @@ class TestMultiVariantSearch:
 # ─── v2.19.0: penalty-box state + Retry-After parsing ────────────
 
 
+import time  # noqa: E402  (used by both v2.19.0 and v2.20.3 blocks)
 import pytest  # noqa: E402  (deliberately co-located with the v2.19.0 block)
 import app.discovery.amazon_author_id_resolver as resolver_module  # noqa: E402
 
+# Captured before any test-time monkey-patching so the v2.20.3
+# persistence tests can re-install the real implementation regardless
+# of fixture ordering.
+_real_persist = resolver_module._persist_block_state
+
 
 @pytest.fixture(autouse=True)
-def _reset_penalty_box():
+def _reset_penalty_box(monkeypatch):
     """Clear module-level penalty-box state between tests so one test's
     block doesn't leak into the next. The v2.19.0 state is intentionally
-    process-wide, so tests must scrub it explicitly."""
+    process-wide, so tests must scrub it explicitly.
+
+    v2.20.3 also neutralizes the disk-persist side effect so a test that
+    records a soft-block doesn't write to the real `settings.json` — the
+    dedicated `TestPersistedBlockState` block monkey-patches its own
+    storage when it actually wants to exercise the persistence path.
+    """
+    monkeypatch.setattr(
+        resolver_module, "_persist_block_state", lambda **_: None,
+    )
     resolver_module._blocked_until = 0.0
     resolver_module._block_reason = ""
     resolver_module._block_count = 0
@@ -730,6 +745,150 @@ class TestTier2SearchRecordsBlock:
         assert is_amazon_blocked()
         search_calls = [c for c in session.calls if "/s?" in c]
         assert len(search_calls) == 1
+
+
+# ─── v2.20.3: HTTP 202 Akamai sensor-challenge detection ─────────
+
+
+class TestHttp202DetectedAcrossTiers:
+    """v2.20.3 — Akamai's sensor challenge returns 202 with a small
+    interstitial body. Before this, status==202 fell into the silent
+    "log + no extract" branch alongside 404, so the cooldown didn't
+    fire and the cascade walked author-to-author at full speed."""
+
+    async def test_tier1_202_records_block(self):
+        session = MockSession({"/dp/": MockResponse(202, "sensor challenge")})
+        result = await resolve_amazon_author_id(
+            "X", known_book_asin="B0DEADBEEF", session=session,
+        )
+        assert result is None
+        assert is_amazon_blocked()
+
+    async def test_tier2_vanity_202_records_block(self):
+        session = MockSession({"/author/": MockResponse(202, "challenge")})
+        result = await resolve_amazon_author_id(
+            "Some Author", session=session,
+        )
+        assert result is None
+        assert is_amazon_blocked()
+
+    async def test_tier2_search_202_records_block_and_bails(self):
+        """202 at /s should bail all 3 variants (just like 429 does) —
+        another /s URL against a jailed IP just produces another 202."""
+        session = MockSession({"/s?": MockResponse(202, "challenge")})
+        result = await resolve_amazon_author_id(
+            "Common Name", session=session,
+        )
+        assert result is None
+        assert is_amazon_blocked()
+        search_calls = [c for c in session.calls if "/s?" in c]
+        assert len(search_calls) == 1, (
+            "expected single /s call; multiple would mean the variant "
+            "loop didn't bail on 202"
+        )
+
+    async def test_tier1_202_message_includes_sensor_challenge_label(
+        self, caplog,
+    ):
+        """The warning log should tag this as an Akamai sensor challenge
+        so log readers can distinguish 202 (silent today) from 429."""
+        session = MockSession({"/dp/": MockResponse(202, "tiny")})
+        with caplog.at_level("WARNING"):
+            await resolve_amazon_author_id(
+                "X", known_book_asin="B0DEADBEEF", session=session,
+            )
+        assert any(
+            "HTTP 202" in record.message
+            and "Akamai sensor challenge" in record.message
+            for record in caplog.records
+        )
+
+
+# ─── v2.20.3: persisted cooldown state ───────────────────────────
+
+
+class TestPersistedBlockState:
+    """v2.20.3 — `_blocked_until` is now mirrored into settings.json so
+    a container restart in the middle of an Akamai penalty doesn't wipe
+    the cooldown. These tests exercise the persist/load cycle with an
+    in-memory fake settings store (we never touch the real disk)."""
+
+    @pytest.fixture(autouse=True)
+    def _fake_settings(self, monkeypatch):
+        """Swap `load_settings`/`save_settings` for an in-memory dict.
+
+        Importantly, this is added on TOP of the module-level autouse
+        fixture that neutralizes `_persist_block_state` — we re-install
+        the real implementation here so the persist call actually fires
+        against our fake store.
+        """
+        from importlib import reload
+        import app.config as config_mod
+        store: dict[str, object] = {}
+        monkeypatch.setattr(config_mod, "load_settings", lambda: dict(store))
+        monkeypatch.setattr(
+            config_mod, "save_settings",
+            lambda d: store.update(d),
+        )
+        # Restore the real persist implementation (the module-level
+        # autouse fixture replaced it with a no-op).
+        monkeypatch.setattr(
+            resolver_module, "_persist_block_state", _real_persist,
+        )
+        # Tracker yields a handle so tests can inspect the underlying
+        # settings dict.
+        yield store
+
+    def test_record_writes_until_reason_and_since(self, _fake_settings):
+        record_amazon_soft_block("first block", retry_after_s=120)
+        assert _fake_settings["amazon_blocked_until"] > time.time() + 100
+        assert _fake_settings["amazon_block_reason"] == "first block"
+        assert _fake_settings["amazon_blocked_since"] is not None
+
+    def test_extension_preserves_since_timestamp(self, _fake_settings):
+        record_amazon_soft_block("initial", retry_after_s=120)
+        original_since = _fake_settings["amazon_blocked_since"]
+        # Extend with a longer cooldown — `since` must not move.
+        record_amazon_soft_block("extended", retry_after_s=3000)
+        assert _fake_settings["amazon_blocked_since"] == original_since
+        # But `until` and `reason` did update.
+        assert _fake_settings["amazon_block_reason"] == "extended"
+        assert _fake_settings["amazon_blocked_until"] > time.time() + 2900
+
+    def test_load_restores_in_memory_state(self, _fake_settings):
+        # Seed the fake settings with a still-active cooldown.
+        future = time.time() + 500
+        _fake_settings["amazon_blocked_until"] = future
+        _fake_settings["amazon_block_reason"] = "persisted across restart"
+        # Reset in-memory state to simulate the post-restart import.
+        resolver_module._blocked_until = 0.0
+        resolver_module._block_reason = ""
+        resolver_module._load_persisted_block_state()
+        assert is_amazon_blocked()
+        assert resolver_module._block_reason == "persisted across restart"
+        assert 499 <= amazon_block_remaining_s() <= 501
+
+    def test_load_ignores_expired_persisted_state(self, _fake_settings):
+        # Persisted cooldown already in the past — load should NO-OP.
+        _fake_settings["amazon_blocked_until"] = time.time() - 60
+        _fake_settings["amazon_block_reason"] = "stale"
+        resolver_module._blocked_until = 0.0
+        resolver_module._block_reason = ""
+        resolver_module._load_persisted_block_state()
+        assert not is_amazon_blocked()
+        assert resolver_module._block_reason == ""
+
+    def test_load_does_not_shorten_active_block(self, _fake_settings):
+        # Active in-memory block longer than persisted one — load must
+        # not reduce the current cooldown.
+        resolver_module._blocked_until = time.time() + 1000
+        resolver_module._block_reason = "long live"
+        _fake_settings["amazon_blocked_until"] = time.time() + 100
+        _fake_settings["amazon_block_reason"] = "short stale"
+        resolver_module._load_persisted_block_state()
+        # The longer cooldown survives.
+        assert amazon_block_remaining_s() > 900
+        assert resolver_module._block_reason == "long live"
 
 
 # ─── v2.19.0: DDG Tier 2c parser ─────────────────────────────────

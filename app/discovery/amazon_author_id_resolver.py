@@ -46,27 +46,113 @@ logger = logging.getLogger("seshat.discovery.amazon.author_id_resolver")
 
 # ─── IP-level soft-block penalty box (shared with AmazonSource) ──
 #
-# When amazon.com returns 429 or a CAPTCHA-shaped thin body, Akamai
-# has put our IP in penalty box at the IP level — every subsequent
-# amazon.com request will fail until the box clears. Without this,
-# the failure cascades across author scans: on 2026-05-20, Hanako
-# Arashi 429'd at 16:17, then Mark Arrows 429'd 2 min later with an
-# identical 2296-byte CAPTCHA body, because nothing told the next
-# scan the IP was jailed. The penalty box stops the cascade by
-# short-circuiting further amazon.com calls until the cooldown
-# expires (or until Amazon's Retry-After header says to retry).
+# When amazon.com returns 429, an Akamai sensor challenge (HTTP 202),
+# or a CAPTCHA-shaped thin body, Akamai has put our IP in penalty box
+# at the IP level — every subsequent amazon.com request will fail
+# until the box clears. Without this, the failure cascades across
+# author scans: on 2026-05-20, Hanako Arashi 429'd at 16:17, then
+# Mark Arrows 429'd 2 min later with an identical 2296-byte CAPTCHA
+# body, because nothing told the next scan the IP was jailed. The
+# penalty box stops the cascade by short-circuiting further
+# amazon.com calls until the cooldown expires (or until Amazon's
+# Retry-After header says to retry).
 #
-# State is process-local module-state. A container restart resets
-# it — but the cooldown timestamp is wall-clock seconds, so even if
-# we did persist it the post-restart check would still work.
+# v2.20.3 — persisted to settings.json (runtime-state keys, protected
+# from PATCH) so container restarts don't wipe the cooldown and let
+# the next scan walk straight into a fresh penalty. The earlier "wall-
+# clock timestamp is enough" comment was wrong: zeroing `_blocked_until`
+# on import means `is_amazon_blocked()` returns False until the next
+# block is recorded, which is exactly the bug we're closing.
 
 _BLOCK_COOLDOWN_DEFAULT_S = 600.0  # 10 min — matches Akamai's typical CAPTCHA TTL
 _BLOCK_COOLDOWN_MIN_S = 60.0       # never less than 1 min
 _BLOCK_COOLDOWN_MAX_S = 3600.0     # never more than 1 hour
 
+# Below this body size on a 2xx response, Akamai is almost certainly
+# returning a CAPTCHA / sensor-challenge interstitial rather than a real
+# Amazon page (real /dp, /s, /author pages weigh 200KB+). Used by the
+# 202-detection and thin-body branches; pulled out here so the v2.21.0
+# worker classifier can read the same constant.
+_AMAZON_SOFT_BLOCK_THIN_BODY_BYTES = 50_000
+
 _blocked_until: float = 0.0  # wall-clock epoch seconds; 0.0 = not blocked
 _block_reason: str = ""
 _block_count: int = 0
+
+
+# Runtime-state keys in settings.json mirror `goodreads_session_state*`.
+# `_RUNTIME_STATE_KEYS` in `app/routers/settings.py` lists these so a
+# user PATCH can't accidentally clear an active cooldown.
+_SETTINGS_KEY_BLOCKED_UNTIL = "amazon_blocked_until"
+_SETTINGS_KEY_BLOCK_REASON = "amazon_block_reason"
+_SETTINGS_KEY_BLOCKED_SINCE = "amazon_blocked_since"
+
+
+def _persist_block_state(*, was_already_blocked: bool) -> None:
+    """Mirror `_blocked_until` / `_block_reason` into settings.json.
+
+    Called from `record_amazon_soft_block` after the module globals are
+    updated. Writes the wall-clock cooldown expiry, the reason string,
+    and (on a fresh arm only) the "since" timestamp. Failure is logged
+    but never raised: the in-memory cooldown still applies this process,
+    so a write failure only compromises restart-survival.
+    """
+    try:
+        from app.config import load_settings, save_settings
+        s = dict(load_settings())
+        s[_SETTINGS_KEY_BLOCKED_UNTIL] = _blocked_until
+        s[_SETTINGS_KEY_BLOCK_REASON] = _block_reason
+        if not was_already_blocked:
+            # Fresh arm — stamp the start time. Extensions preserve the
+            # original arm time so "blocked for Xs" reads naturally in
+            # the UI.
+            s[_SETTINGS_KEY_BLOCKED_SINCE] = time.time()
+        save_settings(s)
+    except Exception as exc:
+        logger.warning(
+            "amazon: failed to persist cooldown state to settings (%s) — "
+            "cooldown applies this process but a restart will clear it",
+            exc,
+        )
+
+
+def _load_persisted_block_state() -> None:
+    """Restore the cooldown from settings.json at module import.
+
+    If the persisted `amazon_blocked_until` is still in the future,
+    re-arm the in-memory state so `is_amazon_blocked()` keeps the
+    cascade off. Expired persisted state is ignored silently. Safe
+    to call multiple times (idempotent — only extends a cooldown).
+    """
+    global _blocked_until, _block_reason
+    try:
+        from app.config import load_settings
+        s = load_settings()
+    except Exception:
+        return
+    persisted_until = s.get(_SETTINGS_KEY_BLOCKED_UNTIL)
+    if not isinstance(persisted_until, (int, float)):
+        return
+    if persisted_until <= time.time():
+        return  # cooldown expired during the downtime — nothing to restore
+    if persisted_until > _blocked_until:
+        _blocked_until = float(persisted_until)
+        _block_reason = str(s.get(_SETTINGS_KEY_BLOCK_REASON) or "")
+        logger.info(
+            "amazon: restored soft-block cooldown from settings — "
+            "%.0fs remaining (reason: %s)",
+            amazon_block_remaining_s(),
+            _block_reason or "<unknown>",
+        )
+
+
+# Restore any persisted cooldown on import so a container restart in
+# the middle of an Akamai penalty doesn't bypass it. Wrapped so a
+# settings.json read failure during startup never blocks import.
+try:
+    _load_persisted_block_state()
+except Exception:
+    pass
 
 
 def is_amazon_blocked() -> bool:
@@ -101,6 +187,7 @@ def record_amazon_soft_block(
     )
     cooldown = max(_BLOCK_COOLDOWN_MIN_S, min(_BLOCK_COOLDOWN_MAX_S, cooldown))
     new_until = time.time() + cooldown
+    was_already_blocked = _blocked_until > time.time()
     # Only extend; never shorten a longer cooldown that's already in flight.
     if new_until > _blocked_until:
         _blocked_until = new_until
@@ -111,6 +198,7 @@ def record_amazon_soft_block(
             "[block #%d this process]",
             cooldown, reason, _block_count,
         )
+        _persist_block_state(was_already_blocked=was_already_blocked)
 
 
 def parse_retry_after(value: str | None) -> float | None:
@@ -238,6 +326,16 @@ async def _tier1_book_pivot(
             retry_after_s=_get_response_retry_after(resp),
         )
         return None
+    # v2.20.3 — HTTP 202 is the Akamai sensor-challenge signature
+    # (silent failure pre-v2.20.3: status != 200 logged but no cooldown
+    # tripped, so a 202 cascade looked identical to "page not found").
+    if status == 202:
+        record_amazon_soft_block(
+            f"tier1 GET {url} returned HTTP 202 with {len(body)}-byte "
+            f"body (Akamai sensor challenge)",
+            retry_after_s=_get_response_retry_after(resp),
+        )
+        return None
     if status != 200 or not body:
         logger.debug(
             "tier1: GET %s returned status=%s body_len=%d (no extract)",
@@ -245,7 +343,7 @@ async def _tier1_book_pivot(
         )
         return None
     # Akamai thin-body soft-block guard — real /dp pages are 200KB+
-    if len(body) < 50_000:
+    if len(body) < _AMAZON_SOFT_BLOCK_THIN_BODY_BYTES:
         logger.warning(
             "tier1: GET %s thin body (%d bytes) — likely Akamai soft-block",
             url, len(body),
@@ -326,6 +424,17 @@ async def _tier2_vanity_url(
             retry_after_s=_get_response_retry_after(resp),
         )
         return None
+    # v2.20.3 — HTTP 202 Akamai sensor challenge. The vanity endpoint
+    # 301-redirects on hit and 404s on miss; a 202 reply has no
+    # legitimate interpretation, so trip the cooldown.
+    if status == 202:
+        body = getattr(resp, "text", "") or ""
+        record_amazon_soft_block(
+            f"tier2 vanity GET {url} returned HTTP 202 with "
+            f"{len(body)}-byte body (Akamai sensor challenge)",
+            retry_after_s=_get_response_retry_after(resp),
+        )
+        return None
     if status != 200:
         # 404 expected when the slug isn't indexed; fall through quietly.
         logger.debug("tier2 vanity: %s returned status=%s", url, status)
@@ -394,13 +503,23 @@ async def _tier2_search(
                 retry_after_s=_get_response_retry_after(resp),
             )
             return None
+        # v2.20.3 — HTTP 202 Akamai sensor challenge. Bail all variants
+        # for the same reason 429 does: trying another /s URL against
+        # a jailed IP just produces another 202.
+        if status == 202:
+            record_amazon_soft_block(
+                f"tier2 search GET {url} returned HTTP 202 with "
+                f"{len(body)}-byte body (Akamai sensor challenge)",
+                retry_after_s=_get_response_retry_after(resp),
+            )
+            return None
         if status != 200 or not body:
             logger.debug(
                 "tier2 search: %s returned status=%s body_len=%d (skipping)",
                 url, status, len(body),
             )
             continue
-        if len(body) < 50_000:
+        if len(body) < _AMAZON_SOFT_BLOCK_THIN_BODY_BYTES:
             # v2.19.0 — thin body is the CAPTCHA-interstitial signature.
             # Record once and bail all variants; trying the others would
             # just generate two more thin-body responses against the same

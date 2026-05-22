@@ -39,6 +39,7 @@ import urllib.parse
 from typing import Any, Optional
 
 from app.discovery.amazon_author_id_resolver import (
+    _AMAZON_SOFT_BLOCK_THIN_BODY_BYTES,
     amazon_block_remaining_s,
     is_amazon_blocked,
     record_amazon_soft_block,
@@ -398,9 +399,13 @@ class AmazonSource(BaseSource):
         body = getattr(resp, "text", None) or ""
         if status != 200:
             # v2.19.0 — explicit 429 trips the IP-level penalty box.
+            # v2.20.3 — HTTP 202 is Akamai's sensor-challenge response;
+            # treat it the same as 429 (penalty box) so the cascade
+            # short-circuits subsequent authors instead of grinding
+            # through a pile of identical 202s.
             # Other non-200s stay as one-off failures (the caller logs +
             # returns empty for this author).
-            if status == 429:
+            if status in (429, 202):
                 headers = getattr(resp, "headers", None)
                 raw_ra = None
                 if headers is not None:
@@ -412,13 +417,15 @@ class AmazonSource(BaseSource):
                     except Exception:
                         raw_ra = None
                 record_amazon_soft_block(
-                    f"allbooks GET {url} returned HTTP 429",
+                    f"allbooks GET {url} returned HTTP {status} with "
+                    f"{len(body)}-byte body"
+                    + (" (Akamai sensor challenge)" if status == 202 else ""),
                     retry_after_s=parse_retry_after(raw_ra),
                 )
             raise _AllBooksFetchError(
                 f"HTTP {status} (body {len(body)} bytes)"
             )
-        if len(body) < 50_000:
+        if len(body) < _AMAZON_SOFT_BLOCK_THIN_BODY_BYTES:
             # v2.19.0 — thin body at 200 OK is the CAPTCHA-interstitial
             # signature; record IP-level block so the next scan doesn't
             # walk into the same wall.

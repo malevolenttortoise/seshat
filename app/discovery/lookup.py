@@ -377,6 +377,64 @@ def _sources_for_content_type(content_type: str) -> list[SourceSpec]:
 PER_AUTHOR_BUDGET_SEC = 25 * 60
 
 
+# v2.20.3 — list-page-size-aware budget scaling for the GR retry loop.
+#
+# Sanderson stress test 2026-05-22: Goodreads silently dropped ~37% of
+# books for a ≥200-book author. Root cause was time-budget exhaustion
+# across the per-source 300s cap × multi-retry cycle: the ~22-minute
+# effective ceiling on a single author scan ran out before all 399
+# books got their detail-page visit.
+#
+# These helpers scale the per-retry timeout AND the per-author wall-
+# clock budget AFTER GR has reported its list-page count via
+# `_partial_state["total"]`. They only kick in when GR is the timing-
+# out source (other sources keep their original caps). Path B/C (full
+# GR caching) is deferred to v2.22.0 — see
+# `project_seshat_v222_goodreads_cache_deferred` for the trigger
+# conditions.
+
+_GOODREADS_LIST_PAGE_BUDGET_TIERS: tuple[tuple[int, float, float], ...] = (
+    # (book_count_floor, per_retry_timeout_s, per_author_budget_s)
+    # Ordered descending so the first match wins.
+    (200, 900.0, 40 * 60.0),
+    (100, 600.0, 30 * 60.0),
+)
+
+
+def _scaled_goodreads_retry_timeout(
+    base_timeout_sec: float, list_page_book_count: int,
+) -> float:
+    """Per-retry timeout cap scaled by the GR list-page book count.
+
+    Returns the larger of `base_timeout_sec` and the tier-matched cap so
+    a user who has manually raised `spec.timeout_sec` for other reasons
+    is never silently shrunk back down.
+    """
+    if list_page_book_count <= 0:
+        return base_timeout_sec
+    for floor, retry_cap, _budget in _GOODREADS_LIST_PAGE_BUDGET_TIERS:
+        if list_page_book_count >= floor:
+            return max(base_timeout_sec, retry_cap)
+    return base_timeout_sec
+
+
+def _scaled_per_author_budget(
+    base_budget_sec: float, list_page_book_count: int,
+) -> float:
+    """Per-author wall-clock budget scaled by the GR list-page book count.
+
+    Only extends the budget for big GR authors — small/normal authors
+    keep the 25-minute default so a degenerate source can't stretch a
+    scan past the user's existing expectations.
+    """
+    if list_page_book_count <= 0:
+        return base_budget_sec
+    for floor, _retry_cap, budget_cap in _GOODREADS_LIST_PAGE_BUDGET_TIERS:
+        if list_page_book_count >= floor:
+            return max(base_budget_sec, budget_cap)
+    return base_budget_sec
+
+
 def _smart_strip_subtitle(t: str) -> str:
     """Strip the part after `:` only when it looks like a real subtitle.
 
@@ -3405,7 +3463,20 @@ async def _lookup_author_inner(author_id: int, author_name: str, full_scan: bool
             if not partial:
                 break  # source completed cleanly on the prior retry
             elapsed = time.monotonic() - scan_started_at
-            remaining = PER_AUTHOR_BUDGET_SEC - elapsed
+            # v2.20.3 — for Goodreads, scale the per-author wall-clock
+            # budget by the observed list-page book count. The 25min
+            # default exhausts before a 200+ book author's detail-fetch
+            # loop completes (Sanderson silently dropped ~37% of books
+            # before this); 30min / 40min tiers give the retry loop room
+            # to finish. Other sources keep the unscaled budget — the
+            # scaling helper is a no-op when `total_books == 0` or `spec`
+            # isn't Goodreads.
+            total_books = partial.get("total", 0)
+            effective_budget = (
+                _scaled_per_author_budget(PER_AUTHOR_BUDGET_SEC, total_books)
+                if spec.name == "goodreads" else PER_AUTHOR_BUDGET_SEC
+            )
+            remaining = effective_budget - elapsed
             if remaining < 30:
                 reached = partial.get("index", 0)
                 missed = max(0, partial.get("total", 0) - reached)
@@ -3413,7 +3484,7 @@ async def _lookup_author_inner(author_id: int, author_name: str, full_scan: bool
                     f"  [{spec.name}] giving up on '{author_name}' — "
                     f"processed {reached}/{partial.get('total', '?')} books "
                     f"after {retry_num} retries; ~{missed} likely unscanned "
-                    f"(out of per-author budget)"
+                    f"(out of per-author budget {effective_budget:.0f}s)"
                 )
                 break
 
@@ -3425,9 +3496,17 @@ async def _lookup_author_inner(author_id: int, author_name: str, full_scan: bool
                 )
                 break
 
-            retry_timeout = min(spec.timeout_sec, remaining)
+            # v2.20.3 — for Goodreads, scale the per-retry cap by the
+            # observed list-page count. The base 300s caps out around
+            # 60-80 detail-page fetches at GR's rate limit; big authors
+            # need 600s (100+ books) or 900s (200+ books) per retry to
+            # finish a contiguous chunk before the wait_for cancels.
+            base_timeout = (
+                _scaled_goodreads_retry_timeout(spec.timeout_sec, total_books)
+                if spec.name == "goodreads" else spec.timeout_sec
+            )
+            retry_timeout = min(base_timeout, remaining)
             start_at = partial["index"]
-            total_books = partial.get("total", 0)
             logger.info(
                 f"  [{spec.name}] retry {retry_num} for '{author_name}' — "
                 f"resuming from book {start_at}/{total_books} with "
