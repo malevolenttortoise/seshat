@@ -16,6 +16,7 @@ import { LibrarySyncBanner } from "./components/LibrarySyncBanner";
 import { InstallPrompt } from "./components/InstallPrompt";
 import { JumpToTop } from "./components/JumpToTop";
 import { GlobalSearchBar, type SearchNavTarget } from "./components/GlobalSearchBar";
+import { GlobalMetadataCacheStatusIcon } from "./components/GlobalMetadataCacheStatusIcon";
 import { MobileNavDrawer, type NavItem } from "./components/MobileNavDrawer";
 import { SseEventsProvider } from "./providers/SseEventsProvider";
 import { useViewport } from "./hooks/useViewport";
@@ -478,6 +479,10 @@ function SeshatApp() {
 
             {/* Right icons */}
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              {/* v2.21.0 Phase F tier 1 — global cache worker
+                 status indicator. Click navigates to Settings →
+                 Metadata Sources → Amazon cache card. */}
+              <GlobalMetadataCacheStatusIcon onClick={() => nav("settings")} />
               {RIGHT_ICONS.map(btn => (
                 <button
                   key={btn.id}

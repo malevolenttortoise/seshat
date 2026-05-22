@@ -279,3 +279,112 @@ class TestResetCooldown:
             "/api/v1/metadata-cache/unknown/reset-cooldown"
         )
         assert r.status_code == 404
+
+
+# ─── GET /author/{id} ──────────────────────────────────────────
+
+
+class TestGetAuthorCacheState:
+    """v2.21.0 Phase F — per-author endpoint that the author detail
+    page's cache badge consumes. Returns one row per library the
+    author has been seen in, with state + queue info."""
+
+    async def test_returns_empty_libraries_for_unknown_author(
+        self, cache_router_client,
+    ):
+        r = await cache_router_client.get(
+            "/api/v1/metadata-cache/amazon/author/B0NEVERSEEN"
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["amazon_author_id"] == "B0NEVERSEEN"
+        assert body["libraries"] == []
+
+    async def test_returns_state_and_queue_for_cached_author(
+        self, cache_router_client,
+    ):
+        now = time.time()
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+        try:
+            await db.execute(
+                f"INSERT INTO {metadata_cache.state_table()} "
+                f"(author_id, library_slug, last_scanned_at, "
+                f" last_outcome, book_count) VALUES (?, ?, ?, ?, ?)",
+                ("B0TESTAUTH", "calibre-library", now, "ok", 5),
+            )
+            await db.execute(
+                f"INSERT INTO {metadata_cache.queue_table()} "
+                f"(author_id, library_slug, priority, status, "
+                f" next_scan_due_at) VALUES (?, ?, ?, ?, ?)",
+                ("B0TESTAUTH", "calibre-library", 100.0, "pending", 0.0),
+            )
+            await db.commit()
+        finally:
+            await db.close()
+
+        r = await cache_router_client.get(
+            "/api/v1/metadata-cache/amazon/author/B0TESTAUTH"
+        )
+        body = r.json()
+        assert len(body["libraries"]) == 1
+        row = body["libraries"][0]
+        assert row["library_slug"] == "calibre-library"
+        assert row["state"]["last_outcome"] == "ok"
+        assert row["state"]["book_count"] == 5
+        assert row["queue"]["status"] == "pending"
+        assert row["queue"]["priority"] == 100.0
+
+    async def test_returns_queue_only_when_not_yet_scanned(
+        self, cache_router_client,
+    ):
+        """An author backfilled into the queue but never scanned has
+        a queue row but no state row. The endpoint surfaces that
+        case so the frontend can render 'in queue' instead of
+        'never seen.'"""
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+        try:
+            await db.execute(
+                f"INSERT INTO {metadata_cache.queue_table()} "
+                f"(author_id, library_slug, priority, status, "
+                f" next_scan_due_at) VALUES (?, ?, ?, ?, ?)",
+                ("B0NOTSCANNED", "calibre-library", 100.0, "pending", 0.0),
+            )
+            await db.commit()
+        finally:
+            await db.close()
+        r = await cache_router_client.get(
+            "/api/v1/metadata-cache/amazon/author/B0NOTSCANNED"
+        )
+        body = r.json()
+        assert len(body["libraries"]) == 1
+        assert body["libraries"][0]["state"] is None
+        assert body["libraries"][0]["queue"]["status"] == "pending"
+
+    async def test_returns_multiple_libraries(
+        self, cache_router_client,
+    ):
+        now = time.time()
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+        try:
+            for slug in ("calibre-library", "abs-audio-library"):
+                await db.execute(
+                    f"INSERT INTO {metadata_cache.state_table()} "
+                    f"(author_id, library_slug, last_scanned_at, "
+                    f" last_outcome, book_count) VALUES (?, ?, ?, ?, ?)",
+                    ("B0BOTHLIBS", slug, now, "ok", 3),
+                )
+            await db.commit()
+        finally:
+            await db.close()
+        r = await cache_router_client.get(
+            "/api/v1/metadata-cache/amazon/author/B0BOTHLIBS"
+        )
+        body = r.json()
+        slugs = sorted(row["library_slug"] for row in body["libraries"])
+        assert slugs == ["abs-audio-library", "calibre-library"]
+
+    async def test_404_on_unknown_source(self, cache_router_client):
+        r = await cache_router_client.get(
+            "/api/v1/metadata-cache/hardcover/author/B0WHATEVER"
+        )
+        assert r.status_code == 404

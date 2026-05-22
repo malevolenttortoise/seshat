@@ -115,6 +115,24 @@ class ResetCooldownResponse(BaseModel):
     previous_remaining_s: float
 
 
+class AuthorCacheStateRow(BaseModel):
+    """One per-(author, library) cache state + queue position. The
+    frontend's per-author badge composes a single human-readable line
+    from one or more of these (an author may appear in multiple
+    libraries — e.g. ebook + audiobook — and have different cache
+    state in each)."""
+    library_slug: str
+    state: Optional[dict]  # last_scanned_at / last_outcome / book_count
+    queue: Optional[dict]  # status / priority / next_scan_due_at / consecutive_failures
+
+
+class AuthorCacheResponse(BaseModel):
+    source: str
+    amazon_author_id: str
+    libraries: list[AuthorCacheStateRow]
+    cooldown: CooldownModel
+
+
 # ─── Helpers ────────────────────────────────────────────────────
 
 
@@ -274,6 +292,87 @@ async def patch_settings(
     new_enabled = bool(_cache_settings_get(source).get("enabled", False))
     return SettingsPatchResponse(
         ok=True, source=source, enabled=new_enabled,
+    )
+
+
+@router.get(
+    "/{source}/author/{author_id}",
+    response_model=AuthorCacheResponse,
+)
+async def get_author_cache_state(
+    source: str, author_id: str,
+) -> AuthorCacheResponse:
+    """Per-author cache state across every library that's seen this
+    Amazon Author Store ID.
+
+    Used by the author detail page's per-author cache badge (Phase F
+    tier 3) to render a single human-readable line summarizing
+    whether this specific author has been scanned, when, and how
+    many books are cached. Returns an empty `libraries` list when
+    the author has never been seen by the worker — the frontend
+    surfaces that as "never scanned" without distinguishing
+    "never enqueued" from "enqueued but not yet popped."
+    """
+    _validate_source(source)
+    cooldown = _cooldown_state(source)
+
+    db = await metadata_cache.get_db(source)
+    try:
+        st_table = metadata_cache.state_table(source)
+        q_table = metadata_cache.queue_table(source)
+        cur = await db.execute(
+            f"SELECT library_slug, last_scanned_at, last_outcome, "
+            f"book_count FROM {st_table} WHERE author_id = ?",
+            (author_id,),
+        )
+        state_rows = await cur.fetchall()
+        cur = await db.execute(
+            f"SELECT library_slug, status, priority, next_scan_due_at, "
+            f"consecutive_failures FROM {q_table} WHERE author_id = ?",
+            (author_id,),
+        )
+        queue_rows = await cur.fetchall()
+    finally:
+        await db.close()
+
+    # Index by library_slug so we can compose one row per library
+    # the author exists in. A library that has a queue row but no
+    # state row (= enqueued but not yet successfully scanned)
+    # still appears with state=None.
+    by_slug: dict[str, dict[str, Any]] = {}
+    for row in state_rows:
+        by_slug[row["library_slug"]] = {
+            "state": {
+                "last_scanned_at": row["last_scanned_at"],
+                "last_outcome": row["last_outcome"],
+                "book_count": row["book_count"],
+            },
+            "queue": None,
+        }
+    for row in queue_rows:
+        slug = row["library_slug"]
+        if slug not in by_slug:
+            by_slug[slug] = {"state": None, "queue": None}
+        by_slug[slug]["queue"] = {
+            "status": row["status"],
+            "priority": row["priority"],
+            "next_scan_due_at": row["next_scan_due_at"],
+            "consecutive_failures": row["consecutive_failures"],
+        }
+
+    libraries = [
+        AuthorCacheStateRow(
+            library_slug=slug,
+            state=entry["state"],
+            queue=entry["queue"],
+        )
+        for slug, entry in sorted(by_slug.items())
+    ]
+    return AuthorCacheResponse(
+        source=source,
+        amazon_author_id=author_id,
+        libraries=libraries,
+        cooldown=cooldown,
     )
 
 

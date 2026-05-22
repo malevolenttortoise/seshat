@@ -17,6 +17,7 @@ import {
   type PersonSearchResponse,
 } from "../lib/authorDetail";
 import { SourceBadgeRow } from "../components/SourceBadgeRow";
+import { AuthorCacheStatusBadge } from "../components/AuthorCacheStatusBadge";
 import {
   MobileBtn,
   MobileChip,
@@ -965,6 +966,12 @@ export default function MobileAuthorDetailPage({
             personId={a.person_id}
             sourceIds={a.source_ids || {}}
             onUpdate={() => loadA()}
+          />
+          {/* v2.21.0 Phase F tier 3 — per-author cache state. Lives
+              inside the Source IDs section so the toggle hides both
+              the badges and the cache lines together on small screens. */}
+          <AuthorCacheStatusBadge
+            amazonAuthorId={(a.source_ids || {}).amazon as string | undefined}
           />
         </MobileSection>
       ) : null}
