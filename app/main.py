@@ -73,6 +73,7 @@ from app.routers.enums import router as enums_router
 from app.routers.inject import router as inject_router
 from app.routers.logs import router as logs_router, install_log_handler
 from app.routers.mam import router as mam_router
+from app.routers.metadata_cache import router as metadata_cache_router
 from app.routers.metadata_sources import router as metadata_sources_router
 from app.routers.goodreads_session import router as goodreads_session_router
 from app.routers.migration import router as migration_router
@@ -1283,6 +1284,7 @@ app.include_router(inject_router)
 app.include_router(logs_router)
 app.include_router(mam_router)
 app.include_router(metadata_sources_router)
+app.include_router(metadata_cache_router)
 app.include_router(goodreads_session_router)
 app.include_router(migration_router)
 app.include_router(review_router)

@@ -1,0 +1,330 @@
+"""
+Metadata cache router (v2.21.0 Phase E).
+
+Surfaces the worker + cache state to the frontend so an operator can
+flip the worker on, watch it work, and intervene when something
+goes wrong.
+
+    GET   /api/v1/metadata-cache/{source}/status
+    PATCH /api/v1/metadata-cache/{source}/settings    body: {enabled: bool}
+    POST  /api/v1/metadata-cache/{source}/reset-cooldown
+
+`{source}` is validated against `metadata_cache.SUPPORTED_SOURCES`
+(today: just `amazon`; v2.22.0 candidate: `goodreads`). Unknown
+sources 404 instead of silently falling back so a typo doesn't
+write to the wrong tree.
+
+The PATCH endpoint deliberately doesn't expose the full settings
+surface yet — Phase E ships the enable toggle; cooldown curves,
+schedules, daily caps, and notification preferences land in later
+phases as the operator needs them.
+"""
+from __future__ import annotations
+
+import logging
+import time
+from typing import Any, Optional
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
+
+from app.config import load_settings, save_settings
+from app.discovery import metadata_cache
+from app.discovery.amazon_author_id_resolver import (
+    amazon_block_remaining_s,
+    is_amazon_blocked,
+)
+
+_log = logging.getLogger("seshat.routers.metadata_cache")
+
+router = APIRouter(
+    prefix="/api/v1/metadata-cache", tags=["metadata-cache"],
+)
+
+
+# ─── Response models ────────────────────────────────────────────
+
+
+class WorkerStatusModel(BaseModel):
+    """Singleton worker_state row + derived live stats."""
+    last_block_at: float
+    block_cooldown_s: float
+    consecutive_blocks: int
+    last_heartbeat_at: Optional[float]
+    last_scan_completed_at: Optional[float]
+    today_scan_count: int
+    today_block_count: int
+    # Derived (not stored): "seconds since last heartbeat", so the
+    # frontend doesn't have to recompute against client-side clock
+    # drift.
+    seconds_since_heartbeat: Optional[float]
+    seconds_since_scan_completed: Optional[float]
+
+
+class QueueStatsModel(BaseModel):
+    """Aggregate counts across the queue. The four
+    explicit-status counters cover every value the worker writes;
+    `total` is the sum so the frontend doesn't have to re-add."""
+    total: int
+    pending: int
+    in_progress: int
+    failed_permanent: int
+    other: int  # any unknown status — defensive, should be 0 in practice
+
+
+class CacheStatsModel(BaseModel):
+    """Aggregate counts across the cache state + books tables."""
+    state_rows: int
+    books_rows: int
+    ok_authors: int       # state rows with last_outcome='ok'
+    error_authors: int    # state rows with last_outcome='error'
+
+
+class CooldownModel(BaseModel):
+    """Current IP-level penalty box state."""
+    blocked: bool
+    remaining_s: float
+    reason: Optional[str]
+
+
+class StatusResponse(BaseModel):
+    source: str
+    enabled: bool
+    cooldown: CooldownModel
+    worker: WorkerStatusModel
+    queue: QueueStatsModel
+    cache: CacheStatsModel
+
+
+class SettingsPatchRequest(BaseModel):
+    """Only `enabled` for now. Future knobs (mode, daily_cap,
+    schedule) are deliberately deferred."""
+    enabled: Optional[bool] = Field(default=None)
+
+
+class SettingsPatchResponse(BaseModel):
+    ok: bool
+    source: str
+    enabled: bool
+
+
+class ResetCooldownResponse(BaseModel):
+    ok: bool
+    source: str
+    previously_blocked: bool
+    previous_remaining_s: float
+
+
+# ─── Helpers ────────────────────────────────────────────────────
+
+
+def _validate_source(source: str) -> str:
+    if source not in metadata_cache.SUPPORTED_SOURCES:
+        raise HTTPException(
+            404, f"unknown metadata cache source: {source!r}",
+        )
+    return source
+
+
+def _cache_settings_get(source: str) -> dict:
+    s = load_settings()
+    mc = s.get("metadata_cache") or {}
+    return mc.get(source) or {}
+
+
+def _cache_settings_set(source: str, *, key: str, value: Any) -> None:
+    """Idempotent in-place update of `metadata_cache.<source>.<key>`."""
+    s = dict(load_settings())
+    mc = dict(s.get("metadata_cache") or {})
+    src = dict(mc.get(source) or {})
+    src[key] = value
+    mc[source] = src
+    s["metadata_cache"] = mc
+    save_settings(s)
+
+
+def _cooldown_state(source: str) -> CooldownModel:
+    """Read the IP-level cooldown shared with the live AmazonSource."""
+    if source != metadata_cache.SOURCE_AMAZON:
+        # Only Amazon has the cooldown plumbing today; other sources
+        # report a permanently-clear cooldown until their equivalent
+        # ships (Goodreads has its own session_state surface).
+        return CooldownModel(blocked=False, remaining_s=0.0, reason=None)
+    from app.discovery import amazon_author_id_resolver as r
+    return CooldownModel(
+        blocked=is_amazon_blocked(),
+        remaining_s=amazon_block_remaining_s(),
+        reason=r._block_reason or None,  # type: ignore[attr-defined]
+    )
+
+
+# ─── Endpoints ──────────────────────────────────────────────────
+
+
+@router.get("/{source}/status", response_model=StatusResponse)
+async def get_status(source: str) -> StatusResponse:
+    """Live worker + queue + cache stats.
+
+    Polled by the frontend status card. Read-only — never mutates
+    state. Counts are exact (COUNT(*) per status / outcome) so a
+    1289-row queue gives 1289 here, not a rate-limited estimate.
+    """
+    _validate_source(source)
+    enabled = bool(_cache_settings_get(source).get("enabled", False))
+    cooldown = _cooldown_state(source)
+
+    db = await metadata_cache.get_db(source)
+    try:
+        # Worker singleton row.
+        wt = metadata_cache.worker_state_table(source)
+        cur = await db.execute(f"SELECT * FROM {wt} WHERE id = 1")
+        wrow = await cur.fetchone()
+
+        # Queue aggregates — one query, GROUP BY status.
+        qt = metadata_cache.queue_table(source)
+        cur = await db.execute(
+            f"SELECT status, COUNT(*) FROM {qt} GROUP BY status"
+        )
+        qcounts: dict[str, int] = {}
+        for row in await cur.fetchall():
+            qcounts[str(row[0])] = int(row[1])
+
+        # Cache state + books counts.
+        st_table = metadata_cache.state_table(source)
+        b_table = metadata_cache.books_table(source)
+        cur = await db.execute(f"SELECT COUNT(*) FROM {st_table}")
+        state_rows = int((await cur.fetchone())[0])
+        cur = await db.execute(f"SELECT COUNT(*) FROM {b_table}")
+        books_rows = int((await cur.fetchone())[0])
+        cur = await db.execute(
+            f"SELECT last_outcome, COUNT(*) FROM {st_table} "
+            f"GROUP BY last_outcome"
+        )
+        state_outcomes: dict[str, int] = {}
+        for row in await cur.fetchall():
+            state_outcomes[str(row[0])] = int(row[1])
+    finally:
+        await db.close()
+
+    now = time.time()
+    hb = wrow["last_heartbeat_at"] if wrow else None
+    scan_completed = wrow["last_scan_completed_at"] if wrow else None
+    worker_model = WorkerStatusModel(
+        last_block_at=float(wrow["last_block_at"]) if wrow else 0.0,
+        block_cooldown_s=float(wrow["block_cooldown_s"]) if wrow else 600.0,
+        consecutive_blocks=int(wrow["consecutive_blocks"]) if wrow else 0,
+        last_heartbeat_at=hb,
+        last_scan_completed_at=scan_completed,
+        today_scan_count=int(wrow["today_scan_count"]) if wrow else 0,
+        today_block_count=int(wrow["today_block_count"]) if wrow else 0,
+        seconds_since_heartbeat=(now - hb) if hb is not None else None,
+        seconds_since_scan_completed=(
+            (now - scan_completed) if scan_completed is not None else None
+        ),
+    )
+
+    pending = qcounts.pop("pending", 0)
+    in_progress = qcounts.pop("in_progress", 0)
+    failed_permanent = qcounts.pop("failed_permanent", 0)
+    other = sum(qcounts.values())  # any unknown status — defensive
+    total = pending + in_progress + failed_permanent + other
+    queue_model = QueueStatsModel(
+        total=total,
+        pending=pending,
+        in_progress=in_progress,
+        failed_permanent=failed_permanent,
+        other=other,
+    )
+
+    cache_model = CacheStatsModel(
+        state_rows=state_rows,
+        books_rows=books_rows,
+        ok_authors=state_outcomes.get("ok", 0),
+        error_authors=state_outcomes.get("error", 0),
+    )
+
+    return StatusResponse(
+        source=source,
+        enabled=enabled,
+        cooldown=cooldown,
+        worker=worker_model,
+        queue=queue_model,
+        cache=cache_model,
+    )
+
+
+@router.patch("/{source}/settings", response_model=SettingsPatchResponse)
+async def patch_settings(
+    source: str, body: SettingsPatchRequest,
+) -> SettingsPatchResponse:
+    """Update operator-facing knobs. Today: `enabled` only.
+
+    Writes through `app.config.save_settings` so the change persists
+    across restart and the worker (which re-reads settings on every
+    tick) picks it up on the next iteration — no container restart
+    needed.
+    """
+    _validate_source(source)
+    if body.enabled is not None:
+        _cache_settings_set(source, key="enabled", value=bool(body.enabled))
+        _log.info(
+            "metadata_cache settings: %s enabled → %s",
+            source, body.enabled,
+        )
+    new_enabled = bool(_cache_settings_get(source).get("enabled", False))
+    return SettingsPatchResponse(
+        ok=True, source=source, enabled=new_enabled,
+    )
+
+
+@router.post("/{source}/reset-cooldown", response_model=ResetCooldownResponse)
+async def reset_cooldown(source: str) -> ResetCooldownResponse:
+    """Emergency override — clear the IP-level penalty box.
+
+    Use case: the operator has manually verified Amazon is reachable
+    (different IP, VPN switched off, Akamai's bot-score decayed) and
+    wants to retry now rather than wait for the timer to clear. Logs
+    loudly because a misuse could trigger a fresh 429 cascade — but
+    sometimes the cooldown holds longer than it needs to (a stale
+    block from a previous IP, for example) and immediate intervention
+    is the right call.
+
+    Today this only resets the in-process module-state cooldown +
+    the settings.json mirror added in v2.20.3. The worker_state row's
+    `consecutive_blocks` is left alone so escalation tier history
+    survives across the reset — a second block within the 1h window
+    will still escalate to tier 2.
+    """
+    _validate_source(source)
+    if source != metadata_cache.SOURCE_AMAZON:
+        raise HTTPException(
+            400, "reset-cooldown only applies to the amazon source today",
+        )
+    from app.discovery import amazon_author_id_resolver as r
+    previously_blocked = is_amazon_blocked()
+    previous_remaining = amazon_block_remaining_s()
+    r._blocked_until = 0.0          # type: ignore[attr-defined]
+    r._block_reason = ""            # type: ignore[attr-defined]
+    # Persist the clear so a container restart doesn't restore the
+    # cooldown via v2.20.3's `_load_persisted_block_state`.
+    try:
+        s = dict(load_settings())
+        s["amazon_blocked_until"] = 0.0
+        s["amazon_block_reason"] = ""
+        s["amazon_blocked_since"] = None
+        save_settings(s)
+    except Exception:
+        _log.exception(
+            "metadata_cache reset-cooldown: failed to persist clear "
+            "to settings (in-memory cooldown cleared regardless)"
+        )
+    _log.warning(
+        "metadata_cache reset-cooldown: operator cleared amazon cooldown "
+        "(was blocked=%s, %.0fs remaining); next scan will hit Amazon live",
+        previously_blocked, previous_remaining,
+    )
+    return ResetCooldownResponse(
+        ok=True, source=source,
+        previously_blocked=previously_blocked,
+        previous_remaining_s=previous_remaining,
+    )

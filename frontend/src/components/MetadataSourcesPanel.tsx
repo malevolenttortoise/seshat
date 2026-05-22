@@ -579,11 +579,14 @@ function SourceList({ tab, draft, setDraft, known }: {
             </div>
           </div>
           {showAmazonExtras && (
-            <AmazonExtrasRow
-              entry={entry}
-              tab={tab}
-              onChange={(key, value) => setToggle(name, key, value)}
-            />
+            <>
+              <AmazonExtrasRow
+                entry={entry}
+                tab={tab}
+                onChange={(key, value) => setToggle(name, key, value)}
+              />
+              <AmazonCacheStatusCard />
+            </>
           )}
           {showKoboExtras && (
             <KoboExtrasRow
@@ -946,6 +949,351 @@ function GoodreadsStatusCard() {
         limit above (8s+ is conservative) or wait a few hours for the
         bot-score to decay, then re-test.
       </div>
+    </div>
+  );
+}
+
+
+// ─── Amazon metadata cache status card (v2.21.0 Phase E) ─────────
+//
+// Renders directly below AmazonExtrasRow in the Ebook tab. Shows the
+// background worker's live state, exposes the enable/disable toggle,
+// and offers an emergency "Reset cooldown" button when the IP-level
+// penalty box is engaged.
+//
+// Polls /api/v1/metadata-cache/amazon/status every 30s when the
+// component is mounted. The status payload covers worker state
+// (heartbeat, scans/blocks today), queue stats, cache row counts,
+// and the cooldown flag.
+
+type CacheWorkerStatus = {
+  last_block_at: number;
+  block_cooldown_s: number;
+  consecutive_blocks: number;
+  last_heartbeat_at: number | null;
+  last_scan_completed_at: number | null;
+  today_scan_count: number;
+  today_block_count: number;
+  seconds_since_heartbeat: number | null;
+  seconds_since_scan_completed: number | null;
+};
+
+type CacheQueueStats = {
+  total: number;
+  pending: number;
+  in_progress: number;
+  failed_permanent: number;
+  other: number;
+};
+
+type CacheStats = {
+  state_rows: number;
+  books_rows: number;
+  ok_authors: number;
+  error_authors: number;
+};
+
+type CacheCooldown = {
+  blocked: boolean;
+  remaining_s: number;
+  reason: string | null;
+};
+
+type CacheStatusResponse = {
+  source: string;
+  enabled: boolean;
+  cooldown: CacheCooldown;
+  worker: CacheWorkerStatus;
+  queue: CacheQueueStats;
+  cache: CacheStats;
+};
+
+type CacheSettingsResponse = {
+  ok: boolean;
+  source: string;
+  enabled: boolean;
+};
+
+type ResetCooldownResponse = {
+  ok: boolean;
+  source: string;
+  previously_blocked: boolean;
+  previous_remaining_s: number;
+};
+
+
+function _formatSecondsAgo(s: number | null): string {
+  if (s === null || s === undefined) return "never";
+  if (s < 60) return `${Math.round(s)}s ago`;
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  if (s < 86400) return `${(s / 3600).toFixed(1)}h ago`;
+  return `${(s / 86400).toFixed(1)}d ago`;
+}
+
+function _formatCooldown(s: number): string {
+  if (s <= 0) return "clear";
+  if (s < 60) return `${Math.round(s)}s`;
+  if (s < 3600) return `${Math.round(s / 60)}m`;
+  return `${(s / 3600).toFixed(1)}h`;
+}
+
+
+function AmazonCacheStatusCard() {
+  const t = useTheme();
+  const [status, setStatus] = useState<CacheStatusResponse | null>(null);
+  const [busy, setBusy] = useState<null | "toggle" | "reset">(null);
+  const [err, setErr] = useState<string>("");
+
+  // Poll every 30s while mounted. Heartbeat-staleness checks rely on
+  // a recent reading; faster polling burns CPU for no real-world
+  // benefit (worker iterations are ≥30s by design).
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const fetchStatus = async () => {
+      try {
+        const r = await api.get<CacheStatusResponse>(
+          "/v1/metadata-cache/amazon/status",
+        );
+        if (!cancelled) setStatus(r);
+      } catch (e) {
+        if (!cancelled && !api.isAbort(e)) {
+          setErr(e instanceof Error ? e.message : "Status fetch failed");
+        }
+      }
+    };
+    fetchStatus();
+    timer = setInterval(fetchStatus, 30_000);
+    return () => {
+      cancelled = true;
+      if (timer) clearInterval(timer);
+    };
+  }, []);
+
+  async function toggleEnabled() {
+    if (status === null) return;
+    setBusy("toggle");
+    setErr("");
+    try {
+      const r = await api.patch<CacheSettingsResponse>(
+        "/v1/metadata-cache/amazon/settings",
+        { enabled: !status.enabled },
+      );
+      // Optimistic: update the enabled flag immediately so the pill
+      // flips without waiting for the next poll. The full status will
+      // refresh on the next 30s tick.
+      setStatus({ ...status, enabled: r.enabled });
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Toggle failed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function resetCooldown() {
+    setBusy("reset");
+    setErr("");
+    try {
+      await api.post<ResetCooldownResponse>(
+        "/v1/metadata-cache/amazon/reset-cooldown",
+      );
+      // Force-refresh status so the cooldown banner clears.
+      const r = await api.get<CacheStatusResponse>(
+        "/v1/metadata-cache/amazon/status",
+      );
+      setStatus(r);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Reset failed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  if (status === null) {
+    return (
+      <div style={{
+        padding: "10px 4px 14px 60px",
+        borderBottom: `1px solid ${t.borderL}`,
+        color: t.textDim, fontSize: 12,
+      }}>
+        Loading cache status…
+      </div>
+    );
+  }
+
+  // Status pill: cooldown (red) > disabled (gray) > stalled (yellow) >
+  // active (green). Stalled = enabled, but >5min since the last
+  // heartbeat — the worker should be ticking at 30-90s, so 5min of
+  // silence is the supervised task crashed.
+  const stalled = status.enabled
+    && (status.worker.seconds_since_heartbeat === null
+        || status.worker.seconds_since_heartbeat > 300);
+  let pillColor: string;
+  let pillLabel: string;
+  if (status.cooldown.blocked) {
+    pillColor = t.err;
+    pillLabel = "Cooldown";
+  } else if (!status.enabled) {
+    pillColor = t.textDim;
+    pillLabel = "Disabled";
+  } else if (stalled) {
+    pillColor = "#cc9933";  // amber — pre-existing palette has no warning tone
+    pillLabel = "Stalled";
+  } else {
+    pillColor = t.ok;
+    pillLabel = "Active";
+  }
+
+  return (
+    <div style={{
+      display: "flex", flexDirection: "column", gap: 10,
+      padding: "10px 4px 14px 60px",
+      borderBottom: `1px solid ${t.borderL}`,
+      fontSize: 12,
+    }}>
+      {/* Header: status pill + label */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <span style={{ color: t.textDim, fontWeight: 600 }}>
+          Cache worker
+        </span>
+        <span style={{
+          fontSize: 11, fontWeight: 700, textTransform: "uppercase",
+          padding: "3px 9px", borderRadius: 99, letterSpacing: 0.5,
+          background: pillColor + "22", color: pillColor,
+        }}>{pillLabel}</span>
+        {status.cooldown.blocked && (
+          <span style={{ color: t.textDim, fontSize: 11 }}>
+            clears in {_formatCooldown(status.cooldown.remaining_s)}
+          </span>
+        )}
+        <span style={{ color: t.textDim, fontSize: 11, marginLeft: "auto" }}>
+          heartbeat {_formatSecondsAgo(status.worker.seconds_since_heartbeat)}
+        </span>
+      </div>
+
+      {/* Live-stats panel */}
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+        gap: 8,
+        background: t.bg3, border: `1px solid ${t.borderL}`,
+        borderRadius: 6, padding: "8px 12px",
+      }}>
+        <StatTile label="Queue (pending)" value={status.queue.pending.toLocaleString()} />
+        <StatTile
+          label="Cached authors"
+          value={`${status.cache.ok_authors.toLocaleString()} / ${status.cache.state_rows.toLocaleString()}`}
+          hint="ok / total state rows"
+        />
+        <StatTile
+          label="Cached books"
+          value={status.cache.books_rows.toLocaleString()}
+        />
+        <StatTile
+          label="Scans today"
+          value={status.worker.today_scan_count.toLocaleString()}
+        />
+        <StatTile
+          label="Blocks today"
+          value={status.worker.today_block_count.toLocaleString()}
+          tone={status.worker.today_block_count > 0 ? "warn" : undefined}
+        />
+        <StatTile
+          label="In progress"
+          value={status.queue.in_progress.toLocaleString()}
+          tone={status.queue.in_progress > 1 ? "warn" : undefined}
+          hint={
+            status.queue.in_progress > 1
+              ? "should normally be 0-1; >1 hints at a stuck row"
+              : undefined
+          }
+        />
+        <StatTile
+          label="Failed permanent"
+          value={status.queue.failed_permanent.toLocaleString()}
+          tone={status.queue.failed_permanent > 0 ? "err" : undefined}
+        />
+        <StatTile
+          label="Last scan"
+          value={_formatSecondsAgo(status.worker.seconds_since_scan_completed)}
+        />
+      </div>
+
+      {/* Action buttons */}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <Btn
+          onClick={toggleEnabled}
+          disabled={busy !== null}
+        >
+          {busy === "toggle" ? <Spin /> : (status.enabled ? "Disable worker" : "Enable worker")}
+        </Btn>
+        {status.cooldown.blocked && (
+          <Btn
+            onClick={resetCooldown}
+            disabled={busy !== null}
+          >
+            {busy === "reset" ? <Spin /> : "Reset cooldown"}
+          </Btn>
+        )}
+      </div>
+
+      {/* Cooldown reason banner (info, not error) */}
+      {status.cooldown.blocked && status.cooldown.reason && (
+        <div style={{
+          background: t.bg3, border: `1px solid ${t.borderL}`,
+          color: t.textDim, padding: "6px 10px", borderRadius: 6, fontSize: 11,
+        }}>
+          <b>Last block:</b> {status.cooldown.reason}
+        </div>
+      )}
+
+      {/* Error banner */}
+      {err && (
+        <div style={{
+          background: t.err + "22", border: `1px solid ${t.err}55`,
+          color: t.err, padding: "6px 10px", borderRadius: 6, fontSize: 12,
+        }}>
+          {err}
+        </div>
+      )}
+
+      {/* Help text */}
+      <div style={{ color: t.textDim, fontSize: 11, fontStyle: "italic", lineHeight: 1.4 }}>
+        The background worker drains the cache queue at humanized cadence
+        (30-90s jitter). Synchronous scans always read from this cache —
+        Amazon is never hit live during a user-triggered scan, so soft-
+        block cascades can't spill into other sources. Disable to pause
+        the worker without disabling Amazon as a metadata source.
+      </div>
+    </div>
+  );
+}
+
+
+function StatTile({
+  label, value, hint, tone,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  tone?: "warn" | "err";
+}) {
+  const t = useTheme();
+  const color = tone === "err" ? t.err
+              : tone === "warn" ? "#cc9933"
+              : t.text2;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
+      <span style={{
+        color: t.textDim, fontSize: 10, fontWeight: 700,
+        textTransform: "uppercase", letterSpacing: 0.5,
+      }}>{label}</span>
+      <span style={{ color, fontSize: 14, fontWeight: 600 }}>{value}</span>
+      {hint && (
+        <span style={{ color: t.textDim, fontSize: 10, fontStyle: "italic" }}>
+          {hint}
+        </span>
+      )}
     </div>
   );
 }
