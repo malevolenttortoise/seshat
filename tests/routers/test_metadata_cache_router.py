@@ -388,3 +388,136 @@ class TestGetAuthorCacheState:
             "/api/v1/metadata-cache/hardcover/author/B0WHATEVER"
         )
         assert r.status_code == 404
+
+
+# ─── GET /recent-discoveries ───────────────────────────────────
+
+
+async def _seed_book_at(
+    *,
+    author_id: str,
+    library_slug: str,
+    book_asin: str,
+    title: str,
+    cached_at: float,
+    series_name: str | None = None,
+    series_pos: float | None = None,
+) -> None:
+    db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+    try:
+        # state row required by the FK before we can insert the book
+        await db.execute(
+            f"INSERT OR IGNORE INTO {metadata_cache.state_table()} "
+            f"(author_id, library_slug, last_scanned_at, last_outcome, "
+            f" book_count) VALUES (?, ?, ?, ?, ?)",
+            (author_id, library_slug, cached_at, "ok", 1),
+        )
+        await db.execute(
+            f"INSERT INTO {metadata_cache.books_table()} "
+            f"(author_id, library_slug, book_asin, title, "
+            f" series_name, series_pos, cached_at) "
+            f"VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                author_id, library_slug, book_asin, title,
+                series_name, series_pos, cached_at,
+            ),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+class TestRecentDiscoveries:
+    async def test_returns_newest_first_within_window(
+        self, cache_router_client,
+    ):
+        now = time.time()
+        await _seed_book_at(
+            author_id="B0A0", library_slug="books-lib",
+            book_asin="B0BK0001", title="Old Book",
+            cached_at=now - 3600,
+        )
+        await _seed_book_at(
+            author_id="B0A0", library_slug="books-lib",
+            book_asin="B0BK0002", title="Newer Book",
+            cached_at=now - 60,
+        )
+        await _seed_book_at(
+            author_id="B0A1", library_slug="books-lib",
+            book_asin="B0BK0003", title="Newest Book",
+            cached_at=now - 10,
+        )
+        r = await cache_router_client.get(
+            "/api/v1/metadata-cache/amazon/recent-discoveries"
+        )
+        body = r.json()
+        assert body["source"] == "amazon"
+        assert body["window_hours"] == 24
+        titles = [d["title"] for d in body["discoveries"]]
+        assert titles == ["Newest Book", "Newer Book", "Old Book"]
+        # seconds_ago is precomputed server-side; check rough ranges.
+        secs = [d["seconds_ago"] for d in body["discoveries"]]
+        assert 0 <= secs[0] < 20
+        assert 50 < secs[1] < 100
+        assert 3500 < secs[2] < 3700
+
+    async def test_window_hours_filter(self, cache_router_client):
+        now = time.time()
+        await _seed_book_at(
+            author_id="B0A0", library_slug="books-lib",
+            book_asin="B0BK0001", title="Within Window",
+            cached_at=now - 1800,  # 30min ago — within 1h window
+        )
+        await _seed_book_at(
+            author_id="B0A0", library_slug="books-lib",
+            book_asin="B0BK0002", title="Outside Window",
+            cached_at=now - 7200,  # 2h ago — outside 1h window
+        )
+        r = await cache_router_client.get(
+            "/api/v1/metadata-cache/amazon/recent-discoveries?hours=1"
+        )
+        titles = [d["title"] for d in r.json()["discoveries"]]
+        assert titles == ["Within Window"]
+
+    async def test_limit_caps_results(self, cache_router_client):
+        now = time.time()
+        for i in range(15):
+            await _seed_book_at(
+                author_id="B0A0", library_slug="books-lib",
+                book_asin=f"B0BK{i:04d}", title=f"Book {i}",
+                cached_at=now - i * 10,
+            )
+        r = await cache_router_client.get(
+            "/api/v1/metadata-cache/amazon/recent-discoveries?limit=5"
+        )
+        body = r.json()
+        assert len(body["discoveries"]) == 5
+
+    async def test_empty_returns_empty_list(self, cache_router_client):
+        r = await cache_router_client.get(
+            "/api/v1/metadata-cache/amazon/recent-discoveries"
+        )
+        body = r.json()
+        assert body["discoveries"] == []
+        assert body["source"] == "amazon"
+
+    async def test_series_fields_round_trip(self, cache_router_client):
+        now = time.time()
+        await _seed_book_at(
+            author_id="B0A0", library_slug="books-lib",
+            book_asin="B0BK0001", title="Mistborn 1",
+            series_name="Mistborn", series_pos=1.0,
+            cached_at=now,
+        )
+        r = await cache_router_client.get(
+            "/api/v1/metadata-cache/amazon/recent-discoveries"
+        )
+        row = r.json()["discoveries"][0]
+        assert row["series_name"] == "Mistborn"
+        assert row["series_pos"] == 1.0
+
+    async def test_404_on_unknown_source(self, cache_router_client):
+        r = await cache_router_client.get(
+            "/api/v1/metadata-cache/hardcover/recent-discoveries"
+        )
+        assert r.status_code == 404

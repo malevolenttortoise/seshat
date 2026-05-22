@@ -25,7 +25,7 @@ import logging
 import time
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.config import load_settings, save_settings
@@ -113,6 +113,26 @@ class ResetCooldownResponse(BaseModel):
     source: str
     previously_blocked: bool
     previous_remaining_s: float
+
+
+class RecentDiscoveryRow(BaseModel):
+    """One newly-cached book for the dashboard "recent finds"
+    widget. Light projection — only the fields the widget renders;
+    the full book row stays in the per-author detail flow."""
+    author_id: str
+    library_slug: str
+    book_asin: str
+    title: str
+    series_name: Optional[str]
+    series_pos: Optional[float]
+    cached_at: float
+    seconds_ago: float
+
+
+class RecentDiscoveriesResponse(BaseModel):
+    source: str
+    window_hours: int
+    discoveries: list[RecentDiscoveryRow]
 
 
 class AuthorCacheStateRow(BaseModel):
@@ -292,6 +312,59 @@ async def patch_settings(
     new_enabled = bool(_cache_settings_get(source).get("enabled", False))
     return SettingsPatchResponse(
         ok=True, source=source, enabled=new_enabled,
+    )
+
+
+@router.get(
+    "/{source}/recent-discoveries",
+    response_model=RecentDiscoveriesResponse,
+)
+async def get_recent_discoveries(
+    source: str,
+    limit: int = Query(10, ge=1, le=100),
+    hours: int = Query(24, ge=1, le=720),
+) -> RecentDiscoveriesResponse:
+    """Latest cached books for the dashboard "Recent Amazon finds"
+    section. Returns rows whose `cached_at` is within the last
+    `hours` window, newest first, capped at `limit`.
+
+    Used by `UnifiedDashboard` to celebrate worker wins. Kept
+    intentionally minimal: just enough fields to render a compact
+    line, with `seconds_ago` precomputed server-side so the widget
+    isn't tied to client clock accuracy.
+    """
+    _validate_source(source)
+    now = time.time()
+    cutoff = now - (hours * 3600)
+    bt = metadata_cache.books_table(source)
+    db = await metadata_cache.get_db(source)
+    try:
+        cur = await db.execute(
+            f"SELECT author_id, library_slug, book_asin, title, "
+            f"series_name, series_pos, cached_at "
+            f"FROM {bt} "
+            f"WHERE cached_at >= ? "
+            f"ORDER BY cached_at DESC LIMIT ?",
+            (cutoff, limit),
+        )
+        rows = await cur.fetchall()
+    finally:
+        await db.close()
+    discoveries = [
+        RecentDiscoveryRow(
+            author_id=row["author_id"],
+            library_slug=row["library_slug"],
+            book_asin=row["book_asin"],
+            title=row["title"] or "",
+            series_name=row["series_name"],
+            series_pos=row["series_pos"],
+            cached_at=float(row["cached_at"]),
+            seconds_ago=now - float(row["cached_at"]),
+        )
+        for row in rows
+    ]
+    return RecentDiscoveriesResponse(
+        source=source, window_hours=hours, discoveries=discoveries,
     )
 
 

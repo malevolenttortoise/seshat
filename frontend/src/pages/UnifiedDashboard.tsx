@@ -1203,55 +1203,58 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
         </div>
       </div>
 
-      {/* ══════ SESHAT STATS: right rail on wide, wraps below on narrow ══════ */}
+      {/* ══════ SESHAT STATS: right rail on wide, wraps below on narrow ══════
+         v2.21.0 Phase F.3 — sections compacted (smaller header + tiles +
+         tighter margins) so the new Amazon Cache section at the bottom
+         fits without a dashboard-wide layout overhaul. */}
       <div
         style={{
           gridArea: "stats",
           background: t.bg2,
           border: `1px solid ${t.border}`,
           borderRadius: 12,
-          padding: "12px 16px",
+          padding: "10px 14px",
         }}
       >
-        <div style={{ ...hdr(), marginBottom: 12 }}>
+        <div style={{ ...hdr(), fontSize: 13, marginBottom: 8 }}>
           <Dot color={t.accent} /> Seshat Stats
         </div>
 
-        <div style={sectionHdr}>Ebook</div>
+        <div style={{ ...sectionHdr, fontSize: 9, marginBottom: 4 }}>Ebook</div>
         <div
           style={{
             display: "grid",
             gridTemplateColumns: mobileMode ? "repeat(2, 1fr)" : wideMode ? "repeat(2, 1fr)" : "repeat(4, 1fr)",
-            gap: 8,
-            marginBottom: 14,
+            gap: 6,
+            marginBottom: 10,
           }}
         >
-          <Tile
+          <Tile compact
             label="Owned"
             value={fmtNum(owned)}
             color={t.accent}
             onClick={() => onNav("disc-library")}
           />
-          <Tile
+          <Tile compact
             label="Missing"
             value={fmtNum(missing)}
             color={t.ylw}
             onClick={() => onNav("disc-missing")}
           />
-          <Tile label="New" value={fmtNum(newBooks)} color={t.jade} />
-          <Tile
+          <Tile compact label="New" value={fmtNum(newBooks)} color={t.jade} />
+          <Tile compact
             label="Upcoming"
             value={fmtNum(upcoming)}
             color={t.cyan}
             onClick={() => onNav("disc-upcoming")}
           />
-          <Tile
+          <Tile compact
             label="Authors"
             value={fmtNum(authors)}
             onClick={() => onNav("disc-authors")}
           />
-          <Tile label="Series" value={fmtNum(series)} />
-          <Tile
+          <Tile compact label="Series" value={fmtNum(series)} />
+          <Tile compact
             label="Metadata"
             value={fmtNum(ds.suggestions ?? 0)}
             color={t.pur}
@@ -1261,34 +1264,34 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
 
         {audiobookStats && (
           <>
-            <div style={sectionHdr}>Audiobook</div>
+            <div style={{ ...sectionHdr, fontSize: 9, marginBottom: 4 }}>Audiobook</div>
             <div
               style={{
                 display: "grid",
                 gridTemplateColumns: mobileMode ? "repeat(2, 1fr)" : wideMode ? "repeat(2, 1fr)" : "repeat(4, 1fr)",
-                gap: 8,
-                marginBottom: 14,
+                gap: 6,
+                marginBottom: 10,
               }}
             >
-              <Tile
+              <Tile compact
                 label="Owned"
                 value={fmtNum(audiobookStats.owned_books ?? 0)}
                 color={t.pur}
                 onClick={() => onNav("disc-library")}
               />
-              <Tile
+              <Tile compact
                 label="Hours"
                 value={fmtNum(
                   Math.round((audiobookStats.total_duration_sec ?? 0) / 3600),
                 )}
                 color={t.pur}
               />
-              <Tile
+              <Tile compact
                 label="Narrators"
                 value={fmtNum(audiobookStats.narrator_count ?? 0)}
                 color={t.pur}
               />
-              <Tile
+              <Tile compact
                 label="Unabridged"
                 value={fmtNum(audiobookStats.unabridged_count ?? 0)}
                 color={t.jade}
@@ -1297,41 +1300,55 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
           </>
         )}
 
-        <div style={sectionHdr}>Pipeline</div>
+        <div style={{ ...sectionHdr, fontSize: 9, marginBottom: 4 }}>Pipeline</div>
         <div
           style={{
             display: "grid",
             gridTemplateColumns: mobileMode ? "repeat(2, 1fr)" : wideMode ? "repeat(2, 1fr)" : "repeat(4, 1fr)",
-            gap: 8,
+            gap: 6,
+            marginBottom: 10,
           }}
         >
-          <Tile
+          <Tile compact
             label="To Review"
             value={reviewCount}
             color={(reviewCount ?? 0) > 0 ? t.accent : t.td}
             onClick={() => onNav("pipe-review")}
           />
-          <Tile
+          <Tile compact
             label="New Authors"
             value={tentativeCount}
             color={(tentativeCount ?? 0) > 0 ? t.warn : t.td}
             onClick={() => onNav("pipe-tentative")}
           />
-          <Tile
+          <Tile compact
             label="Allowed"
             value={fmtNum(allowed)}
             color={t.ok}
             onClick={() => onNav("pipe-authors")}
           />
-          <Tile
+          <Tile compact
             label="Ignored"
             value={fmtNum(ignored)}
             color={t.red}
             onClick={() => onNav("pipe-authors")}
           />
-          <Tile label="To Calibre" value={fmtNum(calibreAdds)} color={t.ok} />
-          <Tile label="Total Grabs" value={fmtNum(totalGrabs)} />
+          <Tile compact label="To Calibre" value={fmtNum(calibreAdds)} color={t.ok} />
+          <Tile compact label="Total Grabs" value={fmtNum(totalGrabs)} />
         </div>
+
+        {/* v2.21.0 Phase F.3 — Amazon metadata cache section.
+           Renders inside the Seshat Stats widget rather than as a
+           standalone dashboard tile so the existing grid layout stays
+           intact. Polls /status (cache + queue counts) and
+           /recent-discoveries (latest cached books) for the celebratory
+           feed below the tiles. */}
+        <AmazonCacheRail
+          mobileMode={mobileMode}
+          wideMode={wideMode}
+          sectionHdrStyle={{ ...sectionHdr, fontSize: 9, marginBottom: 4 }}
+          onNavSettings={() => onNav("settings")}
+        />
       </div>
       {showHygieneConfirm && (
         <HygieneConfirmModal
@@ -1563,33 +1580,42 @@ interface TileProps {
   onClick?: () => void;
 }
 
-function Tile({ label, value, color, sub, onClick }: TileProps) {
+function Tile({ label, value, color, sub, onClick, compact = false }: TileProps & { compact?: boolean }) {
   const t = useTheme();
+  // v2.21.0 Phase F.3 — compact variant scoped to the Seshat Stats
+  // widget. ~30% less vertical real estate per tile so the widget
+  // fits the new Amazon Cache section without a full dashboard
+  // redesign.
+  const padding = compact ? "6px 10px" : "12px 14px";
+  const valueSize = compact ? 16 : 24;
+  const labelSize = compact ? 10 : 13;
+  const subSize = compact ? 9 : 10;
+  const labelMargin = compact ? 1 : 4;
   return (
     <div
       onClick={onClick}
       style={{
         background: t.bg3,
-        borderRadius: 8,
-        padding: "12px 14px",
+        borderRadius: compact ? 6 : 8,
+        padding,
         cursor: onClick ? "pointer" : "default",
       }}
     >
       <div
         style={{
-          fontSize: 24,
+          fontSize: valueSize,
           fontWeight: 700,
           color: color || t.text,
           lineHeight: 1.1,
         }}
       >
-        {value === null ? <Spin size={16} /> : value}
+        {value === null ? <Spin size={compact ? 12 : 16} /> : value}
       </div>
-      <div style={{ fontSize: 13, color: t.td, marginTop: 4 }}>{label}</div>
+      <div style={{ fontSize: labelSize, color: t.td, marginTop: labelMargin }}>{label}</div>
       {sub && (
         <div
           style={{
-            fontSize: 10,
+            fontSize: subSize,
             color: t.tf,
             marginTop: 2,
             textTransform: "uppercase",
@@ -1602,6 +1628,254 @@ function Tile({ label, value, color, sub, onClick }: TileProps) {
     </div>
   );
 }
+
+// ─── Amazon cache rail (v2.21.0 Phase F.3) ──────────────────────
+//
+// Lives at the bottom of the Seshat Stats widget. Two parts:
+//   1. Four compact tiles: enabled state, cached authors fraction,
+//      scans today, blocks today (tone warn when >0).
+//   2. Scrollable "Recent finds" list: up to 6 newest cached books
+//      from the past 24h, newest first. Empty state surfaces the
+//      worker-disabled vs. just-haven't-scanned-anything-yet
+//      distinction explicitly.
+//
+// Polls /status every 60s and /recent-discoveries every 120s. Both
+// fail silently on auth / network / legacy-image errors so the
+// dashboard doesn't crash for unrelated reasons.
+
+type AmazonCacheStatus = {
+  enabled: boolean;
+  cooldown: { blocked: boolean; remaining_s: number };
+  worker: {
+    today_scan_count: number;
+    today_block_count: number;
+    seconds_since_heartbeat: number | null;
+  };
+  queue: { pending: number };
+  cache: { state_rows: number; ok_authors: number };
+};
+
+type RecentDiscovery = {
+  author_id: string;
+  library_slug: string;
+  book_asin: string;
+  title: string;
+  series_name: string | null;
+  series_pos: number | null;
+  cached_at: number;
+  seconds_ago: number;
+};
+
+type RecentDiscoveriesResponse = {
+  source: string;
+  window_hours: number;
+  discoveries: RecentDiscovery[];
+};
+
+const STATUS_POLL_MS = 60_000;
+const DISCOVERIES_POLL_MS = 120_000;
+const DISCOVERIES_LIMIT = 6;
+const DISCOVERIES_WINDOW_H = 24;
+
+function _ago(s: number): string {
+  if (s < 60) return `${Math.round(s)}s ago`;
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
+}
+
+function AmazonCacheRail({
+  mobileMode,
+  wideMode,
+  sectionHdrStyle,
+  onNavSettings,
+}: {
+  mobileMode: boolean;
+  wideMode: boolean;
+  sectionHdrStyle: React.CSSProperties;
+  onNavSettings: () => void;
+}) {
+  const t = useTheme();
+  const [status, setStatus] = useState<AmazonCacheStatus | null>(null);
+  const [discoveries, setDiscoveries] = useState<RecentDiscovery[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let statusTimer: ReturnType<typeof setInterval> | null = null;
+    let discoveriesTimer: ReturnType<typeof setInterval> | null = null;
+    const fetchStatus = async () => {
+      try {
+        const r = await api.get<AmazonCacheStatus>(
+          "/v1/metadata-cache/amazon/status",
+        );
+        if (!cancelled) setStatus(r);
+      } catch {
+        /* silent — auth, network, legacy image */
+      }
+    };
+    const fetchDiscoveries = async () => {
+      try {
+        const r = await api.get<RecentDiscoveriesResponse>(
+          `/v1/metadata-cache/amazon/recent-discoveries?limit=${DISCOVERIES_LIMIT}&hours=${DISCOVERIES_WINDOW_H}`,
+        );
+        if (!cancelled) setDiscoveries(r.discoveries);
+      } catch {
+        /* silent */
+      }
+    };
+    fetchStatus();
+    fetchDiscoveries();
+    statusTimer = setInterval(fetchStatus, STATUS_POLL_MS);
+    discoveriesTimer = setInterval(fetchDiscoveries, DISCOVERIES_POLL_MS);
+    return () => {
+      cancelled = true;
+      if (statusTimer) clearInterval(statusTimer);
+      if (discoveriesTimer) clearInterval(discoveriesTimer);
+    };
+  }, []);
+
+  // Cached authors fraction: ok_authors / total ever-queued. Total
+  // is approximated by `pending + state_rows` since once-scanned
+  // rows stay pending (just with a forward next_scan_due_at). For
+  // tile cosmetics this is precise enough.
+  const cachedTotal = (status?.cache.state_rows ?? 0);
+  const queuePending = (status?.queue.pending ?? 0);
+  const totalAuthors = Math.max(cachedTotal, queuePending);
+  const okAuthors = status?.cache.ok_authors ?? 0;
+
+  return (
+    <>
+      <div style={sectionHdrStyle}>Amazon Cache</div>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: mobileMode
+            ? "repeat(2, 1fr)"
+            : wideMode
+            ? "repeat(2, 1fr)"
+            : "repeat(4, 1fr)",
+          gap: 6,
+          marginBottom: 8,
+        }}
+      >
+        <Tile
+          compact
+          label="Worker"
+          value={
+            status === null
+              ? null
+              : status.cooldown.blocked
+              ? "Cooldown"
+              : status.enabled
+              ? "On"
+              : "Off"
+          }
+          color={
+            status === null
+              ? undefined
+              : status.cooldown.blocked
+              ? t.warn
+              : status.enabled
+              ? t.ok
+              : t.td
+          }
+          onClick={onNavSettings}
+        />
+        <Tile
+          compact
+          label="Cached"
+          value={
+            status === null
+              ? null
+              : `${fmtNum(okAuthors)} / ${fmtNum(totalAuthors)}`
+          }
+          color={t.accent}
+          sub="authors"
+          onClick={onNavSettings}
+        />
+        <Tile
+          compact
+          label="Scans"
+          value={status === null ? null : fmtNum(status.worker.today_scan_count)}
+          color={t.jade}
+          sub="today"
+        />
+        <Tile
+          compact
+          label="Blocks"
+          value={status === null ? null : fmtNum(status.worker.today_block_count)}
+          color={
+            (status?.worker.today_block_count ?? 0) > 0 ? t.warn : t.td
+          }
+          sub="today"
+        />
+      </div>
+
+      {/* Recent finds list */}
+      <div
+        style={{
+          background: t.bg3,
+          border: `1px solid ${t.borderL}`,
+          borderRadius: 6,
+          padding: "6px 8px",
+          maxHeight: 140,
+          overflowY: "auto",
+        }}
+      >
+        <div
+          style={{
+            fontSize: 9,
+            fontWeight: 700,
+            color: t.td,
+            textTransform: "uppercase",
+            letterSpacing: "0.04em",
+            marginBottom: 4,
+          }}
+        >
+          Recent finds · {DISCOVERIES_WINDOW_H}h
+        </div>
+        {discoveries === null ? (
+          <div style={{ color: t.td, fontSize: 11, padding: "4px 2px" }}>
+            <Spin size={10} />
+          </div>
+        ) : discoveries.length === 0 ? (
+          <div style={{ color: t.td, fontSize: 11, fontStyle: "italic", padding: "4px 2px" }}>
+            {status?.enabled === false
+              ? "Worker disabled — enable to start populating the cache"
+              : "No discoveries yet in this window"}
+          </div>
+        ) : (
+          discoveries.map(d => (
+            <div
+              key={`${d.author_id}-${d.library_slug}-${d.book_asin}`}
+              style={{
+                display: "flex",
+                gap: 6,
+                alignItems: "baseline",
+                padding: "2px 0",
+                fontSize: 11,
+                borderBottom: `1px solid ${t.borderL}66`,
+              }}
+            >
+              <span style={{ flex: 1, minWidth: 0, color: t.text2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={d.title}>
+                {d.title}
+                {d.series_name && (
+                  <span style={{ color: t.td, fontStyle: "italic" }}>
+                    {" "}— {d.series_name}{d.series_pos != null ? ` #${d.series_pos}` : ""}
+                  </span>
+                )}
+              </span>
+              <span style={{ color: t.td, fontSize: 10, flexShrink: 0 }}>
+                {_ago(d.seconds_ago)}
+              </span>
+            </div>
+          ))
+        )}
+      </div>
+    </>
+  );
+}
+
 
 function formatAgo(ts: number | null | undefined): string | null {
   if (!ts) return null;
