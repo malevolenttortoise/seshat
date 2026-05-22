@@ -62,6 +62,16 @@ class BookResult:
     # format" later. Only AmazonSource populates this today; other
     # sources leave it None and the merge layer no-ops.
     amazon_format_asins: Optional[str] = None
+    # v2.21.0 schema-v2: the source's binding shape for this book
+    # (e.g. `kindle_edition`, `audio_download`, `paperback`,
+    # `hardcover` for Amazon; left None for sources that don't
+    # expose a binding). The metadata cache stores this verbatim so
+    # the cache reader can filter per-content-type at read time
+    # WITHOUT relying on the scan-time format filter that the
+    # worker used. Required for the v2 per-author-scan workflow,
+    # where a single scan returns mixed bindings and each book row
+    # needs to identify its own.
+    format: Optional[str] = None
     # v2.16.0 Gap 1 — cross-source identifiers a source happens to
     # know for the book it's emitting. Hardcover surfaces these via
     # its `book_mappings` table (goodreads/openlibrary/google

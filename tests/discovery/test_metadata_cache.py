@@ -142,10 +142,12 @@ class TestSchemaInit:
             row = await cur.fetchone()
         finally:
             await db.close()
-        # The migration list contains 6 entries (4 CREATE TABLE + 1
-        # INSERT + 1 CREATE INDEX); user_version should equal that
-        # count so subsequent calls short-circuit.
-        assert row[0] == 6
+        # user_version should match the length of the migration list
+        # so subsequent calls short-circuit. Derived rather than
+        # hardcoded so adding new migrations (v3, v4, …) doesn't
+        # require updating this assertion.
+        expected = len(metadata_cache._MIGRATIONS[metadata_cache.SOURCE_AMAZON])
+        assert row[0] == expected
 
     async def test_init_is_idempotent(self, cache_under):
         # Two back-to-back inits should leave the schema untouched.
@@ -297,9 +299,13 @@ class TestBackfillFromAuthors:
             await db.close()
         assert row[0] == 4
 
-    async def test_backfill_records_library_slug_and_seshat_id(
+    async def test_backfill_records_queue_metadata(
         self, cache_under, fake_discovery_libraries,
     ):
+        """v2 schema: queue is keyed by `author_id` only. Per-library
+        seshat_author_id is resolved by the worker at scan time via
+        `_libraries_for_author`. Backfill records priority + status +
+        enqueued_reason on each unique amazon_id."""
         await metadata_cache.init_db(metadata_cache.SOURCE_AMAZON)
         await metadata_cache.backfill_amazon_queue_from_authors(
             fake_discovery_libraries,
@@ -307,26 +313,73 @@ class TestBackfillFromAuthors:
         db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
         try:
             cur = await db.execute(
-                f"SELECT author_id, library_slug, seshat_author_id, "
-                f"priority, status, enqueued_reason "
+                f"SELECT author_id, priority, status, enqueued_reason "
                 f"FROM {metadata_cache.queue_table()} "
-                f"WHERE library_slug = ? "
-                f"ORDER BY author_id",
-                ("books-lib",),
+                f"ORDER BY author_id"
             )
             rows = await cur.fetchall()
         finally:
             await db.close()
-        # author_id matches what authors.amazon_id held; library_slug
-        # matches the fixture; seshat_author_id is the authors.id PK;
-        # status defaults to 'pending'.
-        assert len(rows) == 2
+        # All 4 distinct amazon_id authors from both libraries.
+        assert len(rows) == 4
         for r in rows:
-            assert r[1] == "books-lib"
-            assert isinstance(r[2], int) and r[2] > 0
-            assert r[3] == 100.0
-            assert r[4] == "pending"
-            assert r[5] == "v2210_backfill"
+            assert r[1] == 100.0          # priority
+            assert r[2] == "pending"      # status
+            assert r[3] == "v2210_backfill"
+
+    async def test_backfill_dedupes_same_amazon_id_across_libraries(
+        self, cache_under, tmp_path, monkeypatch,
+    ):
+        """v2 schema: queue PK is `author_id` only, so the same
+        amazon_id present in both calibre + abs collapses to ONE
+        queue row. Confirms the 50% backfill-volume win flagged on
+        2026-05-22."""
+        from app.discovery import database as disco_db
+        monkeypatch.setattr(disco_db, "DATA_DIR", tmp_path)
+
+        slugs = ["books-lib", "audio-lib"]
+        for slug in slugs:
+            await disco_db.init_db(slug)
+
+        # SAME amazon_id in both libraries (Sanderson-style cross-
+        # library author), plus one unique-per-library author each.
+        seed: dict[str, list[tuple[str, str]]] = {
+            "books-lib": [
+                ("Shared Author",  "B0SHARED01"),
+                ("Books-Only One", "B0BOOKS001"),
+            ],
+            "audio-lib": [
+                ("Shared Author Audio", "B0SHARED01"),  # same amazon_id
+                ("Audio-Only One",      "B0AUDIO001"),
+            ],
+        }
+        for slug, authors in seed.items():
+            db = await disco_db.get_db(slug=slug)
+            try:
+                for name, amazon_id in authors:
+                    await db.execute(
+                        "INSERT INTO authors (name, sort_name, normalized_name, amazon_id) "
+                        "VALUES (?, ?, ?, ?)",
+                        (name, name, name.lower(), amazon_id),
+                    )
+                await db.commit()
+            finally:
+                await db.close()
+
+        await metadata_cache.init_db(metadata_cache.SOURCE_AMAZON)
+        await metadata_cache.backfill_amazon_queue_from_authors(slugs)
+
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+        try:
+            cur = await db.execute(
+                f"SELECT author_id FROM {metadata_cache.queue_table()} "
+                f"ORDER BY author_id"
+            )
+            ids = [r[0] for r in await cur.fetchall()]
+        finally:
+            await db.close()
+        # 3 unique amazon_ids, not 4 — Shared Author collapsed.
+        assert ids == ["B0AUDIO001", "B0BOOKS001", "B0SHARED01"]
 
     async def test_backfill_handles_unknown_library_gracefully(
         self, cache_under, fake_discovery_libraries,

@@ -399,19 +399,36 @@ async def get_author_cache_state(
             (author_id,),
         )
         state_rows = await cur.fetchall()
+        # Schema-v2: queue is keyed by author_id only — singleton row
+        # per author. The same queue info applies to every library
+        # this author lives in; we duplicate it onto each library
+        # entry below so the existing frontend shape (one line per
+        # library) keeps working without a frontend-side change.
         cur = await db.execute(
-            f"SELECT library_slug, status, priority, next_scan_due_at, "
+            f"SELECT status, priority, next_scan_due_at, "
             f"consecutive_failures FROM {q_table} WHERE author_id = ?",
             (author_id,),
         )
-        queue_rows = await cur.fetchall()
+        queue_row = await cur.fetchone()
     finally:
         await db.close()
 
-    # Index by library_slug so we can compose one row per library
-    # the author exists in. A library that has a queue row but no
-    # state row (= enqueued but not yet successfully scanned)
-    # still appears with state=None.
+    queue_info: Optional[dict] = None
+    if queue_row is not None:
+        queue_info = {
+            "status": queue_row["status"],
+            "priority": queue_row["priority"],
+            "next_scan_due_at": queue_row["next_scan_due_at"],
+            "consecutive_failures": queue_row["consecutive_failures"],
+        }
+
+    # Index by library_slug. State rows give us the "scanned" side of
+    # each library; the singleton queue row attaches uniformly. When
+    # there are no state rows but a queue row exists (author was
+    # backfilled / cache-missed but the worker hasn't fanned out
+    # yet), we surface one synthesized entry per library this author
+    # is in via `_libraries_for_author` so the frontend can still
+    # render an "in queue" line per library.
     by_slug: dict[str, dict[str, Any]] = {}
     for row in state_rows:
         by_slug[row["library_slug"]] = {
@@ -420,18 +437,21 @@ async def get_author_cache_state(
                 "last_outcome": row["last_outcome"],
                 "book_count": row["book_count"],
             },
-            "queue": None,
+            "queue": queue_info,
         }
-    for row in queue_rows:
-        slug = row["library_slug"]
-        if slug not in by_slug:
-            by_slug[slug] = {"state": None, "queue": None}
-        by_slug[slug]["queue"] = {
-            "status": row["status"],
-            "priority": row["priority"],
-            "next_scan_due_at": row["next_scan_due_at"],
-            "consecutive_failures": row["consecutive_failures"],
-        }
+
+    if not by_slug and queue_info is not None:
+        # No state rows yet — synthesize from the discovery-DB authors
+        # tables so the frontend can render one "in queue" line per
+        # library this author belongs to. Best-effort: a failure
+        # opening any single discovery DB just skips that library.
+        from app.discovery.metadata_cache_worker import _libraries_for_author
+        try:
+            libs = await _libraries_for_author(author_id)
+        except Exception:
+            libs = []
+        for lib in libs:
+            by_slug[lib["slug"]] = {"state": None, "queue": queue_info}
 
     libraries = [
         AuthorCacheStateRow(

@@ -102,6 +102,10 @@ async def worker_under(tmp_path, monkeypatch):
     )
 
     await metadata_cache.init_db(metadata_cache.SOURCE_AMAZON)
+    # Init both library discovery DBs so the worker's
+    # `_libraries_for_author` lookup has tables to query against.
+    await disco_db.init_db("books-lib")
+    await disco_db.init_db("audio-lib")
     prev_lib = disco_db.get_active_library()
     set_active_library("books-lib")
 
@@ -117,42 +121,85 @@ async def worker_under(tmp_path, monkeypatch):
     resolver_module._block_count = 0
 
 
+async def _seed_author_in_libraries(
+    amazon_id: str, *,
+    libraries: tuple[str, ...] = ("books-lib", "audio-lib"),
+) -> None:
+    """Insert per-library `authors` rows so the worker's
+    `_libraries_for_author` lookup finds this amazon_id and the v2
+    fan-out has somewhere to write.
+
+    Each library gets a `name` derived from the amazon_id so the row
+    is identifiable but doesn't collide across re-seeds.
+    """
+    from app.discovery import database as disco_db
+    for slug in libraries:
+        db = await disco_db.get_db(slug=slug)
+        try:
+            await db.execute(
+                "INSERT OR IGNORE INTO authors "
+                "(name, sort_name, normalized_name, amazon_id) "
+                "VALUES (?, ?, ?, ?)",
+                (
+                    f"Test {amazon_id}", f"Test {amazon_id}",
+                    f"test {amazon_id}".lower(), amazon_id,
+                ),
+            )
+            await db.commit()
+        finally:
+            await db.close()
+
+
 async def _seed_queue_row(
     *,
     author_id: str,
-    library_slug: str,
-    seshat_author_id: int = 1,
     priority: float = 100.0,
     status: str = "pending",
     next_scan_due_at: float = 0.0,
     consecutive_failures: int = 0,
     enqueued_reason: str = "test_seed",
+    seed_in_libraries: tuple[str, ...] = ("books-lib", "audio-lib"),
 ) -> None:
+    """Insert a v2-schema queue row (PK=author_id only). Also seeds
+    matching per-library authors rows in `seed_in_libraries` so the
+    worker's fan-out has targets — pass `seed_in_libraries=()` for
+    tests that explicitly want the no-libraries path."""
+    if seed_in_libraries:
+        await _seed_author_in_libraries(
+            author_id, libraries=seed_in_libraries,
+        )
     db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
     try:
         await db.execute(
             f"INSERT OR REPLACE INTO {metadata_cache.queue_table()} "
-            f"(author_id, library_slug, seshat_author_id, priority, "
-            f" status, next_scan_due_at, consecutive_failures, "
-            f" enqueued_reason) "
-            f"VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (author_id, library_slug, seshat_author_id, priority,
-             status, next_scan_due_at, consecutive_failures,
-             enqueued_reason),
+            f"(author_id, priority, status, next_scan_due_at, "
+            f" consecutive_failures, enqueued_reason) "
+            f"VALUES (?, ?, ?, ?, ?, ?)",
+            (author_id, priority, status, next_scan_due_at,
+             consecutive_failures, enqueued_reason),
         )
         await db.commit()
     finally:
         await db.close()
 
 
-def _author_result(*titles: str, author_id: str = "B0AAAAAAAA") -> AuthorResult:
-    """Build a flat AuthorResult with one BookResult per title."""
+def _author_result(
+    *titles: str,
+    author_id: str = "B0AAAAAAAA",
+    binding: str = "kindle_edition",
+) -> AuthorResult:
+    """Build a flat AuthorResult with one BookResult per title. v2:
+    every BookResult carries `format=binding` so the worker's
+    per-library partition routes the books correctly. Default
+    `kindle_edition` so books land in ebook libraries; pass
+    `binding="audio_download"` for audiobook-library tests."""
     books = [
         BookResult(
             title=t,
             external_id=f"B0{i:08d}",
             source="amazon",
             language="English",
+            format=binding,
         )
         for i, t in enumerate(titles, start=1)
     ]
@@ -199,7 +246,7 @@ class TestCooldownGate:
         # Arm a 120s cooldown so the worker should skip the tick.
         r.record_amazon_soft_block("test", retry_after_s=120)
         await _seed_queue_row(
-            author_id="B0COOLDOWN", library_slug="books-lib",
+            author_id="B0COOLDOWN",
         )
         result = await metadata_cache_worker.tick()
         assert result.outcome == "cooldown"
@@ -235,7 +282,7 @@ class TestSuccessfulScan:
     async def test_successful_scan_writes_cache_and_advances_queue(
         self, worker_under, monkeypatch,
     ):
-        async def _fake_scan(author_id, library_slug, session):
+        async def _fake_scan(author_id, session):
             return _author_result(
                 "Book One", "Book Two", "Book Three", author_id=author_id,
             ), None
@@ -243,26 +290,28 @@ class TestSuccessfulScan:
             metadata_cache_worker, "_perform_amazon_scan", _fake_scan,
         )
         await _seed_queue_row(
-            author_id="B0TESTSCAN", library_slug="books-lib",
+            author_id="B0TESTSCAN",
+            seed_in_libraries=("books-lib",),  # ebook only — keep
+                                               # assertions unambiguous
         )
         result = await metadata_cache_worker.tick()
         assert result.outcome == "ok"
         assert result.books_cached == 3
         assert result.author_id == "B0TESTSCAN"
-        # State row written.
+        # State row written (v2 fan-out: one row per library).
         db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
         try:
             cur = await db.execute(
                 f"SELECT last_outcome, book_count FROM "
                 f"{metadata_cache.state_table()} "
-                f"WHERE author_id = ?",
-                ("B0TESTSCAN",),
+                f"WHERE author_id = ? AND library_slug = ?",
+                ("B0TESTSCAN", "books-lib"),
             )
             srow = await cur.fetchone()
             cur = await db.execute(
                 f"SELECT title, format FROM {metadata_cache.books_table()} "
-                f"WHERE author_id = ? ORDER BY title",
-                ("B0TESTSCAN",),
+                f"WHERE author_id = ? AND library_slug = ? ORDER BY title",
+                ("B0TESTSCAN", "books-lib"),
             )
             book_rows = await cur.fetchall()
             cur = await db.execute(
@@ -299,13 +348,19 @@ class TestSuccessfulScan:
     async def test_audiobook_library_uses_audiobook_format(
         self, worker_under, monkeypatch,
     ):
-        async def _fake_scan(author_id, library_slug, session):
-            return _author_result("Audiobook One", author_id=author_id), None
+        async def _fake_scan(author_id, session):
+            # Scan returns an audio_download book — only audio-lib's
+            # binding-set accepts it, so the partition routes it
+            # exclusively to audio-lib.
+            return _author_result(
+                "Audiobook One", author_id=author_id,
+                binding="audio_download",
+            ), None
         monkeypatch.setattr(
             metadata_cache_worker, "_perform_amazon_scan", _fake_scan,
         )
         await _seed_queue_row(
-            author_id="B0AUDIO0001", library_slug="audio-lib",
+            author_id="B0AUDIO0001", seed_in_libraries=("audio-lib",),
         )
         await metadata_cache_worker.tick()
         db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
@@ -329,13 +384,14 @@ class TestEmptyResultScan:
     async def test_scan_with_zero_books_returns_ok_empty(
         self, worker_under, monkeypatch,
     ):
-        async def _fake_scan(author_id, library_slug, session):
+        async def _fake_scan(author_id, session):
             return _author_result(author_id=author_id), None  # 0 books
         monkeypatch.setattr(
             metadata_cache_worker, "_perform_amazon_scan", _fake_scan,
         )
         await _seed_queue_row(
-            author_id="B0NOBOOKS01", library_slug="books-lib",
+            author_id="B0NOBOOKS01",
+            seed_in_libraries=("books-lib",),
         )
         result = await metadata_cache_worker.tick()
         assert result.outcome == "ok_empty"
@@ -346,8 +402,8 @@ class TestEmptyResultScan:
             cur = await db.execute(
                 f"SELECT last_outcome, book_count FROM "
                 f"{metadata_cache.state_table()} "
-                f"WHERE author_id = ?",
-                ("B0NOBOOKS01",),
+                f"WHERE author_id = ? AND library_slug = ?",
+                ("B0NOBOOKS01", "books-lib"),
             )
             row = await cur.fetchone()
         finally:
@@ -363,7 +419,7 @@ class TestSoftBlockPath:
     async def test_scan_that_trips_cooldown_records_softblock(
         self, worker_under, monkeypatch,
     ):
-        async def _fake_scan(author_id, library_slug, session):
+        async def _fake_scan(author_id, session):
             # Simulate `AmazonSource` recording a soft-block during the
             # scan (HTTP 429 / 202 / thin body / no-ProductGrid path).
             from app.discovery import amazon_author_id_resolver as r
@@ -375,7 +431,7 @@ class TestSoftBlockPath:
             metadata_cache_worker, "_perform_amazon_scan", _fake_scan,
         )
         await _seed_queue_row(
-            author_id="B0SOFTBLK1", library_slug="books-lib",
+            author_id="B0SOFTBLK1",
         )
         result = await metadata_cache_worker.tick()
         assert result.outcome == "soft_block"
@@ -420,7 +476,7 @@ class TestSoftBlockPath:
         finally:
             await db.close()
 
-        async def _fake_scan(author_id, library_slug, session):
+        async def _fake_scan(author_id, session):
             from app.discovery import amazon_author_id_resolver as r
             # Tier-1 cooldown from the source (600s).
             r.record_amazon_soft_block("fake", retry_after_s=600)
@@ -429,7 +485,7 @@ class TestSoftBlockPath:
             metadata_cache_worker, "_perform_amazon_scan", _fake_scan,
         )
         await _seed_queue_row(
-            author_id="B0SOFTBLK2", library_slug="books-lib",
+            author_id="B0SOFTBLK2",
         )
         await metadata_cache_worker.tick()
         # Worker escalated to tier 2 (1800s).
@@ -444,13 +500,13 @@ class TestHardErrorPath:
     async def test_scan_returns_none_increments_failure_counter(
         self, worker_under, monkeypatch,
     ):
-        async def _fake_scan(author_id, library_slug, session):
+        async def _fake_scan(author_id, session):
             return None, "transport: socket closed"
         monkeypatch.setattr(
             metadata_cache_worker, "_perform_amazon_scan", _fake_scan,
         )
         await _seed_queue_row(
-            author_id="B0ERROR0001", library_slug="books-lib",
+            author_id="B0ERROR0001",
         )
         result = await metadata_cache_worker.tick()
         assert result.outcome == "error"
@@ -472,7 +528,7 @@ class TestHardErrorPath:
     async def test_repeated_failures_flip_to_permanent_fail(
         self, worker_under, monkeypatch,
     ):
-        async def _fake_scan(author_id, library_slug, session):
+        async def _fake_scan(author_id, session):
             return None, "transport: socket closed"
         monkeypatch.setattr(
             metadata_cache_worker, "_perform_amazon_scan", _fake_scan,
@@ -480,7 +536,7 @@ class TestHardErrorPath:
         # Seed at consecutive_failures=4 so the next tick crosses the
         # 5-failure cap.
         await _seed_queue_row(
-            author_id="B0DOOM00001", library_slug="books-lib",
+            author_id="B0DOOM00001",
             consecutive_failures=4,
         )
         result = await metadata_cache_worker.tick()
@@ -508,7 +564,7 @@ class TestQueuePopOrdering:
         self, worker_under, monkeypatch,
     ):
         scan_calls = []
-        async def _fake_scan(author_id, library_slug, session):
+        async def _fake_scan(author_id, session):
             scan_calls.append(author_id)
             return _author_result("X", author_id=author_id), None
         monkeypatch.setattr(
@@ -516,15 +572,15 @@ class TestQueuePopOrdering:
         )
         # Three rows at different priorities. Highest must pop first.
         await _seed_queue_row(
-            author_id="B0LOWPRIO1", library_slug="books-lib",
+            author_id="B0LOWPRIO1",
             priority=100.0,
         )
         await _seed_queue_row(
-            author_id="B0HIGHPRI1", library_slug="books-lib",
+            author_id="B0HIGHPRI1",
             priority=1000.0,
         )
         await _seed_queue_row(
-            author_id="B0MIDPRIO1", library_slug="books-lib",
+            author_id="B0MIDPRIO1",
             priority=500.0,
         )
         await metadata_cache_worker.tick()
@@ -536,7 +592,7 @@ class TestQueuePopOrdering:
         self, worker_under, monkeypatch,
     ):
         scan_calls = []
-        async def _fake_scan(author_id, library_slug, session):
+        async def _fake_scan(author_id, session):
             scan_calls.append(author_id)
             return _author_result("X", author_id=author_id), None
         monkeypatch.setattr(
@@ -545,11 +601,11 @@ class TestQueuePopOrdering:
         # One row with due_at in the future, one due now. Only the
         # due-now row pops.
         await _seed_queue_row(
-            author_id="B0FUTURE01", library_slug="books-lib",
+            author_id="B0FUTURE01",
             next_scan_due_at=time.time() + 10_000,
         )
         await _seed_queue_row(
-            author_id="B0NOWAVL01", library_slug="books-lib",
+            author_id="B0NOWAVL01",
             next_scan_due_at=0.0,
         )
         await metadata_cache_worker.tick()
@@ -578,7 +634,7 @@ class TestDuplicateAsinDedup:
         # the standalone books list. Pre-fix the worker would hit the
         # UNIQUE constraint; with the dedupe it should keep the
         # first occurrence and drop the second silently.
-        async def _fake_scan(author_id, library_slug, session):
+        async def _fake_scan(author_id, session):
             from app.discovery.sources.base import AuthorResult, BookResult
             return AuthorResult(
                 name=author_id, external_id=author_id,
@@ -588,12 +644,14 @@ class TestDuplicateAsinDedup:
                         external_id="B0SAMEASIN",
                         source="amazon",
                         language="English",
+                        format="kindle_edition",
                     ),
                     BookResult(
                         title="Same Book — Different Variant Row",
                         external_id="B0SAMEASIN",  # duplicate
                         source="amazon",
                         language="English",
+                        format="kindle_edition",
                     ),
                 ],
                 series=[],
@@ -602,7 +660,8 @@ class TestDuplicateAsinDedup:
             metadata_cache_worker, "_perform_amazon_scan", _fake_scan,
         )
         await _seed_queue_row(
-            author_id="B0DEDUP0001", library_slug="books-lib",
+            author_id="B0DEDUP0001",
+            seed_in_libraries=("books-lib",),
         )
         result = await metadata_cache_worker.tick()
         assert result.outcome == "ok"
@@ -623,7 +682,7 @@ class TestDuplicateAsinDedup:
     async def test_duplicate_asin_across_books_and_series_is_deduped(
         self, worker_under, monkeypatch,
     ):
-        async def _fake_scan(author_id, library_slug, session):
+        async def _fake_scan(author_id, session):
             from app.discovery.sources.base import (
                 AuthorResult, BookResult, SeriesResult,
             )
@@ -634,6 +693,7 @@ class TestDuplicateAsinDedup:
                         title="Standalone Edition",
                         external_id="B0OVERLAP1",
                         source="amazon",
+                        format="kindle_edition",
                     ),
                 ],
                 series=[
@@ -644,6 +704,7 @@ class TestDuplicateAsinDedup:
                                 title="Series Edition",
                                 external_id="B0OVERLAP1",  # dupe
                                 source="amazon",
+                                format="kindle_edition",
                             ),
                         ],
                     ),
@@ -653,7 +714,8 @@ class TestDuplicateAsinDedup:
             metadata_cache_worker, "_perform_amazon_scan", _fake_scan,
         )
         await _seed_queue_row(
-            author_id="B0DEDUP0002", library_slug="books-lib",
+            author_id="B0DEDUP0002",
+            seed_in_libraries=("books-lib",),
         )
         result = await metadata_cache_worker.tick()
         assert result.outcome == "ok"
@@ -684,7 +746,7 @@ class TestCacheWriteFailureRecovery:
     async def test_write_failure_resets_queue_row_to_pending(
         self, worker_under, monkeypatch,
     ):
-        async def _fake_scan(author_id, library_slug, session):
+        async def _fake_scan(author_id, session):
             return _author_result("Book A", author_id=author_id), None
         monkeypatch.setattr(
             metadata_cache_worker, "_perform_amazon_scan", _fake_scan,
@@ -700,7 +762,7 @@ class TestCacheWriteFailureRecovery:
         )
 
         await _seed_queue_row(
-            author_id="B0WRITEFAIL", library_slug="books-lib",
+            author_id="B0WRITEFAIL",
         )
         result = await metadata_cache_worker.tick()
         assert result.outcome == "error"
@@ -727,7 +789,7 @@ class TestCrashRecovery:
     async def test_recover_resets_in_progress_rows(self, worker_under):
         # Manually seed a stuck in_progress row.
         await _seed_queue_row(
-            author_id="B0STUCK0001", library_slug="books-lib",
+            author_id="B0STUCK0001",
             status="in_progress",
         )
         n = await metadata_cache_worker.recover_stuck_in_progress("amazon")
@@ -752,7 +814,7 @@ class TestCrashRecovery:
         # need operator triage. Recovery only addresses crash-stuck
         # in_progress rows.
         await _seed_queue_row(
-            author_id="B0PERMFAIL", library_slug="books-lib",
+            author_id="B0PERMFAIL",
             status="failed_permanent",
         )
         await metadata_cache_worker.recover_stuck_in_progress("amazon")

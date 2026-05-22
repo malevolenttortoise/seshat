@@ -57,8 +57,6 @@ from app.discovery.amazon_author_id_resolver import (
     amazon_block_remaining_s,
     is_amazon_blocked,
 )
-from app.discovery.sources.amazon_widget_parser import FILTER_TO_BINDING
-
 logger = logging.getLogger("seshat.discovery.metadata_cache_worker")
 
 
@@ -282,17 +280,15 @@ async def _pop_next_queue_row(
     `next_scan_due_at <= now` and mark it `status='in_progress'` +
     stamp `last_attempt_at`.
 
-    Returns the popped row as a dict, or None if nothing is ready.
-    aiosqlite doesn't expose UPDATE...RETURNING cleanly, so we do
-    SELECT-then-UPDATE inside a transaction.
+    Schema-v2: queue PK is `author_id` only. Worker reads per-library
+    rows from the discovery DBs at scan time to partition results.
     """
     queue = metadata_cache.queue_table(source_name)
     await db.execute("BEGIN IMMEDIATE")
     try:
         cur = await db.execute(
-            f"SELECT author_id, library_slug, seshat_author_id, "
-            f"priority, status, next_scan_due_at, last_attempt_at, "
-            f"consecutive_failures, enqueued_reason "
+            f"SELECT author_id, priority, status, next_scan_due_at, "
+            f"last_attempt_at, consecutive_failures, enqueued_reason "
             f"FROM {queue} "
             f"WHERE status = 'pending' AND next_scan_due_at <= ? "
             f"ORDER BY priority DESC, next_scan_due_at ASC "
@@ -306,20 +302,18 @@ async def _pop_next_queue_row(
         await db.execute(
             f"UPDATE {queue} "
             f"SET status = 'in_progress', last_attempt_at = ? "
-            f"WHERE author_id = ? AND library_slug = ?",
-            (now, row[0], row[1]),
+            f"WHERE author_id = ?",
+            (now, row[0]),
         )
         await db.execute("COMMIT")
         return {
             "author_id": row[0],
-            "library_slug": row[1],
-            "seshat_author_id": row[2],
-            "priority": row[3],
+            "priority": row[1],
             "status": "in_progress",
-            "next_scan_due_at": row[5],
+            "next_scan_due_at": row[3],
             "last_attempt_at": now,
-            "consecutive_failures": row[7],
-            "enqueued_reason": row[8],
+            "consecutive_failures": row[5],
+            "enqueued_reason": row[6],
         }
     except Exception:
         await db.execute("ROLLBACK")
@@ -328,7 +322,7 @@ async def _pop_next_queue_row(
 
 async def _mark_queue_row_pending(
     db: aiosqlite.Connection, source_name: str, *,
-    author_id: str, library_slug: str,
+    author_id: str,
     next_scan_due_at: float,
     reset_failures: bool = True,
 ) -> None:
@@ -339,22 +333,22 @@ async def _mark_queue_row_pending(
         await db.execute(
             f"UPDATE {queue} SET status = 'pending', "
             f"    next_scan_due_at = ?, consecutive_failures = 0 "
-            f"WHERE author_id = ? AND library_slug = ?",
-            (next_scan_due_at, author_id, library_slug),
+            f"WHERE author_id = ?",
+            (next_scan_due_at, author_id),
         )
     else:
         await db.execute(
             f"UPDATE {queue} SET status = 'pending', "
             f"    next_scan_due_at = ? "
-            f"WHERE author_id = ? AND library_slug = ?",
-            (next_scan_due_at, author_id, library_slug),
+            f"WHERE author_id = ?",
+            (next_scan_due_at, author_id),
         )
     await db.commit()
 
 
 async def _mark_queue_row_failure(
     db: aiosqlite.Connection, source_name: str, *,
-    author_id: str, library_slug: str,
+    author_id: str,
     next_scan_due_at: float,
 ) -> tuple[int, bool]:
     """Increment `consecutive_failures`; flip to `failed_permanent`
@@ -363,8 +357,8 @@ async def _mark_queue_row_failure(
     queue = metadata_cache.queue_table(source_name)
     cur = await db.execute(
         f"SELECT consecutive_failures FROM {queue} "
-        f"WHERE author_id = ? AND library_slug = ?",
-        (author_id, library_slug),
+        f"WHERE author_id = ?",
+        (author_id,),
     )
     row = await cur.fetchone()
     prior = int(row[0] or 0) if row else 0
@@ -375,19 +369,102 @@ async def _mark_queue_row_failure(
             f"UPDATE {queue} "
             f"SET status = 'failed_permanent', "
             f"    consecutive_failures = ?, next_scan_due_at = ? "
-            f"WHERE author_id = ? AND library_slug = ?",
-            (new_count, next_scan_due_at, author_id, library_slug),
+            f"WHERE author_id = ?",
+            (new_count, next_scan_due_at, author_id),
         )
     else:
         await db.execute(
             f"UPDATE {queue} "
             f"SET status = 'pending', "
             f"    consecutive_failures = ?, next_scan_due_at = ? "
-            f"WHERE author_id = ? AND library_slug = ?",
-            (new_count, next_scan_due_at, author_id, library_slug),
+            f"WHERE author_id = ?",
+            (new_count, next_scan_due_at, author_id),
         )
     await db.commit()
     return new_count, became_permanent
+
+
+# ─── Per-library partitioning (schema-v2) ────────────────────
+
+
+# Map content_type → set of acceptable Amazon binding_symbols.
+# Books returned by an `allFormats` scan are partitioned into each
+# library's cache rows based on this mapping. Keeps audiobook
+# bindings out of ebook libraries and vice versa even though we now
+# scan once for all formats.
+_EBOOK_BINDINGS: frozenset[str] = frozenset({
+    "kindle_edition", "paperback", "hardcover", "mass_market",
+})
+_AUDIOBOOK_BINDINGS: frozenset[str] = frozenset({
+    "audio_download", "audioCD", "mp3_cd",
+    "preloaded_digital_audio_player",
+})
+
+
+def _bindings_for_content_type(content_type: str) -> frozenset[str]:
+    """Map a library's content_type to the set of Amazon binding
+    symbols its book rows should carry. Conservative — unknown
+    bindings won't make it into either library's cache (the worker
+    drops them rather than guess)."""
+    if content_type == "audiobook":
+        return _AUDIOBOOK_BINDINGS
+    return _EBOOK_BINDINGS
+
+
+async def _libraries_for_author(
+    author_id: str,
+) -> list[dict[str, Any]]:
+    """Return the list of libraries that have a row for ``author_id``.
+
+    Each entry carries `slug`, `content_type`, and `seshat_author_id`
+    (the per-library authors.id). Used by the worker to fan out a
+    single Amazon scan into per-library state + book rows.
+
+    Reads from the discovery DBs every time — no caching — so a
+    just-resolved amazon_id is observed without needing a worker
+    restart.
+    """
+    from app.discovery.database import get_db as get_discovery_db
+    result: list[dict[str, Any]] = []
+    for lib in state._discovered_libraries:
+        slug = lib.get("slug")
+        if not slug:
+            continue
+        try:
+            disc = await get_discovery_db(slug=slug)
+        except Exception as exc:
+            logger.debug(
+                "metadata_cache_worker: cannot open discovery DB %r (%s) "
+                "— skipping for fan-out",
+                slug, exc,
+            )
+            continue
+        try:
+            cur = await disc.execute(
+                "SELECT id FROM authors WHERE amazon_id = ?",
+                (author_id,),
+            )
+            row = await cur.fetchone()
+        except Exception as exc:
+            logger.debug(
+                "metadata_cache_worker: authors lookup failed for %r/%s "
+                "(%s) — skipping",
+                slug, author_id, exc,
+            )
+            row = None
+        finally:
+            try:
+                await disc.close()
+            except Exception:
+                pass
+        if row is None:
+            continue
+        result.append({
+            "slug": slug,
+            "content_type": lib.get("content_type") or "ebook",
+            "seshat_author_id": int(row[0]),
+        })
+    return result
 
 
 async def _count_pending_queue_rows(
@@ -446,36 +523,33 @@ async def _upsert_state_row(
     await db.commit()
 
 
-def _flatten_author_result_to_book_rows(
+def _flatten_for_library(
     author_result: Any, *,
     author_id: str, library_slug: str, now: float,
-    format_filter: str, language: str,
+    allowed_bindings: frozenset[str], language: str,
 ) -> list[tuple]:
-    """Walk an AmazonSource AuthorResult into cache-row tuples.
+    """Walk an AmazonSource AuthorResult into cache-row tuples for
+    ONE library, filtering by `allowed_bindings`.
 
-    We use the scan's input filters as the stored `format` /
-    `language` because Amazon's `authorFilters` already constrained
-    the scan server-side — every returned book is guaranteed to be
-    in that format + language. Stamping these on the cache row gives
-    the read-time filter (`metadata_cache_reader._format_matches`)
-    something concrete to match against, including for the
-    FILTER_TO_BINDING translation it does for the user-facing input.
+    Schema-v2: each row stamps its own `format` from
+    `BookResult.format` (Amazon's binding_symbol per product). A
+    single `allFormats` scan returns books with mixed bindings —
+    Kindle, Paperback, Hardcover, Audible, etc. — and this helper
+    partitions them into the calling library's content_type-matched
+    subset (kindle/paperback/hardcover for ebook libraries;
+    audio_download and friends for audiobook libraries).
 
-    Dedupes by `book_asin` because AmazonSource occasionally returns
-    the same ASIN twice in one scan — mediaMatrix variants reusing a
-    canonical ASIN, or pagination handing back a product that was
-    already detail-fetched on page 1. Without the dedupe the
-    subsequent `INSERT INTO {books}` trips the
-    `(author_id, library_slug, book_asin)` UNIQUE constraint and the
-    whole tick crashes (UAT 2026-05-22: two scans crashed at 17:49
-    and 18:25 from this exact path, B000AP9Y66 and B001H6GPWS, both
-    leaving the queue row stuck in `in_progress`). First occurrence
-    wins; the duplicate would have the same canonical fields anyway.
+    Dedupes by `book_asin` so duplicate-ASIN payloads from mediaMatrix
+    overlap or pagination repeats don't trip the
+    `(author_id, library_slug, book_asin)` UNIQUE constraint
+    (the Phase D hotfix on 2026-05-22 first introduced this dedup;
+    schema-v2 keeps it).
     """
-    binding_format = FILTER_TO_BINDING.get(format_filter, format_filter)
     rows: list[tuple] = []
     seen_asins: set[str] = set()
     duplicates_dropped = 0
+    binding_filtered = 0
+    missing_binding = 0
     all_books: list[Any] = list(author_result.books or [])
     for series in author_result.series or []:
         all_books.extend(series.books or [])
@@ -485,23 +559,34 @@ def _flatten_author_result_to_book_rows(
         if book.external_id in seen_asins:
             duplicates_dropped += 1
             continue
+        binding = getattr(book, "format", None)
+        if binding is None:
+            # No binding info — conservatively skip rather than
+            # cross-contaminate libraries. Real Amazon products
+            # always have a binding via `Product.binding_symbol`.
+            missing_binding += 1
+            continue
+        if binding not in allowed_bindings:
+            binding_filtered += 1
+            continue
         seen_asins.add(book.external_id)
         rows.append((
             author_id, library_slug, book.external_id,
             book.title or "",
             book.series_name, book.series_index,
             book.pub_date,
-            binding_format,
+            binding,
             book.language or language,
             book.isbn, book.cover_url,
             None,  # raw_json — reserved for richer future shapes
             now,
         ))
-    if duplicates_dropped:
+    if duplicates_dropped or binding_filtered or missing_binding:
         logger.debug(
-            "metadata_cache_worker: dropped %d duplicate ASIN(s) "
-            "from %s/%s scan (mediaMatrix overlap / pagination)",
-            duplicates_dropped, author_id, library_slug,
+            "metadata_cache_worker: %s/%s partition — kept %d, dropped "
+            "%d dupes / %d off-content-type / %d missing-binding",
+            author_id, library_slug, len(rows),
+            duplicates_dropped, binding_filtered, missing_binding,
         )
     return rows
 
@@ -574,38 +659,44 @@ async def _run_warmup(session: Any) -> None:
 
 
 async def _perform_amazon_scan(
-    author_id: str, library_slug: str, session: Any,
+    author_id: str, session: Any,
 ) -> tuple[Any, Optional[str]]:
-    """Build a one-shot AmazonSource bound to `session`, run
-    `get_author_books(author_id)`. Returns (author_result, error_message).
+    """Schema-v2: scan ONCE with `allFormats` so a single Amazon
+    round-trip covers every library this author lives in. The
+    per-library partition happens at cache-write time downstream
+    (see `_flatten_for_library`).
 
-    Returns (None, error_msg) on any of:
+    Returns (None, error_msg) on:
       - curl_cffi missing (caller already handled, but defensive)
       - source raised
       - source returned None (transport or soft-block)
     """
     from app.discovery.sources.amazon import AmazonSource
-    content_type = _library_content_type(library_slug)
-    fmt, language = _amazon_filters_for_content_type(content_type)
+    s = app_config.load_settings()
+    amz = (s.get("metadata_sources") or {}).get("amazon") or {}
+    language = amz.get("language") or "English"
+    # Both format kwargs set to `allFormats` so AmazonSource's
+    # `_active_format_filter()` returns the same value regardless of
+    # the (now-irrelevant) `_content_type` attribute below.
     source = AmazonSource(
         rate_limit=0.0,           # worker controls cadence via jitter
-        format_filter=fmt,
-        audiobook_format_filter=fmt if content_type == "audiobook" else (
-            (app_config.load_settings().get("metadata_sources") or {})
-            .get("amazon", {}).get("audiobook_format") or "audible_audiobook"
-        ),
+        format_filter="allFormats",
+        audiobook_format_filter="allFormats",
         language=language,
         burst_delay_s=0.0,        # no extra in-scan delays
     )
     source._session = session
     source._session_init_attempted = True
-    source._content_type = content_type
+    # `_content_type` is now unused for binding selection (always
+    # `allFormats`) but the AmazonSource init reads it for logging /
+    # signature parity. Set to a stable value.
+    source._content_type = "ebook"
     try:
         result = await source.get_author_books(author_id)
     except Exception as exc:
         logger.exception(
-            "metadata_cache_worker: scan raised for %s/%s: %s",
-            author_id, library_slug, exc,
+            "metadata_cache_worker: scan raised for %s: %s",
+            author_id, exc,
         )
         return None, f"{type(exc).__name__}: {exc}"
     if result is None:
@@ -709,18 +800,44 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
         await db.close()
 
     author_id = queue_row["author_id"]
-    library_slug = queue_row["library_slug"]
-    seshat_author_id = queue_row.get("seshat_author_id")
+
+    # Schema-v2: figure out which libraries this author belongs to so
+    # one scan response can be partitioned into per-library state +
+    # books rows downstream. If the author has no per-library rows
+    # (amazon_id was removed since the queue row was created, or the
+    # author was deleted), drop the queue row gracefully — there's
+    # nothing left for the worker to do.
+    libraries = await _libraries_for_author(author_id)
+    if not libraries:
+        db = await metadata_cache.get_db(source_name)
+        try:
+            await _mark_queue_row_pending(
+                db, source_name,
+                author_id=author_id,
+                next_scan_due_at=now + _NORMAL_RESCAN_CADENCE_S,
+                reset_failures=True,
+            )
+        finally:
+            await db.close()
+        logger.info(
+            "metadata_cache_worker: %s has no per-library rows; "
+            "deferring queue row by %.0fs",
+            author_id, _NORMAL_RESCAN_CADENCE_S,
+        )
+        return TickResult(
+            source_name=source_name, outcome="ok_empty",
+            author_id=author_id, queue_size=queue_size,
+            next_sleep_s=random.uniform(_JITTER_MIN_S, _JITTER_MAX_S),
+        )
 
     session = _create_session()
     if session is None:
         # curl_cffi missing — defer the queue row + report error.
         db = await metadata_cache.get_db(source_name)
         try:
-            # Put the row back so a later install of curl_cffi can pop it.
             await _mark_queue_row_pending(
                 db, source_name,
-                author_id=author_id, library_slug=library_slug,
+                author_id=author_id,
                 next_scan_due_at=now + _COOLDOWN_MAX_SLEEP_S,
                 reset_failures=False,
             )
@@ -728,7 +845,7 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
             await db.close()
         return TickResult(
             source_name=source_name, outcome="error",
-            author_id=author_id, library_slug=library_slug,
+            author_id=author_id,
             queue_size=queue_size,
             error="curl_cffi not installed",
             next_sleep_s=_IDLE_SLEEP_S,
@@ -737,7 +854,7 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
     try:
         await _run_warmup(session)
         result, scan_error = await _perform_amazon_scan(
-            author_id, library_slug, session,
+            author_id, session,
         )
     finally:
         try:
@@ -755,11 +872,8 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
                 db, source_name, now, cooldown_s=cooldown_s,
             )
             # Escalate the cooldown on the 2nd / 3rd block-in-window.
-            # The base cooldown comes from record_amazon_soft_block;
-            # we extend it past that floor for subsequent blocks.
             escalated_s = _pick_escalation_cooldown(consecutive)
             if escalated_s > cooldown_s:
-                # Re-stamp the penalty box with the longer cooldown.
                 from app.discovery.amazon_author_id_resolver import (
                     record_amazon_soft_block,
                 )
@@ -769,25 +883,23 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
                     retry_after_s=escalated_s,
                 )
                 cooldown_s = escalated_s
-            # Defer the queue row to after the cooldown clears, but
-            # don't penalize it with a failure (the block isn't this
-            # author's fault).
+            # Defer queue row past the cooldown; not a failure.
             await _mark_queue_row_pending(
                 db, source_name,
-                author_id=author_id, library_slug=library_slug,
+                author_id=author_id,
                 next_scan_due_at=now + cooldown_s + 60.0,
                 reset_failures=True,
             )
         finally:
             await db.close()
         logger.info(
-            "metadata_cache_worker: soft-block on %s/%s — "
+            "metadata_cache_worker: soft-block on %s — "
             "consecutive=%d, cooldown=%.0fs",
-            author_id, library_slug, consecutive, cooldown_s,
+            author_id, consecutive, cooldown_s,
         )
         return TickResult(
             source_name=source_name, outcome="soft_block",
-            author_id=author_id, library_slug=library_slug,
+            author_id=author_id,
             queue_size=queue_size, cooldown_remaining_s=cooldown_s,
             next_sleep_s=min(cooldown_s + 1.0, _COOLDOWN_MAX_SLEEP_S),
         )
@@ -798,67 +910,75 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
         try:
             new_count, became_permanent = await _mark_queue_row_failure(
                 db, source_name,
-                author_id=author_id, library_slug=library_slug,
+                author_id=author_id,
                 next_scan_due_at=now + _NORMAL_RESCAN_CADENCE_S,
             )
-            # Still record a state row so the reader knows the worker
-            # tried; the cache reader can keep returning None until a
-            # later successful scan replaces this.
-            await _upsert_state_row(
-                db, source_name,
-                author_id=author_id, library_slug=library_slug,
-                seshat_author_id=seshat_author_id,
-                now=now, outcome="error",
-                book_count=0, last_error=(scan_error or "unknown"),
-            )
+            # Record a per-library state row for each library so the
+            # reader knows we tried. Cache reader keeps returning
+            # None until a later successful scan replaces this.
+            for lib in libraries:
+                await _upsert_state_row(
+                    db, source_name,
+                    author_id=author_id, library_slug=lib["slug"],
+                    seshat_author_id=lib["seshat_author_id"],
+                    now=now, outcome="error",
+                    book_count=0, last_error=(scan_error or "unknown"),
+                )
         finally:
             await db.close()
         outcome = "permanent_fail" if became_permanent else "error"
         logger.warning(
-            "metadata_cache_worker: scan FAILED for %s/%s (%s) "
+            "metadata_cache_worker: scan FAILED for %s (%s) "
             "consecutive_failures=%d%s",
-            author_id, library_slug, scan_error, new_count,
+            author_id, scan_error, new_count,
             " — flipped to failed_permanent" if became_permanent else "",
         )
         return TickResult(
             source_name=source_name, outcome=outcome,
-            author_id=author_id, library_slug=library_slug,
+            author_id=author_id,
             queue_size=queue_size, error=scan_error,
             next_sleep_s=random.uniform(_JITTER_MIN_S, _JITTER_MAX_S),
         )
 
-    # Successful scan: flatten to cache rows, write, ack the queue.
-    content_type = _library_content_type(library_slug)
-    fmt, language = _amazon_filters_for_content_type(content_type)
-    cache_rows = _flatten_author_result_to_book_rows(
-        result, author_id=author_id, library_slug=library_slug,
-        now=now, format_filter=fmt, language=language,
+    # Successful scan: fan out per-library writes from the single
+    # `allFormats` response. `_flatten_for_library` partitions by
+    # the per-library content_type's allowed bindings.
+    s = app_config.load_settings()
+    language = (
+        (s.get("metadata_sources") or {}).get("amazon", {}).get("language")
+        or "English"
     )
+    per_library_rows: list[tuple[dict[str, Any], list[tuple]]] = []
+    for lib in libraries:
+        bindings = _bindings_for_content_type(lib["content_type"])
+        rows = _flatten_for_library(
+            result,
+            author_id=author_id, library_slug=lib["slug"],
+            now=now, allowed_bindings=bindings, language=language,
+        )
+        per_library_rows.append((lib, rows))
+    total_cache_rows = sum(len(rows) for _, rows in per_library_rows)
 
-    # v2.21.0 Phase D hotfix — wrap the cache-write block in a
-    # try/except so a write-time failure (UNIQUE constraint
-    # violations, disk-full, schema drift) doesn't leave the queue
-    # row stuck at `status='in_progress'` until the next container
-    # restart. Without this guard the run_loop's outer catch-and-
-    # continue swallows the exception but the row stays locked,
-    # eventually blocking re-scans of that author.
+    # Single try/except for the whole multi-library cache-write so any
+    # failure mid-fan-out cleanly unwinds via the failure path.
     try:
         db = await metadata_cache.get_db(source_name)
         try:
-            await _upsert_state_row(
-                db, source_name,
-                author_id=author_id, library_slug=library_slug,
-                seshat_author_id=seshat_author_id,
-                now=now, outcome="ok", book_count=len(cache_rows),
-            )
-            await _replace_book_rows(
-                db, source_name,
-                author_id=author_id, library_slug=library_slug,
-                rows=cache_rows,
-            )
+            for lib, rows in per_library_rows:
+                await _upsert_state_row(
+                    db, source_name,
+                    author_id=author_id, library_slug=lib["slug"],
+                    seshat_author_id=lib["seshat_author_id"],
+                    now=now, outcome="ok", book_count=len(rows),
+                )
+                await _replace_book_rows(
+                    db, source_name,
+                    author_id=author_id, library_slug=lib["slug"],
+                    rows=rows,
+                )
             await _mark_queue_row_pending(
                 db, source_name,
-                author_id=author_id, library_slug=library_slug,
+                author_id=author_id,
                 next_scan_due_at=now + _NORMAL_RESCAN_CADENCE_S,
                 reset_failures=True,
             )
@@ -867,22 +987,16 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
             await db.close()
     except Exception as exc:
         logger.exception(
-            "metadata_cache_worker: cache-write failed for %s/%s "
-            "(%s) — resetting queue row to pending so the next "
-            "iteration can retry",
-            author_id, library_slug, exc,
+            "metadata_cache_worker: cache-write failed for %s (%s) — "
+            "resetting queue row so the next iteration can retry",
+            author_id, exc,
         )
-        # Best-effort recovery: put the queue row back to pending +
-        # bump consecutive_failures so a recurring write failure
-        # eventually flips to failed_permanent instead of looping
-        # forever. Use a fresh connection — the previous one may
-        # be in a bad state.
         try:
             db = await metadata_cache.get_db(source_name)
             try:
                 await _mark_queue_row_failure(
                     db, source_name,
-                    author_id=author_id, library_slug=library_slug,
+                    author_id=author_id,
                     next_scan_due_at=now + _NORMAL_RESCAN_CADENCE_S,
                 )
             finally:
@@ -890,26 +1004,30 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
         except Exception:
             logger.exception(
                 "metadata_cache_worker: queue-row recovery also "
-                "failed — row will be cleaned up by the startup "
+                "failed — row will be cleaned up by startup "
                 "recover_stuck_in_progress on the next restart"
             )
         return TickResult(
             source_name=source_name, outcome="error",
-            author_id=author_id, library_slug=library_slug,
+            author_id=author_id,
             queue_size=queue_size,
             error=f"cache write failed: {type(exc).__name__}: {exc}",
             next_sleep_s=random.uniform(_JITTER_MIN_S, _JITTER_MAX_S),
         )
 
-    logger.info(
-        "metadata_cache_worker: scanned %s/%s — %d books cached",
-        author_id, library_slug, len(cache_rows),
+    per_lib_summary = ", ".join(
+        f"{lib['slug']}={len(rows)}" for lib, rows in per_library_rows
     )
-    outcome = "ok" if cache_rows else "ok_empty"
+    logger.info(
+        "metadata_cache_worker: scanned %s — %d total books cached "
+        "across %d library(ies) [%s]",
+        author_id, total_cache_rows, len(libraries), per_lib_summary,
+    )
+    outcome = "ok" if total_cache_rows else "ok_empty"
     return TickResult(
         source_name=source_name, outcome=outcome,
-        author_id=author_id, library_slug=library_slug,
-        books_cached=len(cache_rows), queue_size=queue_size,
+        author_id=author_id,
+        books_cached=total_cache_rows, queue_size=queue_size,
         next_sleep_s=random.uniform(_JITTER_MIN_S, _JITTER_MAX_S),
     )
 

@@ -220,6 +220,77 @@ def _build_amazon_migrations() -> list[str]:
         CREATE INDEX IF NOT EXISTS idx_{queue}_priority_due
             ON {queue} (status, priority DESC, next_scan_due_at ASC)
         """,
+        # ─── v2: per-author queue (UAT 2026-05-22) ─────────────────
+        # Mark's observation: with v1's `(author_id, library_slug)`
+        # queue PK, every author present in both calibre + abs gets
+        # scanned twice — once per library — even though Amazon's
+        # mediaMatrix returns all format variants in a single call.
+        # That doubled the Akamai request budget for ~99.8% of the
+        # backfilled queue (644/645 unique authors were in both
+        # libraries). v2 collapses to PK=`author_id` only; the
+        # worker now scans each author ONCE and partitions the
+        # results into per-library state + book rows from one
+        # response. State + books keep their (author_id, library_slug)
+        # PKs since each library still needs its own scan-state row
+        # and per-content-type book set (kindle in calibre, audio
+        # in abs).
+        #
+        # We wipe the v1 contents on this migration — the worker
+        # state row (singleton, id=1) survives because we don't drop
+        # `worker_state`. Discovery DB authors-with-amazon_id rows
+        # will repopulate the new queue on next startup backfill.
+        f"DROP TABLE IF EXISTS {books}",
+        f"DROP TABLE IF EXISTS {queue}",
+        f"DROP TABLE IF EXISTS {state}",
+        f"""
+        CREATE TABLE {state} (
+            author_id        TEXT NOT NULL,
+            library_slug     TEXT NOT NULL,
+            seshat_author_id INTEGER,
+            last_scanned_at  REAL,
+            last_outcome     TEXT,
+            last_error       TEXT,
+            book_count       INTEGER,
+            schema_version   INTEGER NOT NULL DEFAULT 2,
+            PRIMARY KEY (author_id, library_slug)
+        )
+        """,
+        f"""
+        CREATE TABLE {books} (
+            author_id    TEXT NOT NULL,
+            library_slug TEXT NOT NULL,
+            book_asin    TEXT NOT NULL,
+            title        TEXT,
+            series_name  TEXT,
+            series_pos   REAL,
+            pub_date     TEXT,
+            format       TEXT,
+            language     TEXT,
+            isbn         TEXT,
+            cover_url    TEXT,
+            raw_json     TEXT,
+            cached_at    REAL NOT NULL,
+            PRIMARY KEY (author_id, library_slug, book_asin),
+            FOREIGN KEY (author_id, library_slug)
+                REFERENCES {state}(author_id, library_slug)
+                ON DELETE CASCADE
+        )
+        """,
+        f"""
+        CREATE TABLE {queue} (
+            author_id            TEXT PRIMARY KEY,
+            priority             REAL NOT NULL DEFAULT 100,
+            status               TEXT NOT NULL DEFAULT 'pending',
+            next_scan_due_at     REAL NOT NULL DEFAULT 0,
+            last_attempt_at      REAL,
+            consecutive_failures INTEGER NOT NULL DEFAULT 0,
+            enqueued_reason      TEXT
+        )
+        """,
+        f"""
+        CREATE INDEX IF NOT EXISTS idx_{queue}_priority_due
+            ON {queue} (status, priority DESC, next_scan_due_at ASC)
+        """,
     ]
 
 
@@ -327,13 +398,18 @@ async def backfill_amazon_queue_from_authors(
     """Enqueue every author with a stored ``amazon_id`` for a future
     worker scan.
 
-    Walks each library's ``authors`` table, pulls (id, amazon_id)
-    rows, and ``INSERT OR IGNORE``s them into the amazon queue. The
-    PK is (author_id, library_slug), so re-running this is idempotent:
-    existing queue rows survive untouched.
+    v2 schema (UAT 2026-05-22): queue PK is `author_id` only — the
+    same Amazon Author Store ID across multiple libraries collapses
+    to ONE queue row. The worker reads the per-library authors rows
+    at scan time to partition the single Amazon response into
+    per-library state + book rows.
 
-    Returns per-library counts of NEW rows enqueued — second-call
-    counts are zero even though the queue is fully populated.
+    Returns per-library counts of *NEW* queue rows enqueued. An author
+    that's in both calibre + abs only counts ONCE in the per-library
+    total of whichever library was iterated first — but the total
+    across libraries reflects accurate dedupe (sum of counts =
+    unique-amazon-ids-newly-enqueued, not unique-authors-per-library).
+    Idempotent: re-running enqueues 0 new rows.
     """
     from app.discovery.database import get_db as get_discovery_db
     cache_db = await get_db(SOURCE_AMAZON)
@@ -372,18 +448,16 @@ async def backfill_amazon_queue_from_authors(
                 counts[slug] = 0
                 continue
             before_cur = await cache_db.execute(
-                f"SELECT COUNT(*) FROM {qt} WHERE library_slug = ?",
-                (slug,),
+                f"SELECT COUNT(*) FROM {qt}"
             )
             before = (await before_cur.fetchone())[0]
             await cache_db.executemany(
                 f"INSERT OR IGNORE INTO {qt} "
-                f"(author_id, library_slug, seshat_author_id, priority, "
-                f"enqueued_reason, next_scan_due_at) "
-                f"VALUES (?, ?, ?, ?, ?, ?)",
+                f"(author_id, priority, enqueued_reason, next_scan_due_at) "
+                f"VALUES (?, ?, ?, ?)",
                 [
                     (
-                        str(row[1]), slug, int(row[0]),
+                        str(row[1]),
                         default_priority, enqueued_reason, 0.0,
                     )
                     for row in rows
@@ -391,15 +465,15 @@ async def backfill_amazon_queue_from_authors(
             )
             await cache_db.commit()
             after_cur = await cache_db.execute(
-                f"SELECT COUNT(*) FROM {qt} WHERE library_slug = ?",
-                (slug,),
+                f"SELECT COUNT(*) FROM {qt}"
             )
             after = (await after_cur.fetchone())[0]
             counts[slug] = after - before
             if counts[slug]:
                 _log.info(
                     "metadata_cache backfill: enqueued %d amazon authors "
-                    "for library %r (was %d, now %d)",
+                    "while iterating library %r (queue %d → %d, deduped "
+                    "across libraries)",
                     counts[slug], slug, before, after,
                 )
     finally:

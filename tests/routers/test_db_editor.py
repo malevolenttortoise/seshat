@@ -412,12 +412,14 @@ async def metadata_cache_client(tmp_path, monkeypatch):
     # unit tests).
     cache_db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
     try:
+        # Schema-v2: queue PK is `author_id` only. Per-library
+        # partitioning lives on state + books rows; queue is the
+        # global "we owe this author a scan" signal.
         await cache_db.execute(
             f"INSERT INTO {metadata_cache.queue_table()} "
-            f"(author_id, library_slug, seshat_author_id, priority, "
-            f"enqueued_reason, next_scan_due_at) "
-            f"VALUES (?, ?, ?, ?, ?, ?)",
-            ("B0SEEDAAAA", "books-lib", 1, 100.0, "test_seed", 0.0),
+            f"(author_id, priority, enqueued_reason, next_scan_due_at) "
+            f"VALUES (?, ?, ?, ?)",
+            ("B0SEEDAAAA", 100.0, "test_seed", 0.0),
         )
         await cache_db.commit()
     finally:
@@ -477,7 +479,8 @@ class TestMetadataCacheSurface:
         body = r.json()
         assert body["total"] == 1
         assert body["rows"][0]["author_id"] == "B0SEEDAAAA"
-        assert body["rows"][0]["library_slug"] == "books-lib"
+        # Schema-v2: queue rows no longer carry library_slug.
+        assert "library_slug" not in body["rows"][0]
 
     async def test_table_rows_endpoint_ignores_library_param(
         self, metadata_cache_client,

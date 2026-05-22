@@ -98,11 +98,11 @@ class TestCacheMissEnqueues:
         source = metadata_cache_reader.make_amazon_cached_source()
         result = await source.get_author_books("B0AAAAAAAA")
         assert result is None
-        # Queue picked up the cache-miss row.
+        # Queue picked up the cache-miss row (schema-v2: PK=author_id).
         db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
         try:
             cur = await db.execute(
-                f"SELECT author_id, library_slug, priority, enqueued_reason "
+                f"SELECT author_id, priority, enqueued_reason "
                 f"FROM {metadata_cache.queue_table()}"
             )
             rows = await cur.fetchall()
@@ -110,10 +110,9 @@ class TestCacheMissEnqueues:
             await db.close()
         assert len(rows) == 1
         assert rows[0][0] == "B0AAAAAAAA"
-        assert rows[0][1] == "books-lib"
         # User-bumped priority — pops before backfill rows (priority 100).
-        assert rows[0][2] == 1000.0
-        assert rows[0][3] == "lookup_miss"
+        assert rows[0][1] == 1000.0
+        assert rows[0][2] == "lookup_miss"
 
     async def test_miss_with_existing_queue_row_does_not_duplicate(
         self, fresh_cache,
@@ -126,9 +125,9 @@ class TestCacheMissEnqueues:
         try:
             await db.execute(
                 f"INSERT INTO {metadata_cache.queue_table()} "
-                f"(author_id, library_slug, priority, enqueued_reason, "
-                f"next_scan_due_at) VALUES (?, ?, ?, ?, ?)",
-                ("B0BBBBBBBB", "books-lib", 100.0, "v2210_backfill", 0.0),
+                f"(author_id, priority, enqueued_reason, "
+                f"next_scan_due_at) VALUES (?, ?, ?, ?)",
+                ("B0BBBBBBBB", 100.0, "v2210_backfill", 0.0),
             )
             await db.commit()
         finally:
@@ -142,8 +141,8 @@ class TestCacheMissEnqueues:
             cur = await db.execute(
                 f"SELECT priority, enqueued_reason FROM "
                 f"{metadata_cache.queue_table()} "
-                f"WHERE author_id = ? AND library_slug = ?",
-                ("B0BBBBBBBB", "books-lib"),
+                f"WHERE author_id = ?",
+                ("B0BBBBBBBB",),
             )
             row = await cur.fetchone()
             count_cur = await db.execute(

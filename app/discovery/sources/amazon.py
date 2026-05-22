@@ -681,6 +681,12 @@ class AmazonSource(BaseSource):
             source="amazon",
             source_url=source_url,
             amazon_format_asins=amazon_format_asins,
+            # v2.21.0 schema-v2: the metadata cache stores this so the
+            # cache reader can partition mixed-binding scan results by
+            # content_type at read time. `binding_symbol` is the
+            # canonical Amazon shape (`kindle_edition`,
+            # `audio_download`, `paperback`, `hardcover`, …).
+            format=p.binding_symbol or None,
         )
 
 

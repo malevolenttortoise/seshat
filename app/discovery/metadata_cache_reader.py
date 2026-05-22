@@ -215,38 +215,30 @@ async def ensure_enqueued(
     *,
     source_name: str,
     author_id: str,
-    library_slug: str,
-    seshat_author_id: Optional[int] = None,
     priority: float = 100.0,
     enqueued_reason: str = "lookup_miss",
 ) -> bool:
     """Idempotent INSERT OR IGNORE into the source's worker queue.
 
     Returns True when a NEW row landed, False when one already existed.
-    Used by `CachedSource.get_author_books` on cache miss so the worker
-    picks the author up without the caller needing to know whether the
-    Phase B backfill already covered them.
+    Schema-v2: queue is keyed by `author_id` only — the worker reads
+    per-library rows at scan time to partition results.
     """
     qt = metadata_cache.queue_table(source_name)
     db = await metadata_cache.get_db(source_name)
     try:
         before_cur = await db.execute(
-            f"SELECT COUNT(*) FROM {qt} "
-            f"WHERE author_id = ? AND library_slug = ?",
-            (author_id, library_slug),
+            f"SELECT COUNT(*) FROM {qt} WHERE author_id = ?",
+            (author_id,),
         )
         existed = (await before_cur.fetchone())[0] > 0
         if existed:
             return False
         await db.execute(
             f"INSERT OR IGNORE INTO {qt} "
-            f"(author_id, library_slug, seshat_author_id, priority, "
-            f"enqueued_reason, next_scan_due_at) "
-            f"VALUES (?, ?, ?, ?, ?, ?)",
-            (
-                author_id, library_slug, seshat_author_id,
-                priority, enqueued_reason, 0.0,
-            ),
+            f"(author_id, priority, enqueued_reason, next_scan_due_at) "
+            f"VALUES (?, ?, ?, ?)",
+            (author_id, priority, enqueued_reason, 0.0),
         )
         await db.commit()
         return True
@@ -439,15 +431,12 @@ class CachedSource:
         )
 
         if result is None:
-            # Cache miss — enqueue so the worker picks it up. We
-            # don't have a clean seshat_author_id at this layer (we
-            # could query authors.amazon_id reverse, but it's not
-            # required for the worker — it can re-resolve when it
-            # processes the row).
+            # Cache miss — enqueue so the worker picks it up. Schema-v2:
+            # queue is keyed by `author_id` only; the worker reads
+            # per-library rows at scan time to fan out the response.
             new_row = await ensure_enqueued(
                 source_name=self.source_name,
                 author_id=author_id,
-                library_slug=slug,
                 priority=1000.0,  # user-bumped — popped before
                                   # the v2.21.0 backfill rows
                 enqueued_reason="lookup_miss",

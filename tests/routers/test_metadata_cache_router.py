@@ -84,18 +84,21 @@ async def cache_router_client(tmp_path, monkeypatch):
 
 async def _seed_some_rows() -> None:
     """Seed enough rows that the GET /status counts have something
-    interesting to assert on. Mix of queue + state + books rows."""
+    interesting to assert on. Mix of queue + state + books rows.
+
+    Schema-v2: queue PK is `author_id` only — no `library_slug` on
+    queue rows. State + books still partition per library."""
     db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
     try:
         # 3 queue rows: 2 pending, 1 failed_permanent.
         await db.execute(
             f"INSERT INTO {metadata_cache.queue_table()} "
-            f"(author_id, library_slug, priority, status, next_scan_due_at) "
-            f"VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)",
+            f"(author_id, priority, status, next_scan_due_at) "
+            f"VALUES (?, ?, ?, ?), (?, ?, ?, ?), (?, ?, ?, ?)",
             (
-                "B0AAAAAAAA", "books-lib", 100.0, "pending", 0.0,
-                "B0BBBBBBBB", "books-lib", 200.0, "pending", 0.0,
-                "B0CCCCCCCC", "books-lib", 100.0, "failed_permanent", 0.0,
+                "B0AAAAAAAA", 100.0, "pending", 0.0,
+                "B0BBBBBBBB", 200.0, "pending", 0.0,
+                "B0CCCCCCCC", 100.0, "failed_permanent", 0.0,
             ),
         )
         # 2 state rows: 1 ok, 1 error.
@@ -312,11 +315,12 @@ class TestGetAuthorCacheState:
                 f" last_outcome, book_count) VALUES (?, ?, ?, ?, ?)",
                 ("B0TESTAUTH", "calibre-library", now, "ok", 5),
             )
+            # Schema-v2: queue PK is author_id only.
             await db.execute(
                 f"INSERT INTO {metadata_cache.queue_table()} "
-                f"(author_id, library_slug, priority, status, "
-                f" next_scan_due_at) VALUES (?, ?, ?, ?, ?)",
-                ("B0TESTAUTH", "calibre-library", 100.0, "pending", 0.0),
+                f"(author_id, priority, status, next_scan_due_at) "
+                f"VALUES (?, ?, ?, ?)",
+                ("B0TESTAUTH", 100.0, "pending", 0.0),
             )
             await db.commit()
         finally:
@@ -331,23 +335,49 @@ class TestGetAuthorCacheState:
         assert row["library_slug"] == "calibre-library"
         assert row["state"]["last_outcome"] == "ok"
         assert row["state"]["book_count"] == 5
+        # Singleton queue row attached to each library entry.
         assert row["queue"]["status"] == "pending"
         assert row["queue"]["priority"] == 100.0
 
     async def test_returns_queue_only_when_not_yet_scanned(
-        self, cache_router_client,
+        self, cache_router_client, monkeypatch, tmp_path,
     ):
         """An author backfilled into the queue but never scanned has
-        a queue row but no state row. The endpoint surfaces that
-        case so the frontend can render 'in queue' instead of
-        'never seen.'"""
+        a queue row but no state row. The endpoint synthesizes per-
+        library entries by reading the discovery DBs so the frontend
+        can still render 'in queue' lines per library."""
+        # v2: state rows are empty, so the router falls back to
+        # `_libraries_for_author` (which reads the discovery DB
+        # `authors` table). Set up a single library with the author
+        # row so synthesis returns one entry.
+        from app import state
+        from app.discovery import database as disco_db
+        monkeypatch.setattr(
+            state, "_discovered_libraries",
+            [{"slug": "calibre-library", "name": "Calibre",
+              "content_type": "ebook",
+              "source_db_path": "/x", "library_path": "/x"}],
+        )
+        await disco_db.init_db("calibre-library")
+        disc = await disco_db.get_db(slug="calibre-library")
+        try:
+            await disc.execute(
+                "INSERT INTO authors "
+                "(name, sort_name, normalized_name, amazon_id) "
+                "VALUES (?, ?, ?, ?)",
+                ("Test", "Test", "test", "B0NOTSCANNED"),
+            )
+            await disc.commit()
+        finally:
+            await disc.close()
+
         db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
         try:
             await db.execute(
                 f"INSERT INTO {metadata_cache.queue_table()} "
-                f"(author_id, library_slug, priority, status, "
-                f" next_scan_due_at) VALUES (?, ?, ?, ?, ?)",
-                ("B0NOTSCANNED", "calibre-library", 100.0, "pending", 0.0),
+                f"(author_id, priority, status, next_scan_due_at) "
+                f"VALUES (?, ?, ?, ?)",
+                ("B0NOTSCANNED", 100.0, "pending", 0.0),
             )
             await db.commit()
         finally:
@@ -357,6 +387,7 @@ class TestGetAuthorCacheState:
         )
         body = r.json()
         assert len(body["libraries"]) == 1
+        assert body["libraries"][0]["library_slug"] == "calibre-library"
         assert body["libraries"][0]["state"] is None
         assert body["libraries"][0]["queue"]["status"] == "pending"
 
