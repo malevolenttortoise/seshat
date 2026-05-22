@@ -820,6 +820,35 @@ async def lifespan(app: FastAPI):
                 "this succeeds)"
             )
 
+        # v2.21.0 Phase B — metadata cache scaffolding.
+        # Apply pending schema migrations for the Amazon metadata cache
+        # (creates `metadata_cache_amazon.db` and its four tables on
+        # first run) and one-shot-backfill the queue with every author
+        # already carrying an `amazon_id`. The backfill is idempotent
+        # (INSERT OR IGNORE on the queue PK), so subsequent restarts
+        # only catch up on authors whose `amazon_id` was resolved after
+        # the previous startup. The worker (Phase D) will pop from this
+        # queue; nothing actually hits Amazon until that lands.
+        try:
+            from app.discovery import metadata_cache
+            await metadata_cache.init_db(metadata_cache.SOURCE_AMAZON)
+            backfill_counts = await metadata_cache.backfill_amazon_queue_from_authors(
+                [l["slug"] for l in state._discovered_libraries],
+            )
+            total_enqueued = sum(backfill_counts.values())
+            if total_enqueued:
+                _log.info(
+                    "metadata_cache: amazon queue backfill enqueued "
+                    "%d new author(s) across %d libraries",
+                    total_enqueued, len(backfill_counts),
+                )
+        except Exception:
+            _log.exception(
+                "metadata_cache: amazon backfill failed (non-fatal — "
+                "the cache DB still initializes; the worker (Phase D) "
+                "will rebuild the queue lazily as authors are scanned)"
+            )
+
         active = settings.get("active_library") or first_slug
         valid_slugs = [l["slug"] for l in state._discovered_libraries]
         if active not in valid_slugs:

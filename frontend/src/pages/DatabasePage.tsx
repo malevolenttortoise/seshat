@@ -24,7 +24,10 @@ interface TableEntry {
   // v2.17.5: "pipeline" = global seshat.db; "discovery" =
   // per-library seshat_<slug>.db. The library picker filters/
   // groups by this field instead of the old hardcoded name list.
-  scope: "pipeline" | "discovery";
+  // v2.21.0 Phase B: "metadata_cache" = per-source cache DB
+  // (today: metadata_cache_amazon.db). Library picker doesn't apply
+  // — the cache spans every library.
+  scope: "pipeline" | "discovery" | "metadata_cache";
 }
 
 interface TablesResponse {
@@ -469,6 +472,11 @@ function DesktopDatabasePage() {
               // *_snapshot) automatically land in the right section.
               const disc = tables.filter((x) => x.scope === "discovery");
               const pipe = tables.filter((x) => x.scope === "pipeline");
+              // v2.21.0 Phase B — per-source metadata cache(s). Today
+              // only Amazon. Listed as a third top-level group rather
+              // than nested under discovery, because the cache is
+              // library-agnostic and the library picker doesn't apply.
+              const cache = tables.filter((x) => x.scope === "metadata_cache");
               const renderGroup = (label: string, list: TableEntry[]) => (
                 <>
                   <div style={{ fontSize: 10, fontWeight: 700, color: t.textDim, textTransform: "uppercase", letterSpacing: "0.06em", padding: "8px 10px 4px" }}>{label}</div>
@@ -496,7 +504,14 @@ function DesktopDatabasePage() {
               );
               const libLabel = libraries.find((l) => l.slug === library)?.name;
               const discLabel = libLabel ? `Discovery · ${libLabel}` : "Discovery";
-              return <>{renderGroup("Pipeline", pipe)}{disc.length > 0 && <div style={{ borderTop: `1px solid ${t.borderL}`, margin: "6px 0" }} />}{disc.length > 0 && renderGroup(discLabel, disc)}</>;
+              const divider = <div style={{ borderTop: `1px solid ${t.borderL}`, margin: "6px 0" }} />;
+              return <>
+                {renderGroup("Pipeline", pipe)}
+                {disc.length > 0 && divider}
+                {disc.length > 0 && renderGroup(discLabel, disc)}
+                {cache.length > 0 && divider}
+                {cache.length > 0 && renderGroup("Metadata cache", cache)}
+              </>;
             })()}
           </div>
 

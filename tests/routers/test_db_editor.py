@@ -378,3 +378,134 @@ class TestExpandedWhitelist:
         # the whitelist expansion.
         assert "winner_id" in cols
         assert "loser_id" in cols
+
+
+# ─── v2.21.0 Phase B: metadata cache surface ─────────────────────
+
+
+@pytest.fixture
+async def metadata_cache_client(tmp_path, monkeypatch):
+    """Spin up a real Amazon metadata cache DB so router tests can
+    exercise the /tables + /table/{name} surface end-to-end.
+
+    Patches DATA_DIR everywhere the cache module looks (config
+    + metadata_cache), then runs init_db so the cache schema is
+    in place before requests fire.
+    """
+    from app import config as app_config
+    from app import database as pipeline_database
+    from app.discovery import database as disco_db
+    from app.discovery import metadata_cache
+
+    monkeypatch.setattr(app_config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(disco_db, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(metadata_cache, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(app_config, "APP_DB_PATH", tmp_path / "seshat.db")
+    monkeypatch.setattr(pipeline_database, "APP_DB_PATH", tmp_path / "seshat.db")
+
+    await pipeline_database.init_db()
+    await metadata_cache.init_db(metadata_cache.SOURCE_AMAZON)
+
+    # Seed one queue row so list endpoints have something non-empty
+    # to chew on. The router test only needs presence; the row's
+    # contents are not asserted here (covered by the metadata_cache
+    # unit tests).
+    cache_db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+    try:
+        await cache_db.execute(
+            f"INSERT INTO {metadata_cache.queue_table()} "
+            f"(author_id, library_slug, seshat_author_id, priority, "
+            f"enqueued_reason, next_scan_due_at) "
+            f"VALUES (?, ?, ?, ?, ?, ?)",
+            ("B0SEEDAAAA", "books-lib", 1, 100.0, "test_seed", 0.0),
+        )
+        await cache_db.commit()
+    finally:
+        await cache_db.close()
+
+    app = _make_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://test",
+    ) as ac:
+        yield ac
+
+
+class TestMetadataCacheSurface:
+    """v2.21.0 Phase B — the Amazon metadata cache tables are surfaced
+    through the existing db_editor endpoints under a new
+    `metadata_cache` scope tag. Library picker doesn't apply
+    (the cache spans every library)."""
+
+    async def test_tables_endpoint_lists_metadata_cache_scope(
+        self, metadata_cache_client,
+    ):
+        r = await metadata_cache_client.get("/api/v1/db/tables")
+        assert r.status_code == 200
+        cache_entries = [
+            t for t in r.json()["tables"]
+            if t["scope"] == "metadata_cache"
+        ]
+        names = {t["name"] for t in cache_entries}
+        # Exactly the four amazon cache tables, all under the new scope.
+        assert names == {
+            "metadata_cache_amazon_state",
+            "metadata_cache_amazon_books",
+            "metadata_cache_amazon_queue",
+            "metadata_cache_amazon_worker_state",
+        }
+
+    async def test_tables_endpoint_reports_row_counts(
+        self, metadata_cache_client,
+    ):
+        r = await metadata_cache_client.get("/api/v1/db/tables")
+        by_name = {t["name"]: t for t in r.json()["tables"]}
+        # Queue seeded with 1 row; worker_state singleton seeded with 1.
+        assert by_name["metadata_cache_amazon_queue"]["row_count"] == 1
+        assert by_name["metadata_cache_amazon_worker_state"]["row_count"] == 1
+        # Books + state still empty.
+        assert by_name["metadata_cache_amazon_books"]["row_count"] == 0
+        assert by_name["metadata_cache_amazon_state"]["row_count"] == 0
+
+    async def test_table_rows_endpoint_returns_seeded_queue_row(
+        self, metadata_cache_client,
+    ):
+        r = await metadata_cache_client.get(
+            "/api/v1/db/table/metadata_cache_amazon_queue"
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["total"] == 1
+        assert body["rows"][0]["author_id"] == "B0SEEDAAAA"
+        assert body["rows"][0]["library_slug"] == "books-lib"
+
+    async def test_table_rows_endpoint_ignores_library_param(
+        self, metadata_cache_client,
+    ):
+        # The cache spans every library, so `?library=` is accepted
+        # but has no effect on which DB gets queried. Matches the
+        # pipeline-table convention (also accepts the param silently).
+        r = await metadata_cache_client.get(
+            "/api/v1/db/table/metadata_cache_amazon_queue?library=anything"
+        )
+        assert r.status_code == 200
+        body = r.json()
+        # Still hits the cache DB and returns the seeded row, NOT a
+        # discovery DB row from "anything".
+        assert body["total"] == 1
+        assert body["rows"][0]["author_id"] == "B0SEEDAAAA"
+
+    async def test_schema_endpoint_works_for_cache_table(
+        self, metadata_cache_client,
+    ):
+        r = await metadata_cache_client.get(
+            "/api/v1/db/table/metadata_cache_amazon_state/schema"
+        )
+        assert r.status_code == 200
+        cols = {c["name"]: c for c in r.json()["columns"]}
+        assert "author_id" in cols
+        assert "library_slug" in cols
+        assert "last_outcome" in cols
+        # PK columns are flagged correctly.
+        assert cols["author_id"]["primary_key"] is True
+        assert cols["library_slug"]["primary_key"] is True

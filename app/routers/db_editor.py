@@ -34,6 +34,7 @@ from pydantic import BaseModel
 from app import state
 from app.database import get_db as get_pipeline_db
 from app.discovery.database import get_db as get_discovery_db
+from app.discovery import metadata_cache
 
 _log = logging.getLogger("seshat.routers.db_editor")
 
@@ -86,7 +87,23 @@ _DISCOVERY_TABLES: frozenset[str] = frozenset({
     "books_calibre_snapshot",
 })
 
-_TABLES = _PIPELINE_TABLES | _DISCOVERY_TABLES
+# v2.21.0 Phase B — Amazon metadata cache surfaces through the same
+# read endpoints. The cache lives in its own DB file
+# (`metadata_cache_amazon.db`), so requests for these tables route
+# through `metadata_cache.get_db(SOURCE_AMAZON)` instead of the
+# pipeline / discovery DBs. Inspect-only today; write endpoints
+# still need a deliberate audit before being unlocked (the worker
+# is the canonical writer, so editing rows by hand should be rare).
+_METADATA_CACHE_AMAZON_TABLES: frozenset[str] = frozenset({
+    metadata_cache.state_table(metadata_cache.SOURCE_AMAZON),
+    metadata_cache.books_table(metadata_cache.SOURCE_AMAZON),
+    metadata_cache.queue_table(metadata_cache.SOURCE_AMAZON),
+    metadata_cache.worker_state_table(metadata_cache.SOURCE_AMAZON),
+})
+
+_METADATA_CACHE_TABLES = _METADATA_CACHE_AMAZON_TABLES
+
+_TABLES = _PIPELINE_TABLES | _DISCOVERY_TABLES | _METADATA_CACHE_TABLES
 
 
 def _check_table(name: str) -> None:
@@ -122,11 +139,15 @@ async def _get_db(name: str, library: Optional[str] = None):
 
     Discovery tables route to the per-library DB; the optional
     `library` arg picks which one. Pipeline tables ignore `library`
-    because they live in the global `seshat.db`.
+    because they live in the global `seshat.db`. Metadata cache tables
+    (v2.21.0 Phase B) route to their per-source DB file and also
+    ignore `library` — the cache spans every library.
     """
     if name in _DISCOVERY_TABLES:
         slug = _check_library_slug(library)
         return await get_discovery_db(slug=slug) if slug else await get_discovery_db()
+    if name in _METADATA_CACHE_AMAZON_TABLES:
+        return await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
     return await get_pipeline_db()
 
 
@@ -139,6 +160,9 @@ class TableEntry(BaseModel):
     # v2.17.5: "pipeline" = global seshat.db; "discovery" = per-library
     # seshat_<slug>.db. Frontend uses this to group tables under the
     # library picker and to know which calls need `?library=`.
+    # v2.21.0 Phase B: "metadata_cache" = per-source cache DB
+    # (currently only Amazon at metadata_cache_amazon.db). Library
+    # picker doesn't apply — the cache spans every library.
     scope: str
 
 
@@ -221,6 +245,30 @@ async def list_tables(
                 entries.append(TableEntry(name=name, row_count=0, scope="discovery"))
     finally:
         await discovery_db.close()
+
+    # v2.21.0 Phase B — Amazon metadata cache. Single DB shared across
+    # libraries, so `?library=` is ignored for these rows.
+    try:
+        cache_db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+    except Exception:
+        cache_db = None
+    if cache_db is not None:
+        try:
+            for name in sorted(_METADATA_CACHE_AMAZON_TABLES):
+                try:
+                    cur = await cache_db.execute(f"SELECT COUNT(*) FROM [{name}]")
+                    row = await cur.fetchone()
+                    entries.append(TableEntry(
+                        name=name,
+                        row_count=int(row[0]) if row else 0,
+                        scope="metadata_cache",
+                    ))
+                except Exception:
+                    entries.append(TableEntry(
+                        name=name, row_count=0, scope="metadata_cache",
+                    ))
+        finally:
+            await cache_db.close()
 
     entries.sort(key=lambda e: e.name)
     return TablesResponse(tables=entries)

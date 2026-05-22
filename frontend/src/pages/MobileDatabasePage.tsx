@@ -21,7 +21,10 @@ import {
 interface TableEntry {
   name: string;
   row_count: number;
-  scope: "pipeline" | "discovery";
+  // v2.21.0 Phase B adds "metadata_cache" for per-source cache tables
+  // (today only Amazon). Treated like pipeline for layout purposes —
+  // library picker doesn't apply.
+  scope: "pipeline" | "discovery" | "metadata_cache";
 }
 
 interface LibraryEntry {
