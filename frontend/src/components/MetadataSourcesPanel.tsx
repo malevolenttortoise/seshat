@@ -129,7 +129,10 @@ export function MetadataSourcesPanel() {
   const t = useTheme();
   const [loaded, setLoaded] = useState<GetResponse | null>(null);
   const [draft, setDraft] = useState<PanelState | null>(null);
-  const [tab, setTab] = useState<Tab>("ebook");
+  // Phase I — single panel; the prior top-level Ebook/Audiobook tabs
+  // become a scope toggle inside the right-column detail pane.
+  const [scope, setScope] = useState<Tab>("ebook");
+  const [selectedSource, setSelectedSource] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -137,6 +140,15 @@ export function MetadataSourcesPanel() {
   // is stable across renders — moving it below the loading-state
   // early return triggers React #310.
   const [resetting, setResetting] = useState(false);
+
+  // Auto-select the first source on initial load so the right pane is
+  // never blank. MAM is always present and pinned, so it's the safest
+  // default — and lands the user on the most visually obvious row.
+  useEffect(() => {
+    if (selectedSource === null && draft) {
+      setSelectedSource("mam");
+    }
+  }, [draft, selectedSource]);
 
   async function load() {
     try {
@@ -278,17 +290,34 @@ export function MetadataSourcesPanel() {
         </div>
       )}
 
-      <div style={{ display: "flex", gap: 4, borderBottom: `1px solid ${t.border}` }}>
-        <TabBtn label="Ebook" active={tab === "ebook"} onClick={() => setTab("ebook")} />
-        <TabBtn label="Audiobook" active={tab === "audiobook"} onClick={() => setTab("audiobook")} />
+      {/* v2.21.0 Phase I — two-column layout. Left: unified source
+          list (MAM pinned top). Right: details + scope toggle +
+          per-source sub-cards (Goodreads / Amazon / Kobo). Replaces
+          the prior top-level Ebook/Audiobook tabs; the scope toggle
+          now lives inside the right pane so users can compare both
+          content types' settings without losing their place in the
+          source list. */}
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "minmax(220px, 280px) 1fr",
+        gap: 16, alignItems: "start",
+      }}>
+        <UnifiedSourceList
+          known={loaded.known}
+          draft={draft}
+          scope={scope}
+          selectedSource={selectedSource}
+          onSelect={setSelectedSource}
+        />
+        <SourceDetailPane
+          sourceName={selectedSource}
+          known={loaded.known}
+          draft={draft}
+          setDraft={setDraft}
+          scope={scope}
+          setScope={setScope}
+        />
       </div>
-
-      <SourceList
-        tab={tab}
-        draft={draft}
-        setDraft={setDraft}
-        known={loaded.known}
-      />
 
       {/* Sticky save bar */}
       <div style={{
@@ -320,285 +349,476 @@ export function MetadataSourcesPanel() {
   );
 }
 
-// ─── Tab button ────────────────────────────────────────────────
+// ─── Unified source list (Phase I — left column) ─────────────────
+//
+// Replaces the prior priority-ordered table view. Renders one row per
+// known source (combined across content types — no top-level tabs
+// anymore). MAM is hard-locked at rank 0. Rows display the per-scope
+// priority number, tiny enable badges (E for ebook, A for audiobook,
+// dimmed when disabled), and select on click. The right-column
+// `SourceDetailPane` mirrors the selection.
+//
+// Priority order is taken from `draft.priority[scope]` so a user
+// switching the right-pane scope toggle re-sorts the left list to
+// match the active scope's ordering. The left list is read-only —
+// reorder happens in the right pane next to each scope's priority
+// number, which keeps the up/down arrows next to the field they
+// affect.
 
-function TabBtn({ label, active, onClick }: {
-  label: string; active: boolean; onClick: () => void;
-}) {
-  const t = useTheme();
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        padding: "10px 18px",
-        fontSize: 14, fontWeight: 600,
-        color: active ? t.accent : t.text2,
-        background: "transparent",
-        border: "none",
-        borderBottom: active ? `2px solid ${t.accent}` : "2px solid transparent",
-        cursor: "pointer",
-        marginBottom: -1,
-      }}
-    >
-      {label}
-    </button>
-  );
-}
-
-// ─── Source list ───────────────────────────────────────────────
-
-function SourceList({ tab, draft, setDraft, known }: {
-  tab: Tab;
-  draft: PanelState;
-  setDraft: (d: PanelState) => void;
+function UnifiedSourceList({
+  known, draft, scope, selectedSource, onSelect,
+}: {
   known: SourceMetadata[];
+  draft: PanelState;
+  scope: Tab;
+  selectedSource: string | null;
+  onSelect: (name: string) => void;
 }) {
   const t = useTheme();
-
-  const priority = draft.priority[tab] ?? [];
-  const enrichKey = tab === "ebook" ? "ebook_enrich" : "audiobook_enrich";
-  const scanKey = tab === "ebook" ? "ebook_scan" : "audiobook_scan";
-
-  // Known sources available for this content type, in the priority
-  // order. Any available source missing from the priority list gets
-  // appended to the end so the user can rank it later.
-  const availableNames = known
-    .filter(k => k.available_for.includes(tab))
-    .map(k => k.name);
-  const ordered = [
-    ...priority.filter(n => availableNames.includes(n)),
-    ...availableNames.filter(n => !priority.includes(n)),
-  ];
-
-  function setToggle(name: string, key: keyof SourceEntry, value: boolean | number | string) {
-    const entry = draft.sources[name];
-    if (!entry) return;
-    const next: SourceEntry = { ...entry, [key]: value };
-    setDraft({ ...draft, sources: { ...draft.sources, [name]: next } });
-  }
-
-  function commitReorder(newOrder: string[]) {
-    // MAM always rank 0 regardless of what the reorder produced.
-    const withoutMam = newOrder.filter(n => n !== "mam");
-    const withMam = ["mam", ...withoutMam];
-    setDraft({ ...draft, priority: { ...draft.priority, [tab]: withMam } });
-  }
-
-  // Arrow-button reorder — up/down swap the row with its neighbor.
-  // MAM is locked at rank 0; the arrow buttons are hidden on that
-  // row and the surrounding rows' "up" / "down" are bounded so they
-  // can't swap INTO position 0.
-  function move(i: number, dir: -1 | 1) {
-    const j = i + dir;
-    if (j < 1 || j >= ordered.length) return;  // j < 1 keeps MAM (i=0) immovable
-    if (ordered[i] === "mam" || ordered[j] === "mam") return;
-    const next = [...ordered];
-    [next[i], next[j]] = [next[j], next[i]];
-    commitReorder(next);
-  }
+  const priority = draft.priority[scope] ?? [];
+  // Sort known sources by current scope's priority; sources not in
+  // the priority list (e.g. just added in a future release) sink to
+  // the bottom alphabetically so they're still visible + clickable.
+  const ordered = [...known].sort((a, b) => {
+    const ai = priority.indexOf(a.name);
+    const bi = priority.indexOf(b.name);
+    if (ai !== -1 && bi !== -1) return ai - bi;
+    if (ai !== -1) return -1;
+    if (bi !== -1) return 1;
+    return a.display.localeCompare(b.display);
+  });
 
   return (
-    <div>
+    <div style={{
+      background: t.bg2, border: `1px solid ${t.borderL}`,
+      borderRadius: 8,
+      overflow: "hidden",
+      display: "flex", flexDirection: "column",
+    }}>
       <div style={{
-        display: "grid",
-        gridTemplateColumns: "24px 24px 1fr 80px 80px 90px 110px",
-        alignItems: "center",
-        gap: "8px 12px",
-        fontSize: 11, fontWeight: 700,
-        color: t.textDim, textTransform: "uppercase", letterSpacing: 0.5,
-        padding: "8px 4px",
+        padding: "8px 12px",
+        fontSize: 11, fontWeight: 700, textTransform: "uppercase",
+        letterSpacing: 0.5, color: t.textDim,
         borderBottom: `1px solid ${t.borderL}`,
+        background: t.bg3,
       }}>
-        <span></span>
-        <span style={{ textAlign: "right" }}>#</span>
-        <span>Source</span>
-        <span style={{ textAlign: "center" }}>Enrich</span>
-        <span style={{ textAlign: "center" }}>Scan</span>
-        <span
-          style={{ textAlign: "center" }}
-          title={
-            "Keeps doing full-detail searches on this source until it " +
-            "finds a match for every owned book — instead of " +
-            "fast-pathing once any other source has a URL. Default on " +
-            "for the primary tier (Goodreads / Hardcover / Audible)."
-          }
-        >Mandatory</span>
-        <span style={{ textAlign: "center" }} title="Seconds to wait between requests (NOT queries per second)">Rate (s)</span>
+        Sources
       </div>
-
-      {ordered.map((name, i) => {
-        const meta = known.find(k => k.name === name);
-        if (!meta) return null;
+      {ordered.map((meta) => {
+        const name = meta.name;
         const entry = draft.sources[name];
         if (!entry) return null;
         const locked = name === "mam";
-        // Arrow buttons are bounded so they can't swap INTO slot 0
-        // (MAM is pinned there). The "up" button on row 1 (first
-        // non-MAM) is disabled because moving it up would collide
-        // with MAM.
-        const canUp = !locked && i > 1;
-        const canDown = !locked && i < ordered.length - 1;
-        // v2.11.1: Amazon's audiobook scan ships in this release, so
-        // the Amazon extras sub-row also renders on the audiobook
-        // tab — with the audiobook-specific format dropdown.
-        const showAmazonExtras = name === "amazon";
-        const showKoboExtras = name === "kobo" && tab === "ebook";
-        // v2.13.0 Stage 6 — Goodreads gets a status + probe panel below
-        // its row on both tabs. The Goodreads session-state flag is
-        // global across content types, so we render the same card on
-        // the audiobook tab too (Cloudflare doesn't care which scan
-        // tripped the gate).
-        const showGoodreadsExtras = name === "goodreads";
-        const hasExtrasRow = showAmazonExtras || showKoboExtras || showGoodreadsExtras;
+        const isSelected = selectedSource === name;
+        // Per-content-type "available" check — Kobo is ebook-only,
+        // Audible is audiobook-only, etc. Dim badges when the source
+        // isn't relevant in that scope.
+        const eAvail = meta.available_for.includes("ebook");
+        const aAvail = meta.available_for.includes("audiobook");
+        const eEnabled = eAvail && (entry.ebook_enrich || entry.ebook_scan);
+        const aEnabled = aAvail && (entry.audiobook_enrich || entry.audiobook_scan);
+        // Priority rank for the current scope (1-indexed for display).
+        const rank = priority.indexOf(name);
+        const rankDisplay = rank === -1 ? "–" : String(rank + 1);
+        const isInScope = meta.available_for.includes(scope);
+
         return (
-          <div key={name}>
-          <div
+          <button
+            key={name}
+            onClick={() => onSelect(name)}
             style={{
               display: "grid",
-              gridTemplateColumns: "24px 24px 1fr 80px 80px 90px 110px",
+              gridTemplateColumns: "28px 1fr auto",
               alignItems: "center",
-              gap: "8px 12px",
-              padding: "8px 4px",
-              borderBottom: hasExtrasRow ? "none" : `1px solid ${t.borderL}`,
-              background: locked ? t.bg3 : "transparent",
+              gap: 10,
+              padding: "10px 12px",
+              background: isSelected ? t.accent + "1a" : "transparent",
+              border: "none",
+              borderLeft: isSelected
+                ? `3px solid ${t.accent}`
+                : "3px solid transparent",
+              borderBottom: `1px solid ${t.borderL}`,
+              cursor: "pointer",
+              color: t.text,
+              textAlign: "left",
+              fontSize: 13,
+              opacity: isInScope ? 1 : 0.55,
             }}
           >
-            {/* Up/down arrows — replaces the HTML5 drag-grip. MAM
-                row shows no arrows since it's pinned. */}
-            <div style={{
-              display: "flex", flexDirection: "column",
-              alignItems: "center", justifyContent: "center",
-              lineHeight: 1,
+            <span style={{
+              fontSize: 11, fontWeight: 700,
+              color: locked ? t.accent : t.textDim,
+              textAlign: "center",
             }}>
-              {!locked && (
-                <>
-                  <button onClick={() => move(i, -1)} disabled={!canUp} style={{
-                    background: "none", border: "none",
-                    cursor: canUp ? "pointer" : "default",
-                    color: canUp ? t.textDim : t.borderL,
-                    fontSize: 11, padding: "0 2px",
-                    opacity: canUp ? 1 : 0.4,
-                  }}>▲</button>
-                  <button onClick={() => move(i, 1)} disabled={!canDown} style={{
-                    background: "none", border: "none",
-                    cursor: canDown ? "pointer" : "default",
-                    color: canDown ? t.textDim : t.borderL,
-                    fontSize: 11, padding: "0 2px",
-                    opacity: canDown ? 1 : 0.4,
-                  }}>▼</button>
-                </>
-              )}
-            </div>
-
-            {/* Rank */}
-            <span style={{ fontSize: 13, color: t.textDim, fontWeight: 600, textAlign: "right" }}>
-              {i + 1}
+              {locked ? "🔒" : rankDisplay}
             </span>
-
-            {/* Name + badges */}
-            <div style={{
-              fontSize: 14, fontWeight: 600,
-              color: locked ? t.textDim : t.text,
-              display: "flex", alignItems: "center", gap: 8,
+            <span style={{
+              fontWeight: isSelected ? 700 : 500,
+              color: isSelected ? t.accent : t.text,
             }}>
               {meta.display}
-              {locked && (
-                <span style={{
-                  fontSize: 10, fontWeight: 700, textTransform: "uppercase",
-                  padding: "2px 7px", borderRadius: 99,
-                  background: t.accent + "22", color: t.accent, letterSpacing: 0.4,
-                }}>
-                  Always first
-                </span>
-              )}
-            </div>
-
-            {/* Enrich — MAM shown as locked-checked since it's
-                prepended per-call at enrich time whenever a torrent_id
-                is available. */}
-            <div style={{ display: "flex", justifyContent: "center" }} title={
-              locked
-                ? "MAM enriches every grab automatically via the announce torrent_id"
-                : undefined
-            }>
-              <input
-                type="checkbox"
-                checked={locked ? true : Boolean(entry[enrichKey])}
-                disabled={locked}
-                onChange={e => !locked && setToggle(name, enrichKey, e.target.checked)}
-                style={{ width: 18, height: 18, cursor: locked ? "not-allowed" : "pointer" }}
-              />
-            </div>
-
-            {/* Scan */}
-            <div style={{ display: "flex", justifyContent: "center" }}>
-              <input
-                type="checkbox"
-                checked={Boolean(entry[scanKey])}
-                disabled={locked}
-                onChange={e => !locked && setToggle(name, scanKey, e.target.checked)}
-                style={{ width: 18, height: 18, cursor: locked ? "not-allowed" : "pointer" }}
-              />
-            </div>
-
-            {/* Mandatory — v2.3.2. Locked off for MAM (it's not part
-                of the source-scan registry; mandatory has no effect
-                there). For everyone else, governs whether
-                `_lookup_author_inner` keeps DETAIL-fetching books
-                missing this source's URL on every scan. */}
-            <div style={{ display: "flex", justifyContent: "center" }} title={
-              locked
-                ? "MAM is not part of the source-scan registry; the mandatory flag has no effect."
-                : undefined
-            }>
-              <input
-                type="checkbox"
-                checked={locked ? false : Boolean(entry.mandatory)}
-                disabled={locked}
-                onChange={e => !locked && setToggle(name, "mandatory", e.target.checked)}
-                style={{ width: 18, height: 18, cursor: locked ? "not-allowed" : "pointer" }}
-              />
-            </div>
-
-            {/* Rate limit */}
-            <div style={{ display: "flex", justifyContent: "center" }}>
-              <input
-                type="number"
-                min={0.1}
-                max={100}
-                step={0.5}
-                value={Number(entry.rate_limit ?? 1)}
-                onChange={e => setToggle(name, "rate_limit", parseFloat(e.target.value) || 1)}
-                style={{
-                  width: 70, padding: "4px 8px", textAlign: "center",
-                  borderRadius: 6,
-                  border: `1px solid ${t.border}`, background: t.inp,
-                  color: t.text2, fontSize: 12, outline: "none",
-                }}
-              />
-            </div>
-          </div>
-          {showAmazonExtras && (
-            <>
-              <AmazonExtrasRow
-                entry={entry}
-                tab={tab}
-                onChange={(key, value) => setToggle(name, key, value)}
-              />
-              <AmazonCacheStatusCard />
-            </>
-          )}
-          {showKoboExtras && (
-            <KoboExtrasRow
-              entry={entry}
-              onChange={(key, value) => setToggle(name, key, value)}
-            />
-          )}
-          {showGoodreadsExtras && <GoodreadsStatusCard />}
-          </div>
+            </span>
+            <span style={{ display: "flex", gap: 4 }}>
+              <ScopeBadge label="E" enabled={eEnabled} available={eAvail} />
+              <ScopeBadge label="A" enabled={aEnabled} available={aAvail} />
+            </span>
+          </button>
         );
       })}
     </div>
+  );
+}
+
+function ScopeBadge({ label, enabled, available }: {
+  label: string; enabled: boolean; available: boolean;
+}) {
+  const t = useTheme();
+  if (!available) {
+    return (
+      <span style={{
+        fontSize: 9, fontWeight: 700, letterSpacing: 0.5,
+        padding: "2px 5px", borderRadius: 3,
+        background: t.bg3, color: t.borderL,
+        border: `1px solid ${t.borderL}`,
+      }} title={`Not available for ${label === "E" ? "ebook" : "audiobook"}`}>{label}</span>
+    );
+  }
+  return (
+    <span style={{
+      fontSize: 9, fontWeight: 700, letterSpacing: 0.5,
+      padding: "2px 5px", borderRadius: 3,
+      background: enabled ? t.ok + "22" : t.bg3,
+      color: enabled ? t.ok : t.textDim,
+      border: `1px solid ${enabled ? t.ok + "55" : t.borderL}`,
+    }}>{label}</span>
+  );
+}
+
+// ─── Scope toggle (right column — Ebook / Audiobook) ─────────────
+
+function ScopeToggle({ scope, setScope }: {
+  scope: Tab; setScope: (s: Tab) => void;
+}) {
+  const t = useTheme();
+  return (
+    <div style={{
+      display: "inline-flex",
+      background: t.bg3, border: `1px solid ${t.borderL}`,
+      borderRadius: 6, padding: 2, gap: 0,
+    }}>
+      {(["ebook", "audiobook"] as Tab[]).map((s) => {
+        const active = scope === s;
+        return (
+          <button
+            key={s}
+            onClick={() => setScope(s)}
+            style={{
+              padding: "4px 14px", fontSize: 12, fontWeight: 600,
+              background: active ? t.accent + "22" : "transparent",
+              color: active ? t.accent : t.text2,
+              border: "none", borderRadius: 4,
+              cursor: active ? "default" : "pointer",
+              textTransform: "capitalize",
+            }}
+          >
+            {s}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Source detail pane (Phase I — right column) ─────────────────
+//
+// Shows the currently-selected source's editable settings. Renders
+// the scope-aware enable toggles (enrich, scan, mandatory) on the
+// active content-type scope, the shared rate limit, both priority
+// numbers side-by-side (each with up/down buttons that act on its
+// own scope's priority array), and the source-specific sub-cards
+// (Goodreads probe / Amazon format + cache / Kobo concurrency).
+
+function SourceDetailPane({
+  sourceName, known, draft, setDraft, scope, setScope,
+}: {
+  sourceName: string | null;
+  known: SourceMetadata[];
+  draft: PanelState;
+  setDraft: (d: PanelState) => void;
+  scope: Tab;
+  setScope: (s: Tab) => void;
+}) {
+  const t = useTheme();
+  if (!sourceName) {
+    return (
+      <div style={{
+        padding: 24,
+        background: t.bg2, border: `1px solid ${t.borderL}`,
+        borderRadius: 8, color: t.textDim, fontSize: 13,
+        textAlign: "center",
+      }}>
+        Select a source on the left to edit its settings.
+      </div>
+    );
+  }
+  const meta = known.find((k) => k.name === sourceName);
+  const entry = draft.sources[sourceName];
+  if (!meta || !entry) {
+    return (
+      <div style={{
+        padding: 24,
+        background: t.bg2, border: `1px solid ${t.borderL}`,
+        borderRadius: 8, color: t.err, fontSize: 13,
+      }}>
+        Source <code>{sourceName}</code> not found in registry. Save +
+        reload to refresh.
+      </div>
+    );
+  }
+
+  const locked = sourceName === "mam";
+  const enrichKey: keyof SourceEntry = scope === "ebook"
+    ? "ebook_enrich" : "audiobook_enrich";
+  const scanKey: keyof SourceEntry = scope === "ebook"
+    ? "ebook_scan" : "audiobook_scan";
+  // Whether this source supports the currently-selected scope. Kobo
+  // for audiobook → "not applicable" pill; Audible for ebook → same.
+  const scopeSupported = meta.available_for.includes(scope);
+
+  function setToggle(key: keyof SourceEntry, value: boolean | number | string) {
+    const next: SourceEntry = { ...entry!, [key]: value };
+    setDraft({ ...draft, sources: { ...draft.sources, [sourceName!]: next } });
+  }
+
+  function reorderPriority(targetScope: Tab, direction: -1 | 1) {
+    const arr = [...(draft.priority[targetScope] ?? [])];
+    const idx = arr.indexOf(sourceName!);
+    if (idx === -1) return;
+    const j = idx + direction;
+    // MAM stays at index 0 forever — can't swap into slot 0.
+    if (j < 1 || j >= arr.length) return;
+    [arr[idx], arr[j]] = [arr[j], arr[idx]];
+    setDraft({
+      ...draft,
+      priority: { ...draft.priority, [targetScope]: arr },
+    });
+  }
+
+  return (
+    <div style={{
+      display: "flex", flexDirection: "column", gap: 16,
+      background: t.bg2, border: `1px solid ${t.borderL}`,
+      borderRadius: 8, padding: 20,
+    }}>
+      {/* Header — source name + locked badge */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <h3 style={{
+          margin: 0, fontSize: 18, fontWeight: 700, color: t.text,
+        }}>{meta.display}</h3>
+        {locked && (
+          <span style={{
+            fontSize: 10, fontWeight: 700, textTransform: "uppercase",
+            padding: "3px 8px", borderRadius: 99,
+            background: t.accent + "22", color: t.accent, letterSpacing: 0.4,
+          }}>🔒 Always first</span>
+        )}
+        <span style={{ flex: 1 }} />
+        <ScopeToggle scope={scope} setScope={setScope} />
+      </div>
+
+      {/* Scope-applicability notice */}
+      {!scopeSupported && (
+        <div style={{
+          background: t.bg3, border: `1px solid ${t.borderL}`,
+          borderRadius: 6, padding: "8px 12px",
+          fontSize: 12, color: t.textDim,
+        }}>
+          {meta.display} doesn't apply to <b>{scope}</b> scans. Toggles
+          below are disabled; switch scope to {scope === "ebook" ? "audiobook" : "ebook"} to edit.
+        </div>
+      )}
+
+      {/* Toggle row — enrich / scan / mandatory (scoped to current tab) */}
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(3, 1fr)",
+        gap: 12,
+      }}>
+        <DetailToggle
+          label="Enrich"
+          desc={`Query during ${scope} enrich.`}
+          checked={locked ? true : Boolean(entry[enrichKey])}
+          disabled={locked || !scopeSupported}
+          tooltip={locked
+            ? "MAM enriches every grab automatically via the announce torrent_id"
+            : undefined}
+          onChange={(v) => setToggle(enrichKey, v)}
+        />
+        <DetailToggle
+          label="Scan"
+          desc={`Include in per-author ${scope} scans.`}
+          checked={Boolean(entry[scanKey])}
+          disabled={locked || !scopeSupported}
+          onChange={(v) => setToggle(scanKey, v)}
+        />
+        <DetailToggle
+          label="Mandatory"
+          desc="Keep DETAIL-fetching until every book has a URL from this source."
+          checked={locked ? false : Boolean(entry.mandatory)}
+          disabled={locked}
+          tooltip={locked
+            ? "MAM is not part of the source-scan registry; the mandatory flag has no effect."
+            : undefined}
+          onChange={(v) => setToggle("mandatory", v)}
+        />
+      </div>
+
+      {/* Rate limit (shared across content types) */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <span style={{
+          fontSize: 11, fontWeight: 700, textTransform: "uppercase",
+          letterSpacing: 0.5, color: t.textDim, minWidth: 80,
+        }}>Rate (s)</span>
+        <input
+          type="number"
+          min={0.1}
+          max={100}
+          step={0.5}
+          value={Number(entry.rate_limit ?? 1)}
+          disabled={locked}
+          onChange={(e) => setToggle("rate_limit", parseFloat(e.target.value) || 1)}
+          style={{
+            width: 90, padding: "5px 8px", textAlign: "center",
+            borderRadius: 6,
+            border: `1px solid ${t.border}`, background: t.inp,
+            color: t.text2, fontSize: 13, outline: "none",
+            opacity: locked ? 0.5 : 1,
+          }}
+        />
+        <span style={{ fontSize: 11, color: t.textDim, fontStyle: "italic" }}>
+          Seconds to wait between requests. Higher = gentler upstream.
+        </span>
+      </div>
+
+      {/* Priority — both content types shown simultaneously */}
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(2, 1fr)",
+        gap: 12,
+      }}>
+        {(["ebook", "audiobook"] as Tab[]).map((s) => {
+          const arr = draft.priority[s] ?? [];
+          const idx = arr.indexOf(sourceName);
+          const rank = idx === -1 ? null : idx + 1;
+          const supported = meta.available_for.includes(s);
+          const canUp = !locked && supported && idx > 1;
+          const canDown = !locked && supported && idx >= 1 && idx < arr.length - 1;
+          return (
+            <div key={s} style={{
+              display: "flex", alignItems: "center", gap: 10,
+              padding: "10px 12px",
+              background: t.bg3, border: `1px solid ${t.borderL}`,
+              borderRadius: 6,
+              opacity: supported ? 1 : 0.5,
+            }}>
+              <span style={{
+                fontSize: 11, fontWeight: 700, textTransform: "capitalize",
+                letterSpacing: 0.5, color: t.textDim,
+              }}>{s}</span>
+              <span style={{ fontSize: 18, fontWeight: 700, color: t.text }}>
+                {rank === null ? "—" : `#${rank}`}
+              </span>
+              <span style={{ flex: 1 }} />
+              <button
+                onClick={() => reorderPriority(s, -1)}
+                disabled={!canUp}
+                title={canUp ? "Move up" : (locked ? "MAM is locked at #1" : "Already at top")}
+                style={{
+                  background: "none", border: `1px solid ${t.borderL}`,
+                  borderRadius: 4, padding: "3px 7px",
+                  cursor: canUp ? "pointer" : "default",
+                  color: canUp ? t.text : t.borderL,
+                  opacity: canUp ? 1 : 0.4,
+                  fontSize: 11,
+                }}
+              >▲</button>
+              <button
+                onClick={() => reorderPriority(s, 1)}
+                disabled={!canDown}
+                title={canDown ? "Move down" : "Already at bottom"}
+                style={{
+                  background: "none", border: `1px solid ${t.borderL}`,
+                  borderRadius: 4, padding: "3px 7px",
+                  cursor: canDown ? "pointer" : "default",
+                  color: canDown ? t.text : t.borderL,
+                  opacity: canDown ? 1 : 0.4,
+                  fontSize: 11,
+                }}
+              >▼</button>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Source-specific sub-sections */}
+      {sourceName === "amazon" && (
+        <>
+          <AmazonExtrasRow
+            entry={entry}
+            tab={scope}
+            onChange={(key, value) => setToggle(key, value)}
+          />
+          <AmazonCacheStatusCard />
+        </>
+      )}
+      {sourceName === "kobo" && scope === "ebook" && (
+        <KoboExtrasRow
+          entry={entry}
+          onChange={(key, value) => setToggle(key, value)}
+        />
+      )}
+      {sourceName === "goodreads" && <GoodreadsStatusCard />}
+    </div>
+  );
+}
+
+function DetailToggle({
+  label, desc, checked, disabled, tooltip, onChange,
+}: {
+  label: string;
+  desc?: string;
+  checked: boolean;
+  disabled?: boolean;
+  tooltip?: string;
+  onChange: (v: boolean) => void;
+}) {
+  const t = useTheme();
+  return (
+    <label
+      title={tooltip}
+      style={{
+        display: "flex", flexDirection: "column", gap: 4,
+        padding: "10px 12px",
+        background: t.bg3, border: `1px solid ${t.borderL}`,
+        borderRadius: 6,
+        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled ? 0.5 : 1,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <input
+          type="checkbox"
+          checked={checked}
+          disabled={disabled}
+          onChange={(e) => onChange(e.target.checked)}
+          style={{ width: 18, height: 18, cursor: disabled ? "not-allowed" : "pointer" }}
+        />
+        <span style={{ fontSize: 13, fontWeight: 600, color: t.text }}>{label}</span>
+      </div>
+      {desc && (
+        <div style={{ fontSize: 11, color: t.textDim, lineHeight: 1.4 }}>{desc}</div>
+      )}
+    </label>
   );
 }
 
