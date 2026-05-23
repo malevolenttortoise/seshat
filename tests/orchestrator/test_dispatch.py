@@ -666,6 +666,164 @@ class TestDryRun:
         assert result.grab_id is None
 
 
+# ─── v2.21.2 — live-read runtime kill switches ─────────────────
+#
+# The `dry_run` and `mam_irc_enabled` settings are operator-facing
+# kill switches in Settings → MAM. Pre-v2.21.2 they were read once
+# at lifespan startup / dispatcher build, so flipping them on a
+# running container had no effect until the next restart — the
+# toggles looked like they did something but didn't actually stop
+# grabs from happening. Critical safety gap caught during a
+# real incident 2026-05-23. v2.21.2 reads both from live settings
+# at the top of `handle_announce` and `inject_grab`.
+
+
+class TestLiveKillSwitches:
+    async def test_live_dry_run_skips_irc_announce(
+        self, temp_db, monkeypatch,
+    ):
+        """Flipping `dry_run` in settings should stop the next
+        IRC announce from grabbing, even when `deps.dry_run=False`
+        (which is the case on a running dispatcher that was built
+        before the toggle)."""
+        from app import config as app_config
+        fake_settings = {"dry_run": True, "mam_irc_enabled": True}
+        monkeypatch.setattr(
+            app_config, "load_settings", lambda: dict(fake_settings),
+        )
+        fetch = _make_fetch(
+            GrabResult(success=True, torrent_bytes=MINIMAL_BENCODED_TORRENT)
+        )
+        deps = _make_deps(
+            filter_config=_make_filter_config(allowed=["Brandon Sanderson"]),
+            fetch_result=GrabResult(
+                success=True, torrent_bytes=MINIMAL_BENCODED_TORRENT,
+            ),
+        )
+        deps.dry_run = False  # canonical "dispatcher built before toggle"
+        deps.fetch_torrent = fetch
+
+        result = await handle_announce(deps, _make_announce())
+
+        assert result.action == "skip"
+        assert result.reason == "dry_run_live"
+        # fetch_torrent must not have been called — kill switch is
+        # at the top of handle_announce, before any side effects.
+        assert len(fetch.calls) == 0
+
+    async def test_live_irc_disabled_skips_irc_announce(
+        self, temp_db, monkeypatch,
+    ):
+        """Flipping `mam_irc_enabled=False` in settings should stop
+        the next IRC announce from grabbing — the kill switch the
+        operator expected the UI toggle to be."""
+        from app import config as app_config
+        fake_settings = {"mam_irc_enabled": False, "dry_run": False}
+        monkeypatch.setattr(
+            app_config, "load_settings", lambda: dict(fake_settings),
+        )
+        fetch = _make_fetch(
+            GrabResult(success=True, torrent_bytes=MINIMAL_BENCODED_TORRENT)
+        )
+        deps = _make_deps(
+            filter_config=_make_filter_config(allowed=["Brandon Sanderson"]),
+            fetch_result=GrabResult(
+                success=True, torrent_bytes=MINIMAL_BENCODED_TORRENT,
+            ),
+        )
+        deps.fetch_torrent = fetch
+
+        result = await handle_announce(deps, _make_announce())
+
+        assert result.action == "skip"
+        assert result.reason == "irc_listener_disabled"
+        assert len(fetch.calls) == 0
+
+    async def test_live_kill_switches_default_permissive(
+        self, temp_db, monkeypatch,
+    ):
+        """Missing settings keys default to permissive: announces
+        flow through normally. Critical for back-compat with users
+        who never touched the toggles."""
+        from app import config as app_config
+        # Empty settings — no kill-switch fields set.
+        monkeypatch.setattr(app_config, "load_settings", lambda: {})
+        deps = _make_deps(
+            filter_config=_make_filter_config(allowed=["Brandon Sanderson"]),
+            fetch_result=GrabResult(
+                success=True, torrent_bytes=MINIMAL_BENCODED_TORRENT,
+            ),
+        )
+
+        result = await handle_announce(deps, _make_announce())
+
+        assert result.action == "submit"
+
+    async def test_live_dry_run_skips_manual_inject(
+        self, temp_db, monkeypatch,
+    ):
+        """Manual injects also honor the live dry_run toggle —
+        a user-initiated inject under an active dry_run should
+        NOT grab. (IRC-disabled does NOT apply to manual injects
+        since those are user-initiated regardless of listener state.)"""
+        from app import config as app_config
+        from app.orchestrator.dispatch import inject_grab
+        # IRC disabled + dry_run on. inject_grab should honor dry_run
+        # but NOT honor irc_disabled.
+        fake_settings = {"mam_irc_enabled": False, "dry_run": True}
+        monkeypatch.setattr(
+            app_config, "load_settings", lambda: dict(fake_settings),
+        )
+        fetch = _make_fetch(
+            GrabResult(success=True, torrent_bytes=MINIMAL_BENCODED_TORRENT)
+        )
+        deps = _make_deps(
+            filter_config=_make_filter_config(allowed=[]),
+            fetch_result=GrabResult(
+                success=True, torrent_bytes=MINIMAL_BENCODED_TORRENT,
+            ),
+        )
+        deps.dry_run = False
+        deps.fetch_torrent = fetch
+
+        result = await inject_grab(
+            deps, torrent_id="123456",
+            torrent_name="test", category="Audiobooks - Fantasy",
+        )
+
+        assert result.action == "skip"
+        assert result.reason == "dry_run_live"
+        assert len(fetch.calls) == 0
+
+    async def test_live_irc_disabled_does_not_block_manual_inject(
+        self, temp_db, monkeypatch,
+    ):
+        """Manual injects DO NOT honor the IRC-disabled toggle —
+        they're user-initiated and should still work when the
+        listener is paused. (Only dry_run blocks manual injects.)"""
+        from app import config as app_config
+        from app.orchestrator.dispatch import inject_grab
+        fake_settings = {"mam_irc_enabled": False, "dry_run": False}
+        monkeypatch.setattr(
+            app_config, "load_settings", lambda: dict(fake_settings),
+        )
+        deps = _make_deps(
+            filter_config=_make_filter_config(allowed=[]),
+            fetch_result=GrabResult(
+                success=True, torrent_bytes=MINIMAL_BENCODED_TORRENT,
+            ),
+        )
+
+        result = await inject_grab(
+            deps, torrent_id="123456",
+            torrent_name="test", category="Audiobooks - Fantasy",
+        )
+
+        # Should NOT be the irc_listener_disabled skip — the manual
+        # inject path bypasses that kill switch by design.
+        assert result.reason != "irc_listener_disabled"
+
+
 # ─── Buffer gate (commit 5 — MouseSearch Tier 1) ────────────
 
 

@@ -283,7 +283,67 @@ async def handle_announce(
     on the happy or expected-failure paths — the IRC listener
     iterates over many announces and a single bad one shouldn't
     take down the loop.
+
+    Live-read kill switches (v2.21.2). Reads `dry_run` and
+    `mam_irc_enabled` from settings on every call so the operator's
+    runtime toggles take effect on the NEXT announce instead of
+    waiting for a container restart. Pre-v2.21.2, both were read
+    only at dispatcher build time / lifespan startup, so flipping
+    them on a running container had no effect until the next reboot
+    — a critical gap that meant the UI "kill switches" weren't
+    actually kill switches. Cheap on every call: `load_settings()`
+    is mtime-cached.
     """
+    # Live-read kill-switch evaluation (v2.21.2). Both `dry_run` and
+    # `mam_irc_enabled` route through synthetic skip decisions so the
+    # audit row still gets written (preserving the `announce_id is
+    # always set` contract) but nothing downstream actually fetches
+    # or submits the torrent. Live dispatch path is the cheapest
+    # place to enforce — pre-fix these toggles only took effect at
+    # container restart, which was a critical safety gap.
+    live = _live_kill_switch_state()
+    if not live["irc_enabled"]:
+        _log.info(
+            "IRC announce ignored: mam_irc_enabled=False "
+            "(torrent_id=%s, name=%r)",
+            announce.torrent_id, announce.torrent_name,
+        )
+        return await _dispatch_with_decision(
+            deps,
+            announce=announce,
+            raw_line=raw_line,
+            filter_decision=Decision(
+                action="skip", reason="irc_listener_disabled",
+            ),
+            skip_filter=False,
+            force_fl_wedge=False,
+            apply_format_dedup=False,
+        )
+    if live["dry_run"] and not deps.dry_run:
+        # Live setting flipped to dry_run while the dispatcher's
+        # `deps.dry_run` is still False (dispatcher was built before
+        # the toggle flipped on a running container). Honor the
+        # live setting — this is the v2.21.2 contract that the
+        # toggle takes effect on the next announce. The original
+        # `if deps.dry_run` path inside `_dispatch_with_decision`
+        # still works for tests / startup-time-configured dry_run.
+        _log.info(
+            "Live dry_run engaged: skipping IRC announce "
+            "(torrent_id=%s, name=%r)",
+            announce.torrent_id, announce.torrent_name,
+        )
+        return await _dispatch_with_decision(
+            deps,
+            announce=announce,
+            raw_line=raw_line,
+            filter_decision=Decision(
+                action="skip", reason="dry_run_live",
+            ),
+            skip_filter=False,
+            force_fl_wedge=False,
+            apply_format_dedup=False,
+        )
+
     decision = evaluate_announce(announce, deps.filter_config)
     return await _dispatch_with_decision(
         deps,
@@ -294,6 +354,22 @@ async def handle_announce(
         force_fl_wedge=False,
         apply_format_dedup=True,
     )
+
+
+def _live_kill_switch_state() -> dict[str, bool]:
+    """Read the runtime kill-switch settings on every call.
+
+    Settings are mtime-cached in `app.config.load_settings`, so a
+    per-announce call is effectively free. Defaults match the
+    "permissive" lifespan defaults so a missing field never
+    accidentally disables grabs.
+    """
+    from app.config import load_settings
+    s = load_settings()
+    return {
+        "irc_enabled": bool(s.get("mam_irc_enabled", True)),
+        "dry_run": bool(s.get("dry_run", False)),
+    }
 
 
 async def inject_grab(
@@ -333,7 +409,14 @@ async def inject_grab(
     manual-inject router when the user checks "use a wedge for this
     one" — drains one wedge from the pool for this single grab
     without needing to flip the global `policy_use_wedge` setting.
+
+    Live `dry_run` kill-switch (v2.21.2). Unlike the IRC-enabled
+    toggle (which doesn't apply here — manual injects are user-
+    initiated regardless of the IRC listener state), the live
+    `dry_run` setting IS honored on every manual inject. Mirrors
+    the same contract `handle_announce` uses.
     """
+    live = _live_kill_switch_state()
     fake_announce = Announce(
         torrent_id=torrent_id,
         torrent_name=torrent_name or f"manual_inject_{torrent_id}",
@@ -343,6 +426,24 @@ async def inject_grab(
         book_title=book_title,
         filetype=(filetype or "").lower(),
     )
+    if live["dry_run"] and not deps.dry_run:
+        _log.info(
+            "Live dry_run engaged: skipping manual inject "
+            "(torrent_id=%s, name=%r)",
+            torrent_id, torrent_name,
+        )
+        return await _dispatch_with_decision(
+            deps,
+            announce=fake_announce,
+            raw_line=raw_line,
+            filter_decision=Decision(
+                action="skip", reason="dry_run_live",
+            ),
+            skip_filter=False,
+            force_fl_wedge=False,
+            apply_format_dedup=False,
+        )
+
     # Synthetic "allow" decision so the audit row reflects that this
     # was a manual override (reason `manual_inject` rather than the
     # filter's allowed_author / category_not_allowed / etc.).

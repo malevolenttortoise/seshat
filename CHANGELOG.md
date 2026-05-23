@@ -7,6 +7,62 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [2.21.2] — 2026-05-23
+
+### Fixed — `dry_run` and `mam_irc_enabled` are now real kill switches
+
+Both toggles in Settings → MAM are operator-facing "stop grabbing"
+controls. Pre-v2.21.2 they were both read **only at lifespan startup
+/ dispatcher build time** and never re-read on a running container.
+Flipping either in the UI saved the new value to `settings.json`
+correctly but the running dispatcher and IRC listener task ignored
+it — the toggles looked like they did something but didn't actually
+stop grabs from happening until the next container restart.
+
+Caught the hard way during a real incident 2026-05-23: an operator
+tried disabling IRC listener, enabling dry_run, and disabling MAM
+search to halt grabs in flight — none of them worked. The only
+thing that stopped Seshat was changing the IRC NickServ password
+to kill the protocol-level connection.
+
+The fix wires a `_live_kill_switch_state()` helper at the top of
+`handle_announce` and `inject_grab` that reads both settings from
+`load_settings()` on every call. The settings are mtime-cached so
+the per-announce cost is effectively zero.
+
+**Behavior change:**
+
+| Setting | Pre-v2.21.2 | v2.21.2 |
+|---|---|---|
+| `mam_irc_enabled = False` | Took effect only at container restart | Next IRC announce is skipped with `reason='irc_listener_disabled'`. Audit row still recorded. Manual injects unaffected (user-initiated). |
+| `dry_run = True` | Took effect only at container restart (and only if `_build_dispatcher` ran with it set) | Next IRC announce + next manual inject both skip with `reason='dry_run_live'`. Audit row still recorded. |
+
+The IRC listener task itself stays connected to MAM when
+`mam_irc_enabled` is flipped off — announces are dropped at the
+application layer with zero MAM-side side effects (no torrent fetch,
+no qBit add). Actually disconnecting the IRC client on toggle is
+deferred to a follow-up. The immediate "stop grabs" need is solved
+by the dispatch-level gate.
+
+**Note on `mam_enabled`:** this setting **only gates the
+discovery-side MAM book search**, not the IRC → dispatch → qBit
+pipeline. It always did, this just makes the contract explicit:
+"disable MAM" in Settings → Sources doesn't stop IRC autograbs. Use
+`mam_irc_enabled` for that.
+
+5 new tests in `tests/orchestrator/test_dispatch.py::TestLiveKillSwitches`
+cover the four combinations (irc-disabled + dry_run on/off, IRC announce
+vs manual inject) plus the missing-settings default-permissive case.
+
+### Operator note
+
+If you've been bitten by this and have grabs in flight you didn't
+intend, the new gates take effect on the next announce after this
+upgrade. The legacy "restart Seshat to actually apply the toggle"
+workaround still works as a belt-and-suspenders.
+
+---
+
 ## [2.21.1] — 2026-05-22
 
 ### Fixed — qBittorrent 5.2 JSON response shape for `torrents/add`
