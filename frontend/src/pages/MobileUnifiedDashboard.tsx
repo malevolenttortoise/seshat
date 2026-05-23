@@ -676,6 +676,9 @@ const MOBILE_HYGIENE_JOBS = [
   "Book deduplication",
   "Series consolidation",
   "ABS author cross-stamp",
+  "Orphan author retrolink",
+  "Cross-library person backfill",
+  "Prune orphan author_links",
 ];
 
 interface MobileHygieneConfirmProps {
@@ -721,7 +724,7 @@ function MobileHygieneConfirm({
           Run Data Hygiene?
         </div>
         <div style={{ fontSize: 12, color: t.text2, marginBottom: 10 }}>
-          Fans 6 jobs across every library, in order. Re-running is idempotent.
+          Fans 9 jobs across every library, in order. Re-running is idempotent.
         </div>
         <ol style={{ paddingLeft: 22, margin: 0, marginBottom: 14 }}>
           {MOBILE_HYGIENE_JOBS.map((name) => (

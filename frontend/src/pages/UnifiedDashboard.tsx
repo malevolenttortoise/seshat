@@ -345,7 +345,9 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
   // v2.16.0 Data Hygiene chain — confirmation gate is intentional;
   // the chain mutates per-library DBs (deletes empty authors,
   // merges duplicate books, consolidates series) so a misclick
-  // shouldn't fire it. The modal lists the 6 jobs verbatim so the
+  // shouldn't fire it. The modal lists the 9 jobs verbatim
+  // (originally 6 in v2.16.0; v2.22.0 added orphan retrolink +
+  // cross-library person backfill + prune-orphan-links) so the
   // user sees what's about to run.
   const [showHygieneConfirm, setShowHygieneConfirm] = useState(false);
   const [hygieneStarting, setHygieneStarting] = useState(false);
@@ -1651,8 +1653,16 @@ type AmazonCacheStatus = {
     today_block_count: number;
     seconds_since_heartbeat: number | null;
   };
-  queue: { pending: number };
-  cache: { state_rows: number; ok_authors: number };
+  queue: { pending: number; due_now?: number; scheduled_later?: number };
+  cache: {
+    state_rows: number;
+    ok_authors: number;
+    // v2.22.0 — author-level dedup (DISTINCT author_id) so 2-library
+    // setups don't double-count. Fall back to legacy fields if the
+    // server is pre-v2.22.0.
+    unique_total_authors?: number;
+    unique_ok_authors?: number;
+  };
 };
 
 type RecentDiscovery = {
@@ -1734,14 +1744,19 @@ function AmazonCacheRail({
     };
   }, []);
 
-  // Cached authors fraction: ok_authors / total ever-queued. Total
-  // is approximated by `pending + state_rows` since once-scanned
-  // rows stay pending (just with a forward next_scan_due_at). For
-  // tile cosmetics this is precise enough.
-  const cachedTotal = (status?.cache.state_rows ?? 0);
+  // Cached authors fraction: author-level (DISTINCT author_id),
+  // not per-library state rows. A 2-library setup with 645 unique
+  // authors should report 645/645, not the inflated 1290/1290 that
+  // the per-library row count produces. Falls back to legacy
+  // state_rows/ok_authors when talking to a pre-v2.22.0 server.
+  const cachedTotal = (
+    status?.cache.unique_total_authors ?? status?.cache.state_rows ?? 0
+  );
   const queuePending = (status?.queue.pending ?? 0);
   const totalAuthors = Math.max(cachedTotal, queuePending);
-  const okAuthors = status?.cache.ok_authors ?? 0;
+  const okAuthors = (
+    status?.cache.unique_ok_authors ?? status?.cache.ok_authors ?? 0
+  );
 
   return (
     <>
@@ -2047,6 +2062,18 @@ const HYGIENE_JOBS: { name: string; blurb: string }[] = [
     name: "ABS author cross-stamp",
     blurb: "Copies goodreads_id / hardcover_id / etc. from enriched ebook authors to ABS authors with the same name.",
   },
+  {
+    name: "Orphan author retrolink",
+    blurb: "For every per-library author row missing an author_links entry (e.g. stub rows inserted by the v2.12.1 mirror or other paths that bypassed the identity hook), creates or reuses the right `persons` row so it joins the cross-library identity graph.",
+  },
+  {
+    name: "Cross-library person backfill",
+    blurb: "Walks every multi-link person; mirrors NULL source IDs across linked siblings (Amazon/Goodreads/Hardcover/etc.), audit-logs ebook-wins conflict resolution, backfills `persons.bio` from any non-null sibling, clears broken book-cover-as-author-photo URLs, and recomputes link_confidence flags so Author Triage stays accurate.",
+  },
+  {
+    name: "Prune orphan author_links",
+    blurb: "Drops global `author_links` rows whose per-library author no longer exists (cross-file FK can't cascade automatically). Also removes any `persons` rows that become unreferenced.",
+  },
 ];
 
 function HygieneConfirmModal({
@@ -2085,7 +2112,7 @@ function HygieneConfirmModal({
           Run Data Hygiene?
         </div>
         <div style={{ fontSize: 13, color: t.text2, marginBottom: 14 }}>
-          This will fan the following 6 jobs across every configured library,
+          This will fan the following 9 jobs across every configured library,
           in order. Re-running is idempotent — re-runs are near-no-ops once
           everything is clean.
         </div>

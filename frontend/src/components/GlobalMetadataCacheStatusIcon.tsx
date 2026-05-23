@@ -44,10 +44,15 @@ type WorkerStatus = {
     pending: number;
     in_progress: number;
     failed_permanent: number;
+    due_now?: number;
+    scheduled_later?: number;
   };
   cache: {
     state_rows: number;
     ok_authors: number;
+    // v2.22.0 — author-level dedup.
+    unique_total_authors?: number;
+    unique_ok_authors?: number;
   };
 };
 
@@ -137,10 +142,13 @@ export function GlobalMetadataCacheStatusIcon({
     primaryLabel = "Active";
   }
 
+  const dueNow = status.queue.due_now ?? status.queue.pending;
+  const okAuthors = status.cache.unique_ok_authors ?? status.cache.ok_authors;
+  const totalAuthors = status.cache.unique_total_authors ?? status.cache.state_rows;
   const tooltipLines = [
     `Cache worker: ${primaryLabel}`,
-    `Queue pending: ${status.queue.pending.toLocaleString()}`,
-    `Cached authors: ${status.cache.ok_authors.toLocaleString()} / ${status.cache.state_rows.toLocaleString()}`,
+    `Queue: ${dueNow.toLocaleString()} due now`,
+    `Cached authors: ${okAuthors.toLocaleString()} / ${totalAuthors.toLocaleString()}`,
     `Today: ${status.worker.today_scan_count} scans, ${status.worker.today_block_count} blocks`,
   ];
   if (status.cooldown.blocked) {

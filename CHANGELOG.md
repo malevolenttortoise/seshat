@@ -7,6 +7,30 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [2.22.3] — 2026-05-23
+
+### Fixed — Dashboard widgets + hygiene confirm dialog now reflect v2.22.0 changes
+
+Two display layers were still pre-v2.22.0:
+
+- **UnifiedDashboard Amazon Cache rail** and **GlobalMetadataCacheStatusIcon
+  tooltip** were both reading `cache.state_rows` / `cache.ok_authors`
+  for their "Cached authors" display. That's per-library row count
+  (645 × 2 = 1290 for a two-library setup) — same inflation that
+  the MetadataSourcesPanel "Authors cached" tile had until v2.22.0
+  fixed it there. Now reads `cache.unique_total_authors` /
+  `cache.unique_ok_authors` (falling back to legacy fields when
+  talking to a pre-v2.22.0 server). Tooltip also switched from
+  `queue.pending` to `queue.due_now` to match the panel.
+
+- **Data Hygiene confirmation dialog** (desktop + mobile) still
+  said "fans 6 jobs across every library" and listed only the
+  original six. v2.22.0 added jobs 7-9 (Orphan author retrolink +
+  Cross-library person backfill + Prune orphan author_links).
+  Dialog now lists all nine.
+
+---
+
 ## [2.22.2] — 2026-05-23
 
 ### Fixed — `_flag_low_confidence_links` no longer punishes the unenriched-but-clearly-same-author case
