@@ -126,6 +126,16 @@ Settings → Sources → Amazon. First scan after enable populates the
 cache for high-priority authors; over 2–4 days the worker drains
 the full backlog.
 
+### Fixed — qBittorrent 5.2 IP-whitelist 204 handshake
+
+`login()` now treats HTTP 204 No Content as a successful
+authentication, alongside the existing 200 "Ok." path. qBittorrent
+5.2 returns 204 when the caller's IP is in `AuthSubnetWhitelist` —
+credentials are ignored and the subnet match is authoritative.
+Whitelisted setups (the hotio image's default in many configs) hit
+a permanent "qBit login failed" loop on v2.20.x and earlier even
+though qBit was granting access on every request.
+
 ---
 
 ## [2.20.3] — 2026-05-22
