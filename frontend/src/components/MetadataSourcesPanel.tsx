@@ -999,9 +999,20 @@ type CacheCooldown = {
   reason: string | null;
 };
 
+type CacheSchedule = {
+  active_hours: string;  // "HH:MM-HH:MM"
+  timezone: string;      // IANA tz name; "" = system local
+};
+
+type CacheMode = "continuous" | "scheduled" | "disabled";
+
 type CacheStatusResponse = {
   source: string;
   enabled: boolean;
+  mode: CacheMode;
+  schedule: CacheSchedule;
+  inside_schedule_window: boolean;
+  seconds_until_window_open: number;
   cooldown: CacheCooldown;
   worker: CacheWorkerStatus;
   queue: CacheQueueStats;
@@ -1012,6 +1023,8 @@ type CacheSettingsResponse = {
   ok: boolean;
   source: string;
   enabled: boolean;
+  mode: CacheMode;
+  schedule: CacheSchedule;
 };
 
 type ResetCooldownResponse = {
@@ -1041,8 +1054,16 @@ function _formatCooldown(s: number): string {
 function AmazonCacheStatusCard() {
   const t = useTheme();
   const [status, setStatus] = useState<CacheStatusResponse | null>(null);
-  const [busy, setBusy] = useState<null | "toggle" | "reset">(null);
+  const [busy, setBusy] = useState<null | "mode" | "schedule" | "reset">(null);
   const [err, setErr] = useState<string>("");
+  // Local-edit buffer for the active-hours field — committed via the
+  // Save button rather than every keystroke so we don't ping the
+  // backend with `08:0` mid-typing (which would 400 validation).
+  const [pendingHours, setPendingHours] = useState<string>("");
+  const [pendingTz, setPendingTz] = useState<string>("");
+  // Track whether the user has dirtied the inputs vs the server state
+  // so the Save button can stay disabled when there's nothing to save.
+  const [scheduleDirty, setScheduleDirty] = useState<boolean>(false);
 
   // Poll every 30s while mounted. Heartbeat-staleness checks rely on
   // a recent reading; faster polling burns CPU for no real-world
@@ -1055,7 +1076,17 @@ function AmazonCacheStatusCard() {
         const r = await api.get<CacheStatusResponse>(
           "/v1/metadata-cache/amazon/status",
         );
-        if (!cancelled) setStatus(r);
+        if (cancelled) return;
+        setStatus(r);
+        // Seed the local edit buffer on first load — and on every
+        // subsequent poll where the user hasn't started editing
+        // (dirty flag stays false until they touch an input). This
+        // way a remote change (e.g. via PATCH from another tab)
+        // surfaces in the inputs.
+        setPendingHours((prev) =>
+          scheduleDirty ? prev : r.schedule.active_hours,
+        );
+        setPendingTz((prev) => (scheduleDirty ? prev : r.schedule.timezone));
       } catch (e) {
         if (!cancelled && !api.isAbort(e)) {
           setErr(e instanceof Error ? e.message : "Status fetch failed");
@@ -1068,23 +1099,51 @@ function AmazonCacheStatusCard() {
       cancelled = true;
       if (timer) clearInterval(timer);
     };
-  }, []);
+  }, [scheduleDirty]);
 
-  async function toggleEnabled() {
-    if (status === null) return;
-    setBusy("toggle");
+  async function setMode(nextMode: CacheMode) {
+    if (status === null || nextMode === status.mode) return;
+    setBusy("mode");
     setErr("");
     try {
       const r = await api.patch<CacheSettingsResponse>(
         "/v1/metadata-cache/amazon/settings",
-        { enabled: !status.enabled },
+        { mode: nextMode },
       );
-      // Optimistic: update the enabled flag immediately so the pill
-      // flips without waiting for the next poll. The full status will
-      // refresh on the next 30s tick.
-      setStatus({ ...status, enabled: r.enabled });
+      // Optimistic: update mode + enabled (kept in sync server-side)
+      // so the pill flips without waiting for the next poll.
+      setStatus({
+        ...status,
+        enabled: r.enabled,
+        mode: r.mode,
+        schedule: r.schedule,
+      });
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Toggle failed");
+      setErr(e instanceof Error ? e.message : "Mode update failed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function saveSchedule() {
+    if (status === null) return;
+    setBusy("schedule");
+    setErr("");
+    try {
+      const r = await api.patch<CacheSettingsResponse>(
+        "/v1/metadata-cache/amazon/settings",
+        {
+          schedule: {
+            active_hours: pendingHours.trim(),
+            timezone: pendingTz.trim(),
+          },
+        },
+      );
+      setStatus({ ...status, schedule: r.schedule });
+      setScheduleDirty(false);
+    } catch (e) {
+      // Backend returns 400 with detail on invalid spec — surface it.
+      setErr(e instanceof Error ? e.message : "Save failed");
     } finally {
       setBusy(null);
     }
@@ -1121,11 +1180,14 @@ function AmazonCacheStatusCard() {
     );
   }
 
-  // Status pill: cooldown (red) > disabled (gray) > stalled (yellow) >
-  // active (green). Stalled = enabled, but >5min since the last
-  // heartbeat — the worker should be ticking at 30-90s, so 5min of
-  // silence is the supervised task crashed.
+  // Status pill: cooldown (red) > disabled (gray) > outside-schedule
+  // (gray-ish) > stalled (amber) > active (green). Stalled = enabled,
+  // inside-window, but >5min since the last heartbeat — the worker
+  // should be ticking at 30-90s, so 5min of silence is the supervised
+  // task crashed. Outside-schedule is gray (intentional sleep) not
+  // amber (looks like a problem).
   const stalled = status.enabled
+    && status.inside_schedule_window
     && (status.worker.seconds_since_heartbeat === null
         || status.worker.seconds_since_heartbeat > 300);
   let pillColor: string;
@@ -1133,9 +1195,12 @@ function AmazonCacheStatusCard() {
   if (status.cooldown.blocked) {
     pillColor = t.err;
     pillLabel = "Cooldown";
-  } else if (!status.enabled) {
+  } else if (status.mode === "disabled" || !status.enabled) {
     pillColor = t.textDim;
     pillLabel = "Disabled";
+  } else if (status.mode === "scheduled" && !status.inside_schedule_window) {
+    pillColor = t.textDim;
+    pillLabel = "Off-hours";
   } else if (stalled) {
     pillColor = "#cc9933";  // amber — pre-existing palette has no warning tone
     pillLabel = "Stalled";
@@ -1143,6 +1208,15 @@ function AmazonCacheStatusCard() {
     pillColor = t.ok;
     pillLabel = "Active";
   }
+
+  const MODES: Array<{ key: CacheMode; label: string; desc: string }> = [
+    { key: "continuous", label: "Continuous",
+      desc: "Worker fires every 30–90s round the clock." },
+    { key: "scheduled", label: "Scheduled",
+      desc: "Worker only runs inside the active-hours window below." },
+    { key: "disabled", label: "Disabled",
+      desc: "Worker stays idle; cache reads still hit existing rows." },
+  ];
 
   return (
     <div style={{
@@ -1219,14 +1293,108 @@ function AmazonCacheStatusCard() {
         />
       </div>
 
+      {/* Mode selector (segmented control) */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <div style={{ fontSize: 11, color: t.textDim, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>
+          Mode
+        </div>
+        <div style={{ display: "flex", gap: 0, alignItems: "stretch", flexWrap: "wrap" }}>
+          {MODES.map((m, idx) => {
+            const selected = status.mode === m.key;
+            return (
+              <button
+                key={m.key}
+                onClick={() => setMode(m.key)}
+                disabled={busy !== null || selected}
+                title={m.desc}
+                style={{
+                  flex: "1 1 0", minWidth: 0,
+                  padding: "6px 10px",
+                  fontSize: 12, fontWeight: 600,
+                  background: selected ? t.accent + "22" : t.bg3,
+                  color: selected ? t.accent : t.text,
+                  border: `1px solid ${selected ? t.accent : t.borderL}`,
+                  borderLeftWidth: idx === 0 ? 1 : 0,
+                  borderTopLeftRadius: idx === 0 ? 6 : 0,
+                  borderBottomLeftRadius: idx === 0 ? 6 : 0,
+                  borderTopRightRadius: idx === MODES.length - 1 ? 6 : 0,
+                  borderBottomRightRadius: idx === MODES.length - 1 ? 6 : 0,
+                  cursor: busy !== null || selected ? "default" : "pointer",
+                  opacity: busy !== null && !selected ? 0.5 : 1,
+                }}
+              >
+                {busy === "mode" && selected ? <Spin /> : m.label}
+              </button>
+            );
+          })}
+        </div>
+        <div style={{ fontSize: 11, color: t.textDim, lineHeight: 1.5 }}>
+          {MODES.find((m) => m.key === status.mode)?.desc}
+        </div>
+      </div>
+
+      {/* Schedule editor — only relevant when mode=scheduled */}
+      {status.mode === "scheduled" && (
+        <div style={{
+          display: "flex", flexDirection: "column", gap: 8,
+          background: t.bg3, border: `1px solid ${t.borderL}`,
+          borderRadius: 6, padding: "10px 12px",
+        }}>
+          <div style={{ fontSize: 11, color: t.textDim, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>
+            Active hours
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <input
+              type="text"
+              value={pendingHours}
+              onChange={(e) => {
+                setPendingHours(e.target.value);
+                setScheduleDirty(true);
+              }}
+              placeholder="10:00-22:00"
+              style={{
+                fontFamily: "monospace", fontSize: 13,
+                padding: "5px 8px", width: 130,
+                background: t.bg2, color: t.text,
+                border: `1px solid ${t.borderL}`, borderRadius: 4,
+              }}
+            />
+            <input
+              type="text"
+              value={pendingTz}
+              onChange={(e) => {
+                setPendingTz(e.target.value);
+                setScheduleDirty(true);
+              }}
+              placeholder="timezone (blank = system)"
+              style={{
+                fontSize: 12, padding: "5px 8px", flex: "1 1 200px",
+                minWidth: 180,
+                background: t.bg2, color: t.text,
+                border: `1px solid ${t.borderL}`, borderRadius: 4,
+              }}
+            />
+            <Btn
+              onClick={saveSchedule}
+              disabled={busy !== null || !scheduleDirty}
+            >
+              {busy === "schedule" ? <Spin /> : "Save"}
+            </Btn>
+          </div>
+          <div style={{ fontSize: 11, color: t.textDim, lineHeight: 1.4 }}>
+            Format <code>HH:MM-HH:MM</code> (24-hour). Overnight windows
+            allowed (start &gt; end, e.g. <code>22:00-06:00</code>).
+            Timezone accepts IANA names like <code>America/Detroit</code>;
+            blank uses the system local time.
+            {!status.inside_schedule_window && status.seconds_until_window_open > 0 && (
+              <> Currently outside the window — next open in {_formatCooldown(status.seconds_until_window_open)}.</>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Action buttons */}
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-        <Btn
-          onClick={toggleEnabled}
-          disabled={busy !== null}
-        >
-          {busy === "toggle" ? <Spin /> : (status.enabled ? "Disable worker" : "Enable worker")}
-        </Btn>
         {status.cooldown.blocked && (
           <Btn
             onClick={resetCooldown}
@@ -1262,8 +1430,10 @@ function AmazonCacheStatusCard() {
         The background worker drains the cache queue at humanized cadence
         (30-90s jitter). Synchronous scans always read from this cache —
         Amazon is never hit live during a user-triggered scan, so soft-
-        block cascades can't spill into other sources. Disable to pause
-        the worker without disabling Amazon as a metadata source.
+        block cascades can't spill into other sources. Pick <b>Disabled</b>
+        to pause the worker without disabling Amazon as a metadata source;
+        <b>Scheduled</b> restricts the worker to user-chosen hours and
+        keeps a respectful presence overnight.
       </div>
     </div>
   );

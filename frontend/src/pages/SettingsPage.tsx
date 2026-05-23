@@ -1015,6 +1015,42 @@ function DesktopSettingsPage() {
                   <NCheck label="MAM cookie rotated" field="ntfy_on_mam_cookie_rotated" s={s} upd={upd} />
                 </div>
               </SF>
+
+              {/* v2.21.0 Phase I — metadata-cache worker notifications.
+                  Source-agnostic field names so a future Goodreads
+                  cache reuses the same toggles. No master gate;
+                  errors/warnings are operator-critical and default ON,
+                  the two info-tier ones are explicitly opt-in by
+                  name. Pattern mirrors the Discovery Events group. */}
+              <SF label="Metadata Cache Worker" desc="The Amazon background worker (and any future metadata cache) emits notifications via these toggles. Errors and warnings are on by default; the info-tier events are opt-in.">
+                <span style={{ fontSize: 12, color: t.textDim }}>Per-event below</span>
+              </SF>
+              <SF label="" desc="" wide>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "8px 32px", width: "100%" }}>
+                  <NCheck label="Errors (stall / write fail / crash)" field="notify_on_metadata_cache_error" s={s} upd={upd} />
+                  <NCheck label="Warnings (top-tier cooldown / permanent fail)" field="notify_on_metadata_cache_warning" s={s} upd={upd} />
+                  <NCheck label="Daily summary" field="notify_on_metadata_cache_daily_summary" s={s} upd={upd} />
+                  <NCheck label="New book discovered" field="notify_on_metadata_cache_new_book" s={s} upd={upd} />
+                </div>
+              </SF>
+              <SF label="Daily Summary Time" desc="When the metadata-cache daily summary fires + when the today_scan_count / today_block_count counters reset.">
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <select value={(s.metadata_cache_daily_summary_hour as number) ?? 9} onChange={e => upd("metadata_cache_daily_summary_hour", parseInt(e.target.value))}
+                    style={{ ...ist, width: use12h ? 110 : 70, cursor: "pointer", appearance: "auto" }}>
+                    {HOURS_24.map(h => <option key={h} value={h}>{use12h ? fmt12(h) : `${String(h).padStart(2, "0")}:00`}</option>)}
+                  </select>
+                  <span style={{ fontSize: 11, color: t.textDim }}>{use12h ? "" : "(24h)"}</span>
+                </div>
+              </SF>
+              <SF label="Stall Threshold" desc="Seconds with no heartbeat before the watchdog fires an error notification. Default 300s (5 min) ≈ 5× the worst-case jittered tick cadence.">
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <input type="number" min={60} max={3600} step={60} value={(s.metadata_cache_stall_threshold_s as number) ?? 300} onChange={e => upd("metadata_cache_stall_threshold_s", parseInt(e.target.value) || 300)} style={nist} />
+                  <span style={{ fontSize: 12, color: t.textDim }}>seconds</span>
+                </div>
+              </SF>
+              <SF label="Rotated Log File" desc="Attach a RotatingFileHandler writing INFO-level worker output to /app/data/logs/metadata_cache_worker.log (1 MB × 3 rotations). Container log still receives everything; this is a dedicated tail target.">
+                <STog on={!!s.metadata_cache_log_file_enabled} onToggle={() => upd("metadata_cache_log_file_enabled", !s.metadata_cache_log_file_enabled)} label />
+              </SF>
             </>;
           })()}
           <SF label="Digest Time" desc="When the daily digest fires, on the hour. Minute granularity isn't available — the backend scheduler runs at :00.">

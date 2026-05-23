@@ -827,6 +827,52 @@ export default function MobileSettingsPage() {
             upd("notify_weekly_digest", !s.notify_weekly_digest)
           }
         />
+        {/* v2.21.0 Phase I — metadata cache worker notifications.
+            Mobile parity for the desktop Notifications group. */}
+        <ToggleRow
+          label="Cache worker errors"
+          desc="Stall, cache-write failure, tick crash."
+          on={!!s.notify_on_metadata_cache_error}
+          onToggle={() =>
+            upd(
+              "notify_on_metadata_cache_error",
+              !s.notify_on_metadata_cache_error,
+            )
+          }
+        />
+        <ToggleRow
+          label="Cache worker warnings"
+          desc="Top-tier cooldown escalation, permanent author failure."
+          on={!!s.notify_on_metadata_cache_warning}
+          onToggle={() =>
+            upd(
+              "notify_on_metadata_cache_warning",
+              !s.notify_on_metadata_cache_warning,
+            )
+          }
+        />
+        <ToggleRow
+          label="Cache daily summary"
+          desc="Once-per-day digest of today's scans + blocks."
+          on={!!s.notify_on_metadata_cache_daily_summary}
+          onToggle={() =>
+            upd(
+              "notify_on_metadata_cache_daily_summary",
+              !s.notify_on_metadata_cache_daily_summary,
+            )
+          }
+        />
+        <ToggleRow
+          label="Cache new books"
+          desc="Per-author celebration when the worker discovers a new ASIN."
+          on={!!s.notify_on_metadata_cache_new_book}
+          onToggle={() =>
+            upd(
+              "notify_on_metadata_cache_new_book",
+              !s.notify_on_metadata_cache_new_book,
+            )
+          }
+        />
       </MobileSection>
 
       {/* ─── Metadata Sources ───────────────────────────────── */}

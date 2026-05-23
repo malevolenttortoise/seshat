@@ -24,8 +24,16 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import { useTheme } from "../theme";
 
+type CacheMode = "continuous" | "scheduled" | "disabled";
+
 type WorkerStatus = {
   enabled: boolean;
+  // Phase I — mode + schedule. Older builds (pre-Phase I) won't return
+  // these; the icon falls back to `enabled` if mode is missing.
+  mode?: CacheMode;
+  schedule?: { active_hours: string; timezone: string };
+  inside_schedule_window?: boolean;
+  seconds_until_window_open?: number;
   cooldown: { blocked: boolean; remaining_s: number };
   worker: {
     today_scan_count: number;
@@ -95,13 +103,21 @@ export function GlobalMetadataCacheStatusIcon({
     );
   }
 
+  // Phase I — outside-schedule mode counts as healthy sleep, NOT a
+  // stall. Only flag stalled when we're inside the active window AND
+  // the heartbeat is older than the threshold.
+  const insideWindow = status.inside_schedule_window ?? true;
   const stalled = status.enabled
+    && insideWindow
     && (status.worker.seconds_since_heartbeat === null
         || status.worker.seconds_since_heartbeat > HEARTBEAT_STALE_S);
+  const offHours = status.enabled
+    && status.mode === "scheduled"
+    && !insideWindow;
 
   let dotColor: string;
   let primaryLabel: string;
-  if (!status.enabled) {
+  if (!status.enabled || status.mode === "disabled") {
     dotColor = t.textDim;
     primaryLabel = "Disabled";
   } else if (status.queue.failed_permanent > 0) {
@@ -110,6 +126,9 @@ export function GlobalMetadataCacheStatusIcon({
   } else if (status.cooldown.blocked) {
     dotColor = "#cc9933";  // amber
     primaryLabel = "Cooldown";
+  } else if (offHours) {
+    dotColor = t.textDim;
+    primaryLabel = "Off-hours";
   } else if (stalled) {
     dotColor = "#cc9933";  // amber
     primaryLabel = "Stalled";
@@ -126,6 +145,12 @@ export function GlobalMetadataCacheStatusIcon({
   ];
   if (status.cooldown.blocked) {
     tooltipLines.push(`Cooldown clears in ${Math.round(status.cooldown.remaining_s)}s`);
+  }
+  if (offHours && status.seconds_until_window_open) {
+    const mins = Math.round(status.seconds_until_window_open / 60);
+    tooltipLines.push(
+      `Window opens in ${mins >= 60 ? `${(mins / 60).toFixed(1)}h` : `${mins}m`}`,
+    );
   }
   const tooltip = tooltipLines.join("\n");
 
