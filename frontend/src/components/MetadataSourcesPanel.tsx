@@ -606,14 +606,14 @@ function SourceDetailPane({
 
   return (
     <div style={{
-      display: "flex", flexDirection: "column", gap: 16,
+      display: "flex", flexDirection: "column", gap: 12,
       background: t.bg2, border: `1px solid ${t.borderL}`,
-      borderRadius: 8, padding: 20,
+      borderRadius: 8, padding: "14px 18px",
     }}>
       {/* Header — source name + locked badge */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <h3 style={{
-          margin: 0, fontSize: 18, fontWeight: 700, color: t.text,
+          margin: 0, fontSize: 17, fontWeight: 700, color: t.text,
         }}>{meta.display}</h3>
         {locked && (
           <span style={{
@@ -793,31 +793,31 @@ function DetailToggle({
   onChange: (v: boolean) => void;
 }) {
   const t = useTheme();
+  // Phase I compaction (2026-05-22): description moves into the
+  // tile's `title` attribute (browser tooltip) instead of rendering
+  // as a second line under the label. Saves ~30px of vertical space
+  // across the three-card row, which gets us most of the way to a
+  // no-scroll Amazon detail pane.
   return (
     <label
-      title={tooltip}
+      title={tooltip || desc}
       style={{
-        display: "flex", flexDirection: "column", gap: 4,
-        padding: "10px 12px",
+        display: "flex", alignItems: "center", gap: 8,
+        padding: "8px 12px",
         background: t.bg3, border: `1px solid ${t.borderL}`,
         borderRadius: 6,
         cursor: disabled ? "not-allowed" : "pointer",
         opacity: disabled ? 0.5 : 1,
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <input
-          type="checkbox"
-          checked={checked}
-          disabled={disabled}
-          onChange={(e) => onChange(e.target.checked)}
-          style={{ width: 18, height: 18, cursor: disabled ? "not-allowed" : "pointer" }}
-        />
-        <span style={{ fontSize: 13, fontWeight: 600, color: t.text }}>{label}</span>
-      </div>
-      {desc && (
-        <div style={{ fontSize: 11, color: t.textDim, lineHeight: 1.4 }}>{desc}</div>
-      )}
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+        style={{ width: 18, height: 18, cursor: disabled ? "not-allowed" : "pointer" }}
+      />
+      <span style={{ fontSize: 13, fontWeight: 600, color: t.text }}>{label}</span>
     </label>
   );
 }
@@ -855,12 +855,13 @@ function AmazonExtrasRow({
     : AMAZON_FORMAT_OPTIONS;
   const currentFormat = (isAudiobook ? entry.audiobook_format : entry.format)
     ?? formatDefault;
+  // Phase I (2026-05-22): no longer rendered inline under a SourceList
+  // row, so the prior `60px` left indent + border-bottom are gone. Now
+  // a tight flex row inside the SourceDetailPane.
   return (
     <div style={{
-      display: "flex", gap: 24, alignItems: "center",
-      padding: "8px 4px 12px 60px",  // indent under the rank column
-      borderBottom: `1px solid ${t.borderL}`,
-      fontSize: 12,
+      display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap",
+      padding: "2px 0", fontSize: 12,
     }}>
       <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <span style={{ color: t.textDim, fontWeight: 600 }}>Format</span>
@@ -928,10 +929,8 @@ function KoboExtrasRow({
   const effectiveRate = rateLimit > 0 ? concurrency / rateLimit : 0;
   return (
     <div style={{
-      display: "flex", gap: 24, alignItems: "center",
-      padding: "8px 4px 12px 60px",
-      borderBottom: `1px solid ${t.borderL}`,
-      fontSize: 12,
+      display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap",
+      padding: "2px 0", fontSize: 12,
     }}>
       <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <span style={{ color: t.textDim, fontWeight: 600 }}>Concurrency</span>
@@ -950,11 +949,11 @@ function KoboExtrasRow({
           }}
         />
       </label>
-      <span style={{ color: t.textDim, fontSize: 11, fontStyle: "italic" }}>
-        Parallel detail-fetch workers. Effective rate ≈
-        {" "}{effectiveRate.toFixed(2)} req/s ({concurrency} workers ÷
-        {" "}{rateLimit}s each). Raising concurrency without raising
-        Rate triggers Cloudflare soft-blocks.
+      <span
+        style={{ color: t.textDim, fontSize: 11, fontStyle: "italic" }}
+        title="Raising concurrency without raising Rate triggers Cloudflare soft-blocks."
+      >
+        Effective rate ≈ {effectiveRate.toFixed(2)} req/s ({concurrency} workers ÷ {rateLimit}s each).
       </span>
     </div>
   );
@@ -1440,13 +1439,15 @@ function AmazonCacheStatusCard() {
 
   return (
     <div style={{
-      display: "flex", flexDirection: "column", gap: 10,
-      padding: "10px 4px 14px 60px",
-      borderBottom: `1px solid ${t.borderL}`,
+      display: "flex", flexDirection: "column", gap: 8,
+      padding: "10px 4px 12px 0",
+      borderTop: `1px solid ${t.borderL}`, marginTop: 4,
       fontSize: 12,
     }}>
-      {/* Header: status pill + label */}
-      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+      {/* Header row: label + pill + mode segmented control + heartbeat.
+          Stays on one line at typical widths; wraps cleanly when the
+          panel is narrow. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <span style={{ color: t.textDim, fontWeight: 600 }}>
           Cache worker
         </span>
@@ -1460,28 +1461,68 @@ function AmazonCacheStatusCard() {
             clears in {_formatCooldown(status.cooldown.remaining_s)}
           </span>
         )}
-        <span style={{ color: t.textDim, fontSize: 11, marginLeft: "auto" }}>
+        <span style={{ flex: 1 }} />
+        {/* Mode segmented control — moved up next to the pill so the
+            user's mode choice and the resulting state are visually
+            adjacent rather than separated by the stats grid. */}
+        <div style={{ display: "flex", gap: 0, alignItems: "stretch" }}>
+          {MODES.map((m, idx) => {
+            const selected = status.mode === m.key;
+            return (
+              <button
+                key={m.key}
+                onClick={() => setMode(m.key)}
+                disabled={busy !== null || selected}
+                title={m.desc}
+                style={{
+                  padding: "4px 10px",
+                  fontSize: 11, fontWeight: 600,
+                  background: selected ? t.accent + "22" : t.bg3,
+                  color: selected ? t.accent : t.text,
+                  border: `1px solid ${selected ? t.accent : t.borderL}`,
+                  borderLeftWidth: idx === 0 ? 1 : 0,
+                  borderTopLeftRadius: idx === 0 ? 4 : 0,
+                  borderBottomLeftRadius: idx === 0 ? 4 : 0,
+                  borderTopRightRadius: idx === MODES.length - 1 ? 4 : 0,
+                  borderBottomRightRadius: idx === MODES.length - 1 ? 4 : 0,
+                  cursor: busy !== null || selected ? "default" : "pointer",
+                  opacity: busy !== null && !selected ? 0.5 : 1,
+                }}
+              >
+                {busy === "mode" && selected ? <Spin /> : m.label}
+              </button>
+            );
+          })}
+        </div>
+        <span style={{ color: t.textDim, fontSize: 11 }}>
           heartbeat {_formatSecondsAgo(status.worker.seconds_since_heartbeat)}
         </span>
       </div>
 
-      {/* Live-stats panel */}
+      {/* Live-stats panel — fixed 4-column grid, denser than the prior
+          auto-fit so the eight tiles fit cleanly into 4×2 at any
+          panel width >= ~520px instead of varying between 4 and 7
+          columns. */}
       <div style={{
         display: "grid",
-        gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
-        gap: 8,
+        gridTemplateColumns: "repeat(4, 1fr)",
+        gap: "4px 12px",
         background: t.bg3, border: `1px solid ${t.borderL}`,
-        borderRadius: 6, padding: "8px 12px",
+        borderRadius: 6, padding: "6px 10px",
       }}>
-        <StatTile label="Queue (pending)" value={status.queue.pending.toLocaleString()} />
+        <StatTile label="Queue" value={status.queue.pending.toLocaleString()} />
         <StatTile
-          label="Cached authors"
+          label="Authors cached"
           value={`${status.cache.ok_authors.toLocaleString()} / ${status.cache.state_rows.toLocaleString()}`}
-          hint="ok / total state rows"
+          hint="ok / total"
         />
         <StatTile
-          label="Cached books"
+          label="Books cached"
           value={status.cache.books_rows.toLocaleString()}
+        />
+        <StatTile
+          label="Last scan"
+          value={_formatSecondsAgo(status.worker.seconds_since_scan_completed)}
         />
         <StatTile
           label="Scans today"
@@ -1496,142 +1537,85 @@ function AmazonCacheStatusCard() {
           label="In progress"
           value={status.queue.in_progress.toLocaleString()}
           tone={status.queue.in_progress > 1 ? "warn" : undefined}
-          hint={
-            status.queue.in_progress > 1
-              ? "should normally be 0-1; >1 hints at a stuck row"
-              : undefined
-          }
         />
         <StatTile
-          label="Failed permanent"
+          label="Failed perm."
           value={status.queue.failed_permanent.toLocaleString()}
           tone={status.queue.failed_permanent > 0 ? "err" : undefined}
         />
-        <StatTile
-          label="Last scan"
-          value={_formatSecondsAgo(status.worker.seconds_since_scan_completed)}
-        />
-      </div>
-
-      {/* Mode selector (segmented control) */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        <div style={{ fontSize: 11, color: t.textDim, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>
-          Mode
-        </div>
-        <div style={{ display: "flex", gap: 0, alignItems: "stretch", flexWrap: "wrap" }}>
-          {MODES.map((m, idx) => {
-            const selected = status.mode === m.key;
-            return (
-              <button
-                key={m.key}
-                onClick={() => setMode(m.key)}
-                disabled={busy !== null || selected}
-                title={m.desc}
-                style={{
-                  flex: "1 1 0", minWidth: 0,
-                  padding: "6px 10px",
-                  fontSize: 12, fontWeight: 600,
-                  background: selected ? t.accent + "22" : t.bg3,
-                  color: selected ? t.accent : t.text,
-                  border: `1px solid ${selected ? t.accent : t.borderL}`,
-                  borderLeftWidth: idx === 0 ? 1 : 0,
-                  borderTopLeftRadius: idx === 0 ? 6 : 0,
-                  borderBottomLeftRadius: idx === 0 ? 6 : 0,
-                  borderTopRightRadius: idx === MODES.length - 1 ? 6 : 0,
-                  borderBottomRightRadius: idx === MODES.length - 1 ? 6 : 0,
-                  cursor: busy !== null || selected ? "default" : "pointer",
-                  opacity: busy !== null && !selected ? 0.5 : 1,
-                }}
-              >
-                {busy === "mode" && selected ? <Spin /> : m.label}
-              </button>
-            );
-          })}
-        </div>
-        <div style={{ fontSize: 11, color: t.textDim, lineHeight: 1.5 }}>
-          {MODES.find((m) => m.key === status.mode)?.desc}
-        </div>
       </div>
 
       {/* Schedule editor — only relevant when mode=scheduled */}
       {status.mode === "scheduled" && (
         <div style={{
-          display: "flex", flexDirection: "column", gap: 8,
+          display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center",
           background: t.bg3, border: `1px solid ${t.borderL}`,
-          borderRadius: 6, padding: "10px 12px",
+          borderRadius: 6, padding: "6px 10px",
         }}>
-          <div style={{ fontSize: 11, color: t.textDim, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>
-            Active hours
-          </div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-            <input
-              type="text"
-              value={pendingHours}
-              onChange={(e) => {
-                setPendingHours(e.target.value);
-                setScheduleDirty(true);
-              }}
-              placeholder="10:00-22:00"
-              style={{
-                fontFamily: "monospace", fontSize: 13,
-                padding: "5px 8px", width: 130,
-                background: t.bg2, color: t.text,
-                border: `1px solid ${t.borderL}`, borderRadius: 4,
-              }}
-            />
-            <input
-              type="text"
-              value={pendingTz}
-              onChange={(e) => {
-                setPendingTz(e.target.value);
-                setScheduleDirty(true);
-              }}
-              placeholder="timezone (blank = system)"
-              style={{
-                fontSize: 12, padding: "5px 8px", flex: "1 1 200px",
-                minWidth: 180,
-                background: t.bg2, color: t.text,
-                border: `1px solid ${t.borderL}`, borderRadius: 4,
-              }}
-            />
-            <Btn
-              onClick={saveSchedule}
-              disabled={busy !== null || !scheduleDirty}
-            >
-              {busy === "schedule" ? <Spin /> : "Save"}
-            </Btn>
-          </div>
-          <div style={{ fontSize: 11, color: t.textDim, lineHeight: 1.4 }}>
-            Format <code>HH:MM-HH:MM</code> (24-hour). Overnight windows
-            allowed (start &gt; end, e.g. <code>22:00-06:00</code>).
-            Timezone accepts IANA names like <code>America/Detroit</code>;
-            blank uses the system local time.
-            {!status.inside_schedule_window && status.seconds_until_window_open > 0 && (
-              <> Currently outside the window — next open in {_formatCooldown(status.seconds_until_window_open)}.</>
-            )}
-          </div>
+          <span style={{
+            fontSize: 11, color: t.textDim, fontWeight: 700,
+            textTransform: "uppercase", letterSpacing: 0.5,
+          }}>Active hours</span>
+          <input
+            type="text"
+            value={pendingHours}
+            onChange={(e) => {
+              setPendingHours(e.target.value);
+              setScheduleDirty(true);
+            }}
+            placeholder="10:00-22:00"
+            title="Format HH:MM-HH:MM (24-hour). Overnight windows allowed (e.g. 22:00-06:00)."
+            style={{
+              fontFamily: "monospace", fontSize: 12,
+              padding: "4px 8px", width: 120,
+              background: t.bg2, color: t.text,
+              border: `1px solid ${t.borderL}`, borderRadius: 4,
+            }}
+          />
+          <input
+            type="text"
+            value={pendingTz}
+            onChange={(e) => {
+              setPendingTz(e.target.value);
+              setScheduleDirty(true);
+            }}
+            placeholder="tz (blank = system)"
+            title="Optional IANA timezone like America/Detroit; blank uses system local."
+            style={{
+              fontSize: 12, padding: "4px 8px", flex: "1 1 160px",
+              minWidth: 140,
+              background: t.bg2, color: t.text,
+              border: `1px solid ${t.borderL}`, borderRadius: 4,
+            }}
+          />
+          <Btn
+            onClick={saveSchedule}
+            disabled={busy !== null || !scheduleDirty}
+          >
+            {busy === "schedule" ? <Spin /> : "Save"}
+          </Btn>
+          {!status.inside_schedule_window && status.seconds_until_window_open > 0 && (
+            <span style={{ fontSize: 11, color: t.textDim, fontStyle: "italic" }}>
+              opens in {_formatCooldown(status.seconds_until_window_open)}
+            </span>
+          )}
         </div>
       )}
 
-      {/* Action buttons */}
-      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-        {status.cooldown.blocked && (
-          <Btn
-            onClick={resetCooldown}
-            disabled={busy !== null}
-          >
-            {busy === "reset" ? <Spin /> : "Reset cooldown"}
-          </Btn>
-        )}
-      </div>
-
-      {/* Cooldown reason banner (info, not error) */}
-      {status.cooldown.blocked && status.cooldown.reason && (
+      {/* Cooldown banner + reset button (only rendered when blocked) */}
+      {status.cooldown.blocked && (
         <div style={{
+          display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap",
           background: t.bg3, border: `1px solid ${t.borderL}`,
           color: t.textDim, padding: "6px 10px", borderRadius: 6, fontSize: 11,
         }}>
-          <b>Last block:</b> {status.cooldown.reason}
+          {status.cooldown.reason && (
+            <span><b>Last block:</b> {status.cooldown.reason}</span>
+          )}
+          <span style={{ flex: 1 }} />
+          <Btn onClick={resetCooldown} disabled={busy !== null}>
+            {busy === "reset" ? <Spin /> : "Reset cooldown"}
+          </Btn>
         </div>
       )}
 
@@ -1644,17 +1628,6 @@ function AmazonCacheStatusCard() {
           {err}
         </div>
       )}
-
-      {/* Help text */}
-      <div style={{ color: t.textDim, fontSize: 11, fontStyle: "italic", lineHeight: 1.4 }}>
-        The background worker drains the cache queue at humanized cadence
-        (30-90s jitter). Synchronous scans always read from this cache —
-        Amazon is never hit live during a user-triggered scan, so soft-
-        block cascades can't spill into other sources. Pick <b>Disabled</b>
-        to pause the worker without disabling Amazon as a metadata source;
-        <b>Scheduled</b> restricts the worker to user-chosen hours and
-        keeps a respectful presence overnight.
-      </div>
     </div>
   );
 }
@@ -1672,18 +1645,19 @@ function StatTile({
   const color = tone === "err" ? t.err
               : tone === "warn" ? "#cc9933"
               : t.text2;
+  // Phase I compaction (2026-05-22): hint now renders as a tooltip on
+  // the tile instead of a third row. Saves a noticeable amount of
+  // vertical space across the 8-tile stats grid.
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
+    <div style={{
+      display: "flex", flexDirection: "column", gap: 1, minWidth: 0,
+      padding: "2px 0",
+    }} title={hint}>
       <span style={{
         color: t.textDim, fontSize: 10, fontWeight: 700,
-        textTransform: "uppercase", letterSpacing: 0.5,
+        textTransform: "uppercase", letterSpacing: 0.4,
       }}>{label}</span>
-      <span style={{ color, fontSize: 14, fontWeight: 600 }}>{value}</span>
-      {hint && (
-        <span style={{ color: t.textDim, fontSize: 10, fontStyle: "italic" }}>
-          {hint}
-        </span>
-      )}
+      <span style={{ color, fontSize: 13, fontWeight: 600, lineHeight: 1.2 }}>{value}</span>
     </div>
   );
 }
