@@ -261,6 +261,49 @@ class QbitClient:
                     failure_kind="duplicate",
                     failure_detail="qBit reports torrent already exists (HTTP 200 'Fails.')",
                 )
+            # qBittorrent 5.2+ replaced the plain-text "Ok." / "Fails."
+            # contract with a JSON body shaped:
+            #   {"added_torrent_ids": ["<hash>", ...], "failure_count": N}
+            # We treat `added_torrent_ids` non-empty AND failure_count==0
+            # as success. failure_count>0 with non-empty added implies a
+            # mixed batch (we only ever send one torrent, so this is
+            # effectively a duplicate from qBit's side); failure_count>0
+            # with empty added is a real rejection.
+            #
+            # Discovered post-v2.21.0 deploy on the hotio image's qBit
+            # 5.2 build: every torrents/add call was returning JSON,
+            # so the dispatcher marked every grab `failed_unknown` even
+            # though qBit had accepted and was downloading them. The
+            # `login()` 204 handler was patched (df69a79); this is the
+            # matching add-torrent handler.
+            if body.startswith("{") or body.startswith("["):
+                try:
+                    import json as _json
+                    parsed = _json.loads(body)
+                except (ValueError, TypeError):
+                    parsed = None
+                if isinstance(parsed, dict):
+                    added = parsed.get("added_torrent_ids") or []
+                    failure_count = parsed.get("failure_count", 0)
+                    if added and not failure_count:
+                        return AddResult(success=True)
+                    if added and failure_count:
+                        # Mixed-batch — we only send one torrent so this
+                        # path shouldn't fire in practice, but treat the
+                        # `added` presence as authoritative.
+                        return AddResult(success=True)
+                    if not added and failure_count:
+                        return AddResult(
+                            success=False,
+                            failure_kind="rejected",
+                            failure_detail=(
+                                f"qBit rejected torrent "
+                                f"(failure_count={failure_count})"
+                            ),
+                        )
+                    # Empty JSON or unknown shape — fall through to the
+                    # generic "unexpected" path below so we don't
+                    # silently swallow new response variants.
 
         if resp.status_code == 403:
             return AddResult(

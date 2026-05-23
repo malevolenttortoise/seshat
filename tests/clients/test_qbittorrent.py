@@ -334,6 +334,100 @@ class TestAddTorrent:
         assert result.failure_kind == "duplicate"
         assert "already exists" in result.failure_detail.lower()
 
+    # ─── qBit 5.2+ JSON response shape (post-v2.21.0 hotfix) ───
+    #
+    # Discovered 2026-05-22 after the v2.21.0 deploy. qBit 5.2's
+    # hotio image returns JSON
+    #   {"added_torrent_ids": ["<hash>"], "failure_count": 0}
+    # from POST /api/v2/torrents/add instead of the legacy
+    # "Ok." / "Fails." plain text. Pre-fix, every successful add
+    # got classified `failed_unknown` even though qBit was actually
+    # downloading the torrent — Mark's two stuck audiobooks
+    # (tids 1244201 + 1244208) were the prod evidence. Tests pin
+    # both the success and rejection JSON shapes.
+
+    async def test_v52_json_success_response_marks_added(self, fake_qbit):
+        client = _make_client(fake_qbit)
+        try:
+            assert await client.login() is True
+            fake_qbit.add_body = (
+                b'{"added_torrent_ids":["e00501ba351b73e6e09014f1689a7aa4483b113d"],'
+                b'"failure_count":0}'
+            )
+            result = await client.add_torrent(MINIMAL_BENCODED_TORRENT)
+        finally:
+            await client.aclose()
+
+        assert result.success is True
+        assert result.failure_kind is None
+        assert not result.failure_detail
+
+    async def test_v52_json_failure_response_marks_rejected(self, fake_qbit):
+        client = _make_client(fake_qbit)
+        try:
+            assert await client.login() is True
+            fake_qbit.add_body = (
+                b'{"added_torrent_ids":[],"failure_count":1}'
+            )
+            result = await client.add_torrent(MINIMAL_BENCODED_TORRENT)
+        finally:
+            await client.aclose()
+
+        assert result.success is False
+        assert result.failure_kind == "rejected"
+        assert "failure_count=1" in result.failure_detail
+
+    async def test_v52_json_mixed_batch_treats_added_as_authoritative(
+        self, fake_qbit,
+    ):
+        # qBit's batch endpoint could theoretically return added > 0 AND
+        # failure_count > 0 for a multi-torrent post, but Seshat only
+        # ever sends one torrent. If the response says it was added,
+        # we trust that — better than classifying a successful add as
+        # a failure and re-grabbing later (which would burn a slot).
+        client = _make_client(fake_qbit)
+        try:
+            assert await client.login() is True
+            fake_qbit.add_body = (
+                b'{"added_torrent_ids":["abc123"],"failure_count":1}'
+            )
+            result = await client.add_torrent(MINIMAL_BENCODED_TORRENT)
+        finally:
+            await client.aclose()
+
+        assert result.success is True
+
+    async def test_v52_json_with_unknown_shape_falls_through(self, fake_qbit):
+        # If qBit ships another response variant in a future version,
+        # we want the client to surface it cleanly as "unexpected
+        # response" rather than silently swallowing it. Empty JSON
+        # object is a good probe.
+        client = _make_client(fake_qbit)
+        try:
+            assert await client.login() is True
+            fake_qbit.add_body = b'{}'
+            result = await client.add_torrent(MINIMAL_BENCODED_TORRENT)
+        finally:
+            await client.aclose()
+
+        assert result.success is False
+        assert result.failure_kind == "unknown"
+        assert "unexpected qBit response" in result.failure_detail
+
+    async def test_v52_malformed_json_falls_through(self, fake_qbit):
+        # A body that LOOKS like JSON but won't parse must NOT crash
+        # the client. Falls back to the generic "unexpected" path.
+        client = _make_client(fake_qbit)
+        try:
+            assert await client.login() is True
+            fake_qbit.add_body = b'{"added_torrent_ids": ['
+            result = await client.add_torrent(MINIMAL_BENCODED_TORRENT)
+        finally:
+            await client.aclose()
+
+        assert result.success is False
+        assert result.failure_kind == "unknown"
+
 
 # ─── List / get torrents ─────────────────────────────────────
 

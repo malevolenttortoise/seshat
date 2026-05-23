@@ -7,6 +7,66 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [2.21.1] — 2026-05-22
+
+### Fixed — qBittorrent 5.2 JSON response shape for `torrents/add`
+
+qBit 5.2 (and the hotio image's current build) replaced the legacy
+plain-text `Ok.` / `Fails.` response from `POST /api/v2/torrents/add`
+with a JSON shape:
+
+```json
+{"added_torrent_ids": ["<info-hash>"], "failure_count": 0}
+```
+
+The client previously only recognized `Ok.` / `Fails.` and fell
+through to the "unexpected response" path, marking the grab
+`failed_unknown` even though qBit had accepted the torrent and was
+downloading it. The dispatcher then never emitted "submitted",
+never fired the `notify_on_grab` ntfy, and never proceeded to the
+post-download pipeline — so successfully-grabbed torrents
+silently disappeared from Seshat's view.
+
+The client now recognizes the JSON shape:
+
+- `added_torrent_ids` non-empty + `failure_count == 0` → success
+- `added_torrent_ids` non-empty + `failure_count > 0` → success
+  (we only send one torrent, so `added` is authoritative)
+- `added_torrent_ids` empty + `failure_count > 0` → `rejected`
+- Anything else → falls through to the existing "unexpected
+  response" path so future qBit response variants surface cleanly
+  instead of silently misclassifying
+
+Matches the same-day `login()` 204 fix in v2.21.0 (`df69a79`) which
+already covered the IP-whitelist bypass handshake. Together these
+two patches restore parity with qBit 5.2's new `/api/v2/*` response
+contract.
+
+6 new tests in `tests/clients/test_qbittorrent.py` cover the
+success / rejection / mixed-batch / unknown-shape / malformed-JSON
+cases.
+
+### Operator note
+
+Grabs stuck in `failed_unknown` state from v2.21.0 with a
+`failure_detail` starting with `unexpected qBit response: HTTP 200
+body='{"added_torrent_ids":...` can be reconciled with:
+
+```sql
+UPDATE grabs
+SET state='submitted',
+    submitted_at=datetime('now'),
+    failed_reason=NULL
+WHERE state='failed_unknown'
+  AND failure_reason LIKE 'unexpected qBit response: HTTP 200 body=''{%';
+```
+
+The completion watcher will then pick them up on its next sweep
+(qBit already has the torrent + the hash matches Seshat's
+`qbit_hash` column).
+
+---
+
 ## [2.21.0] — 2026-05-22
 
 Amazon metadata cache — biggest discovery-flow architectural change
