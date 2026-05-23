@@ -99,6 +99,20 @@ class TestLogin:
         finally:
             await client.aclose()
 
+    async def test_qbit_204_treated_as_success(self, fake_qbit):
+        # qBit 5.2+ returns 204 No Content when the caller's IP is in
+        # AuthSubnetWhitelist — credentials are ignored, subnet match
+        # is authoritative. Must be accepted as success or Seshat will
+        # bounce off the bypass and report "not authenticated" even
+        # though qBit is granting access on every request.
+        fake_qbit.login_status = 204
+        client = _make_client(fake_qbit)
+        try:
+            assert await client.login() is True
+            assert client._logged_in is True
+        finally:
+            await client.aclose()
+
 
 # ─── Add torrent ─────────────────────────────────────────────
 

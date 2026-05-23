@@ -111,8 +111,15 @@ class QbitClient:
         in). Network exceptions return False; the caller can decide
         whether to retry.
 
-        On success, the SID cookie is captured by the client's cookie
-        jar and attached to all subsequent requests automatically.
+        qBit 5.2+ also returns HTTP 204 No Content when the caller's
+        IP is in `AuthSubnetWhitelist` — the credentials are ignored
+        and the connection is authorized by IP. We treat that the same
+        as a successful login: subsequent calls don't need a session
+        cookie because qBit re-checks the subnet on every request.
+
+        On success, any session cookie qBit set is captured by the
+        client's cookie jar and attached to subsequent requests
+        automatically.
         """
         try:
             resp = await self._client.post(
@@ -128,6 +135,11 @@ class QbitClient:
         if resp.status_code == 200 and resp.text.strip() == "Ok.":
             self._logged_in = True
             _log.info(f"qBit login OK at {self.base_url}")
+            return True
+
+        if resp.status_code == 204:
+            self._logged_in = True
+            _log.info(f"qBit login OK at {self.base_url} (IP whitelist bypass)")
             return True
 
         _log.warning(
