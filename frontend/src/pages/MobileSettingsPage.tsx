@@ -491,7 +491,7 @@ export default function MobileSettingsPage() {
         version?: string | null;
         error_class?: string;
         error?: string;
-      }>("/api/qbittorrent/test");
+      }>("/qbittorrent/test");
       if (r.ok) {
         setTestQbitResult(`✓ Connected (${r.version || "version unknown"})`);
       } else {

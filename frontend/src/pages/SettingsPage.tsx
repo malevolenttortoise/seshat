@@ -498,7 +498,7 @@ function QbitTestButton() {
   async function test() {
     setBusy(true); setResult(null);
     try {
-      const r = await api.post<QbitTestResult>("/api/qbittorrent/test");
+      const r = await api.post<QbitTestResult>("/qbittorrent/test");
       setResult(r);
     } catch (e) {
       setResult({ ok: false, error_class: "unknown", error: String(e) });
