@@ -6,6 +6,18 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
+# Tag pushes + branch pushes for the SAME commit fire two
+# workflow runs (branch=main + tag=vX.Y.Z) and historically raced
+# each other for GHCR push credentials / checkout token state.
+# Whichever lost the race failed noisily even though the winner
+# published the image correctly. Serialize them by SHA so the
+# second run queues behind the first — both still publish (their
+# metadata-action invocations emit different tags based on
+# github.ref) but they don't step on each other.
+concurrency:
+  group: docker-publish-${{ github.sha }}
+  cancel-in-progress: false
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
