@@ -87,9 +87,30 @@ class CooldownModel(BaseModel):
     reason: Optional[str]
 
 
+class ScheduleModel(BaseModel):
+    """Phase I — operating-hours window for `mode=scheduled`.
+
+    `active_hours` is `"HH:MM-HH:MM"`; start can be greater than end
+    for overnight windows (`22:00-06:00`). `timezone` accepts any
+    IANA tz name (e.g. `America/Detroit`); empty string means
+    "system local".
+    """
+    active_hours: str = "10:00-22:00"
+    timezone: str = ""
+
+
 class StatusResponse(BaseModel):
     source: str
     enabled: bool
+    # Phase I — mode-aware status. `mode` is one of
+    # "continuous" / "scheduled" / "disabled"; `schedule` carries the
+    # window spec when relevant. `inside_schedule_window` exposes the
+    # current gate state so the frontend can show "active now" vs
+    # "sleeping until 10:00" without re-implementing the parser.
+    mode: str
+    schedule: ScheduleModel
+    inside_schedule_window: bool
+    seconds_until_window_open: float
     cooldown: CooldownModel
     worker: WorkerStatusModel
     queue: QueueStatsModel
@@ -97,15 +118,24 @@ class StatusResponse(BaseModel):
 
 
 class SettingsPatchRequest(BaseModel):
-    """Only `enabled` for now. Future knobs (mode, daily_cap,
-    schedule) are deliberately deferred."""
+    """Operator-facing knobs for the metadata cache worker.
+
+    Phase I adds `mode` + `schedule`. `enabled` is preserved for
+    backwards compat — clients that PATCH `enabled` still work, and
+    `mode` is derived from it when `mode` isn't sent. Sending both
+    is allowed; `mode` wins when present.
+    """
     enabled: Optional[bool] = Field(default=None)
+    mode: Optional[str] = Field(default=None)  # continuous|scheduled|disabled
+    schedule: Optional[ScheduleModel] = Field(default=None)
 
 
 class SettingsPatchResponse(BaseModel):
     ok: bool
     source: str
     enabled: bool
+    mode: str
+    schedule: ScheduleModel
 
 
 class ResetCooldownResponse(BaseModel):
@@ -281,9 +311,26 @@ async def get_status(source: str) -> StatusResponse:
         error_authors=state_outcomes.get("error", 0),
     )
 
+    # Phase I — mode + schedule. Reads through the same accessors the
+    # worker uses so the API and the worker tick agree on the gate
+    # state at every tick.
+    from app.discovery import metadata_cache_worker
+    mode = metadata_cache_worker.get_worker_mode(source)
+    sched = _cache_settings_get(source).get("schedule") or {}
+    schedule_model = ScheduleModel(
+        active_hours=str(sched.get("active_hours") or "10:00-22:00"),
+        timezone=str(sched.get("timezone") or ""),
+    )
+    inside = metadata_cache_worker.is_inside_schedule_window(source)
+    wait_s = metadata_cache_worker.seconds_until_window_open(source)
+
     return StatusResponse(
         source=source,
         enabled=enabled,
+        mode=mode,
+        schedule=schedule_model,
+        inside_schedule_window=inside,
+        seconds_until_window_open=wait_s,
         cooldown=cooldown,
         worker=worker_model,
         queue=queue_model,
@@ -295,23 +342,90 @@ async def get_status(source: str) -> StatusResponse:
 async def patch_settings(
     source: str, body: SettingsPatchRequest,
 ) -> SettingsPatchResponse:
-    """Update operator-facing knobs. Today: `enabled` only.
+    """Update operator-facing knobs.
+
+    Phase I (Settings → Sources Amazon panel) accepts:
+      - `enabled` (legacy boolean — still honored for clients that
+        pre-date the mode toggle)
+      - `mode` ("continuous" / "scheduled" / "disabled")
+      - `schedule.active_hours` + `schedule.timezone`
 
     Writes through `app.config.save_settings` so the change persists
     across restart and the worker (which re-reads settings on every
     tick) picks it up on the next iteration — no container restart
     needed.
+
+    When `mode` is sent, `enabled` is also synced to match (False
+    when mode=disabled, True otherwise) so any downstream consumer
+    still reading the legacy field gets the right value.
     """
     _validate_source(source)
-    if body.enabled is not None:
-        _cache_settings_set(source, key="enabled", value=bool(body.enabled))
-        _log.info(
-            "metadata_cache settings: %s enabled → %s",
-            source, body.enabled,
+    if body.mode is not None:
+        if body.mode not in ("continuous", "scheduled", "disabled"):
+            raise HTTPException(
+                400, f"unknown mode: {body.mode!r} "
+                "(expected continuous / scheduled / disabled)",
+            )
+        _cache_settings_set(source, key="mode", value=body.mode)
+        # Keep `enabled` in sync so legacy reads (frontend code that
+        # hasn't migrated to `mode` yet, future Goodreads cache code)
+        # still see the correct boolean.
+        _cache_settings_set(
+            source, key="enabled", value=body.mode != "disabled",
         )
+        _log.info(
+            "metadata_cache settings: %s mode → %s", source, body.mode,
+        )
+    elif body.enabled is not None:
+        _cache_settings_set(source, key="enabled", value=bool(body.enabled))
+        # Mirror into mode so the two fields don't drift if a later
+        # PATCH sends mode without enabled.
+        _cache_settings_set(
+            source, key="mode",
+            value="continuous" if body.enabled else "disabled",
+        )
+        _log.info(
+            "metadata_cache settings: %s enabled → %s "
+            "(mode derived to %s)",
+            source, body.enabled,
+            "continuous" if body.enabled else "disabled",
+        )
+    if body.schedule is not None:
+        # Validate the spec — reject obviously bad input rather than
+        # silently letting the parser fall back to "always on".
+        from app.discovery import metadata_cache_worker
+        parsed = metadata_cache_worker._parse_active_hours(
+            body.schedule.active_hours
+        )
+        if parsed is None:
+            raise HTTPException(
+                400, f"invalid schedule.active_hours: "
+                f"{body.schedule.active_hours!r} (expected HH:MM-HH:MM)",
+            )
+        _cache_settings_set(
+            source, key="schedule",
+            value={
+                "active_hours": body.schedule.active_hours,
+                "timezone": body.schedule.timezone,
+            },
+        )
+        _log.info(
+            "metadata_cache settings: %s schedule → %s (tz=%r)",
+            source, body.schedule.active_hours, body.schedule.timezone,
+        )
+
+    from app.discovery import metadata_cache_worker
     new_enabled = bool(_cache_settings_get(source).get("enabled", False))
+    new_mode = metadata_cache_worker.get_worker_mode(source)
+    sched_now = _cache_settings_get(source).get("schedule") or {}
     return SettingsPatchResponse(
-        ok=True, source=source, enabled=new_enabled,
+        ok=True, source=source,
+        enabled=new_enabled,
+        mode=new_mode,
+        schedule=ScheduleModel(
+            active_hours=str(sched_now.get("active_hours") or "10:00-22:00"),
+            timezone=str(sched_now.get("timezone") or ""),
+        ),
     )
 
 

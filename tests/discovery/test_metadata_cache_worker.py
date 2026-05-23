@@ -1438,3 +1438,233 @@ class TestPhaseGStructuredLogLine:
         assert "author=B0LOGLINE1" in msg
         assert "outcome=ok" in msg
         assert "elapsed_ms=" in msg
+
+
+# ─── v2.21.0 Phase I — mode + scheduled-window gate ──────────────
+
+
+class TestPhaseIModeDerivation:
+    def test_legacy_enabled_true_maps_to_continuous(self, worker_under):
+        worker_under["settings"]["metadata_cache"]["amazon"]["enabled"] = True
+        worker_under["settings"]["metadata_cache"]["amazon"].pop("mode", None)
+        assert metadata_cache_worker.get_worker_mode("amazon") == "continuous"
+        assert metadata_cache_worker.is_worker_enabled("amazon") is True
+
+    def test_legacy_enabled_false_maps_to_disabled(self, worker_under):
+        worker_under["settings"]["metadata_cache"]["amazon"]["enabled"] = False
+        worker_under["settings"]["metadata_cache"]["amazon"].pop("mode", None)
+        assert metadata_cache_worker.get_worker_mode("amazon") == "disabled"
+        assert metadata_cache_worker.is_worker_enabled("amazon") is False
+
+    def test_mode_disabled_wins_over_enabled_true(self, worker_under):
+        worker_under["settings"]["metadata_cache"]["amazon"]["enabled"] = True
+        worker_under["settings"]["metadata_cache"]["amazon"]["mode"] = "disabled"
+        assert metadata_cache_worker.get_worker_mode("amazon") == "disabled"
+        assert metadata_cache_worker.is_worker_enabled("amazon") is False
+
+    def test_mode_scheduled_is_enabled(self, worker_under):
+        worker_under["settings"]["metadata_cache"]["amazon"]["enabled"] = True
+        worker_under["settings"]["metadata_cache"]["amazon"]["mode"] = "scheduled"
+        assert metadata_cache_worker.get_worker_mode("amazon") == "scheduled"
+        assert metadata_cache_worker.is_worker_enabled("amazon") is True
+
+    def test_unknown_mode_falls_back_to_legacy_field(self, worker_under):
+        # Typo / future-mode-this-build-doesn't-know — fall back to
+        # `enabled` boolean rather than crashing.
+        worker_under["settings"]["metadata_cache"]["amazon"]["enabled"] = True
+        worker_under["settings"]["metadata_cache"]["amazon"]["mode"] = "wat"
+        assert metadata_cache_worker.get_worker_mode("amazon") == "continuous"
+
+
+class TestPhaseIActiveHoursParser:
+    def test_well_formed_daytime_window(self):
+        assert metadata_cache_worker._parse_active_hours("10:00-22:00") == (10, 0, 22, 0)
+
+    def test_well_formed_overnight_window(self):
+        assert metadata_cache_worker._parse_active_hours("22:30-06:15") == (22, 30, 6, 15)
+
+    def test_missing_dash_returns_none(self):
+        assert metadata_cache_worker._parse_active_hours("1000-2200") is None
+
+    def test_out_of_range_hour_returns_none(self):
+        assert metadata_cache_worker._parse_active_hours("25:00-26:00") is None
+
+    def test_non_numeric_returns_none(self):
+        assert metadata_cache_worker._parse_active_hours("ten-twelve") is None
+
+    def test_empty_returns_none(self):
+        assert metadata_cache_worker._parse_active_hours("") is None
+        assert metadata_cache_worker._parse_active_hours(None) is None  # type: ignore[arg-type]
+
+
+class TestPhaseIScheduleWindow:
+    """`is_inside_schedule_window` reads system local time. Tests
+    patch `_resolve_local_now` to drive specific wallclock values."""
+
+    def _set_schedule(self, worker_under, active_hours, mode="scheduled"):
+        worker_under["settings"]["metadata_cache"]["amazon"]["mode"] = mode
+        worker_under["settings"]["metadata_cache"]["amazon"]["enabled"] = True
+        worker_under["settings"]["metadata_cache"]["amazon"]["schedule"] = {
+            "active_hours": active_hours, "timezone": "",
+        }
+
+    def _patch_now(self, monkeypatch, hour, minute):
+        from datetime import datetime as _dt
+        fake_now = _dt(2026, 5, 22, hour, minute, 0)
+        monkeypatch.setattr(
+            metadata_cache_worker, "_resolve_local_now",
+            lambda _tz="": fake_now,
+        )
+
+    def test_continuous_mode_always_inside(self, worker_under):
+        worker_under["settings"]["metadata_cache"]["amazon"]["mode"] = "continuous"
+        assert metadata_cache_worker.is_inside_schedule_window("amazon") is True
+
+    def test_daytime_window_inside_at_noon(self, worker_under, monkeypatch):
+        self._set_schedule(worker_under, "10:00-22:00")
+        self._patch_now(monkeypatch, 12, 0)
+        assert metadata_cache_worker.is_inside_schedule_window("amazon") is True
+
+    def test_daytime_window_outside_at_3am(self, worker_under, monkeypatch):
+        self._set_schedule(worker_under, "10:00-22:00")
+        self._patch_now(monkeypatch, 3, 0)
+        assert metadata_cache_worker.is_inside_schedule_window("amazon") is False
+
+    def test_overnight_window_inside_at_midnight(self, worker_under, monkeypatch):
+        self._set_schedule(worker_under, "22:00-06:00")
+        self._patch_now(monkeypatch, 0, 30)
+        assert metadata_cache_worker.is_inside_schedule_window("amazon") is True
+
+    def test_overnight_window_outside_at_noon(self, worker_under, monkeypatch):
+        self._set_schedule(worker_under, "22:00-06:00")
+        self._patch_now(monkeypatch, 12, 0)
+        assert metadata_cache_worker.is_inside_schedule_window("amazon") is False
+
+    def test_end_boundary_exclusive(self, worker_under, monkeypatch):
+        # 22:00 sharp is OUTSIDE the 10:00-22:00 window.
+        self._set_schedule(worker_under, "10:00-22:00")
+        self._patch_now(monkeypatch, 22, 0)
+        assert metadata_cache_worker.is_inside_schedule_window("amazon") is False
+
+    def test_start_boundary_inclusive(self, worker_under, monkeypatch):
+        # 10:00 sharp is INSIDE the 10:00-22:00 window.
+        self._set_schedule(worker_under, "10:00-22:00")
+        self._patch_now(monkeypatch, 10, 0)
+        assert metadata_cache_worker.is_inside_schedule_window("amazon") is True
+
+    def test_invalid_spec_treated_as_always_inside(self, worker_under, monkeypatch):
+        # Operator typo can't strand the worker.
+        self._set_schedule(worker_under, "garbage")
+        self._patch_now(monkeypatch, 3, 0)
+        assert metadata_cache_worker.is_inside_schedule_window("amazon") is True
+
+    def test_seconds_until_window_open_inside_returns_zero(
+        self, worker_under, monkeypatch,
+    ):
+        self._set_schedule(worker_under, "10:00-22:00")
+        self._patch_now(monkeypatch, 12, 0)
+        assert metadata_cache_worker.seconds_until_window_open("amazon") == 0.0
+
+    def test_seconds_until_window_open_before_today_start(
+        self, worker_under, monkeypatch,
+    ):
+        # 03:00 → 7h until 10:00 today.
+        self._set_schedule(worker_under, "10:00-22:00")
+        self._patch_now(monkeypatch, 3, 0)
+        delta = metadata_cache_worker.seconds_until_window_open("amazon")
+        assert delta == 7 * 3600
+
+    def test_seconds_until_window_open_after_today_end(
+        self, worker_under, monkeypatch,
+    ):
+        # 23:00 → 11h until 10:00 tomorrow.
+        self._set_schedule(worker_under, "10:00-22:00")
+        self._patch_now(monkeypatch, 23, 0)
+        delta = metadata_cache_worker.seconds_until_window_open("amazon")
+        assert delta == 11 * 3600
+
+
+class TestPhaseIScheduleGate:
+    """Worker tick honors the schedule window."""
+
+    async def test_outside_schedule_returns_outside_schedule_outcome(
+        self, worker_under, monkeypatch,
+    ):
+        worker_under["settings"]["metadata_cache"]["amazon"]["mode"] = "scheduled"
+        worker_under["settings"]["metadata_cache"]["amazon"]["schedule"] = {
+            "active_hours": "10:00-22:00", "timezone": "",
+        }
+        from datetime import datetime as _dt
+        # 03:00 local — well outside the window.
+        monkeypatch.setattr(
+            metadata_cache_worker, "_resolve_local_now",
+            lambda _tz="": _dt(2026, 5, 22, 3, 0, 0),
+        )
+        await _seed_queue_row(author_id="B0SCHED0001")
+        result = await metadata_cache_worker.tick()
+        assert result.outcome == "outside_schedule"
+        # Sleep is bounded — at least IDLE, at most the cooldown cap.
+        assert result.next_sleep_s >= 60
+        assert result.next_sleep_s <= 3600
+        # Queue row was NOT popped — still pending for the next window.
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+        try:
+            cur = await db.execute(
+                f"SELECT status FROM {metadata_cache.queue_table()} "
+                f"WHERE author_id = ?",
+                ("B0SCHED0001",),
+            )
+            status = (await cur.fetchone())[0]
+        finally:
+            await db.close()
+        assert status == "pending"
+
+    async def test_inside_schedule_proceeds_normally(
+        self, worker_under, monkeypatch, fake_ntfy,
+    ):
+        worker_under["settings"]["metadata_cache"]["amazon"]["mode"] = "scheduled"
+        worker_under["settings"]["metadata_cache"]["amazon"]["schedule"] = {
+            "active_hours": "00:00-23:59", "timezone": "",
+        }
+
+        async def _fake_scan(author_id, session):
+            return _author_result("Book", author_id=author_id), None
+        monkeypatch.setattr(
+            metadata_cache_worker, "_perform_amazon_scan", _fake_scan,
+        )
+        await _seed_queue_row(
+            author_id="B0SCHED0002", seed_in_libraries=("books-lib",),
+        )
+        result = await metadata_cache_worker.tick()
+        assert result.outcome == "ok"
+
+    async def test_outside_schedule_does_not_trigger_stall(
+        self, worker_under, monkeypatch, fake_ntfy,
+    ):
+        # Worker is enabled in scheduled mode + outside window + has
+        # an ancient heartbeat. Stall watchdog must stay quiet.
+        worker_under["settings"]["metadata_cache"]["amazon"]["mode"] = "scheduled"
+        worker_under["settings"]["metadata_cache"]["amazon"]["schedule"] = {
+            "active_hours": "10:00-22:00", "timezone": "",
+        }
+        from datetime import datetime as _dt
+        monkeypatch.setattr(
+            metadata_cache_worker, "_resolve_local_now",
+            lambda _tz="": _dt(2026, 5, 22, 3, 0, 0),
+        )
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+        try:
+            await db.execute(
+                f"UPDATE {metadata_cache.worker_state_table()} "
+                f"SET last_heartbeat_at = ? WHERE id = 1",
+                (time.time() - 3600,),
+            )
+            await db.commit()
+        finally:
+            await db.close()
+        stalled = await metadata_cache_worker.check_stall(
+            "amazon", threshold_s=300.0,
+        )
+        assert stalled is False
+        errors = [c for c in fake_ntfy if c["event_key"] == "metadata_cache_error"]
+        assert errors == []

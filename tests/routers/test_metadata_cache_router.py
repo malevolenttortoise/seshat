@@ -242,6 +242,111 @@ class TestPatchSettings:
         assert s.get("metadata_cache", {}).get("amazon", {}).get("enabled") is True
 
 
+# ─── v2.21.0 Phase I — mode + schedule round-trip ──────────────
+
+
+class TestPhaseIPatchMode:
+    async def test_status_exposes_mode_and_schedule_defaults(
+        self, cache_router_client,
+    ):
+        # Fresh-deploy default: enabled=False → mode=disabled.
+        r = await cache_router_client.get(
+            "/api/v1/metadata-cache/amazon/status"
+        )
+        body = r.json()
+        assert body["mode"] == "disabled"
+        # Schedule defaults populated even when never set by user.
+        assert body["schedule"]["active_hours"] == "10:00-22:00"
+        assert body["schedule"]["timezone"] == ""
+        # Disabled mode is always inside-window (no scheduling applied).
+        assert body["inside_schedule_window"] is True
+        assert body["seconds_until_window_open"] == 0.0
+
+    async def test_patch_mode_continuous(self, cache_router_client):
+        r = await cache_router_client.patch(
+            "/api/v1/metadata-cache/amazon/settings",
+            json={"mode": "continuous"},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["mode"] == "continuous"
+        assert body["enabled"] is True  # synced for back-compat
+        # Read-back via status.
+        r = await cache_router_client.get(
+            "/api/v1/metadata-cache/amazon/status"
+        )
+        assert r.json()["mode"] == "continuous"
+
+    async def test_patch_mode_scheduled_with_window(self, cache_router_client):
+        r = await cache_router_client.patch(
+            "/api/v1/metadata-cache/amazon/settings",
+            json={
+                "mode": "scheduled",
+                "schedule": {
+                    "active_hours": "08:00-20:00", "timezone": "America/Detroit",
+                },
+            },
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["mode"] == "scheduled"
+        assert body["enabled"] is True
+        assert body["schedule"]["active_hours"] == "08:00-20:00"
+        assert body["schedule"]["timezone"] == "America/Detroit"
+
+    async def test_patch_mode_disabled_syncs_enabled_false(
+        self, cache_router_client,
+    ):
+        # Enable first, then flip to mode=disabled. `enabled` must
+        # follow so any legacy reader sees the right value.
+        await cache_router_client.patch(
+            "/api/v1/metadata-cache/amazon/settings",
+            json={"enabled": True},
+        )
+        r = await cache_router_client.patch(
+            "/api/v1/metadata-cache/amazon/settings",
+            json={"mode": "disabled"},
+        )
+        body = r.json()
+        assert body["mode"] == "disabled"
+        assert body["enabled"] is False
+
+    async def test_patch_unknown_mode_400s(self, cache_router_client):
+        r = await cache_router_client.patch(
+            "/api/v1/metadata-cache/amazon/settings",
+            json={"mode": "go-fast-mode"},
+        )
+        assert r.status_code == 400
+
+    async def test_patch_invalid_active_hours_400s(self, cache_router_client):
+        r = await cache_router_client.patch(
+            "/api/v1/metadata-cache/amazon/settings",
+            json={
+                "mode": "scheduled",
+                "schedule": {"active_hours": "garbage", "timezone": ""},
+            },
+        )
+        assert r.status_code == 400
+
+    async def test_legacy_enabled_patch_derives_mode(
+        self, cache_router_client,
+    ):
+        # Frontend pre-dating Phase I can still PATCH enabled=true and
+        # see the mode field get derived to continuous.
+        r = await cache_router_client.patch(
+            "/api/v1/metadata-cache/amazon/settings",
+            json={"enabled": True},
+        )
+        body = r.json()
+        assert body["enabled"] is True
+        assert body["mode"] == "continuous"
+        r2 = await cache_router_client.patch(
+            "/api/v1/metadata-cache/amazon/settings",
+            json={"enabled": False},
+        )
+        assert r2.json()["mode"] == "disabled"
+
+
 # ─── POST /reset-cooldown ──────────────────────────────────────
 
 

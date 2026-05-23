@@ -240,15 +240,21 @@ class TickResult:
     source_name: str
     outcome: str
     """One of:
-      - "ok"             — scan succeeded, cache updated
-      - "ok_empty"       — scan succeeded but returned no books
-      - "cooldown"       — skipped, cooldown engaged
-      - "queue_empty"    — no work to do this tick
-      - "disabled"       — operator disabled the worker
-      - "no_libraries"   — pre-setup state
-      - "soft_block"     — scan tripped the cooldown (worker bumped its own queue row)
-      - "permanent_fail" — author hit the consecutive-failure cap
-      - "error"          — unexpected exception caught + logged
+      - "ok"               — scan succeeded, cache updated
+      - "ok_empty"         — scan succeeded but returned no books
+      - "cooldown"         — skipped, cooldown engaged
+      - "queue_empty"      — no work to do this tick
+      - "disabled"         — operator set mode=disabled
+      - "outside_schedule" — mode=scheduled but the current time is
+                             outside the configured active-hours
+                             window. `next_sleep_s` is set to
+                             seconds-until-window-open so the loop
+                             quietly waits through the off-hours.
+      - "no_libraries"     — pre-setup state
+      - "soft_block"       — scan tripped the cooldown (worker bumped
+                             its own queue row)
+      - "permanent_fail"   — author hit the consecutive-failure cap
+      - "error"            — unexpected exception caught + logged
     """
     author_id: Optional[str] = None
     library_slug: Optional[str] = None
@@ -271,17 +277,157 @@ class TickResult:
 # ─── Settings + state accessors ────────────────────────────────
 
 
-def is_worker_enabled(source_name: str) -> bool:
-    """True iff `metadata_cache.<source>.enabled` is truthy.
-
-    Reads settings on every call so the operator can flip the worker
-    on / off from the UI without a container restart. Defaults to
-    False — opt-in, so a brand-new deploy doesn't immediately start
-    burning Amazon budget the moment v2.21.0 ships.
-    """
+def _source_settings(source_name: str) -> dict[str, Any]:
+    """Return the nested settings sub-dict for `metadata_cache.<source>.*`.
+    Always a dict — empty when the user has never opened the panel."""
     s = app_config.load_settings()
     mc = (s.get("metadata_cache") or {}).get(source_name) or {}
-    return bool(mc.get("enabled", False))
+    return mc
+
+
+def get_worker_mode(source_name: str) -> str:
+    """Return one of `"continuous"` / `"scheduled"` / `"disabled"`.
+
+    Backwards compat: when `mode` is unset, derive from the legacy
+    `enabled` boolean — True → `"continuous"`, False → `"disabled"`.
+    A user who never touches the Phase I UI keeps the v2.21.0
+    Phases A-G semantics.
+    """
+    mc = _source_settings(source_name)
+    mode = mc.get("mode")
+    if mode in ("continuous", "scheduled", "disabled"):
+        return mode
+    return "continuous" if mc.get("enabled", False) else "disabled"
+
+
+def is_worker_enabled(source_name: str) -> bool:
+    """True iff the worker should attempt scans at all.
+
+    Now mode-aware (Phase I): `disabled` returns False. Both
+    `continuous` and `scheduled` return True — the scheduled-window
+    check is a separate gate (`is_inside_schedule_window`) so the
+    tick can return a distinct `outside_schedule` outcome instead of
+    masquerading as `disabled`.
+
+    Reads settings on every call so the operator can flip the mode
+    from the UI without a container restart.
+    """
+    return get_worker_mode(source_name) != "disabled"
+
+
+def _parse_active_hours(spec: str) -> Optional[tuple[int, int, int, int]]:
+    """Parse `"HH:MM-HH:MM"` into `(start_h, start_m, end_h, end_m)`.
+    Returns None on any malformed input — caller treats that as
+    "always on" rather than locking the worker out due to a typo.
+    Spec is inclusive on the start, exclusive on the end (so
+    `10:00-22:00` runs 10:00:00 through 21:59:59).
+    """
+    if not spec or not isinstance(spec, str):
+        return None
+    try:
+        start_s, end_s = spec.split("-", 1)
+        sh, sm = start_s.strip().split(":", 1)
+        eh, em = end_s.strip().split(":", 1)
+        start_h, start_m = int(sh), int(sm)
+        end_h, end_m = int(eh), int(em)
+    except (ValueError, AttributeError):
+        return None
+    if not (0 <= start_h <= 23 and 0 <= start_m <= 59
+            and 0 <= end_h <= 23 and 0 <= end_m <= 59):
+        return None
+    return start_h, start_m, end_h, end_m
+
+
+def _resolve_local_now(tz_name: str = "") -> datetime:
+    """Current wallclock in the schedule's timezone. Empty / invalid
+    `tz_name` falls back to system local time so a typo in the
+    settings doesn't crash the worker."""
+    if tz_name:
+        try:
+            from zoneinfo import ZoneInfo
+            return datetime.now(ZoneInfo(tz_name))
+        except Exception:
+            logger.debug(
+                "metadata_cache_worker: timezone %r not resolvable, "
+                "falling back to system local",
+                tz_name, exc_info=True,
+            )
+    return datetime.now()
+
+
+def _minute_of_day(h: int, m: int) -> int:
+    return h * 60 + m
+
+
+def is_inside_schedule_window(source_name: str) -> bool:
+    """True when worker mode is anything OTHER than `"scheduled"`,
+    OR when mode is `"scheduled"` and the current local wallclock
+    falls inside the configured active-hours window.
+
+    Window spec is `"HH:MM-HH:MM"` with two interpretations:
+      - **Daytime window** (start < end): `10:00-22:00` runs from 10
+        AM through 9:59 PM, sleeps the rest of the day.
+      - **Overnight window** (start > end): `22:00-06:00` runs from
+        10 PM through 5:59 AM, spanning midnight.
+
+    An invalid spec is treated as "always inside" so an operator
+    typo can never strand the worker indefinitely.
+    """
+    mc = _source_settings(source_name)
+    mode = get_worker_mode(source_name)
+    if mode != "scheduled":
+        return True
+    schedule = mc.get("schedule") or {}
+    spec = schedule.get("active_hours") or "10:00-22:00"
+    parsed = _parse_active_hours(spec)
+    if parsed is None:
+        return True
+    start_h, start_m, end_h, end_m = parsed
+    now = _resolve_local_now(schedule.get("timezone") or "")
+    now_min = _minute_of_day(now.hour, now.minute)
+    start_min = _minute_of_day(start_h, start_m)
+    end_min = _minute_of_day(end_h, end_m)
+    if start_min == end_min:
+        # `00:00-00:00` is a no-op spec; treat as always-on so the
+        # user can't accidentally lock themselves out.
+        return True
+    if start_min < end_min:
+        # Daytime window.
+        return start_min <= now_min < end_min
+    # Overnight window — inside iff we're past start OR before end.
+    return now_min >= start_min or now_min < end_min
+
+
+def seconds_until_window_open(source_name: str) -> float:
+    """Seconds from now until the next active-window start. Returns 0
+    when already inside the window or when mode is not `scheduled`.
+
+    Used as the worker's `next_sleep_s` for the new
+    `outside_schedule` outcome so the loop quietly sleeps until the
+    window opens instead of polling every 60s through the off-hours.
+    """
+    mc = _source_settings(source_name)
+    if get_worker_mode(source_name) != "scheduled":
+        return 0.0
+    schedule = mc.get("schedule") or {}
+    spec = schedule.get("active_hours") or "10:00-22:00"
+    parsed = _parse_active_hours(spec)
+    if parsed is None:
+        return 0.0
+    start_h, start_m, _, _ = parsed
+    now = _resolve_local_now(schedule.get("timezone") or "")
+    # Build today's start timestamp in the same tz as `now`.
+    today_start = now.replace(
+        hour=start_h, minute=start_m, second=0, microsecond=0,
+    )
+    if is_inside_schedule_window(source_name):
+        return 0.0
+    delta = (today_start - now).total_seconds()
+    if delta <= 0:
+        # Today's window already started/ended — next start is
+        # tomorrow's same time.
+        delta += 24 * 3600
+    return float(delta)
 
 
 def _library_content_type(library_slug: str) -> str:
@@ -530,6 +676,12 @@ async def check_stall(
     a watchdog firing every minute doesn't spam.
     """
     if not is_worker_enabled(source_name):
+        return False
+    # Phase I — when the worker is intentionally outside its
+    # schedule window, the long sleep is healthy by design. Don't
+    # let the watchdog page on a worker that's doing exactly what
+    # it was told to.
+    if not is_inside_schedule_window(source_name):
         return False
     s = app_config.load_settings()
     if threshold_s is None:
@@ -1156,6 +1308,20 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
         return TickResult(
             source_name=source_name, outcome="disabled",
             next_sleep_s=_IDLE_SLEEP_S,
+        )
+
+    # Phase I schedule gate. When mode=scheduled and we're outside the
+    # active-hours window, return a distinct outcome and sleep until
+    # the window opens. Capped at _COOLDOWN_MAX_SLEEP_S so a misparsed
+    # window can't deadlock the worker for an entire day; capped at
+    # _IDLE_SLEEP_S min so an off-by-a-minute return keeps us
+    # cooperative with stop_event-driven shutdowns.
+    if not is_inside_schedule_window(source_name):
+        wait_s = seconds_until_window_open(source_name)
+        sleep_s = min(max(wait_s, _IDLE_SLEEP_S), _COOLDOWN_MAX_SLEEP_S)
+        return TickResult(
+            source_name=source_name, outcome="outside_schedule",
+            next_sleep_s=sleep_s,
         )
 
     # Cooldown gate — shared with the resolver / live AmazonSource. If
