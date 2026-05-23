@@ -7,6 +7,38 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [2.22.2] — 2026-05-23
+
+### Fixed — `_flag_low_confidence_links` no longer punishes the unenriched-but-clearly-same-author case
+
+Live operator follow-up to v2.22.1: after the recompute, ~106 stale
+flags collapsed to single digits as designed — but one survived
+("Mephisto") and shouldn't have. Both calibre + abs rows had
+**identical** `name` and `normalized_name` and **zero** source IDs
+across all 9 mirrorable columns. The original heuristic ("flag if
+no two siblings share a source ID") couldn't distinguish:
+
+- **Contradiction** — siblings have non-empty disjoint ID sets
+  (the legitimate "John Smith" collision case where two different
+  people share a common name)
+- **No info + name match** — every sibling's source-ID set is
+  empty AND `normalized_name` is the same (Mephisto — unenriched,
+  but auto-link via exact name has no real collision risk)
+- **No info + names differ** — empty IDs but normalized_names
+  diverge (fuzzy/loose match without ID corroboration)
+
+`_flag_low_confidence_links` now distinguishes case 2 from cases 1
+and 3: it exempts persons whose linked rows are **both** empty
+across every source ID **and** share an identical `normalized_name`.
+Cases 1 and 3 still flag.
+
+New regression test
+`test_high_confidence_when_no_ids_but_names_identical` covers
+Mephisto. The existing John Smith and William D. Arand tests
+continue to validate the contradiction and agreement paths.
+
+---
+
 ## [2.22.1] — 2026-05-23
 
 ### Fixed — `link_confidence` flags now recomputed at end of Hygiene Job 8

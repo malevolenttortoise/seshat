@@ -489,6 +489,31 @@ class TestMigration:
         finally:
             await gdb.close()
 
+    async def test_high_confidence_when_no_ids_but_names_identical(
+        self, cross_lib_env,
+    ):
+        """v2.22.2 — Mephisto case: two library rows with identical
+        normalized_name and ZERO source IDs anywhere shouldn't be
+        flagged 'low'. The auto-link is exact-name, and absence of
+        enrichment isn't evidence of a collision."""
+        await cross_lib_env["add_author"](
+            "calibre-library", "Mephisto",
+        )
+        await cross_lib_env["add_author"](
+            "abs-audio-library", "Mephisto",
+        )
+        await migrate_to_cross_library_identity(cross_lib_env["slugs"])
+        gdb = await database.get_db()
+        try:
+            confidences = [r[0] for r in await (await gdb.execute(
+                "SELECT link_confidence FROM author_links"
+            )).fetchall()]
+            assert all(c == "high" for c in confidences), (
+                f"Expected 'high' on both links, got: {confidences}"
+            )
+        finally:
+            await gdb.close()
+
 
 # ─── Pen-name migration ──────────────────────────────────────
 

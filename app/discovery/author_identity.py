@@ -948,6 +948,13 @@ async def _flag_low_confidence_links(
     """
     # Per-library author rows + source IDs cached for collision check.
     per_lib_source_ids: dict[str, dict[int, set[str]]] = {}
+    # Also cache per-row normalized_name so we can exempt the
+    # "all linked rows share the exact normalized name" case from
+    # flagging (v2.22.2 — the heuristic shouldn't punish an
+    # unenriched-but-clearly-same-author person like Mephisto, where
+    # both linked rows are literally identical and just haven't been
+    # touched by any source yet).
+    per_lib_norms: dict[str, dict[int, str]] = {}
     # Source ID columns we care about for confidence — exclude
     # calibre_id/audiobookshelf_id (internal sync identifiers, not
     # cross-library disambiguators).
@@ -970,9 +977,11 @@ async def _flag_low_confidence_links(
             if not has_authors:
                 continue
             cur = await per_lib.execute(
-                f"SELECT id, {select_cols} FROM authors"  # nosec B608
+                f"SELECT id, normalized_name, {select_cols} "  # nosec B608
+                f"FROM authors"
             )
             cache: dict[int, set[str]] = {}
+            norms: dict[int, str] = {}
             for r in await cur.fetchall():
                 ids = {
                     f"{c}:{r[c]}"
@@ -980,7 +989,9 @@ async def _flag_low_confidence_links(
                     if r[c] and str(r[c]).strip()
                 }
                 cache[r["id"]] = ids
+                norms[r["id"]] = (r["normalized_name"] or "").strip()
             per_lib_source_ids[slug] = cache
+            per_lib_norms[slug] = norms
         finally:
             await per_lib.close()
 
@@ -1011,12 +1022,18 @@ async def _flag_low_confidence_links(
         # Union of all source IDs across all linked rows.
         all_ids: set[str] = set()
         per_link_ids: list[set[str]] = []
+        per_link_norms_seen: set[str] = set()
         for lr in link_rows:
             ids = per_lib_source_ids.get(lr["library_slug"], {}).get(
                 lr["author_id"], set(),
             )
             all_ids |= ids
             per_link_ids.append(ids)
+            n = per_lib_norms.get(lr["library_slug"], {}).get(
+                lr["author_id"], "",
+            )
+            if n:
+                per_link_norms_seen.add(n)
         # If every linked row has an empty source-ID set, OR no two
         # rows share an ID, the linkage is suspicious.
         all_disjoint = all(
@@ -1024,7 +1041,26 @@ async def _flag_low_confidence_links(
             for i, a in enumerate(per_link_ids)
             for b in per_link_ids[i + 1:]
         )
-        if all_disjoint:
+        # v2.22.2 — refine the "all-disjoint" trigger. Two distinct
+        # signals collapsed into the original heuristic:
+        #
+        #   1. **Contradiction**: rows have non-empty source-ID sets
+        #      that don't overlap (e.g. two "John Smith"s with
+        #      different amazon_id). Real collision risk → flag.
+        #   2. **No info + name match**: every row has an empty
+        #      source-ID set AND their normalized_names are identical.
+        #      Auto-link via exact-name is fine; flagging Mephisto
+        #      just because nothing's enriched it yet was noise.
+        #   3. **No info + names differ**: still flag — fuzzy/loose
+        #      matches without ID corroboration are uncertain.
+        any_have_ids = any(len(s) > 0 for s in per_link_ids)
+        names_all_identical = len(per_link_norms_seen) == 1
+        exempt = (
+            all_disjoint
+            and not any_have_ids
+            and names_all_identical
+        )
+        if all_disjoint and not exempt:
             await gdb.execute(
                 "UPDATE author_links SET link_confidence = 'low' "
                 "WHERE person_id = ?",
