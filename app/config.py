@@ -299,6 +299,16 @@ DEFAULT_SETTINGS = {
     "local_path_prefix": "/downloads",
     # How often to poll qBit for completed torrents and seedtime updates.
     "qbit_poll_interval_seconds": 60,
+    # Minimum gap (seconds) between successive POST /api/v2/torrents/add
+    # calls Seshat makes to qBit. qBit fires a tracker announce per add;
+    # bursts of 8+ adds in a few seconds trip MAM's per-IP tracker
+    # throttle and turn every subsequent announce into a sticky timeout
+    # for ~15 minutes (UAT 2026-05-22). The stagger spaces adds with
+    # ±qbit_add_stagger_jitter_s of randomness so adjacent batches don't
+    # ALL land at multiples of the same interval. Set to 0 to disable.
+    # Read live from settings on every dispatch — no restart required.
+    "qbit_add_stagger_s": 2.0,
+    "qbit_add_stagger_jitter_s": 0.5,
 
     # ── Sinks (where completed books go) ────────────────────
     # Default sink: calibre. Per-category overrides via "category_routing".

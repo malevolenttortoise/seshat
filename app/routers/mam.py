@@ -26,7 +26,7 @@ import logging
 import time
 from typing import Optional
 
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.config import load_settings, save_settings
@@ -202,27 +202,6 @@ async def replace_cookie(body: CookieRequest) -> ValidateResponse:
     else:
         _log.warning("MAM cookie replaced via UI but validation FAILED: %s", message)
     return ValidateResponse(ok=ok, message=message)
-
-
-@router.post("/test-qbit", response_model=ValidateResponse)
-async def test_qbit() -> ValidateResponse:
-    """Test the download client connection.
-
-    Attempts a login using the current credentials. WARNING: the
-    client may ban the IP after 5 failed attempts (default 30-min
-    ban in qBittorrent).
-    """
-    from app import state
-    if state.dispatcher is None:
-        return ValidateResponse(ok=False, message="Dispatcher not initialized")
-    try:
-        ok = await state.dispatcher.qbit.login()
-        return ValidateResponse(
-            ok=ok,
-            message="Connected!" if ok else "Login failed — check URL, username, and password",
-        )
-    except Exception as e:
-        return ValidateResponse(ok=False, message=f"Connection error: {e}")
 
 
 @router.get("/debug-match")

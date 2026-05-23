@@ -7,6 +7,65 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [2.23.0] — UNRELEASED (development branch)
+
+First release under the dev/main split flow — all work for v2.23.0 onward
+lands on `development` and is UAT-ed via the `:development-slim` image
+before merging to `main` for a tag.
+
+### Added — qBit add-torrent stagger to prevent MAM tracker throttle bursts
+
+Symptom (UAT 2026-05-22, v2.21.1): the IRC listener fanned out 8 grabs in
+~3 seconds, qBit `POST /api/v2/torrents/add` fired all 8 concurrently, and
+qBit's tracker announces hit MAM's per-IP throttle within the same window.
+Result: sticky `status=4 timed out` on every torrent on the user's account
+for ~15 minutes — including older torrents that had previously announced
+fine. Manual `curl` confirmed the tracker itself was healthy from inside
+the qBit container; only the rapid-fire burst tripped the throttle.
+
+`app/orchestrator/dispatch.py` now stages consecutive `add_torrent` calls
+through a module-level `asyncio.Lock` + wallclock guard. New settings:
+
+- `qbit_add_stagger_s` (default `2.0`) — minimum gap in seconds between
+  consecutive submits to qBit. Set to `0` to disable.
+- `qbit_add_stagger_jitter_s` (default `0.5`) — random ± component on the
+  gap so adjacent batches don't all land at multiples of the same interval.
+
+Both are read live via `load_settings()` on every dispatch — flipping them
+at runtime takes effect on the next announce without a restart. Settings UI
+exposed under Settings → Download Client → "Add-Torrent Stagger".
+
+### Changed — Test qBit Connection endpoint upgraded to ABS pattern
+
+Replaced the rudimentary `POST /v1/mam/test-qbit` (which returned only
+`{ok, message}` and couldn't distinguish auth/DNS/connect-refused/timeout)
+with `POST /api/qbittorrent/test` in a new `app/routers/qbittorrent.py`
+router, mirroring the structure of `POST /api/discovery/audiobookshelf/test`.
+
+Failure responses now carry a structured `error_class`:
+`not_configured` | `dns` | `connect_refused` | `timeout` | `tls` |
+`auth` | `unknown`. Success responses include `version`,
+`default_save_path`, and the visible `categories` list — plus
+`watch_category_present` flagging whether the configured watch category
+(default `[mam-reseed]`) actually exists in qBit. A missing watch category
+is the single most common cause of "grabs dispatched but qBit never adds
+them" support tickets, now surfaced at a glance.
+
+UI: `QbitTestButton` in both `SettingsPage.tsx` and `MobileSettingsPage.tsx`
+re-pointed at the new endpoint. Desktop renders the full structured
+response below the button; mobile shows a one-line "✓ Connected (version)"
+or "✗ class: message" summary.
+
+### Tests
+- `tests/orchestrator/test_dispatch_stagger.py` — 5 tests covering
+  disabled-when-zero, no-sleep-on-first-call, second-call-sleeps-gap,
+  concurrent-callers-serialize, negative-jitter-clamp.
+- `tests/routers/test_qbittorrent_router.py` — 9 tests covering each
+  `error_class` plus happy path + partial-info-failure tolerance +
+  watch-category-missing flag.
+
+---
+
 ## [2.22.4] — 2026-05-23
 
 ### Fixed — Persons & IDs page failed to load (route ordering)

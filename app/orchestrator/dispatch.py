@@ -35,7 +35,10 @@ State transitions written by this module:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import random
+import time
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Optional, Protocol
 
@@ -84,6 +87,58 @@ _log = logging.getLogger("seshat.orchestrator.dispatch")
 # the complexity for a soft "don't spam" throttle.
 _BUFFER_GATE_NOTIFY_WINDOW_SECONDS = 6 * 3600
 _last_buffer_gate_notify_at: dict[str, float] = {}
+
+
+# Module-level wallclock + lock for qBit add-torrent staggering.
+# qBit fires one tracker announce per POST /api/v2/torrents/add, and
+# MAM's tracker throttles announces per IP. A burst of grabs (autograb
+# + manual inject + author allow-list catching multiple in quick
+# succession) can land 8+ adds in 3 seconds, tripping the throttle
+# and turning every subsequent announce into a sticky ~15-minute
+# timeout for every torrent on the user's account. Diagnosed on
+# 2026-05-22 — the per-IP throttle is invisible from inside the
+# qBit container (curl shows 200 OK 426ms) but real for bursty
+# patterns.
+#
+# `_stagger_qbit_add()` reads `qbit_add_stagger_s` + `_jitter_s` from
+# live settings on every call and sleeps before the actual add so
+# consecutive calls are at least the configured gap apart. The lock
+# serializes concurrent dispatcher tasks through the gap correctly —
+# without it, two parallel grabs could both see "last add was 5s ago"
+# and both proceed immediately.
+_qbit_add_lock = asyncio.Lock()
+_last_qbit_add_at: float = 0.0
+
+
+async def _stagger_qbit_add() -> float:
+    """Sleep before the next qBit add to space out tracker announces.
+
+    Reads `qbit_add_stagger_s` (default 2.0) and
+    `qbit_add_stagger_jitter_s` (default 0.5) from settings on every
+    call so the operator can disable or tune the stagger without
+    restarting. `qbit_add_stagger_s <= 0` disables.
+
+    Returns the actual sleep duration (mainly for logs + tests).
+    Holds `_qbit_add_lock` across the sleep AND the timer update so
+    concurrent callers serialize through the gap rather than racing
+    on a stale `_last_qbit_add_at`.
+    """
+    from app.config import load_settings
+    s = load_settings()
+    stagger_s = float(s.get("qbit_add_stagger_s", 2.0) or 0.0)
+    jitter_s = float(s.get("qbit_add_stagger_jitter_s", 0.5) or 0.0)
+    if stagger_s <= 0:
+        return 0.0
+
+    global _last_qbit_add_at
+    async with _qbit_add_lock:
+        target_gap = max(0.0, stagger_s + random.uniform(-jitter_s, jitter_s))
+        elapsed = time.monotonic() - _last_qbit_add_at
+        sleep_s = max(0.0, target_gap - elapsed)
+        if sleep_s > 0:
+            await asyncio.sleep(sleep_s)
+        _last_qbit_add_at = time.monotonic()
+        return sleep_s
 
 
 # ─── Dependency container ────────────────────────────────────
@@ -1001,6 +1056,17 @@ async def _dispatch_with_decision(
                         "(qBit path: %s) — submission will likely fail",
                         local_save_path, save_path,
                     )
+
+        # Space out consecutive qBit adds so MAM's per-IP tracker
+        # throttle doesn't trip on bursts. See `_stagger_qbit_add()`
+        # for the rationale + the 2026-05-22 incident. Disabled by
+        # `qbit_add_stagger_s=0`; read live from settings.
+        stagger_slept = await _stagger_qbit_add()
+        if stagger_slept > 0:
+            _log.info(
+                "staggered qBit add by %.2fs (grab_id=%d)",
+                stagger_slept, grab_id,
+            )
 
         add_result = await deps.qbit.add_torrent(
             torrent_bytes,

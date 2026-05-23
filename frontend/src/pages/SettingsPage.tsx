@@ -476,20 +476,74 @@ function DataSection() {
   );
 }
 
+interface QbitTestSuccess {
+  ok: true;
+  version: string | null;
+  default_save_path: string | null;
+  categories: string[] | null;
+  watch_category: string | null;
+  watch_category_present: boolean | null;
+}
+interface QbitTestFailure {
+  ok: false;
+  error_class: string;
+  error: string;
+}
+type QbitTestResult = QbitTestSuccess | QbitTestFailure;
+
 function QbitTestButton() {
   const t = useTheme();
   const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<string | null>(null);
+  const [result, setResult] = useState<QbitTestResult | null>(null);
   async function test() {
     setBusy(true); setResult(null);
-    try { const r = await api.post<{ ok: boolean; message: string }>("/v1/mam/test-qbit"); setResult(r.ok ? `✓ ${r.message}` : `✗ ${r.message}`); }
-    catch (e) { setResult(`✗ ${e}`); } finally { setBusy(false); setTimeout(() => setResult(null), 8000); }
+    try {
+      const r = await api.post<QbitTestResult>("/api/qbittorrent/test");
+      setResult(r);
+    } catch (e) {
+      setResult({ ok: false, error_class: "unknown", error: String(e) });
+    } finally {
+      setBusy(false);
+      // Detailed success/failure surfaces stick until the next click —
+      // there's enough information here that timing it out would just
+      // make the user click again to re-read.
+    }
   }
   return (
-    <SF label="Test Connection" desc="Verify URL, username, and password." warn="Some clients ban IPs after repeated failures.">
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <Btn variant="ghost" onClick={test} disabled={busy}>{busy ? <Spin size={14} /> : "Test"}</Btn>
-        {result && <span style={{ fontSize: 11, color: result.startsWith("✓") ? t.ok : t.err, fontWeight: 600 }}>{result}</span>}
+    <SF label="Test Connection" desc="Connect to qBit, report version + visible categories + the configured save path." warn="qBittorrent bans the caller IP for ~30 min after 5 failed logins. Don't spam the button with bad credentials.">
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <Btn variant="ghost" onClick={test} disabled={busy}>{busy ? <Spin size={14} /> : "Test"}</Btn>
+          {result && (
+            <span style={{ fontSize: 11, color: result.ok ? t.ok : t.err, fontWeight: 600 }}>
+              {result.ok ? "✓ Connected" : `✗ ${result.error_class}`}
+            </span>
+          )}
+        </div>
+        {result && result.ok && (
+          <div style={{ fontSize: 11, color: t.textDim, lineHeight: 1.5, paddingLeft: 4 }}>
+            <div>version: <code style={{ color: t.td }}>{result.version || "—"}</code></div>
+            <div>default save path: <code style={{ color: t.td }}>{result.default_save_path || "—"}</code></div>
+            {result.categories !== null && (
+              <div>
+                categories ({result.categories.length}): <code style={{ color: t.td }}>{result.categories.length ? result.categories.join(", ") : "—"}</code>
+              </div>
+            )}
+            {result.watch_category && (
+              <div style={{ color: result.watch_category_present === false ? t.err : t.textDim }}>
+                watch category {result.watch_category_present === false ? "MISSING" : "found"}: <code style={{ color: t.td }}>{result.watch_category}</code>
+                {result.watch_category_present === false && (
+                  <span style={{ marginLeft: 6 }}>— create it in qBit or the dispatcher will fail to submit grabs</span>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+        {result && !result.ok && (
+          <div style={{ fontSize: 11, color: t.err, lineHeight: 1.5, paddingLeft: 4 }}>
+            {result.error}
+          </div>
+        )}
       </div>
     </SF>
   );
@@ -866,6 +920,14 @@ function DesktopSettingsPage() {
           </SF>
           <SF label="Torrent Tag" desc="Comma-separated tags applied to every torrent Seshat submits. Default: seshat-seed.">
             <input value={(s.qbit_tag as string) ?? ""} onChange={e => upd("qbit_tag", e.target.value)} placeholder="seshat-seed" style={{ ...ist, width: 260 }} />
+          </SF>
+          <SF label="Add-Torrent Stagger" desc="Minimum gap (seconds) between successive submissions to qBit, with ±jitter. qBit fires a tracker announce per add — bursts trip MAM's per-IP throttle. Default 2.0s ± 0.5s. Set to 0 to disable.">
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <input type="number" min={0} max={30} step={0.5} value={(s.qbit_add_stagger_s as number) ?? 2.0} onChange={e => upd("qbit_add_stagger_s", Math.max(0, Math.min(30, Number(e.target.value) || 0)))} style={{ ...nist, width: 80 }} />
+              <span style={{ fontSize: 13, color: t.textDim }}>s ±</span>
+              <input type="number" min={0} max={5} step={0.1} value={(s.qbit_add_stagger_jitter_s as number) ?? 0.5} onChange={e => upd("qbit_add_stagger_jitter_s", Math.max(0, Math.min(5, Number(e.target.value) || 0)))} style={{ ...nist, width: 70 }} />
+              <span style={{ fontSize: 13, color: t.textDim }}>s jitter</span>
+            </div>
           </SF>
           <SF label="Download Path" desc="Base download directory as seen by the download client.">
             <input value={(s.qbit_download_path as string) || ""} onChange={e => upd("qbit_download_path", e.target.value)} placeholder="/data/[mam-complete]" style={{ ...ist, width: 260 }} />

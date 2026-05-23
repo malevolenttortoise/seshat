@@ -486,14 +486,21 @@ export default function MobileSettingsPage() {
   const testQbit = async () => {
     setTestQbitResult(null);
     try {
-      const r = await api.post<{ ok: boolean; message: string }>(
-        "/v1/mam/test-qbit",
-      );
-      setTestQbitResult(r.ok ? `✓ ${r.message}` : `✗ ${r.message}`);
+      const r = await api.post<{
+        ok: boolean;
+        version?: string | null;
+        error_class?: string;
+        error?: string;
+      }>("/api/qbittorrent/test");
+      if (r.ok) {
+        setTestQbitResult(`✓ Connected (${r.version || "version unknown"})`);
+      } else {
+        setTestQbitResult(`✗ ${r.error_class || "error"}: ${r.error || ""}`);
+      }
     } catch (e) {
       setTestQbitResult(`✗ ${e}`);
     }
-    setTimeout(() => setTestQbitResult(null), 8000);
+    setTimeout(() => setTestQbitResult(null), 12000);
   };
 
   const testNtfy = async () => {
