@@ -7,6 +7,28 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [2.22.4] — 2026-05-23
+
+### Fixed — Persons & IDs page failed to load (route ordering)
+
+`GET /persons/source-ids` was registered AFTER `GET /persons/{person_id}`
+in `app/discovery/routers/authors.py`. FastAPI walks routes in
+registration order, so the parameterized route greedy-matched
+`source-ids` as a `person_id` string, hit the int-parser, and
+returned 422:
+
+```json
+[{"type":"int_parsing","loc":["path","person_id"],
+  "msg":"Input should be a valid integer, unable to parse string as an integer",
+  "input":"source-ids"}]
+```
+
+Moved the new endpoint above the parameterized one, alongside
+`GET /persons/search` and `GET /persons/triage`. Added a `Route ORDER`
+note in the docstring so future re-ordering doesn't regress this.
+
+---
+
 ## [2.22.3] — 2026-05-23
 
 ### Fixed — Dashboard widgets + hygiene confirm dialog now reflect v2.22.0 changes
