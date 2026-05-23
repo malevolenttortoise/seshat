@@ -309,6 +309,11 @@ DEFAULT_SETTINGS = {
     # Read live from settings on every dispatch — no restart required.
     "qbit_add_stagger_s": 2.0,
     "qbit_add_stagger_jitter_s": 0.5,
+    # v2.25.0 — quality-metadata backfill pacing. Seconds between
+    # MAM `loadSearchJSONbasic.php` calls during the backfill task.
+    # Read live; the running worker picks up the new value on its
+    # next post-extraction sleep. Min clamped to 1.0s server-side.
+    "quality_backfill_interval_s": 5.0,
 
     # ── Sinks (where completed books go) ────────────────────
     # Default sink: calibre. Per-category overrides via "category_routing".

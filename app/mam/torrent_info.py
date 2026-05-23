@@ -70,6 +70,18 @@ class TorrentInfo:
     # string when the uploader didn't set the field.
     isbn: str = ""
     asin: str = ""
+    # v2.25.0 — raw mediainfo + general-fields for quality extraction.
+    # `mediainfo` is the stringified JSON MAM returns when the
+    # `mediaInfo: True` payload flag is set. Empty `"{}"` for ebooks
+    # (no audio container) and for older audiobook uploads (pre-2024).
+    # Downstream consumer is `app/quality/extract.py::extract_quality()`.
+    # `size` is already defined above (required positional); these are
+    # the additional general-field fallbacks the extractor reads.
+    mediainfo: str = ""
+    numfiles: int = 0
+    seeders: int = 0
+    times_completed: int = 0
+    added: str = ""             # MAM-formatted upload timestamp
 
 
 # ─── In-memory cache ────────────────────────────────────────
@@ -112,11 +124,9 @@ async def get_torrent_info(
     _log.info("Fetching MAM torrent info for tid=%s", torrent_id)
 
     # MAM's loadSearchJSONbasic.php uses payload-root flags to opt
-    # into optional fields. Probed in v2.18.2: only `isbn` and
-    # `description` are real opt-ins — every other plausible flag
-    # name (cover, poster, nfo, comments, pubdate, goodreads, etc.)
-    # is silently ignored. Without these flags the keys are omitted
-    # from the response entirely.
+    # into optional fields. The v2.18.2 probe missed `mediaInfo`;
+    # v2.25.0 confirmed it works via the API reference + live probe.
+    # See `feedback_seshat_mam_search_api_flags.md` memory.
     #
     # `isbn: True` (v2.13.2) — returns the uploader's optional
     # ISBN/ASIN field. Empty string when not filled. ASINs are
@@ -129,6 +139,13 @@ async def get_torrent_info(
     # Goodreads boilerplate string ("Discover and share books you
     # love on Goodreads.") win the longest-wins merge on Spirit
     # Blade (tid=1243620).
+    #
+    # `mediaInfo: True` (v2.25.0) — returns the `mediainfo` field
+    # carrying stringified JSON with audio container metadata
+    # (bitrate, codec, channels, sample rate, chapters). Drives
+    # the quality-metadata extraction pipeline. Empty `"{}"` for
+    # ebooks and older audiobook uploads where the uploader didn't
+    # include mediainfo.
     payload = json.dumps({
         "tor": {
             "id": torrent_id,
@@ -141,6 +158,7 @@ async def get_torrent_info(
         "perpage": 1,
         "isbn": True,
         "description": True,
+        "mediaInfo": True,
     })
 
     try:
@@ -187,6 +205,11 @@ async def get_torrent_info(
         uploader_name=_parse_ownership_name(item.get("ownership")),
         isbn=parsed_isbn,
         asin=parsed_asin,
+        mediainfo=str(item.get("mediainfo", "")),
+        numfiles=int(item.get("numfiles") or 0),
+        seeders=int(item.get("seeders") or 0),
+        times_completed=int(item.get("times_completed") or 0),
+        added=str(item.get("added", "")),
     )
 
     _cache[torrent_id] = (now, info)

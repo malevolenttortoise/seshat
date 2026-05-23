@@ -7,7 +7,131 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
-## [2.24.0] — UNRELEASED (development branch)
+## [2.25.0] — UNRELEASED (development branch)
+
+Quality-metadata extraction layer — the data foundation for the
+deferred Bundle A (quality scoring + active library replacement).
+Captures per-torrent audio quality on every grab going forward;
+backfill button catches up the existing library on demand.
+
+This release has no user-facing scoring feature on its own — its
+purpose is to populate `torrent_quality_metadata` rows so Bundle A
+in a future release can compare candidates and owned books on the
+same axes.
+
+### Added — `mediaInfo` opt-in flag on the MAM torrent-info call
+
+`app/mam/torrent_info.py` now includes `mediaInfo: True` in the
+`loadSearchJSONbasic.php` payload alongside the existing `isbn` /
+`description` flags. The v2.18.2 probe missed this flag name; the
+official API reference at `/api/endpoint.php/1/tor/js/loadSearchJSONbasic.php`
+documents it, and a 2026-05-23 live probe confirmed it works.
+
+The returned `mediainfo` field is stringified JSON shaped like:
+
+```json
+{
+  "Audio1": {
+    "Format": "AAC",
+    "BitRate": "126k",
+    "Channels": 2,
+    "BitRate_Mode": "CBR",
+    "SamplingRate": "44.1kHz",
+    "Compression_Mode": "Lossy",
+    "CodecID": "2 / 40 / mp4a-40-2"
+  },
+  "General": { "Format": "MPEG-4", "Duration": "12:05:07" },
+  "menu":    { "extra": [chapter names ...] }
+}
+```
+
+Older audiobook uploads (pre-2024) and all ebooks return `"{}"`.
+`TorrentInfo` gains 5 new fields (`mediainfo`, `numfiles`, `seeders`,
+`times_completed`, `added`) to carry the additional general signals.
+
+### Added — `app/quality/` package
+
+New module structure:
+
+- **`extract.py`** — three-tier extraction with fallback chain:
+  1. Parse mediainfo JSON (modern uploads)
+  2. Parse description for inAudible-style "Media Information" blocks (regex on `Encoded Codec/Bitrate/Channels/SampleRate/Chapters`)
+  3. Parse tags line for `\d+ kbps` + format token
+  Each `QualitySnapshot` carries a `source` field tagging which tier produced the data, for future re-extraction prioritization.
+- **`storage.py`** — upsert / get-by-torrent / get-by-book (walks `book_grab_links → grabs.mam_torrent_id`) / list-missing / coverage stats.
+- **`pipeline.py`** — `extract_for_torrent()` orchestrator with skip-if-already-extracted check.
+- **`backfill.py`** — in-process background task. Walks `list_missing_quality_torrent_ids` in batches, paced 5s between MAM hits (configurable via `quality_backfill_interval_s`, min 1.0s server-side clamp).
+
+### Added — `torrent_quality_metadata` table
+
+Per-torrent (not per-book) — bundle dispatch links N child books to
+one torrent, and they share quality. Keyed by `mam_torrent_id`.
+
+| Axis | Source examples |
+|---|---|
+| `audio_format` | `AAC`, `MP3`, `FLAC` |
+| `audio_bitrate_kbps` | `126`, `192` |
+| `audio_channels` | `2`, `1` (mono) |
+| `audio_bitrate_mode` | `CBR`, `VBR` |
+| `audio_sample_rate` | `44100`, `48000`, `22050` |
+| `audio_compression` | `Lossy`, `Lossless` |
+| `audio_codec_id` | full CodecID string |
+| `audio_duration_sec`, `audio_chapter_count` | extracted from `General.Duration` + `menu.extra` length |
+| `container_format` | `MPEG-4`, `Matroska` |
+| `num_files`, `total_size_bytes`, `seeders`, `times_completed`, `torrent_added_at` | general signals usable for any axis |
+| `raw_mediainfo`, `raw_tags` | persisted for future parsing of axes not yet designed (no re-call to MAM needed) |
+
+Schema + matching MIGRATIONS entry land together; legacy DBs pick up
+the table on next startup via `init_db()`.
+
+### Added — pipeline hook on `book_grab_links` insert
+
+`app/discovery/acquisition_linkback.py` calls
+`extract_for_torrent(db, mam_torrent_id)` immediately after writing
+the link row. Fail-soft: extraction errors are logged but never
+propagate, so a momentary MAM outage doesn't roll back the
+link-back itself. Bundle dispatch: the skip-if-extracted check
+makes N-children-one-torrent linkbacks emit one MAM call total.
+
+### Added — backfill UI under Settings → Quality Metadata
+
+Three router endpoints on `/api/quality`:
+
+- `GET /stats` — coverage summary (linked / extracted / missing /
+  by_source breakdown)
+- `POST /backfill/start` — kick off the in-process worker
+- `GET /backfill/status` — poll the running state (processed /
+  skipped / failed / current_torrent_id / last_error)
+- `POST /backfill/stop` — request cancellation
+
+The Settings page surfaces all of this in a new "Quality Metadata"
+section under the Pipeline group: live coverage stats + Start/Stop
+buttons + per-source counters + a polling status display that
+ticks every 3s while a backfill runs.
+
+### Tests
+
+- `tests/quality/test_extract.py` — **38 tests** covering coercion
+  helpers (bitrate / sample rate / duration / size string), the three
+  parsers individually, and the orchestrator's source-tagging logic
+  against the three captured probe responses.
+- `tests/quality/test_storage.py` — **9 tests** covering upsert
+  round-trip, last-write-wins overwrite, the book-quality join,
+  missing-torrent list, and aggregate coverage stats. Uses a real
+  on-disk SQLite via `init_db()` so the schema-init path is
+  exercised end-to-end.
+- **78 regression tests** across dispatcher / qbittorrent router /
+  notify / linkback all still green.
+
+### Memory
+
+[`reference_mam_search_api_flags`](memory:reference-mam-search-api-flags)
+updated to document the `mediaInfo` flag (and `dlLink`) that the
+v2.18.2 probe missed.
+
+---
+
+## [2.24.0] — 2026-05-23
 
 Bundle B partial — credential split only. The full notification-taxonomy
 rework (B.2) is deferred to its own release; see
