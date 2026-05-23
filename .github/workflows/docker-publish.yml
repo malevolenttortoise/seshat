@@ -2,7 +2,14 @@ name: Build and Push Docker Image
 
 on:
   push:
-    branches: [main]
+    # `main` builds the stable `:latest-slim` (default-branch flag in
+    # the metadata-action below restricts the `latest` tag to it).
+    # `development` is the permanent staging branch; pushes here build
+    # `:development-slim` via the `type=ref,event=branch` rule. The
+    # container in Mark's Unraid points at the `development` tag so
+    # UAT happens in-place; only after a `development -> main` PR is
+    # merged + tagged does `latest-slim` (and the versioned tag) move.
+    branches: [main, development]
     tags: ['v*']
   workflow_dispatch:
 
