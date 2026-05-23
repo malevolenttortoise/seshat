@@ -286,3 +286,172 @@ class TestIsEventEnabled:
         assert ntfy.is_event_enabled("grab") is False
         assert ntfy.is_event_enabled("download_complete") is True
         assert ntfy.is_event_enabled("pipeline_error") is True
+
+
+# ─── v2.24.0 — BasicAuth credential split ────────────────────
+
+
+class TestAuth:
+    """v2.24.0 — `ntfy_username` setting + encrypted `ntfy_password`
+    secret resolve into BasicAuth on every `send()`. Inline
+    `https://user:pass@host/topic` URLs still work as a backwards-
+    compat fallback but the dedicated fields take precedence.
+    """
+
+    def _seed_settings(self, tmp_path, monkeypatch, payload: str) -> None:
+        from app import config
+        p = tmp_path / "settings.json"
+        p.write_text(payload)
+        monkeypatch.setattr(config, "SETTINGS_PATH", p)
+        config._settings_cache["data"] = None
+        config._settings_cache["mtime"] = object()
+
+    def _stub_secret(self, monkeypatch, value):
+        """Replace `app.secrets.get_secret` with a fixed return value.
+
+        Patches the symbol imported INSIDE `_resolve_auth` (which does
+        a local import per call), not the module attribute directly —
+        that's the safer seam for runtime-imported names.
+        """
+        async def _fake(_key):
+            return value
+        monkeypatch.setattr("app.secrets.get_secret", _fake)
+
+    async def test_no_auth_when_username_empty(
+        self, _mock_ntfy_client, tmp_path, monkeypatch,
+    ):
+        """No username + no inline creds → no Authorization header."""
+        self._seed_settings(tmp_path, monkeypatch,
+            '{"ntfy_url": "https://ntfy.example.com", "ntfy_topic": "seshat"}')
+        self._stub_secret(monkeypatch, None)
+        await ntfy.send(
+            url="https://ntfy.example.com", topic="seshat",
+            title="T", message="M",
+        )
+        req = _mock_ntfy_client["requests"][0]
+        assert "authorization" not in {k.lower() for k in req.headers.keys()}
+
+    async def test_dedicated_username_password_sets_basicauth(
+        self, _mock_ntfy_client, tmp_path, monkeypatch,
+    ):
+        """Username + password from secret → Authorization: Basic ..."""
+        import base64
+        self._seed_settings(tmp_path, monkeypatch,
+            '{"ntfy_url": "https://ntfy.example.com",'
+            '"ntfy_topic": "seshat",'
+            '"ntfy_username": "alice"}')
+        self._stub_secret(monkeypatch, "s3cret")
+        await ntfy.send(
+            url="https://ntfy.example.com", topic="seshat",
+            title="T", message="M",
+        )
+        req = _mock_ntfy_client["requests"][0]
+        expected = "Basic " + base64.b64encode(b"alice:s3cret").decode()
+        assert req.headers.get("authorization") == expected
+
+    async def test_inline_url_creds_strip_from_endpoint(
+        self, _mock_ntfy_client, tmp_path, monkeypatch,
+    ):
+        """Legacy URL form: creds extracted into auth header, URL
+        rewritten so the path the server sees is bare.
+
+        This matters because every reverse-proxy / WAF on the way
+        logs the full URL — inline creds would leak into logs.
+        """
+        import base64
+        self._seed_settings(tmp_path, monkeypatch,
+            '{"ntfy_url": "https://bob:hunter2@ntfy.example.com",'
+            '"ntfy_topic": "seshat"}')
+        self._stub_secret(monkeypatch, None)
+        await ntfy.send(
+            url="https://bob:hunter2@ntfy.example.com", topic="seshat",
+            title="T", message="M",
+        )
+        req = _mock_ntfy_client["requests"][0]
+        # URL must NOT contain the password.
+        assert "hunter2" not in str(req.url)
+        assert str(req.url) == "https://ntfy.example.com/seshat"
+        # Auth header populated from the stripped creds.
+        expected = "Basic " + base64.b64encode(b"bob:hunter2").decode()
+        assert req.headers.get("authorization") == expected
+
+    async def test_dedicated_creds_win_over_inline_url_creds(
+        self, _mock_ntfy_client, tmp_path, monkeypatch,
+    ):
+        """If both are present, the dedicated fields take precedence.
+
+        Inline-URL creds are a backwards-compat seam; once the user
+        moves to the dedicated fields, those should be authoritative
+        even if the inline form is still in the URL (e.g., they
+        haven't pruned the URL yet).
+        """
+        import base64
+        self._seed_settings(tmp_path, monkeypatch,
+            '{"ntfy_url": "https://bob:hunter2@ntfy.example.com",'
+            '"ntfy_topic": "seshat",'
+            '"ntfy_username": "alice"}')
+        self._stub_secret(monkeypatch, "newpw")
+        await ntfy.send(
+            url="https://bob:hunter2@ntfy.example.com", topic="seshat",
+            title="T", message="M",
+        )
+        req = _mock_ntfy_client["requests"][0]
+        expected = "Basic " + base64.b64encode(b"alice:newpw").decode()
+        assert req.headers.get("authorization") == expected
+
+    async def test_username_set_but_password_missing_falls_to_inline(
+        self, _mock_ntfy_client, tmp_path, monkeypatch,
+    ):
+        """Username set but secret store empty → don't send half an
+        auth header. Fall through to inline-URL creds if present;
+        otherwise no auth.
+
+        Mid-setup state — the user typed a username but hasn't saved
+        the password yet. Sending the username alone would just
+        produce 401s; falling through to whatever else is configured
+        keeps the previous behavior working.
+        """
+        import base64
+        self._seed_settings(tmp_path, monkeypatch,
+            '{"ntfy_url": "https://bob:hunter2@ntfy.example.com",'
+            '"ntfy_topic": "seshat",'
+            '"ntfy_username": "alice"}')
+        self._stub_secret(monkeypatch, None)  # no ntfy_password
+        await ntfy.send(
+            url="https://bob:hunter2@ntfy.example.com", topic="seshat",
+            title="T", message="M",
+        )
+        req = _mock_ntfy_client["requests"][0]
+        # Fell back to inline creds.
+        expected = "Basic " + base64.b64encode(b"bob:hunter2").decode()
+        assert req.headers.get("authorization") == expected
+
+    async def test_endpoint_resolution_strips_inline_creds_in_url(
+        self,
+    ):
+        """`_resolve_endpoint()` must NOT carry inline creds into the
+        endpoint URL it returns — they get extracted separately by
+        `_resolve_auth_from_url()`.
+        """
+        endpoint = ntfy._resolve_endpoint(
+            "https://bob:hunter2@ntfy.example.com", "seshat",
+        )
+        assert endpoint == "https://ntfy.example.com/seshat"
+        assert "hunter2" not in endpoint
+        assert "bob" not in endpoint
+
+    async def test_resolve_auth_from_url_extracts_credentials(self):
+        """Helper isolation: `_resolve_auth_from_url()` returns the
+        creds tuple when the URL has them, None otherwise.
+        """
+        assert ntfy._resolve_auth_from_url(
+            "https://user:pass@host.example.com"
+        ) == ("user", "pass")
+        assert ntfy._resolve_auth_from_url(
+            "https://host.example.com"
+        ) is None
+        # Edge case: URL with username but no password — treat as
+        # "no inline creds" rather than half-broken.
+        assert ntfy._resolve_auth_from_url(
+            "https://user@host.example.com"
+        ) is None
