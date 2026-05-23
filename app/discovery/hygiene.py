@@ -96,6 +96,7 @@ def _zero_stats() -> dict[str, Any]:
         "person_id_conflicts_resolved": 0,
         "person_bios_backfilled": 0,
         "broken_image_urls_cleared": 0,
+        "low_confidence_flagged": 0,
         "orphan_links_pruned": 0,
         "errors": [],
     }
@@ -1111,10 +1112,45 @@ async def job_cross_library_person_backfill(stats: dict[str, Any]) -> None:
     stats["person_bios_backfilled"] = (
         stats.get("person_bios_backfilled", 0) + bios_backfilled
     )
+
+    # v2.22.1 — recompute `link_confidence` flags after Job 8's
+    # source-ID mirror. The pre-existing `_flag_low_confidence_links`
+    # heuristic flags persons whose siblings share no source ID;
+    # Job 8 may have just propagated IDs to all of them, so any
+    # stale 'low' flags from the v2.20.0 migration become bookkeeping
+    # debt unless we recompute. Without this, the Author Triage page
+    # surfaces dozens of false-positive low-confidence cards even
+    # though the underlying identity is fine. Matches the logic
+    # exposed by `POST /persons/recompute-consolidation` but runs
+    # automatically as part of hygiene.
+    from app.discovery.author_identity import _flag_low_confidence_links
+    from app.database import get_db as get_global_db_for_flag
+    library_slugs = [s for s in slug_to_type.keys() if s]
+    flagged_low = 0
+    if library_slugs:
+        gdb = await get_global_db_for_flag()
+        try:
+            # Reset all to 'high' then re-flag so manually-fixed links
+            # get a fresh assessment.
+            await gdb.execute(
+                "UPDATE author_links SET link_confidence = 'high'"
+            )
+            await gdb.commit()
+            flagged_low = await _flag_low_confidence_links(
+                gdb, library_slugs,
+            )
+        finally:
+            await gdb.close()
+    stats["low_confidence_flagged"] = (
+        stats.get("low_confidence_flagged", 0) + flagged_low
+    )
+
     logger.info(
         "hygiene: person-backfill: mirrored=%d conflicts_resolved=%d "
-        "broken_image_urls_cleared=%d person_bios_backfilled=%d",
+        "broken_image_urls_cleared=%d person_bios_backfilled=%d "
+        "low_confidence_flagged=%d",
         mirrored, conflicts_resolved, jb_cleared, bios_backfilled,
+        flagged_low,
     )
 
 

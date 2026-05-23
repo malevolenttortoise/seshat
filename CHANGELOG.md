@@ -7,6 +7,37 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [2.22.1] — 2026-05-23
+
+### Fixed — `link_confidence` flags now recomputed at end of Hygiene Job 8
+
+v2.22.0 mirrored source IDs across linked siblings via Hygiene Job 8
+but didn't refresh the `link_confidence` column. `_flag_low_confidence_links`
+was originally run at v2.20.0 migration time — when libraries didn't
+yet share source IDs — so it marked any multi-link person whose
+siblings had no shared ID as `'low'`. After v2.22.0's Job 8 populated
+those IDs, ~106 such links remained flagged 'low' as bookkeeping
+debt, surfacing on the Author Triage page as false-positive
+collision candidates (clear matches like R J Barker, Adrianne
+Strickland, Jay Kristoff, etc.).
+
+Fix: Job 8 now runs the same logic exposed by
+`POST /persons/recompute-consolidation` at the end of its pass —
+resets every `link_confidence` to `'high'`, then re-flags only those
+multi-link persons whose siblings still genuinely share zero source
+IDs. The flag count tracks reality going forward.
+
+New stats key: `low_confidence_flagged` (added to `_zero_stats` +
+the completion log line).
+
+### Same-day operator workflow note
+After deploying v2.22.0 + running Hygiene, operators clicking
+"Recompute consolidation" on Author Triage observed the count
+collapse from ~100+ flags down to single digits. v2.22.1 makes
+that step automatic.
+
+---
+
 ## [2.22.0] — 2026-05-23
 
 ### Added — Cross-library person identity hardening + Persons & IDs UI
