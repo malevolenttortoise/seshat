@@ -803,7 +803,7 @@ export default function MobileSettingsPage() {
             key={c.key}
             item={c}
             onSaved={loadCreds}
-            label="ntfy password"
+            desc="ntfy server password — stored encrypted, sent only as BasicAuth on each notification POST."
           />
         ))}
         <FieldRow label="Test ntfy">
