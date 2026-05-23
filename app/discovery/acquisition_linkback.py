@@ -249,6 +249,21 @@ async def link_new_book(
             "(mam_torrent_id=%s, score=%.2f)",
             book_id, title[:60], best_grab_id, best_torrent_id, best_score,
         )
+
+        # v2.25.0 — quality-metadata extraction for the newly-linked
+        # torrent. Fail-soft: extraction errors must not roll back the
+        # link-back. Skips automatically if this torrent has already
+        # been extracted (bundle dispatch links N books to one torrent).
+        try:
+            from app.quality.pipeline import extract_for_torrent
+            await extract_for_torrent(app_db, best_torrent_id)
+        except Exception as e:
+            logger.warning(
+                "acquisition link-back: quality extraction failed for "
+                "torrent %s (link-back itself succeeded): %s",
+                best_torrent_id, e,
+            )
+
         return True
     finally:
         await app_db.close()

@@ -486,6 +486,60 @@ CREATE INDEX IF NOT EXISTS idx_pending_holds_state_release
     ON pending_holds(state, release_at);
 CREATE INDEX IF NOT EXISTS idx_pending_holds_dedup_key
     ON pending_holds(dedup_key);
+
+-- v2.25.0 — per-torrent quality metadata extracted from MAM's API.
+--
+-- Source-of-truth metadata about WHAT we got, captured by hitting
+-- loadSearchJSONbasic.php with the documented `mediaInfo` opt-in flag
+-- and parsing the resulting `mediainfo` field (stringified JSON) plus
+-- description-text fallbacks for older uploads where mediainfo is empty.
+--
+-- Keyed by mam_torrent_id (not library_slug/book_id) because the SAME
+-- torrent can be linked to multiple books (bundle dispatch — one
+-- audiobook torrent → N child grabs → N book_grab_links rows). One
+-- extraction per torrent serves all linked books via the
+-- grabs.mam_torrent_id → book_grab_links join.
+--
+-- `source` tracks which extraction path produced each row so future
+-- re-extractions can prioritize the weak-data rows:
+--   'mediainfo'   = parsed from MAM's mediainfo JSON (most accurate)
+--   'description' = parsed from inAudible-style block in description
+--   'tags'        = parsed from tags line (e.g., "126 kbps m4b...")
+--   'mixed'       = some axes from mediainfo, others from fallback
+--   'none'        = no quality data could be extracted; only baseline
+--                   (filetype, size, numfiles) populated
+--
+-- For ebooks the audio_* columns stay NULL (mediainfo returns "{}"
+-- for ebooks). Only the General/baseline columns populate.
+--
+-- raw_mediainfo + raw_tags are persisted so future axes can be parsed
+-- WITHOUT re-calling MAM. Worth the storage (small text blobs) for
+-- the rate-limit savings on Bundle A scoring later.
+CREATE TABLE IF NOT EXISTS torrent_quality_metadata (
+    mam_torrent_id        TEXT PRIMARY KEY,
+    extracted_at          REAL NOT NULL,
+    source                TEXT NOT NULL,
+    -- Audio fields (NULL for ebooks).
+    audio_format          TEXT,
+    audio_bitrate_kbps    INTEGER,
+    audio_channels        INTEGER,
+    audio_bitrate_mode    TEXT,
+    audio_sample_rate     INTEGER,
+    audio_compression     TEXT,
+    audio_codec_id        TEXT,
+    audio_duration_sec    INTEGER,
+    audio_chapter_count   INTEGER,
+    container_format      TEXT,
+    -- General fields (populated for both audio + ebook).
+    num_files             INTEGER,
+    total_size_bytes      INTEGER,
+    seeders               INTEGER,
+    times_completed       INTEGER,
+    torrent_added_at      TEXT,
+    -- Raw payloads for future axes.
+    raw_mediainfo         TEXT,
+    raw_tags              TEXT
+);
 """
 
 
@@ -681,6 +735,32 @@ MIGRATIONS: list[str] = [
     "ON author_id_audit_log(person_id)",
     "CREATE INDEX IF NOT EXISTS idx_author_id_audit_changed "
     "ON author_id_audit_log(changed_at)",
+    # v2.25.0 — per-torrent quality metadata. Mirrors the CREATE in
+    # SCHEMA so legacy DBs get the table on next startup. See the
+    # in-SCHEMA comment for the full design rationale (mam_torrent_id
+    # PK, source field for extraction-path tracking, etc.).
+    """CREATE TABLE IF NOT EXISTS torrent_quality_metadata (
+        mam_torrent_id        TEXT PRIMARY KEY,
+        extracted_at          REAL NOT NULL,
+        source                TEXT NOT NULL,
+        audio_format          TEXT,
+        audio_bitrate_kbps    INTEGER,
+        audio_channels        INTEGER,
+        audio_bitrate_mode    TEXT,
+        audio_sample_rate     INTEGER,
+        audio_compression     TEXT,
+        audio_codec_id        TEXT,
+        audio_duration_sec    INTEGER,
+        audio_chapter_count   INTEGER,
+        container_format      TEXT,
+        num_files             INTEGER,
+        total_size_bytes      INTEGER,
+        seeders               INTEGER,
+        times_completed       INTEGER,
+        torrent_added_at      TEXT,
+        raw_mediainfo         TEXT,
+        raw_tags              TEXT
+    )""",
 ]
 
 
