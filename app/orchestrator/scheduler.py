@@ -201,3 +201,70 @@ def register_goodreads_canary(scheduler: AsyncIOScheduler) -> None:
         coalesce=True,
         max_instances=1,
     )
+
+
+# ─── v2.21.0 Phase G: metadata-cache health watchdog + daily summary ──
+
+
+def register_metadata_cache_health(
+    scheduler: AsyncIOScheduler,
+    *,
+    daily_summary_hour: int,
+) -> None:
+    """Register the metadata-cache worker watchdog + daily-summary jobs.
+
+    Two jobs land on the caller's scheduler:
+
+      - `metadata_cache_amazon_stall_watch` — every 2 min, calls
+        `check_stall(source_name="amazon")`. Fires the Tier-1 error
+        ntfy if the worker is enabled but its heartbeat hasn't been
+        updated within `metadata_cache_stall_threshold_s` (default
+        300s). Self-debounces via a settings runtime-state key.
+
+      - `metadata_cache_amazon_daily_summary` — fires once per day at
+        the user's configured hour. Aggregates today's scan + block
+        counts, sends the Tier-3 info ntfy (if opted-in), and zeroes
+        the `today_*` columns so the UI numbers are for-today rather
+        than monotonic-since-deploy.
+
+    Source-name-agnostic by intent — a future Goodreads cache adds
+    its own pair of jobs (different id) without touching this
+    helper's signature.
+    """
+    from apscheduler.triggers.interval import IntervalTrigger
+
+    async def _stall_watch():
+        from app.discovery import metadata_cache_worker
+        try:
+            await metadata_cache_worker.check_stall("amazon")
+        except Exception:
+            _log.exception("metadata_cache_amazon_stall_watch crashed")
+
+    async def _daily_summary():
+        from app.discovery import metadata_cache_worker
+        _log.info("metadata_cache amazon daily summary tick")
+        try:
+            await metadata_cache_worker.send_daily_summary("amazon")
+        except Exception:
+            _log.exception(
+                "metadata_cache_amazon_daily_summary crashed"
+            )
+
+    scheduler.add_job(
+        _stall_watch,
+        trigger=IntervalTrigger(minutes=2),
+        id="metadata_cache_amazon_stall_watch",
+        name="Amazon metadata-cache stall watchdog",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
+    scheduler.add_job(
+        _daily_summary,
+        trigger=CronTrigger(hour=int(daily_summary_hour), minute=5),
+        id="metadata_cache_amazon_daily_summary",
+        name="Amazon metadata-cache daily summary",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )

@@ -958,3 +958,483 @@ class TestRunLoopStopEvent:
         await stopper
         # No assertion needed beyond clean exit; the timeout would
         # fire if run_loop got stuck.
+
+
+# ─── v2.21.0 Phase G — structured logging + ntfy + daily rollover ──
+
+
+@pytest.fixture
+def fake_ntfy(monkeypatch):
+    """Capture ntfy emits via the worker's `_send_ntfy` helper.
+
+    Bypasses the real httpx client + the `is_event_enabled` gate so
+    individual tests can assert on the payload directly. Returns a
+    list[dict] that gets appended to on every `_send_ntfy` call.
+    """
+    calls: list[dict] = []
+
+    async def _capture(*, event_key, title, message, priority=3, tags=None):
+        calls.append({
+            "event_key": event_key, "title": title,
+            "message": message, "priority": priority, "tags": tags,
+        })
+        return True
+
+    monkeypatch.setattr(metadata_cache_worker, "_send_ntfy", _capture)
+    return calls
+
+
+class TestPhaseGDailyRollover:
+    """`today_scan_count` + `today_block_count` reset when the local
+    day rolls over. Before Phase G, both counters were monotonic
+    since deploy."""
+
+    async def test_same_day_scan_increments(self, worker_under, monkeypatch):
+        async def _fake_scan(author_id, session):
+            return _author_result("Book", author_id=author_id), None
+        monkeypatch.setattr(
+            metadata_cache_worker, "_perform_amazon_scan", _fake_scan,
+        )
+        await _seed_queue_row(
+            author_id="B0DAY00001", seed_in_libraries=("books-lib",),
+        )
+        await metadata_cache_worker.tick()
+        await _seed_queue_row(
+            author_id="B0DAY00002", seed_in_libraries=("books-lib",),
+        )
+        await metadata_cache_worker.tick()
+
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+        try:
+            cur = await db.execute(
+                f"SELECT today_scan_count FROM "
+                f"{metadata_cache.worker_state_table()} WHERE id = 1"
+            )
+            count = (await cur.fetchone())[0]
+        finally:
+            await db.close()
+        assert count == 2
+
+    async def test_day_rollover_resets_scan_counter(self, worker_under):
+        # Hand-craft a worker_state row with last_scan_completed_at
+        # 48h ago + today_scan_count=99. The next `_record_scan_completed`
+        # should reset to 1.
+        old_ts = time.time() - 48 * 3600
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+        try:
+            await db.execute(
+                f"UPDATE {metadata_cache.worker_state_table()} "
+                f"SET last_scan_completed_at = ?, today_scan_count = 99 "
+                f"WHERE id = 1",
+                (old_ts,),
+            )
+            await db.commit()
+            await metadata_cache_worker._record_scan_completed(
+                db, "amazon", time.time(),
+            )
+            cur = await db.execute(
+                f"SELECT today_scan_count FROM "
+                f"{metadata_cache.worker_state_table()} WHERE id = 1"
+            )
+            count = (await cur.fetchone())[0]
+        finally:
+            await db.close()
+        assert count == 1
+
+    async def test_day_rollover_resets_block_counter(self, worker_under):
+        old_ts = time.time() - 48 * 3600
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+        try:
+            await db.execute(
+                f"UPDATE {metadata_cache.worker_state_table()} "
+                f"SET last_block_at = ?, today_block_count = 42, "
+                f"    consecutive_blocks = 3 "
+                f"WHERE id = 1",
+                (old_ts,),
+            )
+            await db.commit()
+            new_consecutive = await metadata_cache_worker._record_block_in_worker_state(
+                db, "amazon", time.time(), cooldown_s=600.0,
+            )
+            cur = await db.execute(
+                f"SELECT today_block_count, consecutive_blocks FROM "
+                f"{metadata_cache.worker_state_table()} WHERE id = 1"
+            )
+            today, consec = await cur.fetchone()
+        finally:
+            await db.close()
+        # `today_block_count` reset by day rollover; consecutive_blocks
+        # also reset since 48h > the 1h escalation window.
+        assert today == 1
+        assert consec == 1
+        assert new_consecutive == 1
+
+    async def test_reset_today_counters_returns_prior_values(
+        self, worker_under,
+    ):
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+        try:
+            await db.execute(
+                f"UPDATE {metadata_cache.worker_state_table()} "
+                f"SET today_scan_count = 17, today_block_count = 4 "
+                f"WHERE id = 1"
+            )
+            await db.commit()
+        finally:
+            await db.close()
+        prior_scans, prior_blocks = (
+            await metadata_cache_worker.reset_today_counters("amazon")
+        )
+        assert prior_scans == 17
+        assert prior_blocks == 4
+        # Second call sees the freshly-zeroed values.
+        again_s, again_b = (
+            await metadata_cache_worker.reset_today_counters("amazon")
+        )
+        assert again_s == 0
+        assert again_b == 0
+
+
+class TestPhaseGNtfyGates:
+    async def test_top_tier_cooldown_escalation_fires_warning_ntfy(
+        self, worker_under, monkeypatch, fake_ntfy,
+    ):
+        # Hand-craft worker_state to be at the 2nd-block threshold so
+        # the next soft-block escalates to tier 3 (3600s).
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+        try:
+            await db.execute(
+                f"UPDATE {metadata_cache.worker_state_table()} "
+                f"SET last_block_at = ?, consecutive_blocks = 2 "
+                f"WHERE id = 1",
+                (time.time() - 60,),  # within 1h window
+            )
+            await db.commit()
+        finally:
+            await db.close()
+
+        async def _fake_scan(author_id, session):
+            from app.discovery import amazon_author_id_resolver as r
+            # Initial cooldown small; escalation tier will boost to 3600.
+            r.record_amazon_soft_block("test", retry_after_s=60)
+            return None, "HTTP 429"
+        monkeypatch.setattr(
+            metadata_cache_worker, "_perform_amazon_scan", _fake_scan,
+        )
+        await _seed_queue_row(author_id="B0TIER3001")
+        result = await metadata_cache_worker.tick()
+        assert result.outcome == "soft_block"
+        assert result.cooldown_remaining_s >= 3600
+        warnings = [c for c in fake_ntfy if c["event_key"] == "metadata_cache_warning"]
+        assert len(warnings) == 1
+        assert "top tier" in warnings[0]["title"]
+        assert warnings[0]["priority"] == 4
+
+    async def test_first_tier_block_does_not_fire_ntfy(
+        self, worker_under, monkeypatch, fake_ntfy,
+    ):
+        async def _fake_scan(author_id, session):
+            from app.discovery import amazon_author_id_resolver as r
+            r.record_amazon_soft_block("test", retry_after_s=600)
+            return None, "HTTP 429"
+        monkeypatch.setattr(
+            metadata_cache_worker, "_perform_amazon_scan", _fake_scan,
+        )
+        await _seed_queue_row(author_id="B0TIER1001")
+        await metadata_cache_worker.tick()
+        # Routine tier-1 block — no ntfy.
+        warnings = [c for c in fake_ntfy if c["event_key"] == "metadata_cache_warning"]
+        assert warnings == []
+
+    async def test_permanent_failure_fires_warning_ntfy(
+        self, worker_under, monkeypatch, fake_ntfy,
+    ):
+        async def _fake_scan(author_id, session):
+            return None, "transport error"
+        monkeypatch.setattr(
+            metadata_cache_worker, "_perform_amazon_scan", _fake_scan,
+        )
+        # Pre-seed at MAX_CONSECUTIVE_FAILURES - 1 so the next failure
+        # flips to failed_permanent.
+        cap = metadata_cache_worker._MAX_CONSECUTIVE_FAILURES
+        await _seed_queue_row(
+            author_id="B0PERMFAIL", consecutive_failures=cap - 1,
+        )
+        result = await metadata_cache_worker.tick()
+        assert result.outcome == "permanent_fail"
+        warnings = [c for c in fake_ntfy if c["event_key"] == "metadata_cache_warning"]
+        assert len(warnings) == 1
+        assert "failed_permanent" in warnings[0]["title"]
+
+    async def test_transient_failure_does_not_fire_ntfy(
+        self, worker_under, monkeypatch, fake_ntfy,
+    ):
+        async def _fake_scan(author_id, session):
+            return None, "transport error"
+        monkeypatch.setattr(
+            metadata_cache_worker, "_perform_amazon_scan", _fake_scan,
+        )
+        await _seed_queue_row(author_id="B0TRANSIENT")
+        result = await metadata_cache_worker.tick()
+        assert result.outcome == "error"
+        # Transient failures are silent — operator only hears about
+        # permanent flips.
+        warnings = [c for c in fake_ntfy if c["event_key"] == "metadata_cache_warning"]
+        assert warnings == []
+
+
+class TestPhaseGNewBookDetection:
+    async def test_first_scan_returns_zero_new_books(
+        self, worker_under, monkeypatch, fake_ntfy,
+    ):
+        async def _fake_scan(author_id, session):
+            return _author_result(
+                "Book One", "Book Two", author_id=author_id,
+            ), None
+        monkeypatch.setattr(
+            metadata_cache_worker, "_perform_amazon_scan", _fake_scan,
+        )
+        await _seed_queue_row(
+            author_id="B0FIRSTSCN", seed_in_libraries=("books-lib",),
+        )
+        result = await metadata_cache_worker.tick()
+        assert result.outcome == "ok"
+        assert result.new_books == 0  # no prior baseline → not "new"
+        info = [c for c in fake_ntfy if c["event_key"] == "metadata_cache_new_book"]
+        assert info == []
+
+    async def test_second_scan_with_new_asin_returns_new_count(
+        self, worker_under, monkeypatch, fake_ntfy,
+    ):
+        # Hand-pre-populate the cache so the next scan has a baseline
+        # to compare against.
+        now = time.time()
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+        try:
+            await db.execute(
+                f"INSERT INTO {metadata_cache.state_table()} "
+                f"(author_id, library_slug, last_scanned_at, "
+                f" last_outcome, book_count) VALUES (?, ?, ?, ?, ?)",
+                ("B0NEWBOOK1", "books-lib", now - 86400, "ok", 1),
+            )
+            await db.execute(
+                f"INSERT INTO {metadata_cache.books_table()} "
+                f"(author_id, library_slug, book_asin, title, format, "
+                f" cached_at) VALUES (?, ?, ?, ?, ?, ?)",
+                ("B0NEWBOOK1", "books-lib", "B000000001", "Old Book",
+                 "kindle_edition", now - 86400),
+            )
+            await db.commit()
+        finally:
+            await db.close()
+
+        async def _fake_scan(author_id, session):
+            # Returns the old book PLUS a new one.
+            old = BookResult(
+                title="Old Book", external_id="B000000001",
+                source="amazon", language="English",
+                format="kindle_edition",
+            )
+            new = BookResult(
+                title="Brand New Book", external_id="B000000002",
+                source="amazon", language="English",
+                format="kindle_edition",
+            )
+            return AuthorResult(
+                name=author_id, external_id=author_id,
+                books=[old, new], series=[],
+            ), None
+        monkeypatch.setattr(
+            metadata_cache_worker, "_perform_amazon_scan", _fake_scan,
+        )
+        await _seed_queue_row(
+            author_id="B0NEWBOOK1", seed_in_libraries=("books-lib",),
+        )
+        result = await metadata_cache_worker.tick()
+        assert result.outcome == "ok"
+        assert result.new_books == 1
+        info = [c for c in fake_ntfy if c["event_key"] == "metadata_cache_new_book"]
+        assert len(info) == 1
+        assert "Brand New Book" in info[0]["message"]
+
+
+class TestPhaseGStallWatchdog:
+    async def test_fresh_heartbeat_returns_false(self, worker_under):
+        # Stamp a recent heartbeat.
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+        try:
+            await db.execute(
+                f"UPDATE {metadata_cache.worker_state_table()} "
+                f"SET last_heartbeat_at = ? WHERE id = 1",
+                (time.time(),),
+            )
+            await db.commit()
+        finally:
+            await db.close()
+        stalled = await metadata_cache_worker.check_stall(
+            "amazon", threshold_s=300.0,
+        )
+        assert stalled is False
+
+    async def test_disabled_worker_never_reports_stall(
+        self, worker_under,
+    ):
+        # Disable worker; heartbeat ancient.
+        worker_under["settings"]["metadata_cache"]["amazon"]["enabled"] = False
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+        try:
+            await db.execute(
+                f"UPDATE {metadata_cache.worker_state_table()} "
+                f"SET last_heartbeat_at = ? WHERE id = 1",
+                (time.time() - 86400,),
+            )
+            await db.commit()
+        finally:
+            await db.close()
+        stalled = await metadata_cache_worker.check_stall(
+            "amazon", threshold_s=300.0,
+        )
+        assert stalled is False
+
+    async def test_stale_heartbeat_fires_error_ntfy(
+        self, worker_under, fake_ntfy,
+    ):
+        # Heartbeat 1h ago, threshold 300s → stalled.
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+        try:
+            await db.execute(
+                f"UPDATE {metadata_cache.worker_state_table()} "
+                f"SET last_heartbeat_at = ? WHERE id = 1",
+                (time.time() - 3600,),
+            )
+            await db.commit()
+        finally:
+            await db.close()
+        stalled = await metadata_cache_worker.check_stall(
+            "amazon", threshold_s=300.0,
+        )
+        assert stalled is True
+        errors = [c for c in fake_ntfy if c["event_key"] == "metadata_cache_error"]
+        assert len(errors) == 1
+        assert "stalled" in errors[0]["title"]
+
+    async def test_repeat_stall_debounces_ntfy(
+        self, worker_under, fake_ntfy,
+    ):
+        # First stall fires. Second invocation within the same stall
+        # window stays quiet.
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+        try:
+            await db.execute(
+                f"UPDATE {metadata_cache.worker_state_table()} "
+                f"SET last_heartbeat_at = ? WHERE id = 1",
+                (time.time() - 3600,),
+            )
+            await db.commit()
+        finally:
+            await db.close()
+        await metadata_cache_worker.check_stall("amazon", threshold_s=300.0)
+        await metadata_cache_worker.check_stall("amazon", threshold_s=300.0)
+        errors = [c for c in fake_ntfy if c["event_key"] == "metadata_cache_error"]
+        assert len(errors) == 1  # only the first one fired
+
+
+class TestPhaseGDailySummary:
+    async def test_send_daily_summary_resets_counters_and_emits_ntfy(
+        self, worker_under, fake_ntfy,
+    ):
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+        try:
+            await db.execute(
+                f"UPDATE {metadata_cache.worker_state_table()} "
+                f"SET today_scan_count = 11, today_block_count = 2 "
+                f"WHERE id = 1"
+            )
+            await db.commit()
+        finally:
+            await db.close()
+        await metadata_cache_worker.send_daily_summary("amazon")
+        # Counters zeroed.
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+        try:
+            cur = await db.execute(
+                f"SELECT today_scan_count, today_block_count FROM "
+                f"{metadata_cache.worker_state_table()} WHERE id = 1"
+            )
+            scans, blocks = await cur.fetchone()
+        finally:
+            await db.close()
+        assert scans == 0
+        assert blocks == 0
+        # ntfy fired with the prior numbers.
+        summaries = [
+            c for c in fake_ntfy
+            if c["event_key"] == "metadata_cache_daily_summary"
+        ]
+        assert len(summaries) == 1
+        assert "11 scans" in summaries[0]["title"]
+        assert "Soft-blocks: 2" in summaries[0]["message"]
+
+
+class TestPhaseGLogFileHandler:
+    def test_log_file_disabled_returns_none(self, worker_under):
+        worker_under["settings"]["metadata_cache_log_file_enabled"] = False
+        path = metadata_cache_worker.install_log_file_handler()
+        assert path is None
+
+    def test_log_file_enabled_attaches_handler(
+        self, worker_under, monkeypatch,
+    ):
+        from app import config as app_config
+        worker_under["settings"]["metadata_cache_log_file_enabled"] = True
+        worker_under["settings"]["metadata_cache_log_file_max_bytes"] = 1000
+        worker_under["settings"]["metadata_cache_log_file_backup_count"] = 1
+        monkeypatch.setattr(app_config, "DATA_DIR", worker_under["tmp_path"])
+        path = metadata_cache_worker.install_log_file_handler()
+        try:
+            assert path is not None
+            assert path.endswith("metadata_cache_worker.log")
+            assert metadata_cache_worker._log_file_handler in (
+                metadata_cache_worker.logger.handlers
+            )
+            # Idempotent — second call detaches old, attaches new.
+            path_again = metadata_cache_worker.install_log_file_handler()
+            assert path_again == path
+            file_handlers = [
+                h for h in metadata_cache_worker.logger.handlers
+                if h is metadata_cache_worker._log_file_handler
+            ]
+            assert len(file_handlers) == 1  # not stacked
+        finally:
+            # Clean up so the handler doesn't bleed into other tests.
+            if metadata_cache_worker._log_file_handler is not None:
+                metadata_cache_worker.logger.removeHandler(
+                    metadata_cache_worker._log_file_handler
+                )
+                metadata_cache_worker._log_file_handler.close()
+                metadata_cache_worker._log_file_handler = None
+
+
+class TestPhaseGStructuredLogLine:
+    async def test_success_emits_scan_marker(
+        self, worker_under, monkeypatch, caplog,
+    ):
+        async def _fake_scan(author_id, session):
+            return _author_result(
+                "Book", author_id=author_id,
+            ), None
+        monkeypatch.setattr(
+            metadata_cache_worker, "_perform_amazon_scan", _fake_scan,
+        )
+        await _seed_queue_row(
+            author_id="B0LOGLINE1", seed_in_libraries=("books-lib",),
+        )
+        import logging as _logging
+        caplog.set_level(_logging.INFO, logger="seshat.discovery.metadata_cache_worker.amazon")
+        await metadata_cache_worker.tick()
+        scan_lines = [r for r in caplog.records if "[scan]" in r.getMessage()]
+        assert scan_lines, "expected a [scan] structured line on success"
+        msg = scan_lines[-1].getMessage()
+        assert "author=B0LOGLINE1" in msg
+        assert "outcome=ok" in msg
+        assert "elapsed_ms=" in msg

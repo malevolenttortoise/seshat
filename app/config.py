@@ -488,6 +488,35 @@ DEFAULT_SETTINGS = {
     # bypass stops working so they can refresh credentials or
     # investigate.
     "notify_on_goodreads_canary_failed": True,
+    # v2.21.0 Phase G — metadata-cache worker notifications. Three
+    # tiers: error / warning are on by default (operator should hear
+    # about real problems), daily-summary + new-book are opt-in
+    # (informational, not actionable). Source-agnostic naming —
+    # extends to a future Goodreads cache without renaming.
+    "notify_on_metadata_cache_error": True,
+    "notify_on_metadata_cache_warning": True,
+    "notify_on_metadata_cache_daily_summary": False,
+    "notify_on_metadata_cache_new_book": False,
+    # Hour-of-day (0-23 local time) for the metadata-cache daily
+    # summary ntfy + counter reset. Defaults to 9am to mirror the
+    # `daily_digest_hour` cadence. The scheduler job that fires this
+    # also resets the in-memory `today_scan_count` / `today_block_count`
+    # columns so the daily-summary number is for the past 24h, not
+    # all-time-since-deploy.
+    "metadata_cache_daily_summary_hour": 9,
+    # Optional rotated file handler for the metadata-cache worker
+    # logger. Default OFF — the worker's INFO/WARN/ERROR lines already
+    # show up in the main container log under the
+    # `seshat.discovery.metadata_cache_worker` namespace. The rotated
+    # file is for users who want a dedicated tail target.
+    "metadata_cache_log_file_enabled": False,
+    "metadata_cache_log_file_max_bytes": 1_000_000,
+    "metadata_cache_log_file_backup_count": 3,
+    # Seconds with no `last_heartbeat_at` write before the watchdog
+    # fires an error ntfy. 5 min ≈ 5x the worst-case jittered tick
+    # cadence (90s scan + 60s idle), so transient delays don't trip
+    # the alarm.
+    "metadata_cache_stall_threshold_s": 300,
     "notify_daily_accepted": True,
     "notify_daily_tentative": True,
     "notify_daily_ignored": True,

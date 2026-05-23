@@ -46,6 +46,7 @@ import logging
 import random
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Optional
 
 import aiosqlite
@@ -58,6 +59,134 @@ from app.discovery.amazon_author_id_resolver import (
     is_amazon_blocked,
 )
 logger = logging.getLogger("seshat.discovery.metadata_cache_worker")
+
+# Tracks whether the optional rotated file handler has already been
+# attached to `logger`, so a hot-reload of settings doesn't stack
+# multiple handlers. Lifespan calls `install_log_file_handler` at
+# startup; the function is idempotent.
+_log_file_handler: Optional[logging.Handler] = None
+
+
+def install_log_file_handler() -> Optional[str]:
+    """Attach a `RotatingFileHandler` to the worker logger when the
+    `metadata_cache_log_file_enabled` setting is truthy.
+
+    Returns the resolved log-file path on success, None when disabled
+    or when the path is not writeable. Safe to call multiple times —
+    the second call detaches the prior handler before attaching the
+    new one, so a settings change during runtime is honored on the
+    next call (typically: next container start).
+    """
+    global _log_file_handler
+    s = app_config.load_settings()
+    enabled = bool(s.get("metadata_cache_log_file_enabled", False))
+
+    # Detach any existing handler if either the toggle just went off
+    # or we're about to attach a fresh one with new parameters.
+    if _log_file_handler is not None:
+        logger.removeHandler(_log_file_handler)
+        try:
+            _log_file_handler.close()
+        except Exception:
+            pass
+        _log_file_handler = None
+
+    if not enabled:
+        return None
+
+    try:
+        from logging.handlers import RotatingFileHandler
+        log_dir = app_config.DATA_DIR / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / "metadata_cache_worker.log"
+        max_bytes = int(s.get("metadata_cache_log_file_max_bytes", 1_000_000))
+        backup_count = int(s.get("metadata_cache_log_file_backup_count", 3))
+        handler = RotatingFileHandler(
+            str(log_path),
+            maxBytes=max_bytes,
+            backupCount=backup_count,
+            encoding="utf-8",
+        )
+        handler.setLevel(logging.INFO)
+        handler.setFormatter(logging.Formatter(
+            "%(asctime)s %(levelname)s %(name)s: %(message)s"
+        ))
+        logger.addHandler(handler)
+        _log_file_handler = handler
+        return str(log_path)
+    except Exception:
+        logger.exception(
+            "metadata_cache_worker: failed to install rotated log file "
+            "(non-fatal — INFO/WARN/ERROR still emit to the container log)"
+        )
+        return None
+
+
+# ─── Structured logging helpers (v2.21.0 Phase G) ──────────────
+
+
+def _scan_logger(source_name: str) -> logging.Logger:
+    """Per-source child logger (`...metadata_cache_worker.<source>`)
+    so a tail/grep can scope to one source without picking up every
+    metadata-cache message in the container log."""
+    return logger.getChild(source_name)
+
+
+def _format_fields(**fields: Any) -> str:
+    """Render ``key=value`` pairs into a single grep-friendly string.
+
+    ``None`` values are omitted so optional fields don't add visual
+    noise. Strings with spaces are single-quoted; everything else
+    renders bare so numbers and short identifiers stay scannable.
+    """
+    parts: list[str] = []
+    for key, value in fields.items():
+        if value is None:
+            continue
+        if isinstance(value, str) and (" " in value or "=" in value):
+            parts.append(f"{key}='{value}'")
+        elif isinstance(value, float):
+            parts.append(f"{key}={value:.0f}" if value.is_integer()
+                         else f"{key}={value:.1f}")
+        else:
+            parts.append(f"{key}={value}")
+    return " ".join(parts)
+
+
+# ─── ntfy emit helper (v2.21.0 Phase G) ────────────────────────
+
+
+async def _send_ntfy(
+    *,
+    event_key: str,
+    title: str,
+    message: str,
+    priority: int = 3,
+    tags: Optional[list[str]] = None,
+) -> bool:
+    """Fire a metadata-cache ntfy if (a) the event gate is on AND
+    (b) the ntfy server + topic are configured. Never raises — all
+    failures are logged at DEBUG and the worker keeps moving."""
+    from app.notify import ntfy as _ntfy
+    if not _ntfy.is_event_enabled(event_key):
+        return False
+    s = app_config.load_settings()
+    url = s.get("ntfy_url") or ""
+    topic = s.get("ntfy_topic") or ""
+    if not url or not topic:
+        return False
+    try:
+        return await _ntfy.send(
+            url=url, topic=topic,
+            title=title, message=message,
+            priority=priority, tags=tags,
+        )
+    except Exception:
+        logger.exception(
+            "metadata_cache_worker: ntfy send failed for event=%s "
+            "(non-fatal)", event_key,
+        )
+        return False
 
 
 # ─── Tuning constants ──────────────────────────────────────────
@@ -128,6 +257,15 @@ class TickResult:
     cooldown_remaining_s: float = 0.0
     next_sleep_s: float = _IDLE_SLEEP_S
     error: Optional[str] = None
+    new_books: int = 0
+    """Count of book_asins this tick saw that weren't in the cache
+    before. Always 0 for first-scan authors (no prior baseline) so a
+    backfill doesn't get treated as N new discoveries."""
+    elapsed_ms: float = 0.0
+    """Wall-clock time spent in scan + cache write for this tick.
+    Used both in the `[scan]` log line and in the daily-summary
+    aggregator. Zero for short-circuit outcomes (disabled / cooldown
+    / queue_empty)."""
 
 
 # ─── Settings + state accessors ────────────────────────────────
@@ -213,6 +351,22 @@ async def _stamp_heartbeat(
     await db.commit()
 
 
+def _is_same_local_day(prior_ts: float, now: float) -> bool:
+    """True iff both timestamps fall on the same calendar day in the
+    local timezone. Used to reset `today_*` counters at the user's
+    wallclock midnight rather than UTC midnight (which would land
+    mid-evening for America/Detroit users)."""
+    if not prior_ts:
+        return False
+    try:
+        return (
+            datetime.fromtimestamp(prior_ts).date()
+            == datetime.fromtimestamp(now).date()
+        )
+    except (OverflowError, OSError, ValueError):
+        return False
+
+
 async def _record_block_in_worker_state(
     db: aiosqlite.Connection, source_name: str, now: float,
     *, cooldown_s: float,
@@ -220,45 +374,255 @@ async def _record_block_in_worker_state(
     """Increment `consecutive_blocks` / `today_block_count`, stamp
     `last_block_at` + `block_cooldown_s`. Returns the new
     consecutive_blocks value so the caller can pick the right
-    escalation tier."""
+    escalation tier.
+
+    `today_block_count` resets when the local-tz day rolls over (the
+    Phase G cosmetic fix) — before, the counter incremented monoto-
+    nically since deploy and never returned to zero.
+    """
     table = metadata_cache.worker_state_table(source_name)
     cur = await db.execute(
-        f"SELECT last_block_at, consecutive_blocks "
+        f"SELECT last_block_at, consecutive_blocks, today_block_count "
         f"FROM {table} WHERE id = 1"
     )
     row = await cur.fetchone()
     prior_last = float(row[0] or 0.0) if row else 0.0
-    prior_count = int(row[1] or 0) if row else 0
+    prior_consecutive = int(row[1] or 0) if row else 0
+    prior_today = int(row[2] or 0) if row else 0
     if (now - prior_last) > _ESCALATION_RESET_WINDOW_S:
-        # 1h blockless — counter reset.
-        new_count = 1
+        # 1h blockless — consecutive-blocks counter reset.
+        new_consecutive = 1
     else:
-        new_count = prior_count + 1
+        new_consecutive = prior_consecutive + 1
+    if _is_same_local_day(prior_last, now):
+        new_today = prior_today + 1
+    else:
+        new_today = 1
     await db.execute(
         f"UPDATE {table} "
         f"SET last_block_at = ?, consecutive_blocks = ?, "
         f"    block_cooldown_s = ?, "
-        f"    today_block_count = today_block_count + 1 "
+        f"    today_block_count = ? "
         f"WHERE id = 1",
-        (now, new_count, cooldown_s),
+        (now, new_consecutive, cooldown_s, new_today),
     )
     await db.commit()
-    return new_count
+    return new_consecutive
 
 
 async def _record_scan_completed(
     db: aiosqlite.Connection, source_name: str, now: float,
 ) -> None:
-    """Bump `today_scan_count` + stamp `last_scan_completed_at`."""
+    """Bump `today_scan_count` + stamp `last_scan_completed_at`.
+
+    `today_scan_count` resets when the local-tz day rolls over (the
+    Phase G cosmetic fix) — before, the counter incremented monoto-
+    nically since deploy and never returned to zero.
+    """
     table = metadata_cache.worker_state_table(source_name)
+    cur = await db.execute(
+        f"SELECT last_scan_completed_at, today_scan_count "
+        f"FROM {table} WHERE id = 1"
+    )
+    row = await cur.fetchone()
+    prior_last = float(row[0] or 0.0) if row else 0.0
+    prior_today = int(row[1] or 0) if row else 0
+    if _is_same_local_day(prior_last, now):
+        new_today = prior_today + 1
+    else:
+        new_today = 1
     await db.execute(
         f"UPDATE {table} "
-        f"SET last_scan_completed_at = ?, "
-        f"    today_scan_count = today_scan_count + 1 "
+        f"SET last_scan_completed_at = ?, today_scan_count = ? "
         f"WHERE id = 1",
-        (now,),
+        (now, new_today),
     )
     await db.commit()
+
+
+async def _read_state_for_summary(
+    source_name: str,
+) -> dict[str, Any]:
+    """Snapshot the counters the daily summary cares about. Read in
+    its own connection so the summary path doesn't deadlock against
+    the worker tick's transaction."""
+    table = metadata_cache.worker_state_table(source_name)
+    db = await metadata_cache.get_db(source_name)
+    try:
+        cur = await db.execute(
+            f"SELECT today_scan_count, today_block_count, "
+            f"       last_heartbeat_at, last_scan_completed_at, "
+            f"       last_block_at, consecutive_blocks "
+            f"FROM {table} WHERE id = 1"
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return {
+                "today_scan_count": 0, "today_block_count": 0,
+                "last_heartbeat_at": None,
+                "last_scan_completed_at": None,
+                "last_block_at": 0.0, "consecutive_blocks": 0,
+            }
+        return {
+            "today_scan_count": int(row[0] or 0),
+            "today_block_count": int(row[1] or 0),
+            "last_heartbeat_at": row[2],
+            "last_scan_completed_at": row[3],
+            "last_block_at": float(row[4] or 0.0),
+            "consecutive_blocks": int(row[5] or 0),
+        }
+    finally:
+        await db.close()
+
+
+async def send_daily_summary(
+    source_name: str = metadata_cache.SOURCE_AMAZON,
+) -> None:
+    """Fire the daily-summary ntfy (if enabled + configured) and
+    zero out the `today_*` counters. Scheduler calls this once per
+    day at `metadata_cache_daily_summary_hour` local time.
+
+    Resets the counters even when ntfy is disabled — that's the
+    primary purpose: clear yesterday's running totals so today's
+    UI numbers reflect the past 24h, not all-time.
+    """
+    snapshot = await _read_state_for_summary(source_name)
+    prior_scans, prior_blocks = await reset_today_counters(source_name)
+    # The day-rollover logic in `_record_scan_completed` may have
+    # already partially reset things on the first tick of the new
+    # day. Either way, the snapshot above reflects the moment-before
+    # state and is what we summarize.
+    today_scans = max(snapshot["today_scan_count"], prior_scans)
+    today_blocks = max(snapshot["today_block_count"], prior_blocks)
+    logger.info(
+        "metadata_cache_worker: daily summary for source=%s — "
+        "scans=%d, blocks=%d",
+        source_name, today_scans, today_blocks,
+    )
+    title = f"Amazon worker — daily summary ({today_scans} scans)"
+    message_lines = [
+        f"Scans: {today_scans}",
+        f"Soft-blocks: {today_blocks}",
+    ]
+    if snapshot["consecutive_blocks"]:
+        message_lines.append(
+            f"Consecutive blocks in last hour: "
+            f"{snapshot['consecutive_blocks']}"
+        )
+    await _send_ntfy(
+        event_key="metadata_cache_daily_summary",
+        title=title,
+        message="\n".join(message_lines),
+        priority=2,
+        tags=["bar_chart"],
+    )
+
+
+async def check_stall(
+    source_name: str = metadata_cache.SOURCE_AMAZON,
+    *,
+    threshold_s: Optional[float] = None,
+) -> bool:
+    """Return True iff the worker is enabled AND its
+    `last_heartbeat_at` is older than `threshold_s` (default from
+    settings). Fires the Tier-1 stall ntfy at most once per stall
+    window — debounced via a runtime-state key in settings.json so
+    a watchdog firing every minute doesn't spam.
+    """
+    if not is_worker_enabled(source_name):
+        return False
+    s = app_config.load_settings()
+    if threshold_s is None:
+        threshold_s = float(
+            s.get("metadata_cache_stall_threshold_s", 300)
+        )
+    snapshot = await _read_state_for_summary(source_name)
+    heartbeat = snapshot["last_heartbeat_at"]
+    if heartbeat is None:
+        # Worker enabled but has never ticked. That's a stall.
+        age_s = float("inf")
+    else:
+        age_s = time.time() - float(heartbeat)
+    if age_s < threshold_s:
+        # Healthy — clear any prior debounce so the next stall fires
+        # a notification cleanly.
+        if s.get(f"metadata_cache.{source_name}.stall_notified_at"):
+            s[f"metadata_cache.{source_name}.stall_notified_at"] = 0.0
+            try:
+                app_config.save_settings(s)
+            except Exception:
+                logger.exception(
+                    "metadata_cache_worker: failed to clear stall "
+                    "debounce key (non-fatal)"
+                )
+        return False
+    # Stall confirmed. Debounce — only fire once per stall (cleared
+    # when the heartbeat recovers above).
+    debounce_key = f"metadata_cache.{source_name}.stall_notified_at"
+    prior_notified = float(s.get(debounce_key) or 0.0)
+    if prior_notified and heartbeat is not None and prior_notified > float(heartbeat):
+        # Already notified for THIS stall window — stay quiet.
+        return True
+    s[debounce_key] = time.time()
+    try:
+        app_config.save_settings(s)
+    except Exception:
+        logger.exception(
+            "metadata_cache_worker: failed to persist stall debounce "
+            "key (notification will re-fire next watchdog tick)"
+        )
+    age_repr = f"{age_s:.0f}s" if age_s != float("inf") else "never"
+    logger.warning(
+        "metadata_cache_worker: stall detected — last heartbeat %s ago "
+        "(threshold %.0fs)",
+        age_repr, threshold_s,
+    )
+    await _send_ntfy(
+        event_key="metadata_cache_error",
+        title="Amazon worker — stalled",
+        message=(
+            f"No heartbeat for {age_repr}. Worker may have crashed "
+            "or be stuck in a long-running call. Check container "
+            "logs and the cache panel."
+        ),
+        priority=5,
+        tags=["rotating_light"],
+    )
+    return True
+
+
+async def reset_today_counters(
+    source_name: str = metadata_cache.SOURCE_AMAZON,
+) -> tuple[int, int]:
+    """Zero the `today_scan_count` + `today_block_count` columns and
+    return the pre-reset values so the daily-summary scheduler job
+    can include them in the ntfy message.
+
+    Idempotent — calling twice in the same day returns (0, 0) the
+    second time. Doesn't touch `last_scan_completed_at` /
+    `last_block_at`, so the day-rollover heuristic in
+    `_record_scan_completed` / `_record_block_in_worker_state`
+    continues to work.
+    """
+    table = metadata_cache.worker_state_table(source_name)
+    db = await metadata_cache.get_db(source_name)
+    try:
+        cur = await db.execute(
+            f"SELECT today_scan_count, today_block_count "
+            f"FROM {table} WHERE id = 1"
+        )
+        row = await cur.fetchone()
+        prior_scans = int(row[0] or 0) if row else 0
+        prior_blocks = int(row[1] or 0) if row else 0
+        await db.execute(
+            f"UPDATE {table} "
+            f"SET today_scan_count = 0, today_block_count = 0 "
+            f"WHERE id = 1"
+        )
+        await db.commit()
+        return prior_scans, prior_blocks
+    finally:
+        await db.close()
 
 
 def _pick_escalation_cooldown(consecutive_blocks: int) -> float:
@@ -591,6 +955,22 @@ def _flatten_for_library(
     return rows
 
 
+async def _fetch_prior_book_asins(
+    db: aiosqlite.Connection, source_name: str, *, author_id: str,
+) -> set[str]:
+    """Return the set of `book_asin` values currently cached for
+    ``author_id`` across every library. Used to compute the "new
+    books this scan" set so the Phase G info-tier ntfy doesn't
+    spam on first-fill scans.
+    """
+    books_table = metadata_cache.books_table(source_name)
+    cur = await db.execute(
+        f"SELECT DISTINCT book_asin FROM {books_table} WHERE author_id = ?",
+        (author_id,),
+    )
+    return {row[0] for row in await cur.fetchall()}
+
+
 async def _replace_book_rows(
     db: aiosqlite.Connection, source_name: str, *,
     author_id: str, library_slug: str,
@@ -743,6 +1123,8 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
     a TickResult with `outcome=...` so `run_loop` can decide the next
     sleep without a try/except wrap on every call site."""
     now = time.time()
+    started_at = now  # for elapsed_ms in the `[scan]` summary line
+    scan_log = _scan_logger(source_name)
 
     # Heartbeat fires on EVERY tick, before any short-circuit gate.
     # This lets the operator distinguish "worker disabled" from
@@ -873,7 +1255,8 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
             )
             # Escalate the cooldown on the 2nd / 3rd block-in-window.
             escalated_s = _pick_escalation_cooldown(consecutive)
-            if escalated_s > cooldown_s:
+            escalated = escalated_s > cooldown_s
+            if escalated:
                 from app.discovery.amazon_author_id_resolver import (
                     record_amazon_soft_block,
                 )
@@ -892,16 +1275,39 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
             )
         finally:
             await db.close()
-        logger.info(
-            "metadata_cache_worker: soft-block on %s — "
-            "consecutive=%d, cooldown=%.0fs",
-            author_id, consecutive, cooldown_s,
+        elapsed_ms = (time.time() - started_at) * 1000.0
+        scan_log.warning(
+            "[scan] %s",
+            _format_fields(
+                author=author_id, outcome="soft_block",
+                consecutive=consecutive, cooldown_s=cooldown_s,
+                escalated=escalated, elapsed_ms=elapsed_ms,
+            ),
         )
+        # ntfy Tier 2 (warning) only fires when we just escalated TO
+        # the top tier (3600s). Routine 1st/2nd-tier blocks are normal
+        # operation — the worker spins them out via `cooldown_s + 60s`
+        # deferral without paging the operator.
+        if escalated and cooldown_s >= _ESCALATION_TIERS_S[-1]:
+            await _send_ntfy(
+                event_key="metadata_cache_warning",
+                title="Amazon worker — cooldown escalated to top tier",
+                message=(
+                    f"Author {author_id} tripped consecutive soft-block "
+                    f"#{consecutive} within {_ESCALATION_RESET_WINDOW_S:.0f}s. "
+                    f"Cooldown is now {cooldown_s:.0f}s "
+                    f"(top of the {len(_ESCALATION_TIERS_S)}-tier curve). "
+                    "Worker will resume scanning automatically once it clears."
+                ),
+                priority=4,
+                tags=["warning", "snail"],
+            )
         return TickResult(
             source_name=source_name, outcome="soft_block",
             author_id=author_id,
             queue_size=queue_size, cooldown_remaining_s=cooldown_s,
             next_sleep_s=min(cooldown_s + 1.0, _COOLDOWN_MAX_SLEEP_S),
+            elapsed_ms=elapsed_ms,
         )
 
     if result is None:
@@ -927,17 +1333,39 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
         finally:
             await db.close()
         outcome = "permanent_fail" if became_permanent else "error"
-        logger.warning(
-            "metadata_cache_worker: scan FAILED for %s (%s) "
-            "consecutive_failures=%d%s",
-            author_id, scan_error, new_count,
-            " — flipped to failed_permanent" if became_permanent else "",
+        elapsed_ms = (time.time() - started_at) * 1000.0
+        scan_log.warning(
+            "[scan] %s",
+            _format_fields(
+                author=author_id, outcome=outcome,
+                consecutive_failures=new_count, permanent=became_permanent,
+                elapsed_ms=elapsed_ms, error=(scan_error or "unknown"),
+            ),
         )
+        # ntfy Tier 2 (warning): one queue row has exhausted its
+        # retries and is now `failed_permanent`. The operator needs to
+        # decide whether to manually re-queue or accept the gap. Non-
+        # permanent transient failures don't notify — the worker
+        # keeps retrying them silently.
+        if became_permanent:
+            await _send_ntfy(
+                event_key="metadata_cache_warning",
+                title="Amazon worker — author flipped to failed_permanent",
+                message=(
+                    f"{author_id} hit {_MAX_CONSECUTIVE_FAILURES} consecutive "
+                    f"failures and was retired from the active queue. "
+                    f"Last error: {scan_error or 'unknown'}. "
+                    "Visit the cache panel to re-queue if this was transient."
+                ),
+                priority=4,
+                tags=["warning", "skull"],
+            )
         return TickResult(
             source_name=source_name, outcome=outcome,
             author_id=author_id,
             queue_size=queue_size, error=scan_error,
             next_sleep_s=random.uniform(_JITTER_MIN_S, _JITTER_MAX_S),
+            elapsed_ms=elapsed_ms,
         )
 
     # Successful scan: fan out per-library writes from the single
@@ -958,6 +1386,28 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
         )
         per_library_rows.append((lib, rows))
     total_cache_rows = sum(len(rows) for _, rows in per_library_rows)
+
+    # New-book detection (Phase G): capture prior cached ASINs BEFORE
+    # the cache write so we can diff the new set against them. A
+    # first-fill scan (no prior rows) yields `prior_asins = set()`, in
+    # which case we treat the entire result as baseline rather than
+    # firing an N-book ntfy.
+    new_titles: list[tuple[str, str]] = []
+    try:
+        db = await metadata_cache.get_db(source_name)
+        try:
+            prior_asins = await _fetch_prior_book_asins(
+                db, source_name, author_id=author_id,
+            )
+        finally:
+            await db.close()
+    except Exception:
+        logger.debug(
+            "metadata_cache_worker: prior-ASIN lookup failed for %s "
+            "(non-fatal — new-book detection skipped this tick)",
+            author_id, exc_info=True,
+        )
+        prior_asins = set()
 
     # Single try/except for the whole multi-library cache-write so any
     # failure mid-fan-out cleanly unwinds via the failure path.
@@ -1007,28 +1457,95 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
                 "failed — row will be cleaned up by startup "
                 "recover_stuck_in_progress on the next restart"
             )
+        elapsed_ms = (time.time() - started_at) * 1000.0
+        scan_log.error(
+            "[scan] %s",
+            _format_fields(
+                author=author_id, outcome="cache_write_fail",
+                elapsed_ms=elapsed_ms,
+                error=f"{type(exc).__name__}: {exc}",
+            ),
+        )
+        # ntfy Tier 1 (error): DB-write failure is one of the
+        # explicitly-error-tier events from the plan. Worker stays
+        # alive but the operator should know — a stuck cache-write
+        # path can silently halt cache freshness for every author.
+        await _send_ntfy(
+            event_key="metadata_cache_error",
+            title="Amazon worker — cache write failed",
+            message=(
+                f"Author {author_id}: {type(exc).__name__}: {exc}. "
+                "Queue row reset; worker will retry on the next "
+                "iteration. Check container logs if this repeats."
+            ),
+            priority=5,
+            tags=["rotating_light"],
+        )
         return TickResult(
             source_name=source_name, outcome="error",
             author_id=author_id,
             queue_size=queue_size,
             error=f"cache write failed: {type(exc).__name__}: {exc}",
             next_sleep_s=random.uniform(_JITTER_MIN_S, _JITTER_MAX_S),
+            elapsed_ms=elapsed_ms,
         )
+
+    # Diff the new ASIN set against the captured prior set. Each row
+    # tuple shape is `(author_id, library_slug, book_asin, title, …)`
+    # — see `_flatten_for_library`. We only count ASINs as "new" if
+    # the author had prior cached books AT ALL (otherwise every book
+    # would be new on first scan, which would spam the operator).
+    new_count = 0
+    if prior_asins:
+        new_titles_map: dict[str, str] = {}
+        for _lib, rows in per_library_rows:
+            for row in rows:
+                asin = row[2]
+                title = row[3] or ""
+                if asin not in prior_asins:
+                    new_titles_map.setdefault(asin, title)
+        new_titles = list(new_titles_map.items())
+        new_count = len(new_titles)
 
     per_lib_summary = ", ".join(
         f"{lib['slug']}={len(rows)}" for lib, rows in per_library_rows
     )
-    logger.info(
-        "metadata_cache_worker: scanned %s — %d total books cached "
-        "across %d library(ies) [%s]",
-        author_id, total_cache_rows, len(libraries), per_lib_summary,
-    )
+    elapsed_ms = (time.time() - started_at) * 1000.0
     outcome = "ok" if total_cache_rows else "ok_empty"
+    scan_log.info(
+        "[scan] %s [%s]",
+        _format_fields(
+            author=author_id, outcome=outcome,
+            books=total_cache_rows, new=new_count,
+            libraries=len(libraries), elapsed_ms=elapsed_ms,
+        ),
+        per_lib_summary,
+    )
+    # ntfy Tier 3 (info, opt-in): operator wants to celebrate every
+    # new ASIN the worker uncovers. Capped at 3 titles per message
+    # so a multi-book release doesn't produce a wall of text.
+    if new_titles:
+        sample = new_titles[:3]
+        message_lines = [f"{title or asin} ({asin})" for asin, title in sample]
+        if new_count > len(sample):
+            message_lines.append(f"… and {new_count - len(sample)} more")
+        await _send_ntfy(
+            event_key="metadata_cache_new_book",
+            title=(
+                f"Amazon worker — {new_count} new book"
+                f"{'s' if new_count != 1 else ''} for {author_id}"
+            ),
+            message="\n".join(message_lines),
+            priority=3,
+            tags=["books", "sparkles"],
+        )
     return TickResult(
         source_name=source_name, outcome=outcome,
         author_id=author_id,
         books_cached=total_cache_rows, queue_size=queue_size,
+        new_books=new_count,
         next_sleep_s=random.uniform(_JITTER_MIN_S, _JITTER_MAX_S),
+        elapsed_ms=elapsed_ms,
     )
 
 
@@ -1070,10 +1587,29 @@ async def run_loop(
             result = await tick(source_name)
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "metadata_cache_worker: tick crashed unexpectedly"
             )
+            # Phase G: surface tick crashes to the operator. We rely
+            # on the supervised-task restart to bring the loop back —
+            # this ntfy is purely so the user knows it happened.
+            try:
+                await _send_ntfy(
+                    event_key="metadata_cache_error",
+                    title="Amazon worker — tick crashed",
+                    message=(
+                        f"{type(exc).__name__}: {exc}. "
+                        "Worker loop is recovering automatically; "
+                        "check container logs for traceback."
+                    ),
+                    priority=5,
+                    tags=["rotating_light"],
+                )
+            except Exception:
+                logger.exception(
+                    "metadata_cache_worker: post-crash ntfy emit failed"
+                )
             # Belt-and-suspenders: if tick() raised before reaching
             # its own internal queue-row-recovery (the post-scan
             # cache-write try/except), any popped row would stay

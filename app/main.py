@@ -54,7 +54,11 @@ from app.orchestrator.cookie_keepalive import run_loop as cookie_keepalive_loop
 from app.orchestrator.cookie_retry import run_loop as cookie_retry_loop
 from app.orchestrator.dispatch import DispatcherDeps, handle_announce
 from app.orchestrator.review_timeout import run_loop as review_timeout_loop
-from app.orchestrator.scheduler import register_digest_jobs, register_goodreads_canary
+from app.orchestrator.scheduler import (
+    register_digest_jobs,
+    register_goodreads_canary,
+    register_metadata_cache_health,
+)
 from app.notify.digests import DigestContext
 from app.notify.ntfy import aclose as ntfy_aclose
 from app.auth_db import init_auth_db
@@ -758,6 +762,26 @@ async def lifespan(app: FastAPI):
     register_goodreads_canary(scheduler)
     _log.info("Goodreads canary registered (Mon 03:00)")
 
+    # v2.21.0 Phase G — metadata-cache worker health + daily summary.
+    # Stall watchdog runs every 2 min and fires a Tier-1 ntfy if the
+    # worker is enabled but hasn't ticked within
+    # `metadata_cache_stall_threshold_s` (default 300s). Daily summary
+    # fires once per day at `metadata_cache_daily_summary_hour` (default
+    # 9), aggregates today's scan/block counts, then resets the
+    # `today_*` columns so the UI shows for-today numbers rather than
+    # monotonic-since-deploy.
+    register_metadata_cache_health(
+        scheduler,
+        daily_summary_hour=int(
+            settings.get("metadata_cache_daily_summary_hour", 9)
+        ),
+    )
+    _log.info(
+        "Metadata-cache health jobs registered (stall watch every 2min, "
+        "daily summary hour=%s)",
+        settings.get("metadata_cache_daily_summary_hour", 9),
+    )
+
     # ── Discovery domain startup ─────────────────────────────
     # Library discovery, per-library DB init, initial Calibre sync.
     # This runs AFTER the pipeline startup so both domains are live
@@ -860,6 +884,15 @@ async def lifespan(app: FastAPI):
         # fresh v2.21.0 deploy doesn't blast Akamai immediately.
         try:
             from app.discovery import metadata_cache_worker
+
+            # Phase G — optional rotated log file. No-op when
+            # `metadata_cache_log_file_enabled` is False (default).
+            log_path = metadata_cache_worker.install_log_file_handler()
+            if log_path:
+                _log.info(
+                    "metadata_cache_worker: rotated log file enabled at %s",
+                    log_path,
+                )
 
             async def _metadata_cache_amazon_worker_factory():
                 await metadata_cache_worker.run_loop(
