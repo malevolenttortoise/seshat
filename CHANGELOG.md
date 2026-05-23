@@ -7,6 +7,231 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [2.21.0] — 2026-05-22
+
+Amazon metadata cache — biggest discovery-flow architectural change
+since v2.13.0's Goodreads bypass. The live `AmazonSource` no longer
+runs in the synchronous lookup path. A paced background worker scans
+authors on its own clock, writes results to a separate cache DB
+(`metadata_cache_amazon.db`), and the synchronous flow reads from the
+cache instead. User-facing scans never block on Akamai, cooldowns no
+longer cascade across the discovery flow, and a 600-author library
+refreshes Amazon coverage in 2–4 days.
+
+### Added — `metadata_cache_amazon.db` and the read/write split
+
+A new SQLite file alongside `seshat.db` holds the cache:
+`metadata_cache_amazon_state` (per author × library), `_books`
+(actual book rows), `_queue` (scan queue, schema-v2 PK = author_id
+only), `_worker_state` (singleton: heartbeat, cooldown, today's
+counters). PRAGMA `user_version`-versioned migrations live in
+`app/discovery/metadata_cache.py`.
+
+The synchronous flow (`app/discovery/lookup.py`) now uses
+`CachedSource(source_name="amazon")` in place of the live source.
+Cache hits return data immediately; misses enqueue the author at
+priority 1000 and return `None` for this scan. Read-time filters
+(language, format, owned-only) apply on cache reads — changing
+preferences doesn't require re-scanning Amazon.
+
+### Added — `metadata_cache_worker.py` background worker
+
+Runs under `state.supervised_task` (crash → auto-restart). One tick
+per iteration: heartbeat → gates → queue pop → fresh chrome120
+session → behavioral warmup → `AmazonSource` scan with
+`format_filter="allFormats"` → per-library partition by content_type
+binding sets → cache write → 30–90s jittered sleep. Six tactical
+behaviors from the 2026-05-22 Akamai investigation (per-author
+session rotation, behavioral warmup, adaptive cooldown escalation
+600/1800/3600s, think-time jitter, priority queue with no exclusion,
+HTTP 202 detection). Profile rotation deliberately dropped — Arm 1
+experiment showed it's worse than Arm 3.
+
+### Added — schema-v2 cross-library dedup
+
+Pre-Phase-D the queue used `(author_id, library_slug)` as PK. For a
+typical library where every author lives in both calibre + abs, that
+doubled the Akamai budget. Schema-v2 collapses to `author_id` only;
+each scan runs `allFormats` and downstream code partitions the
+response into per-library state + book rows based on each library's
+content_type bindings (kindle/paperback/hardcover/mass_market →
+ebook; audio_download/audioCD/mp3_cd/preloaded → audiobook). Cuts
+the request budget ~50%.
+
+### Added — 3-tier UI surfaces
+
+- **Navbar status icon** — color-coded green/yellow/red/gray with
+  hover tooltip; click → Settings → Sources → Amazon.
+- **Amazon Cache Status card** in the Metadata Sources panel —
+  worker enable toggle, queue depth, today's scans, last block,
+  Reset Cooldown button.
+- **Per-author cache badge** on author detail pages — "scanned 3d
+  ago, 12 books cached" / "in queue (position N)" / "cooldown,
+  retry in 8m" / "never scanned".
+- **Dashboard Amazon Cache rail** at the bottom of the Seshat Stats
+  widget — recent-discoveries list ("Found 'Honor of Duty 2' for
+  A. R. Rend, 2h ago").
+
+### Added — structured logging + 3-tier ntfy (Phase G)
+
+Per-source child logger
+`seshat.discovery.metadata_cache_worker.<source>` emits grep-friendly
+`[scan] author=… outcome=… books=… new=… libraries=… elapsed_ms=…`
+on every tick. Four new ntfy event keys (source-agnostic, so a
+v2.22.0 Goodreads cache reuses them):
+
+- `notify_on_metadata_cache_error` (default ON, prio 5) — worker
+  stall, cache-write failure, tick crash
+- `notify_on_metadata_cache_warning` (default ON, prio 4) — top-tier
+  (3600s) cooldown escalation, author flipped to `failed_permanent`
+- `notify_on_metadata_cache_daily_summary` (default OFF) — once-per-day
+  digest of today's scans + blocks
+- `notify_on_metadata_cache_new_book` (default OFF) — per-author
+  celebration when the worker discovers a new ASIN (first-fill scans
+  silenced to avoid backfill spam)
+
+Two APScheduler jobs: `metadata_cache_amazon_stall_watch` (every
+2 min, fires error ntfy if heartbeat older than
+`metadata_cache_stall_threshold_s`, self-debounced via runtime-state
+key) and `metadata_cache_amazon_daily_summary` (daily at
+`metadata_cache_daily_summary_hour`, zeros `today_*` counters + opt-in
+ntfy). Optional rotated log file at
+`/app/data/logs/metadata_cache_worker.log` via
+`metadata_cache_log_file_enabled`.
+
+### Added — daily counter rollover
+
+`today_scan_count` and `today_block_count` reset at the local-TZ day
+boundary inside `_record_scan_completed` /
+`_record_block_in_worker_state` (using
+`datetime.fromtimestamp(...).date()`), and again at the daily-summary
+fire time. Pre-Phase-G the counters were monotonic since deploy.
+
+### REST surface
+
+New router `app/routers/metadata_cache.py` mounted at
+`/api/v1/metadata-cache`:
+
+- `GET /status` — full worker + cache state
+- `PATCH /settings` — enable/disable, format, language
+- `POST /reset-cooldown` — emergency override
+- `GET /author/{author_id}` — per-author cache lookup with library
+  synthesis when state rows are empty
+- `GET /recent-discoveries` — feed for the Dashboard rail
+
+### Known behavior
+
+Worker is **OFF by default** on fresh deploy. Toggle on under
+Settings → Sources → Amazon. First scan after enable populates the
+cache for high-priority authors; over 2–4 days the worker drains
+the full backlog.
+
+---
+
+## [2.20.3] — 2026-05-22
+
+Three Phase-A hotfixes bundled ahead of the v2.21.0 Amazon cache
+extraction.
+
+### Added — HTTP 202 soft-block detection
+
+Akamai's sensor-challenge response (HTTP 202 with a thin
+interstitial body) was falling into the silent
+"status != 200, log + return" branch alongside genuine 404s, so the
+cooldown never tripped and author scans walked at full speed
+straight into the IP-level penalty box. Now classified as a
+soft-block at every amazon.com call site (tier-1 `/dp`, tier-2
+vanity `/author`, tier-2 search `/s`, `/stores/.../allbooks`).
+
+### Added — cooldown persistence across container restart
+
+`_blocked_until` now mirrors into `settings.json` as three
+runtime-state keys (`amazon_blocked_until`, `amazon_block_reason`,
+`amazon_blocked_since`), protected from user PATCH alongside the
+existing `goodreads_session_*` keys. Restored on module import via
+`_load_persisted_block_state()`. Closes the `docker restart`
+mid-penalty bypass — the prior assumption that the in-process
+`_blocked_until` global survived a restart was wrong.
+
+### Added — Goodreads per-author budget scaling (Path A)
+
+Sanderson-class authors (≥200 books on the GR list page) silently
+dropped ~37% of books to time-budget exhaustion across the per-source
+300s + retry cycle. The retry loop now scales:
+
+- `book_count > 100` → 600s per retry (was 300s), 30 min total budget
+- `book_count > 200` → 900s per retry, 40 min total budget
+- Default — 300s / 25 min
+
+Helpers no-op for non-Goodreads specs and never shrink an
+operator-raised value.
+
+---
+
+## [2.20.2] — 2026-05-21
+
+### Fixed — Amazon CAPTCHA-shim cooldown detection
+
+`_fetch_allbooks` now trips the soft-block cooldown when the
+response is 200 OK + body ≥50KB + no `ProductGrid` widget marker
+(Amazon's full-chrome CAPTCHA variant that bypassed the size-based
+thin-body gate). New `SoftBlockSuspectedError(ParseError)` subclass
+distinguishes "marker absent" (suspected soft-block → cooldown)
+from "marker present but content malformed" (real parser break →
+one-off). Discovered when an Amazon scan ~15 min after an initial
+429 hit returned a 200 CAPTCHA page large enough to pass the 50KB
+threshold; parser logged "may be a Captcha shim" but cooldown
+didn't engage, leaving the door open for cascade.
+
+---
+
+## [2.20.1] — 2026-05-21
+
+### Fixed — `mirror_source_id` self-deadlock against the caller
+
+`mirror_source_id` now skips the caller's own slug when propagating
+a resolved source ID. The previous behavior deadlocked against the
+lookup path's still-open write transaction — every author scan
+logged a cascade of DEBUG-level "database is locked" errors (one
+per resolved source ID). Caller is expected to have pre-written
+its own row; the mirror only propagates to OTHER libraries. The
+PATCH endpoint updated to pre-write the entry row explicitly.
+
+---
+
+## [2.20.0] — 2026-05-21
+
+Cross-library author identity. Source IDs (`amazon_id`,
+`goodreads_id`, `hardcover_id`) discovered in one library now
+propagate to every other library that holds the same author, with
+a triage UI for ambiguous matches. Eliminates the
+"discovered an `amazon_id` in calibre but it never reaches abs"
+gap that left half the library unscannable in v2.19 even after a
+clean GR audit.
+
+### Added — `mirror_source_id` propagation
+
+When the resolver chain lands a new source ID for an author, the
+write now fans out to every other library that has an author row
+matching the canonical name. Mirror writes skip libraries that
+already have a different value (manual triage required); mirror
+writes never overwrite existing populated source IDs without
+explicit user intent.
+
+### Added — cross-library author triage UI
+
+Settings → Discovery → Author Triage surfaces every author whose
+source IDs disagree across libraries. Pick a winner per row;
+mirror it across.
+
+### Added — source-ID badges on author detail pages
+
+Per-author header now shows pill badges for each resolved external
+ID (`amz`, `gr`, `hc`, `cwa`) with a tooltip showing the value.
+Click → open the canonical source URL.
+
+---
+
 ## [2.19.0] — 2026-05-20
 
 Amazon Author-Store discovery hardened against Akamai soft-blocks.

@@ -38,8 +38,10 @@ pen-name aliases. Search MAM for matches and see which titles are
 available.
 
 Per-source coverage, priority defaults, the Cloudflare bypass behind
-Goodreads, and the resolver chain that maps ISBN/ASIN → Goodreads ID
-without scraping `/search` are all documented in
+Goodreads, the resolver chain that maps ISBN/ASIN → Goodreads ID
+without scraping `/search`, and the v2.21.0 Amazon metadata cache
+(background worker + `metadata_cache_amazon.db` + the 3-tier status
+UI) are all documented in
 [`docs/metadata-sources.md`](docs/metadata-sources.md).
 
 Container restarts run an **incremental sync** by default — Calibre's
@@ -148,7 +150,9 @@ state lives entirely on the `/app/data` volume.
 
 - **Backend:** Python 3.12 + FastAPI + SQLite (WAL mode) + aiosqlite
 - **Frontend:** Vite + React 18 + TypeScript
-- **Databases:** Separate SQLite files — per-library discovery DBs + pipeline DB + auth DB
+- **Databases:** Separate SQLite files — per-library discovery DBs +
+  pipeline DB + auth DB + per-source metadata caches
+  (`metadata_cache_amazon.db` as of v2.21.0)
 - **Background jobs:** supervised asyncio tasks + APScheduler
 - **Auth:** bcrypt + itsdangerous signed cookies + Fernet-encrypted secrets
 - **Theme:** Egyptian goddess palette (gold, deep indigo, jade green)
@@ -157,6 +161,12 @@ state lives entirely on the `/app/data` volume.
 - **Library backends:** Calibre (file-based) + Audiobookshelf (API-based),
   composable — users can run multiple of either. Cross-library `works`
   linked via the pipeline DB.
+- **Metadata cache layer (v2.21.0):** Amazon scans are decoupled from
+  user-facing flow via a paced background worker and a separate cache
+  DB. Synchronous scans read cache, never hit Akamai. Status surfaces
+  at three tiers — navbar icon, Amazon Cache card, per-author badge.
+  See [`docs/metadata-sources.md`](docs/metadata-sources.md) for the
+  full architecture.
 
 ---
 
@@ -183,7 +193,7 @@ the user already saved through the UI.
 
 | Mount path | Required | Purpose |
 | --- | :---: | --- |
-| `/app/data` | yes | Seshat's persistent state — `settings.json`, per-library `seshat_<slug>.db`, pipeline DB, auth DB, encrypted secrets store. **Never delete.** |
+| `/app/data` | yes | Seshat's persistent state — `settings.json`, per-library `seshat_<slug>.db`, pipeline DB, auth DB, per-source metadata caches (`metadata_cache_amazon.db`), optional rotated worker log under `logs/`, encrypted secrets store. **Never delete.** |
 | `/calibre` | yes (if using Calibre) | Calibre library directory — read-only is fine. Seshat reads `metadata.db` to discover books. |
 | `/audiobooks` | optional | Audiobookshelf library path — same volume ABS sees, so Seshat can drop new audiobook files where ABS will scan them. |
 | `/downloads` | recommended | qBit's download directory as Seshat sees it (the other side of the qBit/Seshat path translation). |

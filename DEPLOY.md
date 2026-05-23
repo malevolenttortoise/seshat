@@ -124,7 +124,60 @@ Go to **Settings** → **Pipeline** section:
   translation pair (e.g. qBit sees `/data`, Seshat sees `/downloads`)
 - **Folder Structure**: Monthly `[YYYY-MM]`, yearly `[YYYY]`, or flat
 
-### 6. Verify
+### 6. Enable the Amazon metadata cache (optional, recommended)
+
+As of v2.21.0, Amazon scans run in a paced background worker that
+writes to `metadata_cache_amazon.db` alongside your other Seshat
+state. Synchronous scans read from this cache instead of hitting
+Akamai live — the rest of the discovery flow no longer pauses when
+Amazon throws a 429 or 202 challenge.
+
+The worker is **disabled by default** on a fresh deploy. To enable:
+
+1. Go to **Settings** → **Sources** → **Amazon**
+2. Toggle **"Enable Amazon Cache Worker"** on
+3. (Optional) Adjust **Format** (kindle / paperback / hardcover /
+   mass_market) and **Language** (default English)
+
+What you'll see on the panel:
+
+- **Status pill** — green when actively scanning, yellow on cooldown,
+  red on error
+- **Queue depth** — authors currently waiting to be scanned
+- **Today's scan count** — resets daily at
+  `metadata_cache_daily_summary_hour` (default 9am local)
+- **Last block** — most recent soft-block timestamp + reason
+- **Reset Cooldown** — emergency override that clears the cooldown
+  state (use sparingly; the cooldown exists for a reason)
+
+For a 600-author library, the worker typically completes a full
+refresh cycle in 2–4 days at ~200–400 successful scans/day. High-
+priority authors (recent activity) refresh roughly daily.
+
+Status surfaces in three places besides the cache panel itself:
+
+- **Navbar status icon** (color-coded, hover for brief state)
+- **Author detail pages** — per-author cache badge ("scanned 3d ago,
+  12 books" / "in queue" / "cooldown")
+- **Dashboard** — Amazon Cache rail at the bottom of the Seshat Stats
+  widget with the most-recent discoveries
+
+Optional notifications (require `ntfy_url` + `ntfy_topic` set):
+
+- `notify_on_metadata_cache_error` (default ON) — worker stall,
+  cache-write failure, tick crash
+- `notify_on_metadata_cache_warning` (default ON) — top-tier
+  cooldown escalation, author flipped to `failed_permanent`
+- `notify_on_metadata_cache_daily_summary` (default OFF) — once-per-day
+  digest of today's scans + blocks
+- `notify_on_metadata_cache_new_book` (default OFF) — fires when the
+  worker discovers a new ASIN for an existing author
+
+Optional rotated log file: set `metadata_cache_log_file_enabled` to
+True in `settings.json` to attach a `RotatingFileHandler` writing to
+`/app/data/logs/metadata_cache_worker.log` (1 MB × 3 rotations).
+
+### 7. Verify
 
 After saving, check the **Dashboard**:
 
@@ -184,5 +237,6 @@ encrypted credentials are safe.
 | qBit login fails with 403 | IP banned (too many bad attempts) | Restart your qBit container to clear the ban |
 | Books queue instead of downloading | Snatch budget full | Check the budget widget — wait for releases or increase cap |
 | Pipeline finds wrong file | Single-file torrent name mismatch | Usually resolves on retry; check logs for file matching |
-| Amazon scraper returns "—" | Cloudflare blocking (503) | Expected intermittently; other scrapers compensate |
+| Amazon column blank for an author after a scan | Cache miss — worker hasn't reached this author yet | Synchronous scans never touch Amazon as of v2.21.0; they read `metadata_cache_amazon.db`. The miss enqueues the author at priority 1000. Check the Amazon Cache panel for queue depth + worker status. |
+| Amazon Cache Status pill is red | Worker stall or repeated soft-blocks | Check container logs for the `[scan]` summary lines under `seshat.discovery.metadata_cache_worker.amazon`. Use "Reset Cooldown" sparingly; the cooldown is usually justified. |
 | Review queue shows wrong metadata | File scoped to wrong directory | Was fixed in v1.0.0; ensure you're on latest |
