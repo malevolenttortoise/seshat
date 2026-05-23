@@ -528,6 +528,7 @@ export default function MobileSettingsPage() {
   const qbitCreds = creds.filter((c) => c.key === "qbit_password");
   const apiCreds = creds.filter((c) => c.key === "hardcover_api_key");
   const absCreds = creds.filter((c) => c.key === "abs_api_key");
+  const ntfyCreds = creds.filter((c) => c.key === "ntfy_password");
 
   return (
     <div
@@ -773,10 +774,12 @@ export default function MobileSettingsPage() {
 
       {/* ─── Notifications ───────────────────────────────────── */}
       <MobileSection title="Notifications" defaultOpen={false}>
-        <FieldRow label="ntfy endpoint">
+        {/* v2.24.0: was `ntfy_endpoint` — stale key the backend never
+            read. Corrected to `ntfy_url` to match config.py. */}
+        <FieldRow label="ntfy URL">
           <MobileTextInput
-            value={(s.ntfy_endpoint as string) ?? ""}
-            onChange={(v) => upd("ntfy_endpoint", v)}
+            value={(s.ntfy_url as string) ?? ""}
+            onChange={(v) => upd("ntfy_url", v)}
             placeholder="https://ntfy.sh"
           />
         </FieldRow>
@@ -786,6 +789,23 @@ export default function MobileSettingsPage() {
             onChange={(v) => upd("ntfy_topic", v)}
           />
         </FieldRow>
+        {/* v2.24.0 — BasicAuth fields for self-hosted ntfy. Blank
+            username = no auth header sent. */}
+        <FieldRow label="ntfy username">
+          <MobileTextInput
+            value={(s.ntfy_username as string) ?? ""}
+            onChange={(v) => upd("ntfy_username", v)}
+            placeholder="(blank for public topics)"
+          />
+        </FieldRow>
+        {ntfyCreds.map((c) => (
+          <MobileCredField
+            key={c.key}
+            item={c}
+            onSaved={loadCreds}
+            label="ntfy password"
+          />
+        ))}
         <FieldRow label="Test ntfy">
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <MobileBtn
@@ -812,20 +832,26 @@ export default function MobileSettingsPage() {
           on={!!s.notify_on_grab}
           onToggle={() => upd("notify_on_grab", !s.notify_on_grab)}
         />
+        {/* v2.24.0: was `notify_on_download` — stale key the backend
+            never read. Corrected to `notify_on_download_complete`. */}
         <ToggleRow
           label="Notify on download"
-          on={!!s.notify_on_download}
-          onToggle={() => upd("notify_on_download", !s.notify_on_download)}
+          on={!!s.notify_on_download_complete}
+          onToggle={() => upd("notify_on_download_complete", !s.notify_on_download_complete)}
         />
+        {/* v2.24.0: was `notify_on_error` — stale key. Corrected to
+            `notify_on_pipeline_error`. */}
         <ToggleRow
           label="Notify on error"
-          on={!!s.notify_on_error}
-          onToggle={() => upd("notify_on_error", !s.notify_on_error)}
+          on={!!s.notify_on_pipeline_error}
+          onToggle={() => upd("notify_on_pipeline_error", !s.notify_on_pipeline_error)}
         />
+        {/* v2.24.0: was `notify_daily_digest` — stale key. Corrected
+            to `daily_digest_enabled`. */}
         <ToggleRow
           label="Daily digest"
-          on={!!s.notify_daily_digest}
-          onToggle={() => upd("notify_daily_digest", !s.notify_daily_digest)}
+          on={!!s.daily_digest_enabled}
+          onToggle={() => upd("daily_digest_enabled", !s.daily_digest_enabled)}
         />
         <ToggleRow
           label="Weekly digest"

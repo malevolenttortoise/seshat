@@ -44,6 +44,7 @@ SECRET_KEYS: dict[str, str] = {
     "mam_session_id": "MAM session cookie",
     "mam_irc_password": "MAM IRC password",
     "qbit_password": "qBittorrent password",
+    "ntfy_password": "ntfy server password (BasicAuth)",
     "hardcover_api_key": "Hardcover API Bearer token",
     "google_books_api_key": "Google Books API key (Cloud Console)",
     "abs_api_key": "Audiobookshelf API Bearer token",

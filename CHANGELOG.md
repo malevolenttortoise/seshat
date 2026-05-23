@@ -7,7 +7,66 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
-## [2.23.0] — UNRELEASED (development branch)
+## [2.24.0] — UNRELEASED (development branch)
+
+Bundle B partial — credential split only. The full notification-taxonomy
+rework (B.2) is deferred to its own release; see
+[`project_seshat_v3x_backlog`][backlog] for the design.
+
+### Added — ntfy BasicAuth credential fields
+
+Self-hosted ntfy servers commonly require authentication. Pre-v2.24.0,
+the only way to send credentials was inlining them in the server URL
+(`https://user:pass@host/topic`) — which leaks the password into every
+reverse-proxy / CDN / nginx log on the request path.
+
+Two new fields under Settings → Notifications:
+
+- **ntfy_username** — plain setting in `settings.json`. Empty = no auth
+  header sent (public ntfy.sh case stays zero-config).
+- **ntfy_password** — encrypted in the `seshat_auth.db` secrets store
+  alongside `qbit_password` et al. Saved via the standard `CredField`
+  flow; never echoed in API responses.
+
+Both are read live on every `ntfy.send()` call, so credential rotation
+takes effect immediately without a container restart.
+
+**Backwards-compat:** legacy inline `https://user:pass@host` URLs
+continue to work — the credentials are extracted into an
+`Authorization: Basic …` header and the URL the wire sees is rewritten
+to `https://host`, so the password no longer leaks into intermediary
+logs. Dedicated `ntfy_username` + `ntfy_password` take precedence when
+both are present.
+
+### Fixed — Mobile Notifications settings wrote stale field names
+
+Four toggles on the mobile Settings → Notifications panel were writing
+keys the backend no longer reads, silently doing nothing when flipped:
+
+| Old (broken) | Corrected to |
+|---|---|
+| `ntfy_endpoint` | `ntfy_url` |
+| `notify_on_download` | `notify_on_download_complete` |
+| `notify_on_error` | `notify_on_pipeline_error` |
+| `notify_daily_digest` | `daily_digest_enabled` |
+
+The keys had drifted at various points (mostly the v2.12.0 per-event-
+gates expansion) without the mobile UI being updated to match. Caught
+while auditing the notifications surface for the credential-split work.
+
+### Tests
+
+`tests/notify/test_ntfy.py` — 7 new tests in `TestAuth`:
+no-auth-when-username-empty, dedicated-creds-set-basicauth,
+inline-url-creds-strip-from-endpoint, dedicated-creds-beat-inline,
+username-without-password-falls-through, endpoint-strips-inline,
+resolve-auth-helper-isolation. 24 existing tests still pass.
+
+[backlog]: https://github.com/malevolenttortoise/seshat/blob/main/CHANGELOG.md
+
+---
+
+## [2.23.0] — 2026-05-23
 
 First release under the dev/main split flow — all work for v2.23.0 onward
 lands on `development` and is UAT-ed via the `:development-slim` image

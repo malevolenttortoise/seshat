@@ -9,9 +9,11 @@ ntfy.sh notification sender.
 
 ntfy.sh is a simple HTTP-based pub/sub notification service. Sending a
 notification is just an HTTP POST with the message body as plain text
-and metadata in headers. No authentication is required for public
-topics; self-hosted ntfy servers may need auth (not yet supported —
-add when a user needs it).
+and metadata in headers. Authentication: BasicAuth via the
+`ntfy_username` setting + encrypted `ntfy_password` secret (v2.24.0);
+legacy inline `https://user:pass@host/topic` URLs still parse but the
+dedicated fields are preferred so the URL doesn't leak through
+intermediary logs.
 
 The module is a no-op when `ntfy_url` is empty in settings, so callers
 don't need to guard against "notifications not configured".
@@ -94,6 +96,12 @@ def _resolve_endpoint(url: str, topic: str) -> Optional[str]:
       url="https://ntfy.sh/seshat", topic="" → https://ntfy.sh/seshat
       url="ntfy.sh/seshat", topic=""         → https://ntfy.sh/seshat
 
+    Inline `user:pass@host` credentials in the URL are STRIPPED here —
+    `_resolve_auth_from_url()` extracts them so they don't leak into
+    the path / Host header. Use the encrypted-store credentials
+    (`ntfy_username` setting + `ntfy_password` secret) for new
+    installs; the inline-strip is only for backwards compatibility.
+
     Returns None if neither url nor topic is set, or if url is empty.
     """
     if not url:
@@ -106,10 +114,21 @@ def _resolve_endpoint(url: str, topic: str) -> Optional[str]:
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
 
+    # Strip inline `user:pass@host` if present. The credentials get
+    # picked up by `_resolve_auth_from_url()` separately; the endpoint
+    # itself must NOT carry them or every nginx/cloudflare in the
+    # middle logs the password.
+    from urllib.parse import urlparse, urlunparse
+    parsed = urlparse(url)
+    if parsed.username or parsed.password:
+        netloc = parsed.hostname or ""
+        if parsed.port:
+            netloc = f"{netloc}:{parsed.port}"
+        parsed = parsed._replace(netloc=netloc)
+        url = urlunparse(parsed)
+
     # If the URL already has a path component (topic in URL), use it as-is.
     # Otherwise, append the topic.
-    from urllib.parse import urlparse
-    parsed = urlparse(url)
     if parsed.path and parsed.path != "/":
         # Topic is already in the URL — use the URL as the full endpoint.
         return url.rstrip("/")
@@ -118,6 +137,59 @@ def _resolve_endpoint(url: str, topic: str) -> Optional[str]:
     if not topic or not topic.strip():
         return None
     return f"{url.rstrip('/')}/{topic.strip()}"
+
+
+def _resolve_auth_from_url(url: str) -> Optional[tuple[str, str]]:
+    """Extract inline `user:pass@host` BasicAuth credentials from a URL.
+
+    Backwards-compat seam — pre-v2.24.0 users embedded credentials in
+    the ntfy server URL (`https://user:pass@host/topic`). The new
+    dedicated `ntfy_username` setting + encrypted `ntfy_password`
+    secret take precedence; this only fires if those are empty AND
+    the URL still carries inline creds.
+
+    Returns None if no inline credentials are present.
+    """
+    if not url:
+        return None
+    url = url.strip()
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    if parsed.username and parsed.password:
+        return (parsed.username, parsed.password)
+    return None
+
+
+async def _resolve_auth() -> Optional[httpx.BasicAuth]:
+    """Resolve the BasicAuth credentials for the next ntfy send.
+
+    Precedence:
+      1. `ntfy_username` setting + `ntfy_password` secret (dedicated fields)
+      2. Inline `user:pass@host` in `ntfy_url` (backwards-compat only)
+      3. None (no auth header sent)
+
+    Read every call so a credential rotation at runtime takes effect
+    on the next send without a restart.
+    """
+    from app.config import load_settings
+    from app.secrets import get_secret
+
+    s = load_settings()
+    username = (s.get("ntfy_username") or "").strip()
+    if username:
+        password = await get_secret("ntfy_password") or ""
+        if password:
+            return httpx.BasicAuth(username, password)
+        # Username set, no password — likely a misconfiguration mid-setup.
+        # Fall through to inline-URL fallback rather than sending a half
+        # auth header.
+
+    inline = _resolve_auth_from_url(s.get("ntfy_url") or "")
+    if inline is not None:
+        return httpx.BasicAuth(*inline)
+    return None
 
 
 async def send(
@@ -159,11 +231,18 @@ async def send(
     if tags:
         headers["Tags"] = ",".join(tags)
 
+    # v2.24.0 — resolve BasicAuth from the dedicated ntfy_username +
+    # ntfy_password secret (or the legacy inline-URL form). Resolved
+    # per call so a credential rotation at runtime applies on the
+    # next send without restarting the container.
+    auth = await _resolve_auth()
+
     try:
         resp = await _get_client().post(
             endpoint,
             content=message.encode("utf-8"),
             headers=headers,
+            auth=auth if auth is not None else httpx.USE_CLIENT_DEFAULT,
         )
         if resp.status_code == 200:
             _log.debug("ntfy sent: %s", title)

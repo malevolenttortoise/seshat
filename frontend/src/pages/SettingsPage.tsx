@@ -690,6 +690,7 @@ function DesktopSettingsPage() {
   const uploaders = ((s.excluded_uploaders as string[]) ?? []);
   const mamCreds = creds.filter(c => ["mam_session_id", "mam_irc_password"].includes(c.key));
   const qbitCreds = creds.filter(c => c.key === "qbit_password");
+  const ntfyCreds = creds.filter(c => c.key === "ntfy_password");
   const apiCreds = creds.filter(c => c.key === "hardcover_api_key");
   const googleBooksCreds = creds.filter(c => c.key === "google_books_api_key");
   const absCreds = creds.filter(c => c.key === "abs_api_key");
@@ -1022,6 +1023,14 @@ function DesktopSettingsPage() {
               {ntfyResult && <span style={{ fontSize: 12, color: ntfyResult.startsWith("✓") ? t.ok : t.err, fontWeight: 600 }}>{ntfyResult}</span>}
             </div>
           </SF>
+          {/* v2.24.0 — BasicAuth for self-hosted ntfy servers. Empty
+              username = no auth header sent (matches the public-topic
+              ntfy.sh case). Legacy inline `https://user:pass@host`
+              URLs still parse but the dedicated fields are preferred. */}
+          <SF label="ntfy Username" desc="Leave blank for public/anonymous ntfy topics. For self-hosted ntfy with auth, enter the username; password is stored encrypted in the field below.">
+            <input value={(s.ntfy_username as string) || ""} onChange={e => upd("ntfy_username", e.target.value)} placeholder="(blank for public topics)" style={{ ...ist, width: 240 }} />
+          </SF>
+          {ntfyCreds.map(c => <CredField key={c.key} item={c} onSaved={loadCreds} desc="ntfy server password. Stored encrypted; sent only as BasicAuth on each notification POST." />)}
           {/* Notification groups restructured around the master toggles
               that already gate them backend-side. Each group uses a
               non-wide SF for the master (toggle right-aligned as

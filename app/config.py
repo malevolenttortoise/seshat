@@ -476,6 +476,15 @@ DEFAULT_SETTINGS = {
     # ── Notifications ───────────────────────────────────────
     "ntfy_url": "",
     "ntfy_topic": "seshat",
+    # v2.24.0 — dedicated BasicAuth fields for self-hosted ntfy
+    # servers that require authentication. Username lives in
+    # settings.json; password lives in the encrypted secrets store
+    # (`ntfy_password`, see `app/secrets.py::SECRET_KEYS`). Empty
+    # username = no auth header sent. Backwards-compat: if the URL
+    # contains an inline `https://user:pass@host` form and these
+    # fields are empty, ntfy.send() falls back to the inline creds
+    # so existing installs don't break on the v2.24.0 deploy.
+    "ntfy_username": "",
     "daily_digest_enabled": True,
     "daily_digest_hour": 9,  # local time, 24h
     # Per-event notifications: fire a ntfy for every grab submitted
