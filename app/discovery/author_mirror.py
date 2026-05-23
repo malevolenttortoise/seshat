@@ -190,12 +190,20 @@ async def backfill_dual_author_rows() -> dict:
                 missing = source_names - existing
                 if not missing:
                     continue
-                # Bulk-insert the missing stubs.
+                # Bulk-insert the missing stubs. Populate
+                # normalized_name so future ABS/Calibre syncs can
+                # consolidate onto these rows via the normalized
+                # fallback path (v2.22.0 — pre-fix, stubs from this
+                # path had NULL normalized_name and produced the
+                # orphan-author churn pattern).
+                from app.metadata.author_names import normalize_author_name
                 inserted_here = 0
                 for name in missing:
+                    norm = normalize_author_name(name)
                     await db.execute(
-                        "INSERT INTO authors (name, sort_name) VALUES (?, ?)",
-                        (name, name),
+                        "INSERT INTO authors (name, sort_name, normalized_name) "
+                        "VALUES (?, ?, ?)",
+                        (name, name, norm),
                     )
                     inserted_here += 1
                 await db.commit()

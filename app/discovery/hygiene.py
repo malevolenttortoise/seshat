@@ -74,6 +74,9 @@ JOB_NAMES = (
     "Book deduplication",
     "Series consolidation",
     "ABS author cross-stamp",
+    "Orphan author retrolink",
+    "Cross-library person backfill",
+    "Prune orphan author links",
 )
 TOTAL_JOBS = len(JOB_NAMES)
 
@@ -82,11 +85,18 @@ def _zero_stats() -> dict[str, Any]:
     return {
         "deleted_authors": 0,
         "deleted_series": 0,
+        "deleted_author_links": 0,
         "books_backfilled": 0,
         "authors_resolved": 0,
         "books_merged": 0,
         "series_merged": 0,
         "abs_authors_stamped": 0,
+        "orphan_authors_retrolinked": 0,
+        "person_ids_mirrored": 0,
+        "person_id_conflicts_resolved": 0,
+        "person_bios_backfilled": 0,
+        "broken_image_urls_cleared": 0,
+        "orphan_links_pruned": 0,
         "errors": [],
     }
 
@@ -240,11 +250,43 @@ async def job_empty_cleanup(
                 continue
             deletable.append(int(r["id"]))
 
+        deleted_links = 0
         if deletable:
             # Series rows referenced by these authors are already
             # orphaned (no books), so cascade isn't required — but
             # we delete in a single transaction to keep the slug's
             # row count consistent for any concurrent reader.
+            # Cascade-delete the global author_links rows first.
+            # `author_links` lives in the global DB and can't have a
+            # cross-file FK to the per-library `authors`, so we
+            # delete it here manually. Pre-v2.22.0 this was silently
+            # left behind, producing the orphaned-link churn pattern
+            # documented in the ABS-sync arc.
+            try:
+                from app.database import get_db as get_global_db
+                gdb = await get_global_db()
+                try:
+                    chunk = 500
+                    for i in range(0, len(deletable), chunk):
+                        batch = deletable[i : i + chunk]
+                        placeholders = ",".join("?" * len(batch))
+                        cur = await gdb.execute(
+                            f"DELETE FROM author_links "
+                            f"WHERE library_slug = ? "
+                            f"AND author_id IN ({placeholders})",  # nosec B608
+                            [slug, *batch],
+                        )
+                        deleted_links += cur.rowcount or 0
+                    await gdb.commit()
+                finally:
+                    await gdb.close()
+            except Exception as e:
+                # Don't block the per-library cleanup on a global
+                # DB hiccup; Phase G's orphan sweep is the safety net.
+                logger.warning(
+                    "hygiene[%s] author_links cascade failed (non-fatal): "
+                    "%s: %s", slug, type(e).__name__, e,
+                )
             chunk = 500
             for i in range(0, len(deletable), chunk):
                 batch = deletable[i : i + chunk]
@@ -255,11 +297,15 @@ async def job_empty_cleanup(
                 )
             await db.commit()
             stats["deleted_authors"] += len(deletable)
+            stats.setdefault("deleted_author_links", 0)
+            stats["deleted_author_links"] += deleted_links
 
         logger.info(
             "hygiene[%s] empty-cleanup: deleted_authors=%d deleted_series=%d "
-            "kept_by_allowlist=%d kept_by_cross_library=%d",
+            "deleted_author_links=%d kept_by_allowlist=%d "
+            "kept_by_cross_library=%d",
             slug, len(deletable), deleted_series,
+            deleted_links,
             kept_allowlist, kept_cross_library,
         )
     except Exception as e:
@@ -769,6 +815,407 @@ async def job_abs_author_cross_stamp(stats: dict[str, Any]) -> None:
     )
 
 
+# ─── Job 7 — Cross-library person backfill (v2.22.0) ────────────────
+#
+# Person-aware version of job 6. Walks every multi-link person and
+# mirrors missing source IDs across linked sibling author rows. For
+# the rare 2+ unique-value conflict, applies a "calibre wins"
+# (ebook-side wins) policy and audit-logs the displaced value via
+# `author_id_audit_log` so it's recoverable.
+#
+# Distinct from job 6 in that it uses the persons / author_links graph
+# instead of normalized-name equality — manually-linked persons whose
+# library rows have name variance still get their IDs mirrored, and
+# accidentally-name-collided persons don't get cross-contaminated.
+#
+# Job 6 is retained for safety (handles authors not yet linked to a
+# person), but after Job 7's orphan-retrolinking sibling runs (Job 8)
+# Job 6 will no-op for the steady state.
+
+async def job_cross_library_person_backfill(stats: dict[str, Any]) -> None:
+    """Mirror NULL source IDs across linked persons; resolve conflicts
+    via ebook-wins; clear the broken John Birmingham image_url
+    (v3.x backlog item — proper author-image fix lives there).
+    """
+    from app.discovery.author_identity import (
+        MIRRORABLE_SOURCE_ID_COLUMNS, _open_per_library,
+    )
+    from app.database import get_db as get_global_db
+
+    # Build slug → content_type map for conflict resolution.
+    slug_to_type: dict[str, str] = {}
+    for lib in cross_library.libraries_for("all"):
+        s = lib.get("slug")
+        if s:
+            slug_to_type[s] = lib.get("content_type") or "ebook"
+
+    def _pick_winner(values: dict[str, str]) -> str:
+        """Given {slug: value}, return the winning slug.
+
+        Policy: ebook content_type wins; tiebreak alphabetical slug.
+        Falls back to first slug alphabetically if no ebook lib has
+        a value (e.g. two audiobook libraries).
+        """
+        ebook = sorted(s for s in values if slug_to_type.get(s) == "ebook")
+        if ebook:
+            return ebook[0]
+        return sorted(values)[0]
+
+    # Collect multi-link persons + their links.
+    by_person: dict[int, list[tuple[str, int]]] = {}
+    gdb = await get_global_db()
+    try:
+        cur = await gdb.execute(
+            "SELECT person_id, library_slug, author_id FROM author_links "
+            "WHERE person_id IN (SELECT person_id FROM author_links "
+            "                    GROUP BY person_id HAVING COUNT(*) > 1)"
+        )
+        rows = await cur.fetchall()
+        for r in rows:
+            by_person.setdefault(r["person_id"], []).append(
+                (r["library_slug"], r["author_id"])
+            )
+    finally:
+        await gdb.close()
+
+    sortable_cols = sorted(MIRRORABLE_SOURCE_ID_COLUMNS)
+    mirrored = 0
+    conflicts_resolved = 0
+    audit_writes: list[tuple] = []
+
+    for person_id, links in by_person.items():
+        # Group aids by slug.
+        slug_to_aids: dict[str, list[int]] = {}
+        for s, aid in links:
+            slug_to_aids.setdefault(s, []).append(aid)
+
+        # Fetch current values per slug: {slug: {col: value}}.
+        per_slug_vals: dict[str, dict[str, Optional[str]]] = {}
+        for slug, aids in slug_to_aids.items():
+            try:
+                per_lib = await _open_per_library(slug)
+            except Exception as e:
+                logger.warning(
+                    "person-backfill: cannot open %s: %s (skipping person %d)",
+                    slug, e, person_id,
+                )
+                continue
+            try:
+                # Defensive — test fixtures and brand-new libraries
+                # may not have the `authors` table yet.
+                has_authors = await (await per_lib.execute(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type='table' AND name='authors' LIMIT 1"
+                )).fetchone()
+                if not has_authors:
+                    continue
+                cols_str = ", ".join(sortable_cols)
+                ph = ",".join("?" * len(aids))
+                cur = await per_lib.execute(
+                    f"SELECT id, {cols_str} FROM authors "  # nosec B608
+                    f"WHERE id IN ({ph})",
+                    aids,
+                )
+                fetched = await cur.fetchall()
+                slug_vals: dict[str, Optional[str]] = {}
+                for r in fetched:
+                    for col in sortable_cols:
+                        v = r[col]
+                        if v and not slug_vals.get(col):
+                            slug_vals[col] = v
+                per_slug_vals[slug] = slug_vals
+            finally:
+                await per_lib.close()
+
+        # Per-column write decisions.
+        for col in sortable_cols:
+            slug_values: dict[str, str] = {}
+            for slug, cols in per_slug_vals.items():
+                v = cols.get(col)
+                if v:
+                    slug_values[slug] = v
+            if not slug_values:
+                continue
+            unique = set(slug_values.values())
+            if len(unique) == 1:
+                value = next(iter(unique))
+                for slug, aids in slug_to_aids.items():
+                    if slug in slug_values:
+                        continue
+                    try:
+                        per_lib = await _open_per_library(slug)
+                    except Exception:
+                        continue
+                    try:
+                        for aid in aids:
+                            await per_lib.execute(
+                                f"UPDATE authors SET {col} = ? "  # nosec B608
+                                f"WHERE id = ? AND "
+                                f"({col} IS NULL OR {col} = '')",
+                                (value, aid),
+                            )
+                        await per_lib.commit()
+                        mirrored += 1
+                    finally:
+                        await per_lib.close()
+            else:
+                # Conflict — apply ebook-wins.
+                winner = _pick_winner(slug_values)
+                winning_value = slug_values[winner]
+                for slug, value in slug_values.items():
+                    if slug == winner or value == winning_value:
+                        continue
+                    audit_writes.append(
+                        (person_id, col, value, winning_value)
+                    )
+                    aids = slug_to_aids.get(slug, [])
+                    try:
+                        per_lib = await _open_per_library(slug)
+                    except Exception:
+                        continue
+                    try:
+                        for aid in aids:
+                            await per_lib.execute(
+                                f"UPDATE authors SET {col} = ? "  # nosec B608
+                                f"WHERE id = ?",
+                                (winning_value, aid),
+                            )
+                        await per_lib.commit()
+                        conflicts_resolved += 1
+                        logger.warning(
+                            "person-backfill: conflict person_id=%d col=%s "
+                            "winner=%s winning_value=%s loser=%s "
+                            "loser_value=%s",
+                            person_id, col, winner, winning_value,
+                            slug, value,
+                        )
+                    finally:
+                        await per_lib.close()
+
+    # Flush audit-log writes (batched).
+    if audit_writes:
+        gdb = await get_global_db()
+        try:
+            await gdb.executemany(
+                "INSERT INTO author_id_audit_log "
+                "(person_id, source_name, old_value, new_value) "
+                "VALUES (?, ?, ?, ?)",
+                audit_writes,
+            )
+            await gdb.commit()
+        finally:
+            await gdb.close()
+
+    # v2.22.0 Phase D — backfill persons.bio from any non-null
+    # sibling bio. The Author Detail endpoint returns `persons.bio`
+    # directly, so populating it makes the bio visible across the
+    # cross-library identity surface. Picks the longest non-empty
+    # bio as canonical when multiple siblings have one (consistent
+    # with `_consolidate_persons`' existing tiebreak heuristic).
+    bios_backfilled = 0
+    from app.database import get_db as get_global_db_for_bio
+    for person_id, links in by_person.items():
+        # Skip if persons.bio is already populated.
+        gdb = await get_global_db_for_bio()
+        try:
+            cur = await gdb.execute(
+                "SELECT bio FROM persons WHERE id = ?", (person_id,),
+            )
+            row = await cur.fetchone()
+            if row and row["bio"] and row["bio"].strip():
+                continue
+        finally:
+            await gdb.close()
+        # Collect per-library bios.
+        bios: list[str] = []
+        slug_to_aids2: dict[str, list[int]] = {}
+        for s, aid in links:
+            slug_to_aids2.setdefault(s, []).append(aid)
+        for slug, aids in slug_to_aids2.items():
+            try:
+                per_lib = await _open_per_library(slug)
+            except Exception:
+                continue
+            try:
+                has_authors = await (await per_lib.execute(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type='table' AND name='authors' LIMIT 1"
+                )).fetchone()
+                if not has_authors:
+                    continue
+                ph = ",".join("?" * len(aids))
+                cur = await per_lib.execute(
+                    f"SELECT bio FROM authors WHERE id IN ({ph})",  # nosec B608
+                    aids,
+                )
+                for r in await cur.fetchall():
+                    if r["bio"] and r["bio"].strip():
+                        bios.append(r["bio"])
+            finally:
+                await per_lib.close()
+        if not bios:
+            continue
+        canonical_bio = max(bios, key=len)
+        gdb = await get_global_db_for_bio()
+        try:
+            await gdb.execute(
+                "UPDATE persons SET bio = ?, "
+                "    last_updated_at = strftime('%s', 'now') "
+                "WHERE id = ?",
+                (canonical_bio, person_id),
+            )
+            await gdb.commit()
+            bios_backfilled += 1
+        finally:
+            await gdb.close()
+
+    # John Birmingham image_url cleanup. The Goodreads selector
+    # `img.authorPhoto, img[alt*='author']` matched a book cover
+    # image; the resulting URL contains "/books/" in its path. Clear
+    # any matching row across all libraries. The proper rebuild lives
+    # in the v3.x backlog item [author_image_rework].
+    jb_cleared = 0
+    for lib in cross_library.libraries_for("all"):
+        slug = lib.get("slug")
+        if not slug:
+            continue
+        try:
+            per_lib = await _open_per_library(slug)
+        except Exception:
+            continue
+        try:
+            has_authors = await (await per_lib.execute(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type='table' AND name='authors' LIMIT 1"
+            )).fetchone()
+            if not has_authors:
+                continue
+            cur = await per_lib.execute(
+                "UPDATE authors SET image_url = NULL "
+                "WHERE image_url LIKE '%/books/%'"
+            )
+            await per_lib.commit()
+            jb_cleared += cur.rowcount or 0
+        finally:
+            await per_lib.close()
+
+    stats["person_ids_mirrored"] = (
+        stats.get("person_ids_mirrored", 0) + mirrored
+    )
+    stats["person_id_conflicts_resolved"] = (
+        stats.get("person_id_conflicts_resolved", 0) + conflicts_resolved
+    )
+    stats["broken_image_urls_cleared"] = (
+        stats.get("broken_image_urls_cleared", 0) + jb_cleared
+    )
+    stats["person_bios_backfilled"] = (
+        stats.get("person_bios_backfilled", 0) + bios_backfilled
+    )
+    logger.info(
+        "hygiene: person-backfill: mirrored=%d conflicts_resolved=%d "
+        "broken_image_urls_cleared=%d person_bios_backfilled=%d",
+        mirrored, conflicts_resolved, jb_cleared, bios_backfilled,
+    )
+
+
+# ─── Job 8 — Orphan author retrolinking (v2.22.0) ──────────────────
+#
+# For every author row that lacks an `author_links` entry, call
+# `get_or_create_person` so it gets joined to the cross-library
+# identity graph. This catches:
+#
+#   1. Stub rows created by `author_mirror.backfill_dual_author_rows`
+#      before v2.22.0 (which inserted without calling
+#      `get_or_create_person`).
+#   2. Authors created by `mirror_new_author_to_other_type_libs`
+#      (the live mirror path) that no subsequent ABS/Calibre sync
+#      has touched, leaving them unlinked.
+#
+# Idempotent — `get_or_create_person` is a no-op when the link
+# already exists.
+
+async def job_orphan_author_retrolink(stats: dict[str, Any]) -> None:
+    """Walk every library's authors and ensure each has an
+    author_links row. Uses `get_or_create_person`, which now (v2.22.0)
+    fuzzy-matches when the exact normalized form misses, so existing
+    person rows are reused where possible."""
+    from app.discovery import author_identity
+    from app.database import get_db as get_global_db
+
+    retrolinked = 0
+    libs = cross_library.libraries_for("all")
+    for lib in libs:
+        slug = lib.get("slug")
+        if not slug:
+            continue
+        # Find authors without a link in this library.
+        gdb = await get_global_db()
+        try:
+            cur = await gdb.execute(
+                "SELECT author_id FROM author_links WHERE library_slug = ?",
+                (slug,),
+            )
+            linked = {r["author_id"] for r in await cur.fetchall()}
+        finally:
+            await gdb.close()
+
+        db = await get_library_db(slug)
+        try:
+            has_authors = await (await db.execute(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type='table' AND name='authors' LIMIT 1"
+            )).fetchone()
+            if not has_authors:
+                continue
+            cur = await db.execute("SELECT id, name FROM authors")
+            authors = await cur.fetchall()
+        finally:
+            await db.close()
+
+        for a in authors:
+            if a["id"] in linked:
+                continue
+            try:
+                await author_identity.get_or_create_person(
+                    slug, a["id"], name=a["name"],
+                )
+                retrolinked += 1
+            except Exception as e:
+                logger.warning(
+                    "orphan-retrolink: %s/%d (%r): %s: %s",
+                    slug, a["id"], a["name"], type(e).__name__, e,
+                )
+
+    stats["orphan_authors_retrolinked"] = (
+        stats.get("orphan_authors_retrolinked", 0) + retrolinked
+    )
+    logger.info(
+        "hygiene: orphan-retrolink: %d author(s) joined to persons graph",
+        retrolinked,
+    )
+
+
+# ─── Job 9 — Prune orphan author_links (v2.22.0) ───────────────────
+#
+# Wraps the existing `author_identity.prune_orphan_links` so it runs
+# on every hygiene pass instead of waiting for an explicit caller.
+# Safety net for the rare case where an author row gets deleted via
+# a path that bypassed Job 1's cascade.
+
+async def job_prune_orphan_links(stats: dict[str, Any]) -> None:
+    from app.discovery import author_identity
+    try:
+        dropped = await author_identity.prune_orphan_links()
+        stats["orphan_links_pruned"] = (
+            stats.get("orphan_links_pruned", 0) + dropped
+        )
+        logger.info("hygiene: prune-orphan-links: dropped=%d", dropped)
+    except Exception as e:
+        msg = f"prune-orphan-links: {type(e).__name__}: {e}"
+        logger.exception(msg)
+        stats["errors"].append(msg)
+
+
 # ─── Coordinator ────────────────────────────────────────────────────
 
 async def run_all() -> dict[str, Any]:
@@ -882,6 +1329,39 @@ async def run_all() -> dict[str, Any]:
             "abs_authors_stamped": stats["abs_authors_stamped"],
         })
 
+        # Job 7 — Orphan author retrolinking (cross-library). Runs
+        # before Job 8 so newly-linked orphans participate in the
+        # subsequent source-ID mirror pass.
+        _set_phase(6, library="(cross-library)")
+        await job_orphan_author_retrolink(stats)
+        state._hygiene_progress["jobs"].append({
+            "name": JOB_NAMES[6],
+            "orphan_authors_retrolinked": stats["orphan_authors_retrolinked"],
+        })
+
+        # Job 8 — Cross-library person backfill (v2.22.0). Person-aware
+        # source-ID mirror across linked siblings, with ebook-wins
+        # conflict resolution + author_id_audit_log writes for any
+        # displaced values.
+        _set_phase(7, library="(cross-library)")
+        await job_cross_library_person_backfill(stats)
+        state._hygiene_progress["jobs"].append({
+            "name": JOB_NAMES[7],
+            "person_ids_mirrored": stats["person_ids_mirrored"],
+            "person_id_conflicts_resolved": stats["person_id_conflicts_resolved"],
+            "broken_image_urls_cleared": stats["broken_image_urls_cleared"],
+        })
+
+        # Job 9 — Prune orphan author_links (safety net for the rare
+        # case where an author row gets deleted via a path that
+        # bypassed Job 1's cascade).
+        _set_phase(8, library="(cross-library)")
+        await job_prune_orphan_links(stats)
+        state._hygiene_progress["jobs"].append({
+            "name": JOB_NAMES[8],
+            "orphan_links_pruned": stats["orphan_links_pruned"],
+        })
+
         state._hygiene_progress.update({
             "running": False,
             "status": "complete" if not stats["errors"] else "complete (with errors)",
@@ -899,7 +1379,10 @@ async def run_all() -> dict[str, Any]:
                 f"+{stats['authors_resolved']} author IDs, "
                 f"~{stats['books_merged']} books merged, "
                 f"~{stats['series_merged']} series merged, "
-                f"+{stats['abs_authors_stamped']} ABS stamps"
+                f"+{stats['abs_authors_stamped']} ABS stamps, "
+                f"+{stats.get('orphan_authors_retrolinked', 0)} retrolinked, "
+                f"+{stats.get('person_ids_mirrored', 0)} IDs mirrored, "
+                f"-{stats.get('orphan_links_pruned', 0)} orphan links"
             )
             await publish_toast(
                 "warning" if stats["errors"] else "success", summary,

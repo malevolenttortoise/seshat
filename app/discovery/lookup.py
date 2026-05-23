@@ -917,6 +917,23 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                     author_id, source_name, result.external_id, exc,
                 )
 
+        # v2.22.0 — mirror the bio across linked siblings AND update
+        # `persons.bio` canonically. Author Detail returns
+        # `persons.bio`, so this is what users see. Best-effort: no
+        # local write was done if `result.bio` is falsy.
+        if result.bio:
+            try:
+                from app.discovery.author_identity import mirror_bio
+                from app.discovery.database import get_active_library
+                active_slug = get_active_library()
+                if active_slug:
+                    await mirror_bio(active_slug, author_id, result.bio)
+            except Exception as exc:
+                logger.debug(
+                    "mirror_bio failed for author_id=%d: %s",
+                    author_id, exc,
+                )
+
         # SELECT includes pub_date, description, expected_date so the
         # owned-book metadata logic in _update_existing can compare against
         # what's currently stored without a second round-trip per book.

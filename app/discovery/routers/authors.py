@@ -615,13 +615,59 @@ async def get_triage_state():
             "WHERE al.link_confidence = 'low' "
             "ORDER BY p.canonical_name COLLATE NOCASE"
         )).fetchall()
-        low_confidence = []
+        # Two-pass to resolve per-library author names without N+1:
+        # collect (slug, author_id) tuples across every low-confidence
+        # person, then bulk-fetch names by slug. Mark wants the actual
+        # per-library names visible on the Triage page so he can
+        # eyeball mismatches like "Marc J Gregson" vs "Marc J. Gregson"
+        # at a glance.
+        low_confidence_link_rows: dict[int, list] = {}
+        wanted_by_slug: dict[str, set[int]] = {}
         for r in low_rows:
             link_rows = await (await gdb.execute(
                 "SELECT library_slug, author_id, link_confidence "
                 "FROM author_links WHERE person_id = ?",
                 (r["person_id"],),
             )).fetchall()
+            low_confidence_link_rows[r["person_id"]] = list(link_rows)
+            for lr in link_rows:
+                wanted_by_slug.setdefault(lr["library_slug"], set()).add(
+                    lr["author_id"]
+                )
+    finally:
+        # Close BEFORE opening per-library connections to avoid
+        # holding the global write-lock across nested I/O.
+        await gdb.close()
+
+    # Bulk-fetch (slug, author_id) → name for every link surface above.
+    from app.discovery.author_identity import _open_per_library
+    name_by_pair: dict[tuple[str, int], str] = {}
+    for slug, aids in wanted_by_slug.items():
+        if not aids:
+            continue
+        try:
+            per_lib = await _open_per_library(slug)
+        except Exception:
+            continue
+        try:
+            aid_list = sorted(aids)
+            ph = ",".join("?" * len(aid_list))
+            cur = await per_lib.execute(
+                f"SELECT id, name FROM authors WHERE id IN ({ph})",  # nosec B608
+                aid_list,
+            )
+            for ar in await cur.fetchall():
+                name_by_pair[(slug, ar["id"])] = ar["name"]
+        except Exception:
+            pass
+        finally:
+            await per_lib.close()
+
+    gdb = await get_global_db()
+    try:
+        low_confidence = []
+        for r in low_rows:
+            link_rows = low_confidence_link_rows.get(r["person_id"], [])
             low_confidence.append({
                 "person_id": r["person_id"],
                 "canonical_name": r["canonical_name"],
@@ -634,6 +680,9 @@ async def get_triage_state():
                         "library_slug": lr["library_slug"],
                         "author_id": lr["author_id"],
                         "link_confidence": lr["link_confidence"],
+                        "author_name": name_by_pair.get(
+                            (lr["library_slug"], lr["author_id"])
+                        ),
                     }
                     for lr in link_rows
                 ],
@@ -1151,6 +1200,118 @@ async def preview_source_id(
         "parsed": parsed,
         "url": url,
     }
+
+
+@router.get("/persons/source-ids")
+async def list_persons_source_ids():
+    """v2.22.0 — Per-person source ID overview for the Persons Manager
+    page. Returns the multi-link persons in the identity graph with
+    each `MIRRORABLE_SOURCE_ID_COLUMN`'s union value across linked
+    siblings, plus a `divergent` set listing columns where siblings
+    disagree (the JFW-style conflict case — calibre-vs-abs IDs that
+    differ, surfaced for manual reconciliation even though Job 8 of
+    Hygiene auto-resolves these).
+
+    Single-link persons are excluded; nothing to manage across
+    libraries for them.
+    """
+    from app.discovery.author_identity import _open_per_library
+    gdb = await get_global_db()
+    try:
+        cur = await gdb.execute(
+            "SELECT al.person_id, p.canonical_name, p.display_name_override, "
+            "       p.normalized_name, al.library_slug, al.author_id "
+            "FROM author_links al "
+            "JOIN persons p ON p.id = al.person_id "
+            "WHERE al.person_id IN ("
+            "  SELECT person_id FROM author_links "
+            "  GROUP BY person_id HAVING COUNT(*) > 1"
+            ") "
+            "ORDER BY p.canonical_name COLLATE NOCASE, al.library_slug"
+        )
+        rows = await cur.fetchall()
+    finally:
+        await gdb.close()
+
+    # Group links by person_id.
+    by_person: dict[int, dict] = {}
+    wanted_by_slug: dict[str, set[int]] = {}
+    for r in rows:
+        pid = r["person_id"]
+        if pid not in by_person:
+            by_person[pid] = {
+                "person_id": pid,
+                "canonical_name": r["canonical_name"],
+                "display_name": (
+                    r["display_name_override"] or r["canonical_name"]
+                ),
+                "normalized_name": r["normalized_name"],
+                "links": [],
+            }
+        by_person[pid]["links"].append({
+            "library_slug": r["library_slug"],
+            "author_id": r["author_id"],
+        })
+        wanted_by_slug.setdefault(r["library_slug"], set()).add(r["author_id"])
+
+    # Bulk-fetch the mirrorable source IDs per (slug, author_id).
+    sortable_cols = sorted(MIRRORABLE_SOURCE_ID_COLUMNS)
+    cols_str = ", ".join(sortable_cols)
+    ids_by_pair: dict[tuple[str, int], dict[str, Optional[str]]] = {}
+    for slug, aids in wanted_by_slug.items():
+        if not aids:
+            continue
+        try:
+            per_lib = await _open_per_library(slug)
+        except Exception:
+            continue
+        try:
+            aid_list = sorted(aids)
+            ph = ",".join("?" * len(aid_list))
+            cur = await per_lib.execute(
+                f"SELECT id, name, {cols_str} FROM authors "  # nosec B608
+                f"WHERE id IN ({ph})",
+                aid_list,
+            )
+            for ar in await cur.fetchall():
+                ids_by_pair[(slug, ar["id"])] = {
+                    "name": ar["name"],
+                    **{c: ar[c] for c in sortable_cols},
+                }
+        finally:
+            await per_lib.close()
+
+    # Materialize per-person union + divergence.
+    out: list[dict] = []
+    for pid, p in by_person.items():
+        union: dict[str, Optional[str]] = {c: None for c in sortable_cols}
+        per_slug_values: dict[str, dict[str, Optional[str]]] = {}
+        for link in p["links"]:
+            key = (link["library_slug"], link["author_id"])
+            cols = ids_by_pair.get(key)
+            if not cols:
+                continue
+            link["author_name"] = cols.get("name")
+            per_slug_values[link["library_slug"]] = cols
+            for c in sortable_cols:
+                v = cols.get(c)
+                if v and not union[c]:
+                    union[c] = v
+        divergent: list[str] = []
+        for c in sortable_cols:
+            seen: set[str] = set()
+            for cols in per_slug_values.values():
+                v = cols.get(c)
+                if v:
+                    seen.add(v)
+            if len(seen) > 1:
+                divergent.append(c)
+        out.append({
+            **p,
+            "source_ids": union,
+            "divergent": divergent,
+        })
+    return {"persons": out}
 
 
 @router.patch("/persons/{person_id}/source-id")

@@ -725,11 +725,16 @@ async def add_book(data: dict = Body(...)):
         if not title or not author_name:
             raise HTTPException(400, "Title and author are required")
         # Find or create author
+        from app.metadata.author_names import normalize_author_name
         row = await (await db.execute("SELECT id FROM authors WHERE name=?", (author_name,))).fetchone()
         if row:
             aid = row["id"]
         else:
-            cur = await db.execute("INSERT INTO authors (name, sort_name) VALUES (?, ?)", (author_name, author_name))
+            norm = normalize_author_name(author_name)
+            cur = await db.execute(
+                "INSERT INTO authors (name, sort_name, normalized_name) VALUES (?, ?, ?)",
+                (author_name, author_name, norm),
+            )
             aid = cur.lastrowid
         # Find series if specified
         sid = None

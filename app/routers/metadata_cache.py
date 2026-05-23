@@ -62,22 +62,46 @@ class WorkerStatusModel(BaseModel):
 
 
 class QueueStatsModel(BaseModel):
-    """Aggregate counts across the queue. The four
-    explicit-status counters cover every value the worker writes;
-    `total` is the sum so the frontend doesn't have to re-add."""
+    """Aggregate counts across the queue. The four explicit-status
+    counters cover every value the worker writes; `total` is the
+    sum so the frontend doesn't have to re-add.
+
+    v2.22.0 — `pending` is split into `due_now` (next_scan_due_at
+    has elapsed and the worker may pop the row this tick) and
+    `scheduled_later` (the row is enrolled but the worker is
+    cooling it off). The unified `pending` field is kept for
+    backwards compat — it equals `due_now + scheduled_later`. The
+    UI should display `due_now` for the active "Queue" tile so a
+    backfill visibly counts down toward zero, instead of staying
+    pinned at the enrolled-author total like it did pre-v2.22.0.
+    """
     total: int
     pending: int
     in_progress: int
     failed_permanent: int
     other: int  # any unknown status — defensive, should be 0 in practice
+    due_now: int = 0          # pending AND next_scan_due_at <= now()
+    scheduled_later: int = 0  # pending AND next_scan_due_at > now()
 
 
 class CacheStatsModel(BaseModel):
-    """Aggregate counts across the cache state + books tables."""
+    """Aggregate counts across the cache state + books tables.
+
+    v2.22.0 — `unique_ok_authors` and `unique_total_authors` are the
+    author-level (de-duplicated across libraries) counters the UI
+    should display for "Authors cached" so a 645-author backfill
+    shows N/645 instead of the 2×N / 2×645 per-library row counts.
+    The `state_rows` / `ok_authors` fields are retained for
+    backwards compat (e.g. debugging panels that want raw row
+    counts) but should not be the primary user-facing progress
+    gauge.
+    """
     state_rows: int
     books_rows: int
-    ok_authors: int       # state rows with last_outcome='ok'
-    error_authors: int    # state rows with last_outcome='error'
+    ok_authors: int       # state rows with last_outcome='ok' (per-lib)
+    error_authors: int    # state rows with last_outcome='error' (per-lib)
+    unique_ok_authors: int = 0      # DISTINCT author_id w/ any 'ok' state row
+    unique_total_authors: int = 0   # DISTINCT author_id in the state table
 
 
 class CooldownModel(BaseModel):
@@ -257,6 +281,20 @@ async def get_status(source: str) -> StatusResponse:
         for row in await cur.fetchall():
             qcounts[str(row[0])] = int(row[1])
 
+        # v2.22.0 — split `pending` into `due_now` vs
+        # `scheduled_later`. The worker pops rows that satisfy
+        # status='pending' AND next_scan_due_at <= now, so `due_now`
+        # is the "work remaining in this ramp" gauge users actually
+        # want to watch. `scheduled_later` is the steady-state pool
+        # waiting for its next cadence tick.
+        now_for_queue = time.time()
+        cur = await db.execute(
+            f"SELECT COUNT(*) FROM {qt} "
+            f"WHERE status='pending' AND next_scan_due_at <= ?",
+            (now_for_queue,),
+        )
+        due_now = int((await cur.fetchone())[0])
+
         # Cache state + books counts.
         st_table = metadata_cache.state_table(source)
         b_table = metadata_cache.books_table(source)
@@ -271,6 +309,19 @@ async def get_status(source: str) -> StatusResponse:
         state_outcomes: dict[str, int] = {}
         for row in await cur.fetchall():
             state_outcomes[str(row[0])] = int(row[1])
+        # v2.22.0 — author-level dedup so "X / Y authors cached" is
+        # author-level not row-level. Pre-fix, a 2-library setup
+        # produced 1289 rows for 645 authors and the tile read
+        # 1289/1289 — useless as a progress gauge.
+        cur = await db.execute(
+            f"SELECT COUNT(DISTINCT author_id) FROM {st_table}"
+        )
+        unique_total_authors = int((await cur.fetchone())[0])
+        cur = await db.execute(
+            f"SELECT COUNT(DISTINCT author_id) FROM {st_table} "
+            f"WHERE last_outcome='ok'"
+        )
+        unique_ok_authors = int((await cur.fetchone())[0])
     finally:
         await db.close()
 
@@ -296,12 +347,15 @@ async def get_status(source: str) -> StatusResponse:
     failed_permanent = qcounts.pop("failed_permanent", 0)
     other = sum(qcounts.values())  # any unknown status — defensive
     total = pending + in_progress + failed_permanent + other
+    scheduled_later = max(pending - due_now, 0)
     queue_model = QueueStatsModel(
         total=total,
         pending=pending,
         in_progress=in_progress,
         failed_permanent=failed_permanent,
         other=other,
+        due_now=due_now,
+        scheduled_later=scheduled_later,
     )
 
     cache_model = CacheStatsModel(
@@ -309,6 +363,8 @@ async def get_status(source: str) -> StatusResponse:
         books_rows=books_rows,
         ok_authors=state_outcomes.get("ok", 0),
         error_authors=state_outcomes.get("error", 0),
+        unique_ok_authors=unique_ok_authors,
+        unique_total_authors=unique_total_authors,
     )
 
     # Phase I — mode + schedule. Reads through the same accessors the

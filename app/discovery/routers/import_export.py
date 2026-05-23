@@ -434,7 +434,12 @@ async def import_add_books(data: dict = Body(...)):
                     if _fuzzy(a["name"], author_name):
                         aid = a["id"]; break
                 if not aid:
-                    cur = await db.execute("INSERT INTO authors (name, sort_name) VALUES (?, ?)", (author_name, author_name))
+                    from app.metadata.author_names import normalize_author_name
+                    norm = normalize_author_name(author_name)
+                    cur = await db.execute(
+                        "INSERT INTO authors (name, sort_name, normalized_name) VALUES (?, ?, ?)",
+                        (author_name, author_name, norm),
+                    )
                     aid = cur.lastrowid
 
                 # Fuzzy-match existing book

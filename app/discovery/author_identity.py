@@ -318,29 +318,65 @@ async def get_or_create_person(
                 library_slug, author_id, name, normalized,
             )
 
-        # Step 3: find existing person by normalized_name.
+        # Step 3: find existing person by normalized_name (exact).
         prow = await (await db.execute(
             "SELECT id FROM persons WHERE normalized_name = ?",
             (normalized,),
         )).fetchone()
         if prow:
             person_id = prow["id"]
+            link_confidence = "high"
         else:
-            # Step 4: create new person.
-            cur = await db.execute(
-                "INSERT INTO persons "
-                "(canonical_name, normalized_name, bio, image_url) "
-                "VALUES (?, ?, ?, ?)",
-                (name, normalized, bio, image_url),
-            )
-            person_id = cur.lastrowid
+            # Step 3b (v2.22.0): fuzzy fallback. Two-stage match —
+            # first stage covers the v2.20.0 known gap where
+            # variants like "Robert Heinlein" vs "Robert A. Heinlein"
+            # land on separate persons because their normalized
+            # forms differ. The resulting link is marked
+            # `link_confidence='low'` so `_flag_low_confidence_links`
+            # surfaces it for manual review rather than auto-trusting
+            # the fuzzy merge.
+            #
+            # Cost is bounded: this branch only runs on true new-
+            # author inserts (exact-normalized matches return above),
+            # so scanning ~all persons here is cheap in practice.
+            from app.metadata.author_names import authors_match
+            candidates = await (await db.execute(
+                "SELECT id, normalized_name FROM persons"
+            )).fetchall()
+            person_id = None
+            link_confidence = "high"
+            for c in candidates:
+                cand_norm = c["normalized_name"]
+                if not cand_norm or cand_norm.startswith("__empty_"):
+                    continue
+                if authors_match(normalized, cand_norm):
+                    person_id = c["id"]
+                    link_confidence = "low"
+                    _log.info(
+                        "get_or_create_person: fuzzy-matched %r "
+                        "(normalized=%r) to person_id=%d "
+                        "(candidate_normalized=%r) — link flagged "
+                        "'low' for review", name, normalized,
+                        person_id, cand_norm,
+                    )
+                    break
+            if person_id is None:
+                # Step 4: create new person.
+                cur = await db.execute(
+                    "INSERT INTO persons "
+                    "(canonical_name, normalized_name, bio, image_url) "
+                    "VALUES (?, ?, ?, ?)",
+                    (name, normalized, bio, image_url),
+                )
+                person_id = cur.lastrowid
 
-        # Insert the link.
+        # Insert the link with computed confidence.
         await db.execute(
             "INSERT INTO author_links "
-            "(person_id, library_slug, author_id, link_source) "
-            "VALUES (?, ?, ?, 'auto')",
-            (person_id, library_slug, author_id),
+            "(person_id, library_slug, author_id, link_source, "
+            " link_confidence) "
+            "VALUES (?, ?, ?, 'auto', ?)",
+            (person_id, library_slug, author_id, link_confidence),
         )
         await db.commit()
         return person_id
@@ -445,6 +481,89 @@ async def mirror_source_id(
                 "UPDATE persons SET last_updated_at = strftime('%s', 'now') "
                 "WHERE id = ?",
                 (person_id,),
+            )
+            await gdb.commit()
+        finally:
+            await gdb.close()
+
+    return touched
+
+
+# ─── Mirror bio (v2.22.0) ──────────────────────────────────────
+
+
+async def mirror_bio(
+    library_slug: str,
+    author_id: int,
+    value: Optional[str],
+) -> int:
+    """v2.22.0 — propagate a bio update across the cross-library
+    identity graph. Mirrors the existing `mirror_source_id` shape:
+
+      1. Write `value` to every OTHER linked per-library `authors`
+         row's `bio` column (skipping the caller's own slug to avoid
+         deadlocking against its still-open write transaction —
+         same v2.20.1 rule that applies to `mirror_source_id`).
+      2. Update `persons.bio` so the canonical row carries the
+         value too. Author Detail endpoints return `persons.bio`
+         directly, so this is the field the user actually sees.
+
+    Defensive: empty / whitespace-only values are treated as None
+    (no write) so a buggy scraper that yields "" doesn't blank
+    a working bio. Caller's own slug's `bio` column is the caller's
+    responsibility — same convention as `mirror_source_id`.
+
+    Returns the count of sibling rows touched (excludes caller +
+    persons update).
+    """
+    if value is not None and not value.strip():
+        value = None
+
+    person_id = await person_id_for(library_slug, author_id)
+    if person_id is None:
+        return 0
+
+    links = await linked_authors(person_id)
+    touched = 0
+    for slug, aid in links:
+        if slug == library_slug:
+            continue
+        try:
+            per_lib = await _open_per_library(slug)
+        except Exception as exc:
+            _log.warning(
+                "mirror_bio: cannot open seshat_%s.db: %s — skipping",
+                slug, exc,
+            )
+            continue
+        try:
+            # COALESCE-fill semantics — never overwrite a non-empty
+            # bio with a different one. The "single canonical bio"
+            # invariant we want lives on `persons.bio`; the per-
+            # library mirrors are advisory and only updated when
+            # they were empty.
+            await per_lib.execute(
+                "UPDATE authors SET bio = COALESCE(NULLIF(bio, ''), ?) "
+                "WHERE id = ?",
+                (value, aid),
+            )
+            await per_lib.commit()
+            touched += 1
+        finally:
+            await per_lib.close()
+
+    # Update persons.bio canonically. Empty current bio gets
+    # overwritten; non-empty stays (operator can edit via the
+    # Persons & IDs page).
+    if value:
+        gdb = await get_global_db()
+        try:
+            await gdb.execute(
+                "UPDATE persons "
+                "SET bio = COALESCE(NULLIF(bio, ''), ?), "
+                "    last_updated_at = strftime('%s', 'now') "
+                "WHERE id = ?",
+                (value, person_id),
             )
             await gdb.commit()
         finally:

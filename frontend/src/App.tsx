@@ -34,6 +34,7 @@ import MigrationPage from "./pages/MigrationPage";
 import PipelineMamPage from "./pages/MamPage";
 import DatabasePage from "./pages/DatabasePage";
 import AuthorTriagePage from "./pages/AuthorTriagePage";
+import PersonsManagerPage from "./pages/PersonsManagerPage";
 import LogsPage from "./pages/LogsPage";
 import SettingsPage from "./pages/SettingsPage";
 
@@ -83,6 +84,7 @@ const DISCOVERY_NAV = [
       { id: "disc-metadata", label: "Metadata",       icon: "📋" },
       { id: "disc-series",   label: "Series",         icon: "🗂️" },
       { id: "author-triage", label: "Author Triage",  icon: "⚙️" },
+      { id: "persons-manager", label: "Persons & IDs", icon: "🪪" },
     ],
   },
 ];
@@ -101,7 +103,7 @@ const WIDE_PAGES = new Set([
   "disc-library", "disc-authors", "disc-author-detail",
   "disc-missing", "disc-upcoming", "disc-mam", "disc-metadata",
   "disc-series", "disc-hidden", "disc-importexport", "disc-works",
-  "author-triage",
+  "author-triage", "persons-manager",
   "pipe-review", "pipe-tentative", "pipe-ignored", "pipe-authors",
   "pipe-delayed", "pipe-migration",
   "logs", "database",
@@ -175,6 +177,7 @@ function renderPage(
     case "logs":               return <LogsPage />;
     case "database":           return <DatabasePage />;
     case "author-triage":      return <AuthorTriagePage onNav={nav} />;
+    case "persons-manager":    return <PersonsManagerPage onNav={nav} />;
 
     default:                   return <PipelineDashboard onNav={nav} />;
   }

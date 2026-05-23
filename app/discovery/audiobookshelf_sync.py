@@ -251,32 +251,51 @@ async def sync_audiobookshelf(library: dict) -> dict:
         # split on ", " to match Calibre's multi-author handling;
         # collaborative audiobooks ("King & Straub") stay together
         # as one author because ABS joins with " & " in that case.
+        from app.metadata.author_names import normalize_author_name
         author_id_map: dict[str, int] = {}
         for book in books_all:
             for author_name in book["authors"]:
                 if author_name in author_id_map:
                     continue
+                norm = normalize_author_name(author_name)
+                # Exact name first (preserves prior behavior for the
+                # clean case). Fall back to normalized-name match so
+                # ABS punctuation drift ("Marc J Gregson" vs "Marc J.
+                # Gregson" between syncs) consolidates onto a single
+                # row instead of producing a duplicate stub that
+                # hygiene later prunes, leaving its author_link
+                # orphaned (the v2.22.0 churn root cause).
                 row = await (await db.execute(
                     "SELECT id FROM authors WHERE name = ?", (author_name,)
                 )).fetchone()
+                if not row and norm:
+                    row = await (await db.execute(
+                        "SELECT id FROM authors WHERE normalized_name = ?",
+                        (norm,),
+                    )).fetchone()
                 if row:
                     author_id_map[author_name] = row["id"]
                     # Stamp the ABS marker so cross-library linking
                     # (Phase 2) can match on it. Null-preserving: if
                     # we already have a Calibre-sourced author with
                     # the same name, we only add the ABS id, never
-                    # overwrite their calibre_id.
+                    # overwrite their calibre_id. Also backfills
+                    # normalized_name on existing rows that lack it
+                    # (rows created by the pre-v2.22.0 INSERT path).
                     await db.execute(
-                        "UPDATE authors SET audiobookshelf_id = COALESCE(audiobookshelf_id, ?) "
+                        "UPDATE authors SET "
+                        "audiobookshelf_id = COALESCE(audiobookshelf_id, ?), "
+                        "normalized_name = COALESCE(normalized_name, ?) "
                         "WHERE id = ?",
-                        (abs_library_id, row["id"]),
+                        (abs_library_id, norm, row["id"]),
                     )
                 else:
                     sort_name = _sort_name(author_name)
                     cur = await db.execute(
-                        "INSERT INTO authors (name, sort_name, audiobookshelf_id) "
-                        "VALUES (?, ?, ?)",
-                        (author_name, sort_name, abs_library_id),
+                        "INSERT INTO authors (name, sort_name, "
+                        "audiobookshelf_id, normalized_name) "
+                        "VALUES (?, ?, ?, ?)",
+                        (author_name, sort_name, abs_library_id, norm),
                     )
                     author_id_map[author_name] = cur.lastrowid
                     # v2.20.0 — link the new ABS-sourced author into the

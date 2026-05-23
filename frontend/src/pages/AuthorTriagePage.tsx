@@ -22,6 +22,7 @@ interface TriageLink {
   library_slug: string;
   author_id: number;
   link_confidence: "high" | "low";
+  author_name?: string | null;
 }
 
 interface LowConfidencePerson {
@@ -285,7 +286,12 @@ export default function AuthorTriagePage({ onNav }: AuthorTriagePageProps) {
                 {p.links.map((l) => (
                   <tr key={`${l.library_slug}:${l.author_id}`}>
                     <td>
-                      {l.library_slug} / author #{l.author_id}
+                      <div style={{ fontWeight: 500 }}>
+                        {l.author_name ?? <span style={{ color: t.tg, fontStyle: "italic" }}>name unavailable</span>}
+                      </div>
+                      <div style={{ fontSize: 10, color: t.tg }}>
+                        {l.library_slug} / author #{l.author_id}
+                      </div>
                     </td>
                     <td style={{ color: t.redt, fontSize: 10 }}>
                       {l.link_confidence}

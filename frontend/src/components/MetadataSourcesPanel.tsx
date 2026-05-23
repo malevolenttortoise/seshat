@@ -1203,6 +1203,9 @@ type CacheQueueStats = {
   in_progress: number;
   failed_permanent: number;
   other: number;
+  // v2.22.0 — split-pending fields for the "Queue" tile.
+  due_now?: number;
+  scheduled_later?: number;
 };
 
 type CacheStats = {
@@ -1210,6 +1213,9 @@ type CacheStats = {
   books_rows: number;
   ok_authors: number;
   error_authors: number;
+  // v2.22.0 — author-level dedup so X/Y shows authors not per-library rows.
+  unique_ok_authors?: number;
+  unique_total_authors?: number;
 };
 
 type CacheCooldown = {
@@ -1510,11 +1516,19 @@ function AmazonCacheStatusCard() {
         background: t.bg3, border: `1px solid ${t.borderL}`,
         borderRadius: 6, padding: "6px 10px",
       }}>
-        <StatTile label="Queue" value={status.queue.pending.toLocaleString()} />
+        <StatTile
+          label="Queue"
+          value={(status.queue.due_now ?? status.queue.pending).toLocaleString()}
+          hint={
+            (status.queue.scheduled_later ?? 0) > 0
+              ? `${(status.queue.scheduled_later ?? 0).toLocaleString()} cooling off`
+              : undefined
+          }
+        />
         <StatTile
           label="Authors cached"
-          value={`${status.cache.ok_authors.toLocaleString()} / ${status.cache.state_rows.toLocaleString()}`}
-          hint="ok / total"
+          value={`${(status.cache.unique_ok_authors ?? status.cache.ok_authors).toLocaleString()} / ${(status.cache.unique_total_authors ?? status.cache.state_rows).toLocaleString()}`}
+          hint="ok / total (author-level)"
         />
         <StatTile
           label="Books cached"

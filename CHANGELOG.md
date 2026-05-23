@@ -7,6 +7,105 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [2.22.0] — 2026-05-23
+
+### Added — Cross-library person identity hardening + Persons & IDs UI
+
+Closing arc on the cross-library author work started in v2.20.0.
+Audit of the production identity graph (727 multi-link persons across
+calibre-library + abs-audio-library) revealed five distinct issues:
+
+1. **~108 missing source-ID mirrors** across linked siblings (66 Goodreads,
+   17 OpenLibrary, 14 Google Books, plus Amazon/Hardcover/etc.)
+2. **One genuine ID conflict** (J Foster Ward — calibre and abs disagree
+   on `goodreads_id`)
+3. **10 orphan authors** with no `author_links` row at all
+4. **Orphaned `author_links`** pointing to deleted authors (no FK
+   cascade across DB files)
+5. **Stub-creation churn** producing empty-`normalized_name` rows that
+   hygiene's empty-cleanup then prunes, leaving links dangling
+
+All five now closed in v2.22.0 via:
+
+#### Source fixes (prevent recurrence)
+- ABS sync's INSERT now populates `normalized_name` and falls back to
+  a normalized-name lookup before creating a duplicate stub (the
+  primary churn root cause). Three additional INSERT paths in
+  `author_mirror.py`, `routers/books.py`, and `routers/import_export.py`
+  also fixed.
+- `get_or_create_person` gains a fuzzy fallback: when exact normalized
+  lookup misses, scans `persons` via `authors_match` (`SequenceMatcher`
+  ≥ 0.92) and reuses the existing person with `link_confidence='low'`
+  so the new link surfaces on the Author Triage page for review.
+- `mirror_bio()` helper analogous to `mirror_source_id()` — bio writes
+  now propagate to linked siblings AND populate canonical `persons.bio`.
+  `lookup.py`'s author-metadata write path calls it after the local
+  write.
+- Hygiene's empty-cleanup now cascades to `author_links` (deletes the
+  global rows before dropping the per-library `authors` rows).
+
+#### Cleanup (one-shot reconciliation via 3 new hygiene jobs)
+- **Job 7 — Orphan author retrolink:** walks every per-library author
+  lacking an `author_links` row and calls `get_or_create_person`.
+  Idempotent. Closes the gap left by paths that bypassed the
+  identity hook (`author_mirror.backfill_dual_author_rows`,
+  routers/books, routers/import_export).
+- **Job 8 — Cross-library person backfill:** the headline job. Walks
+  every multi-link person and, for each `MIRRORABLE_SOURCE_ID_COLUMN`,
+  COALESCE-fills NULL siblings. Two-or-more-unique-values conflicts
+  resolve via **ebook-wins** policy with the displaced value logged
+  to `author_id_audit_log` (so it's recoverable). Also backfills
+  `persons.bio` from any non-null sibling bio (longest wins, matches
+  `_consolidate_persons` tiebreak) and clears the broken John
+  Birmingham `image_url` regression (`/books/...` path = book cover,
+  not author photo).
+- **Job 9 — Prune orphan `author_links`:** safety net wrapper around
+  the existing `prune_orphan_links` function. Runs every hygiene pass.
+
+#### UI (manage from one place)
+- **Author Triage** now shows the per-library author's actual name
+  next to each link so the low-confidence-link review surfaces name
+  mismatches at a glance. Backend bulk-fetches names via a new
+  two-pass query — no N+1.
+- **Persons & IDs** (new page under Discovery → Tools) — table of
+  every multi-link person with their union source IDs across linked
+  libraries. Edit a single field, the existing
+  `PATCH /persons/{id}/source-id` endpoint writes through to every
+  linked library via `mirror_source_id`. Divergent values highlighted.
+
+### Fixed — Metadata-cache "Queue" tile no longer pins at total enrollment
+
+Pre-v2.22.0 the "Queue" stat tile displayed `pending` from the queue
+table — but the worker re-enqueues every row to `status='pending'`
+after a successful scan with `next_scan_due_at = now + rescan_cadence`,
+so `pending` always equals enrolled-author-count once the steady
+state is reached. During a fresh backfill the tile stayed pinned at
+the target value (e.g. "645") instead of counting down.
+
+Status endpoint now emits:
+- `due_now` — pending AND `next_scan_due_at <= now()` (work the
+  worker may pick up on the next tick)
+- `scheduled_later` — pending AND `next_scan_due_at > now()` (cooling
+  off until the next scheduled scan)
+
+UI "Queue" tile reads `due_now` with `scheduled_later` shown as a
+tooltip. "Authors cached" tile also rewired to show author-level
+(de-duplicated across libraries) `unique_ok_authors / unique_total_authors`
+so a 2-library setup no longer reports the doubled per-library row
+count (e.g. "645 / 645" instead of "1289 / 1289").
+
+### v3.x backlog — Author image rework
+
+Audit confirmed author image scraping is functionally dead — only 1
+of 737 calibre authors has an `image_url`, and that 1 is a Goodreads
+book-cover URL (selector at `goodreads.py:519` matches the wrong
+element). Job 8 clears it as a workaround. Proper rebuild
+(re-derive selector + extend `metadata_cache_amazon_state` with
+`author_image_url` + opportunistic Hardcover/Audible fallbacks)
+queued for v3.x.
+
+---
+
 ## [2.21.2] — 2026-05-23
 
 ### Fixed — `dry_run` and `mam_irc_enabled` are now real kill switches
