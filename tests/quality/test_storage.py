@@ -235,3 +235,33 @@ async def test_coverage_stats(db):
     assert stats["by_source"]["mediainfo"] == 1
     assert stats["by_source"]["description"] == 1
     assert stats["by_source"]["tags"] == 0
+    assert stats["by_source"]["unavailable"] == 0
+
+
+async def test_unavailable_stub_row_counts_as_extracted(db):
+    """v2.25.0 hotfix — `source='unavailable'` stub rows are written
+    when MAM no longer returns the torrent. They should:
+      1. Count as extracted (not missing), preventing re-entry into
+         the backfill loop on subsequent runs.
+      2. Appear in by_source.unavailable for at-a-glance visibility.
+    """
+    await _seed_grab_and_link(
+        db, grab_id=30, mam_torrent_id="dead_torrent",
+        library_slug="lib", book_id=300,
+    )
+    stub = QualitySnapshot(
+        mam_torrent_id="dead_torrent",
+        source="unavailable",
+    )
+    await upsert_quality(db, stub)
+    await db.commit()
+
+    # Backfill list MUST exclude it now.
+    missing = await list_missing_quality_torrent_ids(db, limit=50)
+    assert "dead_torrent" not in missing
+
+    # Stats roll it into extracted + the unavailable bucket.
+    stats = await quality_coverage_stats(db)
+    assert stats["missing"] == 0
+    assert stats["extracted"] == 1
+    assert stats["by_source"]["unavailable"] == 1

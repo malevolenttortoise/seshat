@@ -97,6 +97,16 @@ async def _run() -> None:
     Errors are logged but never raised — one bad torrent ID shouldn't
     halt a 500-torrent backfill.
     """
+    # v2.25.0 hotfix — track IDs we've already attempted in this run.
+    # `extract_for_torrent` returns None on certain failure modes
+    # (5xx, network, transient cookie issues) WITHOUT writing a
+    # quality_metadata stub. Without this set, `list_missing` would
+    # keep returning the same failing IDs and the loop would never
+    # terminate — confirmed in prod on Iron Flame + Onyx Storm
+    # (deleted from MAM) which burned ~5800 unnecessary MAM calls
+    # before Mark hit Stop. Halt cleanly when only retried-this-run
+    # IDs remain.
+    attempted: set[str] = set()
     try:
         # Snapshot the total at start so the UI can show a progress
         # estimate that doesn't drift as new grabs land mid-run.
@@ -118,10 +128,23 @@ async def _run() -> None:
                 _log.info("quality backfill: queue empty, finishing")
                 break
 
-            for tid in batch:
+            # Only process IDs we haven't already attempted this run.
+            # When all candidates have been attempted, we've made all
+            # the progress we can — halt.
+            new_in_batch = [tid for tid in batch if tid not in attempted]
+            if not new_in_batch:
+                _log.info(
+                    "quality backfill: only previously-attempted IDs remain "
+                    "(%d failing IDs); halting cleanly",
+                    len(batch),
+                )
+                break
+
+            for tid in new_in_batch:
                 if state.cancel_requested:
                     break
                 state.current_torrent_id = tid
+                attempted.add(tid)
                 processed_this_iter = False
                 try:
                     db = await get_db()

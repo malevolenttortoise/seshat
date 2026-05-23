@@ -564,6 +564,7 @@ interface QualityStats {
     tags: number;
     mixed: number;
     none: number;
+    unavailable: number;
   };
 }
 
@@ -637,7 +638,7 @@ function QualityPanel() {
           </div>
           {stats && (
             <div style={{ fontSize: 11, color: t.textDim, lineHeight: 1.5 }}>
-              By source: mediainfo {stats.by_source.mediainfo} · description {stats.by_source.description} · tags {stats.by_source.tags} · mixed {stats.by_source.mixed} · none {stats.by_source.none}
+              By source: mediainfo {stats.by_source.mediainfo} · description {stats.by_source.description} · tags {stats.by_source.tags} · mixed {stats.by_source.mixed} · none {stats.by_source.none} · unavailable {stats.by_source.unavailable}
             </div>
           )}
         </div>

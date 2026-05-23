@@ -72,6 +72,31 @@ async def extract_for_torrent(
             "quality extraction: torrent_info failed for %s: %s",
             mam_torrent_id, e,
         )
+        # v2.25.0 — "not found in search results" means MAM no longer
+        # serves this torrent (deleted, trumped by a replacement,
+        # restricted category). Write an `unavailable` stub so the
+        # missing-list LEFT JOIN filters this row out forever and we
+        # don't burn MAM API calls on the same dead torrent on every
+        # subsequent backfill. Other errors (5xx, network) DON'T write
+        # the stub — they're potentially transient and should be
+        # retryable on the next run.
+        if "not found in search results" in str(e).lower():
+            stub = QualitySnapshot(
+                mam_torrent_id=mam_torrent_id,
+                source="unavailable",
+            )
+            try:
+                await upsert_quality(db, stub)
+                await db.commit()
+                _log.info(
+                    "quality extraction: marked %s as unavailable on MAM",
+                    mam_torrent_id,
+                )
+            except Exception as upsert_e:
+                _log.warning(
+                    "quality extraction: stub write failed for %s: %s",
+                    mam_torrent_id, upsert_e,
+                )
         return None
 
     snapshot = extract_quality(

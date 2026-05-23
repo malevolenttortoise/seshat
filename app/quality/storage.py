@@ -202,5 +202,10 @@ async def quality_coverage_stats(
             "tags":        by_source.get("tags", 0),
             "mixed":       by_source.get("mixed", 0),
             "none":        by_source.get("none", 0),
+            # v2.25.0 hotfix — torrents that returned "not found in
+            # search results" from MAM (deleted, replaced, restricted).
+            # Marked with a stub row so they don't churn through
+            # the backfill on every run.
+            "unavailable": by_source.get("unavailable", 0),
         },
     }
