@@ -20,3 +20,5 @@ scratch/
 htmlcov/
 staging/
 review-staging/
+dev-stack/
+files/

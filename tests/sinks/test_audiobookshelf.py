@@ -171,3 +171,149 @@ class TestAudiobookshelfSinkScanTrigger:
         result = await sink.deliver("/nope/book.m4b", BookMetadata())
         assert result.success is False
         assert calls == []
+
+
+class TestAudiobookshelfSinkRemove:
+    """v2.27.0 Phase 5b — inverse of deliver. ABS is filesystem-of-truth
+    so removal = fs delete + library scan trigger. Refuses to delete
+    paths outside the configured library_path as defense-in-depth on
+    top of Phase 5b's safety classifier."""
+
+    def _inject_transport(self, monkeypatch, handler):
+        orig = httpx.AsyncClient
+        monkeypatch.setattr(
+            httpx, "AsyncClient",
+            lambda **kw: orig(
+                transport=httpx.MockTransport(handler),
+                **{k: v for k, v in kw.items() if k != "transport"},
+            ),
+        )
+
+    async def test_removes_directory_and_triggers_scan(self, tmp_path, monkeypatch):
+        scan_calls: list = []
+        def handler(request):
+            scan_calls.append(request.url.path)
+            return httpx.Response(200, json={})
+        self._inject_transport(monkeypatch, handler)
+
+        library = tmp_path / "abs-library"
+        book_dir = library / "Brandon Sanderson" / "The Way of Kings"
+        book_dir.mkdir(parents=True)
+        (book_dir / "01.m4b").write_bytes(b"audio")
+        (book_dir / "cover.jpg").write_bytes(b"img")
+
+        sink = AudiobookshelfSink(
+            str(library),
+            abs_base_url="http://abs:13378",
+            abs_api_key="test-token",
+            abs_library_id="lib-xyz",
+        )
+        result = await sink.remove(path=str(book_dir))
+
+        assert result.success is True
+        assert not book_dir.exists()
+        assert scan_calls == ["/api/libraries/lib-xyz/scan"]
+
+    async def test_removes_single_file(self, tmp_path, monkeypatch):
+        self._inject_transport(monkeypatch, lambda r: httpx.Response(200, json={}))
+
+        library = tmp_path / "abs-library"
+        author = library / "Author" / "Title"
+        author.mkdir(parents=True)
+        book = author / "book.m4b"
+        book.write_bytes(b"audio")
+
+        sink = AudiobookshelfSink(str(library))
+        result = await sink.remove(path=str(book))
+
+        assert result.success is True
+        assert not book.exists()
+        # Companion dir survives — we only remove the requested path.
+        assert author.exists()
+
+    async def test_idempotent_when_path_missing(self, tmp_path, monkeypatch):
+        """Path that doesn't exist returns success — that's the desired
+        terminal state and retry-after-partial-failure should not error."""
+        scan_calls: list = []
+        def handler(request):
+            scan_calls.append(request.url.path)
+            return httpx.Response(200, json={})
+        self._inject_transport(monkeypatch, handler)
+
+        library = tmp_path / "abs-library"
+        library.mkdir()
+        sink = AudiobookshelfSink(
+            str(library),
+            abs_base_url="http://abs:13378",
+            abs_api_key="test-token",
+            abs_library_id="lib-xyz",
+        )
+        result = await sink.remove(path=str(library / "Author" / "Gone"))
+        assert result.success is True
+        # We still trigger a scan so ABS reconciles its stale DB row.
+        assert scan_calls == ["/api/libraries/lib-xyz/scan"]
+
+    async def test_refuses_path_outside_library(self, tmp_path):
+        """Defense-in-depth: even if Phase 5b's safety classifier is
+        bypassed, the sink should reject deletes outside its
+        configured library_path. Prevents a misconfigured caller
+        from reaching qBit's download folder by mistake."""
+        library = tmp_path / "abs-library"
+        library.mkdir()
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        (elsewhere / "danger").write_bytes(b"not yours")
+
+        sink = AudiobookshelfSink(str(library))
+        result = await sink.remove(path=str(elsewhere / "danger"))
+        assert result.success is False
+        assert "outside" in (result.error or "")
+        # File is still there — we didn't touch it.
+        assert (elsewhere / "danger").exists()
+
+    async def test_no_path_fails(self):
+        sink = AudiobookshelfSink("/abs-library")
+        result = await sink.remove(path="")
+        assert result.success is False
+        assert "requires" in (result.error or "")
+
+    async def test_remove_failure_returns_error(self, tmp_path, monkeypatch):
+        """A genuine fs delete failure (e.g. permission) should fail the
+        SinkResult so the orchestrator knows to rollback the
+        soft-delete + audit-log the failure."""
+        import shutil
+        def fake_rmtree(*args, **kwargs):
+            raise PermissionError("read-only filesystem")
+        monkeypatch.setattr(shutil, "rmtree", fake_rmtree)
+
+        library = tmp_path / "abs-library"
+        book_dir = library / "Author" / "Title"
+        book_dir.mkdir(parents=True)
+
+        sink = AudiobookshelfSink(str(library))
+        result = await sink.remove(path=str(book_dir))
+        assert result.success is False
+        assert "PermissionError" in (result.error or "")
+
+    async def test_scan_failure_doesnt_fail_remove(self, tmp_path, monkeypatch):
+        """ABS unreachable on the post-remove scan is logged but the
+        SinkResult is still success — the filesystem state is the
+        authoritative outcome."""
+        def handler(request):
+            raise httpx.ConnectError("abs down", request=request)
+        self._inject_transport(monkeypatch, handler)
+
+        library = tmp_path / "abs-library"
+        book_dir = library / "Author" / "Title"
+        book_dir.mkdir(parents=True)
+        (book_dir / "01.m4b").write_bytes(b"audio")
+
+        sink = AudiobookshelfSink(
+            str(library),
+            abs_base_url="http://abs:13378",
+            abs_api_key="test-token",
+            abs_library_id="lib-xyz",
+        )
+        result = await sink.remove(path=str(book_dir))
+        assert result.success is True
+        assert not book_dir.exists()
