@@ -581,6 +581,51 @@ CREATE INDEX IF NOT EXISTS idx_replacement_opportunities_status
     ON replacement_opportunities(status, detected_at DESC);
 CREATE INDEX IF NOT EXISTS idx_replacement_opportunities_owned
     ON replacement_opportunities(owned_library_slug, owned_book_id);
+
+-- v2.27.0 (Bundle A.2 Phase 5b) — replacement enactment audit trail.
+--
+-- One row per attempted file swap, regardless of outcome. The
+-- audit history survives restore + re-enact cycles so the operator
+-- can see every destructive op that touched a given opportunity.
+--
+-- Lifecycle:
+--   * INSERT on enact attempt (success OR failure-then-rollback).
+--     `failed_at` + `failed_reason` populated on rollback paths.
+--   * UPDATE sets `restored_at` + `restored_by` when the user runs
+--     POST /restore on this row's opportunity.
+--
+-- The owned_path_before is the path the file was at before the move;
+-- owned_path_after is its location inside `.seshat-replaced/`. On a
+-- successful restore, the file moves back and owned_path_after is
+-- preserved (audit trail), but the operating reality is "file is at
+-- owned_path_before again."
+--
+-- candidate_path is captured for symmetry — if the candidate file is
+-- later moved or removed, we still have the audit pointer.
+CREATE TABLE IF NOT EXISTS replacement_enactments (
+    id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+    opportunity_id           INTEGER NOT NULL
+        REFERENCES replacement_opportunities(id) ON DELETE CASCADE,
+    enacted_at               REAL NOT NULL,
+    acted_by                 TEXT,         -- 'user', 'auto', or null
+    library_slug             TEXT NOT NULL,
+    owned_book_id_before     INTEGER,
+    owned_path_before        TEXT,
+    owned_path_after         TEXT,         -- inside .seshat-replaced/
+    owned_size_bytes         INTEGER,
+    candidate_path           TEXT,
+    candidate_size_bytes     INTEGER,
+    sink_result              TEXT,         -- calibredb / ABS scan output
+    failed_at                REAL,
+    failed_reason            TEXT,
+    restored_at              REAL,
+    restored_by              TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_replacement_enactments_opp
+    ON replacement_enactments(opportunity_id, enacted_at DESC);
+CREATE INDEX IF NOT EXISTS idx_replacement_enactments_active
+    ON replacement_enactments(library_slug, restored_at)
+    WHERE failed_at IS NULL;
 """
 
 
@@ -826,6 +871,31 @@ MIGRATIONS: list[str] = [
     "ON replacement_opportunities(status, detected_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_replacement_opportunities_owned "
     "ON replacement_opportunities(owned_library_slug, owned_book_id)",
+    # v2.27.0 — replacement enactments audit trail (Bundle A.2 Phase 5b).
+    """CREATE TABLE IF NOT EXISTS replacement_enactments (
+        id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+        opportunity_id           INTEGER NOT NULL
+            REFERENCES replacement_opportunities(id) ON DELETE CASCADE,
+        enacted_at               REAL NOT NULL,
+        acted_by                 TEXT,
+        library_slug             TEXT NOT NULL,
+        owned_book_id_before     INTEGER,
+        owned_path_before        TEXT,
+        owned_path_after         TEXT,
+        owned_size_bytes         INTEGER,
+        candidate_path           TEXT,
+        candidate_size_bytes     INTEGER,
+        sink_result              TEXT,
+        failed_at                REAL,
+        failed_reason            TEXT,
+        restored_at              REAL,
+        restored_by              TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_replacement_enactments_opp "
+    "ON replacement_enactments(opportunity_id, enacted_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_replacement_enactments_active "
+    "ON replacement_enactments(library_slug, restored_at) "
+    "WHERE failed_at IS NULL",
 ]
 
 

@@ -178,6 +178,31 @@ def is_replacement_allowed(
     return bool(enabled_map.get(library_slug, False))
 
 
+def is_auto_enact_allowed(
+    library_slug: str,
+    settings: dict,
+    libraries: Optional[list[dict]] = None,
+) -> bool:
+    """Compound gate for post-detection auto-enact (5b).
+
+    Auto-enact requires ALL of:
+      1. The master gate (`is_replacement_allowed`) passes.
+      2. `active_replacement_auto_enact_by_slug[<slug>]` is truthy.
+
+    Both default off; the operator must explicitly opt in per-library.
+    OVERLAP safety classification hard-disables via the master gate.
+
+    When this returns False, a freshly-detected opportunity stays in
+    'detected' status until a user clicks Enact in the UI. When True,
+    the post-detection auto-enact step performs the file swap
+    immediately.
+    """
+    if not is_replacement_allowed(library_slug, settings, libraries=libraries):
+        return False
+    auto_map = settings.get("active_replacement_auto_enact_by_slug") or {}
+    return bool(auto_map.get(library_slug, False))
+
+
 # ─── Reporting helper for the Settings UI surface (Phase 6) ──
 
 
@@ -194,19 +219,26 @@ def library_replacement_status(
             "content_type": str,
             "library_path": str,
             "safety": "safe" | "overlap" | "unknown",
-            "enabled": bool,          # the opt-in setting itself
-            "effective": bool,        # what the gate actually returns
+            "enabled": bool,                # master opt-in
+            "effective": bool,              # master gate result
+            "auto_enact": bool,             # secondary opt-in (5b)
+            "auto_enact_effective": bool,   # auto-enact gate result
         }
 
-    `effective` is the value the Phase 5 replacement loop checks; the
-    UI may want to display `enabled` separately so the user sees that
-    their toggle was overridden by the safety gate.
+    `effective` is what the manual-enact path checks. `auto_enact_effective`
+    is what the post-detection auto-enact step checks (compound gate:
+    master + safety + auto_enact bool). The UI surfaces both so the user
+    sees when their auto-enact toggle is overridden by the master gate
+    or the safety classification.
     """
     safety = compute_library_safety(library, settings)
     slug = library.get("slug") or ""
     enabled_map = settings.get("active_replacement_enabled_by_slug") or {}
     enabled = bool(enabled_map.get(slug, False))
     effective = enabled and safety != LibrarySafety.OVERLAP
+    auto_map = settings.get("active_replacement_auto_enact_by_slug") or {}
+    auto_enact = bool(auto_map.get(slug, False))
+    auto_enact_effective = effective and auto_enact
     return {
         "slug": slug,
         "name": library.get("name") or slug,
@@ -215,4 +247,6 @@ def library_replacement_status(
         "safety": safety.value,
         "enabled": enabled,
         "effective": effective,
+        "auto_enact": auto_enact,
+        "auto_enact_effective": auto_enact_effective,
     }
