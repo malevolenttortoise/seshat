@@ -540,6 +540,47 @@ CREATE TABLE IF NOT EXISTS torrent_quality_metadata (
     raw_mediainfo         TEXT,
     raw_tags              TEXT
 );
+
+-- v2.26.0 (Bundle A.2 Phase 5a) — replacement opportunities.
+--
+-- A row is written when a freshly-grabbed torrent's quality snapshot
+-- scores higher than an owned book of the same media type + dedup_key
+-- in a library where active replacement is allowed (see
+-- app/orchestrator/active_replacement.py::is_replacement_allowed).
+-- v2.26.0 detection-only: rows accumulate for user review in the UI;
+-- v2.26.1+ (Phase 5b) will add a destructive "enact" path that
+-- removes the lower-quality file from the library.
+--
+-- candidate_score / owned_score are JSON-encoded tier tuples from
+-- app/quality/scoring.py::score_quality. Persisting the tuples (not
+-- just the bool "candidate > owned") lets the UI show *why* the
+-- opportunity fired without re-resolving the profile.
+--
+-- UNIQUE on (candidate_grab_id, owned_library_slug, owned_book_id)
+-- makes detection idempotent — re-running the detector for the same
+-- grab is a no-op.
+CREATE TABLE IF NOT EXISTS replacement_opportunities (
+    id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+    detected_at                 REAL NOT NULL,
+    candidate_grab_id           INTEGER NOT NULL,
+    candidate_mam_torrent_id    TEXT NOT NULL,
+    candidate_format            TEXT,
+    candidate_score             TEXT NOT NULL,
+    owned_library_slug          TEXT NOT NULL,
+    owned_book_id               INTEGER NOT NULL,
+    owned_mam_torrent_id        TEXT,
+    owned_format                TEXT,
+    owned_score                 TEXT,
+    media_type                  TEXT NOT NULL,
+    status                      TEXT NOT NULL DEFAULT 'detected',
+    acted_at                    REAL,
+    acted_by                    TEXT,
+    UNIQUE(candidate_grab_id, owned_library_slug, owned_book_id)
+);
+CREATE INDEX IF NOT EXISTS idx_replacement_opportunities_status
+    ON replacement_opportunities(status, detected_at DESC);
+CREATE INDEX IF NOT EXISTS idx_replacement_opportunities_owned
+    ON replacement_opportunities(owned_library_slug, owned_book_id);
 """
 
 
@@ -761,6 +802,30 @@ MIGRATIONS: list[str] = [
         raw_mediainfo         TEXT,
         raw_tags              TEXT
     )""",
+    # v2.26.0 — replacement opportunities (Bundle A.2 Phase 5a).
+    # Mirrors the CREATE in SCHEMA; legacy DBs pick up the table here.
+    """CREATE TABLE IF NOT EXISTS replacement_opportunities (
+        id                          INTEGER PRIMARY KEY AUTOINCREMENT,
+        detected_at                 REAL NOT NULL,
+        candidate_grab_id           INTEGER NOT NULL,
+        candidate_mam_torrent_id    TEXT NOT NULL,
+        candidate_format            TEXT,
+        candidate_score             TEXT NOT NULL,
+        owned_library_slug          TEXT NOT NULL,
+        owned_book_id               INTEGER NOT NULL,
+        owned_mam_torrent_id        TEXT,
+        owned_format                TEXT,
+        owned_score                 TEXT,
+        media_type                  TEXT NOT NULL,
+        status                      TEXT NOT NULL DEFAULT 'detected',
+        acted_at                    REAL,
+        acted_by                    TEXT,
+        UNIQUE(candidate_grab_id, owned_library_slug, owned_book_id)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_replacement_opportunities_status "
+    "ON replacement_opportunities(status, detected_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_replacement_opportunities_owned "
+    "ON replacement_opportunities(owned_library_slug, owned_book_id)",
 ]
 
 

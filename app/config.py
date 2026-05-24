@@ -238,6 +238,15 @@ DEFAULT_SETTINGS = {
     # Scope: applies to Phase 5 active-replacement decisions only;
     # the announce-time dedup gate keeps using the global profile.
     "quality_profile_overrides_by_slug": {},
+    # v2.26.0 (A.2) — per-library opt-in for active replacement
+    # (upgrade an owned book when a higher-quality torrent appears).
+    # Shape: { "<library_slug>": <bool> }. Default off everywhere.
+    # The safety layer in app/orchestrator/active_replacement.py
+    # hard-disables this when the library path overlaps qBit's
+    # download path (an overlap would mean replacement also overwrites
+    # the seeding copy). UAT default: never auto-enable; user must
+    # opt in per library after reviewing the safety badge.
+    "active_replacement_enabled_by_slug": {},
     # Audiobook acceptance is derived as of v2.9.0 from the Media
     # Type filter (`allowed_formats`): when empty (= "accept all") or
     # when it contains "audiobooks", audiobook announces flow through

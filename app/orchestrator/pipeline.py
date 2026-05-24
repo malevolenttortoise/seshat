@@ -1286,6 +1286,37 @@ async def _deliver_prepared(
     except Exception:
         _log.exception("calibre_additions record failed (non-fatal)")
 
+    # v2.26.0 (A.2 Phase 5a) — replacement-opportunity detection.
+    # Runs AFTER STATE_COMPLETE so the grab is durably marked done
+    # regardless of whether detection succeeds. The detector
+    # internally swallows all exceptions; the surrounding try here is
+    # belt-and-braces. Quality extraction is best-effort: if the
+    # candidate's snapshot isn't in the table yet (the linkback path
+    # didn't fire), we still run with format-only scoring.
+    try:
+        from app.quality.pipeline import extract_for_torrent
+        from app.quality.replacement_detector import detect_for_grab
+        from app.config import load_settings
+        grab_row = await grabs_storage.get_grab(db, event.grab_id)
+        cand_tid = getattr(grab_row, "mam_torrent_id", None) if grab_row else None
+        if cand_tid:
+            try:
+                await extract_for_torrent(db, cand_tid)
+            except Exception:
+                _log.exception(
+                    "replacement detector: quality extraction failed "
+                    "for tid=%s (continuing with format-only scoring)",
+                    cand_tid,
+                )
+        await detect_for_grab(
+            db, grab_id=event.grab_id, settings=load_settings(),
+        )
+    except Exception:
+        _log.exception(
+            "replacement detector hook failed for grab_id=%d (non-fatal)",
+            event.grab_id,
+        )
+
     _log.info(
         "pipeline: complete grab_id=%d %s → %s",
         event.grab_id, event.torrent_name, sink_result.sink_name,
