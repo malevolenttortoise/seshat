@@ -101,14 +101,32 @@ async def list_opportunities(
     if library_slug is not None:
         where.append("owned_library_slug = ?")
         params.append(library_slug)
-    where_clause = ("WHERE " + " AND ".join(where)) if where else ""
+    # `where` is built without table aliases above; prefix with `o.`
+    # for the joined query below so the planner doesn't get ambiguous
+    # column refs once `grabs` is on the LEFT JOIN side.
+    where_clause = (
+        "WHERE " + " AND ".join(f"o.{c}" for c in where) if where else ""
+    )
     params.append(limit)
 
+    # v2.26.0 — LEFT JOIN candidate grab + (best-effort) the owned
+    # grab to surface torrent names alongside IDs in the UI. Both
+    # joins are LEFT so a missing grab row never drops the
+    # opportunity from the list. The owned join keys on
+    # owned_mam_torrent_id — which is NULL when the owned book was
+    # never acquired through Seshat; that path returns NULL for the
+    # owned name and the UI shows just the book_id.
     cursor = await db.execute(
         f"""
-        SELECT * FROM replacement_opportunities
+        SELECT o.*,
+               cg.torrent_name AS candidate_torrent_name,
+               cg.author_blob  AS candidate_author_blob,
+               og.torrent_name AS owned_torrent_name
+        FROM replacement_opportunities o
+        LEFT JOIN grabs cg ON cg.id = o.candidate_grab_id
+        LEFT JOIN grabs og ON og.mam_torrent_id = o.owned_mam_torrent_id
         {where_clause}
-        ORDER BY detected_at DESC
+        ORDER BY o.detected_at DESC
         LIMIT ?
         """,
         params,

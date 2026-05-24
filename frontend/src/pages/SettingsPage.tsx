@@ -7,6 +7,7 @@ import { api } from "../api";
 import { useTheme } from "../theme";
 import { useViewport } from "../hooks/useViewport";
 import { useMobileCodepath } from "../components/mobile";
+import { useNavigation } from "../providers/NavigationProvider";
 import MobileSettingsPage from "./MobileSettingsPage";
 import type { Author, AuthorsResponse } from "../types";
 
@@ -677,6 +678,151 @@ function QualityPanel() {
   );
 }
 
+// ── v2.26.0 Active Replacement panel (Bundle A.2) ────────────
+
+interface LibrarySafetyRow {
+  slug: string;
+  name: string;
+  content_type: string;
+  library_path: string;
+  safety: "safe" | "overlap" | "unknown";
+  enabled: boolean;
+  effective: boolean;
+}
+
+interface OpportunityCounts {
+  detected: number;
+  enacted: number;
+  dismissed: number;
+}
+
+function ActiveReplacementPanel({ s, upd }: {
+  s: S; upd: (k: string, v: unknown) => void;
+}) {
+  const t = useTheme();
+  const { nav } = useNavigation();
+  const [safety, setSafety] = useState<LibrarySafetyRow[]>([]);
+  const [counts, setCounts] = useState<OpportunityCounts | null>(null);
+
+  const refresh = async () => {
+    try {
+      const [sf, cn] = await Promise.all([
+        api.get<{ libraries: LibrarySafetyRow[] }>("/quality/library-safety"),
+        api.get<OpportunityCounts>("/quality/replacement-opportunities/counts"),
+      ]);
+      setSafety(sf.libraries || []);
+      setCounts(cn);
+    } catch {
+      /* swallow — empty state renders cleanly */
+    }
+  };
+
+  useEffect(() => { refresh(); }, []);
+  // Re-fetch when the user toggles a library so the `effective` badge
+  // updates without a save round-trip. (The safety endpoint reads from
+  // the persisted settings, so it won't actually reflect the toggle
+  // until save() flushes — but counts + safety-class itself is stable.)
+  useEffect(() => { refresh(); }, [s.active_replacement_enabled_by_slug]);
+
+  const enabledMap =
+    (s.active_replacement_enabled_by_slug as Record<string, boolean>) || {};
+  const toggle = (slug: string) => {
+    const next = { ...enabledMap, [slug]: !enabledMap[slug] };
+    upd("active_replacement_enabled_by_slug", next);
+  };
+
+  const badgeStyle = (safety: LibrarySafetyRow["safety"]): React.CSSProperties => {
+    const palette: Record<typeof safety, { bg: string; fg: string; label: string }> = {
+      safe:    { bg: t.bg3, fg: t.ok,   label: "SAFE" },
+      overlap: { bg: t.bg3, fg: t.err,  label: "OVERLAP" },
+      unknown: { bg: t.bg3, fg: t.warn, label: "UNKNOWN" },
+    };
+    const p = palette[safety];
+    return {
+      background: p.bg, color: p.fg,
+      fontSize: 10, fontWeight: 700, letterSpacing: "0.04em",
+      padding: "2px 6px", borderRadius: 4,
+    };
+  };
+
+  return (
+    <>
+      <SF
+        label="Detected Opportunities"
+        desc="When a higher-quality torrent matches an owned book in a replacement-enabled library, an opportunity is logged here. v2.26.0 is detection-only — no files are touched until you act on an opportunity (file-swap path lands in a follow-up release)."
+        wide
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ fontSize: 13, color: t.text2 }}>
+            {counts
+              ? <><b>{counts.detected}</b> detected · {counts.dismissed} dismissed · {counts.enacted} enacted</>
+              : "loading…"}
+          </div>
+          <Btn variant="ghost" onClick={() => nav("replacement-opportunities")}>
+            View
+          </Btn>
+          <Btn variant="ghost" onClick={refresh}>Refresh</Btn>
+        </div>
+      </SF>
+
+      <SF
+        label="Per-library Safety + Opt-in"
+        desc="Replacement is off by default for every library. Toggle on per library after confirming the safety badge. Libraries whose path overlaps qBit's download path are hard-disabled to prevent overwriting the seeding copy."
+        wide
+      >
+        {safety.length === 0 && (
+          <div style={{ fontSize: 12, color: t.textDim }}>
+            No libraries discovered yet.
+          </div>
+        )}
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, width: "100%" }}>
+          {safety.map(lib => {
+            const overlap = lib.safety === "overlap";
+            return (
+              <div
+                key={lib.slug}
+                style={{
+                  display: "flex", alignItems: "center", gap: 10,
+                  padding: "8px 12px", background: t.bg3, borderRadius: 6,
+                }}
+              >
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: t.text }}>
+                      {lib.name}
+                    </span>
+                    <span style={badgeStyle(lib.safety)}>
+                      {lib.safety === "safe" ? "SAFE" : lib.safety === "overlap" ? "OVERLAP" : "UNKNOWN"}
+                    </span>
+                    <span style={{ fontSize: 11, color: t.textDim }}>
+                      {lib.content_type}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 11, color: t.textDim, marginTop: 2 }}>
+                    <code>{lib.library_path || "(no path)"}</code>
+                    {overlap && (
+                      <> · <span style={{ color: t.err }}>overlaps qBit download path; opt-in disabled</span></>
+                    )}
+                    {lib.safety === "unknown" && enabledMap[lib.slug] && (
+                      <> · <span style={{ color: t.warn }}>path can't be verified; user attestation required</span></>
+                    )}
+                  </div>
+                </div>
+                <STog
+                  on={!!enabledMap[lib.slug]}
+                  onToggle={() => toggle(lib.slug)}
+                  disabled={overlap}
+                />
+              </div>
+            );
+          })}
+        </div>
+      </SF>
+    </>
+  );
+}
+
+
 // ── Section definitions ───────────────────────────────────────
 
 interface SettingsSection {
@@ -708,6 +854,8 @@ const SECTIONS: SettingsSection[] = [
     keywords: ["ntfy", "notify", "alerts"] },
   { id: "quality", label: "Quality Metadata", group: "Pipeline",
     keywords: ["quality", "bitrate", "mediainfo", "backfill"] },
+  { id: "replacement", label: "Active Replacement", group: "Pipeline",
+    keywords: ["replacement", "upgrade", "opportunity", "swap", "safety"] },
   { id: "sources", label: "Metadata Sources", group: "Discovery",
     keywords: ["goodreads", "hardcover", "amazon", "kobo", "openlibrary", "audible", "ibdb"] },
   { id: "scanning", label: "Author Scanning", group: "Discovery",
@@ -1264,6 +1412,10 @@ function DesktopSettingsPage() {
 
         {showSection("quality") && <SectionScope id="quality"><>
           <QualityPanel />
+        </></SectionScope>}
+
+        {showSection("replacement") && <SectionScope id="replacement"><>
+          <ActiveReplacementPanel s={s} upd={upd} />
         </></SectionScope>}
 
         {showSection("sources") && <SectionScope id="sources"><>

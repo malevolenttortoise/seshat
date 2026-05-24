@@ -37,6 +37,7 @@ import AuthorTriagePage from "./pages/AuthorTriagePage";
 import PersonsManagerPage from "./pages/PersonsManagerPage";
 import LogsPage from "./pages/LogsPage";
 import SettingsPage from "./pages/SettingsPage";
+import ReplacementOpportunitiesPage from "./pages/ReplacementOpportunitiesPage";
 
 // Unified + Discovery pages
 import UnifiedDashboard from "./pages/UnifiedDashboard";
@@ -95,6 +96,7 @@ const PIPELINE_NAV = [
   { id: "pipe-ignored",     label: "Weekly Ignored", icon: "📊" },
   { id: "pipe-authors",     label: "Author Lists",  icon: "👤" },
   { id: "pipe-delayed",     label: "Delayed",       icon: "⏳" },
+  { id: "replacement-opportunities", label: "Upgrades", icon: "⬆" },
   { id: "filters",          label: "Filters",       icon: "🎯" },
 ];
 
@@ -105,7 +107,7 @@ const WIDE_PAGES = new Set([
   "disc-series", "disc-hidden", "disc-importexport", "disc-works",
   "author-triage", "persons-manager",
   "pipe-review", "pipe-tentative", "pipe-ignored", "pipe-authors",
-  "pipe-delayed", "pipe-migration",
+  "pipe-delayed", "pipe-migration", "replacement-opportunities",
   "logs", "database",
 ]);
 
@@ -178,6 +180,7 @@ function renderPage(
     case "database":           return <DatabasePage />;
     case "author-triage":      return <AuthorTriagePage onNav={nav} />;
     case "persons-manager":    return <PersonsManagerPage onNav={nav} />;
+    case "replacement-opportunities": return <ReplacementOpportunitiesPage />;
 
     default:                   return <PipelineDashboard onNav={nav} />;
   }
