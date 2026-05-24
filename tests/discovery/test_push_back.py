@@ -675,3 +675,181 @@ class TestCWAClientPush:
         client = push_back.CWAClient("http://cwa.local", "u", "p")
         with pytest.raises(push_back.PushFailed, match="HTTP 500"):
             await client.push(99, {"series": "X"})
+
+
+class TestCWAClientDelete:
+    """v2.27.0 Phase 5b — `POST /delete/<book_id>` against CWA's admin
+    route. CSRF scraped from the edit page (or /login fallback);
+    success verified by re-fetching the edit page and expecting it
+    to no longer render (200 → still there → fail)."""
+
+    @pytest.mark.asyncio
+    async def test_happy_path_deletes_and_verifies(self, monkeypatch):
+        from app.discovery import push_back
+
+        responses = [
+            # _login
+            ("GET", "/login", _StubResponse(200, _form_html_for(
+                {"title": "T"}, csrf="login-csrf",
+            ))),
+            ("POST", "/login", _StubResponse(200, "ok", cookies={"session": "x"})),
+            # CSRF scrape from edit page
+            ("GET", "/admin/book/42", _StubResponse(200, _form_html_for(
+                {"title": "Doomed"}, csrf="edit-csrf",
+            ))),
+            # The actual delete
+            ("POST", "/delete/42", _StubResponse(200, '{"success":true}')),
+            # Verification re-fetch — non-200 means the book is gone.
+            ("GET", "/admin/book/42", _StubResponse(404, "not found")),
+        ]
+        stub = _StubHttpClient(responses)
+        import httpx
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **_kw: stub)
+
+        client = push_back.CWAClient("http://cwa.local", "u", "p")
+        await client.delete(42)
+
+        # CSRF came from the edit page, not /login.
+        post_body = next(
+            d for (m, u, d) in stub.calls
+            if m == "POST" and "/delete/42" in u
+        )
+        assert post_body["csrf_token"] == "edit-csrf"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_login_csrf_when_edit_page_missing(self, monkeypatch):
+        """If the edit page returns non-200 (book already deleted by a
+        prior partial enact attempt), we still want a CSRF token —
+        scrape from /login. This is the idempotency-on-retry path."""
+        from app.discovery import push_back
+
+        responses = [
+            ("GET", "/login", _StubResponse(200, _form_html_for(
+                {"title": "T"}, csrf="initial-login-csrf",
+            ))),
+            ("POST", "/login", _StubResponse(200, "ok", cookies={"session": "x"})),
+            # Edit page already 404 (book gone from a prior attempt).
+            ("GET", "/admin/book/42", _StubResponse(404, "not found")),
+            # Fallback CSRF scrape from /login.
+            ("GET", "/login", _StubResponse(200, _form_html_for(
+                {"title": "T"}, csrf="fallback-csrf",
+            ))),
+            ("POST", "/delete/42", _StubResponse(200, '{"success":true}')),
+            ("GET", "/admin/book/42", _StubResponse(404, "still gone")),
+        ]
+        stub = _StubHttpClient(responses)
+        import httpx
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **_kw: stub)
+
+        client = push_back.CWAClient("http://cwa.local", "u", "p")
+        await client.delete(42)
+
+        post_body = next(
+            d for (m, u, d) in stub.calls
+            if m == "POST" and "/delete/42" in u
+        )
+        assert post_body["csrf_token"] == "fallback-csrf"
+
+    @pytest.mark.asyncio
+    async def test_treats_302_redirect_as_success(self, monkeypatch):
+        """Real-CWA behavior caught in dev-stack UAT 2026-05-24:
+        /admin/book/<missing-id> returns 302 → /. With follow_redirects
+        enabled, httpx silently follows the redirect and returns 200
+        from the home page — which the naive verify-by-200 check
+        misreads as "book still there." The fix uses
+        follow_redirects=False on the verify GET so a 3xx-redirect-away
+        surfaces directly and is recognized as success (the book is
+        actually gone)."""
+        from app.discovery import push_back
+
+        responses = [
+            ("GET", "/login", _StubResponse(200, _form_html_for(
+                {"title": "T"}, csrf="login-csrf",
+            ))),
+            ("POST", "/login", _StubResponse(200, "ok", cookies={"session": "x"})),
+            ("GET", "/admin/book/42", _StubResponse(200, _form_html_for(
+                {"title": "Doomed"}, csrf="edit-csrf",
+            ))),
+            ("POST", "/delete/42", _StubResponse(200, '{"success":true}')),
+            # Real CWA's behavior after delete: 302 to home (not 404).
+            ("GET", "/admin/book/42", _StubResponse(302, "")),
+        ]
+        stub = _StubHttpClient(responses)
+        import httpx
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **_kw: stub)
+
+        client = push_back.CWAClient("http://cwa.local", "u", "p")
+        # Must NOT raise — the 302 means the book is gone.
+        await client.delete(42)
+
+    @pytest.mark.asyncio
+    async def test_raises_when_book_still_renders_after_delete(self, monkeypatch):
+        """CWA can return 200 on /delete while silently rejecting it
+        (CSRF mismatch, permission, etc.). Re-fetching the edit page
+        and seeing 200 = the book is still there = the delete didn't
+        take. Surface as PushFailed so the orchestrator can rollback
+        the soft-delete and audit-log the failure."""
+        from app.discovery import push_back
+
+        responses = [
+            ("GET", "/login", _StubResponse(200, _form_html_for({"title": "T"}))),
+            ("POST", "/login", _StubResponse(200, "ok", cookies={"session": "x"})),
+            ("GET", "/admin/book/42", _StubResponse(200, _form_html_for(
+                {"title": "Still Here"}, csrf="c1",
+            ))),
+            ("POST", "/delete/42", _StubResponse(200, '{"success":false}')),
+            # Verification — book still renders. Silent rejection.
+            ("GET", "/admin/book/42", _StubResponse(200, _form_html_for(
+                {"title": "Still Here"}, csrf="c2",
+            ))),
+        ]
+        stub = _StubHttpClient(responses)
+        import httpx
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **_kw: stub)
+
+        client = push_back.CWAClient("http://cwa.local", "u", "p")
+        with pytest.raises(push_back.PushFailed, match="did not remove"):
+            await client.delete(42)
+
+    @pytest.mark.asyncio
+    async def test_raises_on_4xx_delete(self, monkeypatch):
+        from app.discovery import push_back
+
+        responses = [
+            ("GET", "/login", _StubResponse(200, _form_html_for({"title": "T"}))),
+            ("POST", "/login", _StubResponse(200, "ok", cookies={"session": "x"})),
+            ("GET", "/admin/book/42", _StubResponse(200, _form_html_for(
+                {"title": "T"}, csrf="c1",
+            ))),
+            ("POST", "/delete/42", _StubResponse(500, "server error")),
+        ]
+        stub = _StubHttpClient(responses)
+        import httpx
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **_kw: stub)
+
+        client = push_back.CWAClient("http://cwa.local", "u", "p")
+        with pytest.raises(push_back.PushFailed, match="HTTP 500"):
+            await client.delete(42)
+
+    @pytest.mark.asyncio
+    async def test_raises_when_no_csrf_obtainable(self, monkeypatch):
+        from app.discovery import push_back
+
+        responses = [
+            # _login still needs a CSRF (which the login form provides).
+            ("GET", "/login", _StubResponse(200, _form_html_for(
+                {"title": "T"}, csrf="login-csrf",
+            ))),
+            ("POST", "/login", _StubResponse(200, "ok", cookies={"session": "x"})),
+            # Edit page broken — no CSRF token in HTML.
+            ("GET", "/admin/book/42", _StubResponse(200, "<html></html>")),
+            # Fallback /login probe also missing CSRF.
+            ("GET", "/login", _StubResponse(200, "<html></html>")),
+        ]
+        stub = _StubHttpClient(responses)
+        import httpx
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **_kw: stub)
+
+        client = push_back.CWAClient("http://cwa.local", "u", "p")
+        with pytest.raises(push_back.PushFailed, match="could not extract CSRF"):
+            await client.delete(42)

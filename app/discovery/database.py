@@ -867,6 +867,40 @@ async def _backfill_omnibus_flag(db) -> int:
     return touched
 
 
+async def _backfill_numeric_mam_categories(db) -> int:
+    """Replace numeric MAM category IDs in `books.mam_category` with their
+    `catname` form (e.g. `"63"` → `"Ebooks - Fantasy"`).
+
+    Sibling fix to `app/database.py::_backfill_numeric_grab_categories`.
+    Cleans the discovery row that feeds Send-to-Pipeline so a re-grab
+    from a previously-polluted books row doesn't re-introduce numeric
+    `grabs.category`. Forward fix in `app/discovery/sources/mam.py`
+    prevents new dirty rows; this backfill cleans existing ones.
+    Idempotent.
+    """
+    from app.mam.enums import catname_for_id
+
+    rows = await (await db.execute(
+        "SELECT id, mam_category FROM books "
+        "WHERE mam_category GLOB '[0-9]*' "
+        "  AND mam_category NOT GLOB '*[^0-9]*'"
+    )).fetchall()
+    if not rows:
+        return 0
+    fixed = 0
+    for r in rows:
+        resolved = catname_for_id(r["mam_category"])
+        if resolved:
+            await db.execute(
+                "UPDATE books SET mam_category = ? WHERE id = ?",
+                (resolved, r["id"]),
+            )
+            fixed += 1
+    if fixed:
+        await db.commit()
+    return fixed
+
+
 async def _backfill_normalized_author_names(db) -> int:
     """Populate `authors.normalized_name` for any rows missing it.
 
@@ -1614,6 +1648,17 @@ async def init_db(slug=None):
             _db_logger.info(
                 f"Metadata snapshot backfill: {cal_seeded} Calibre + "
                 f"{abs_seeded} ABS row(s) seeded"
+            )
+
+        # ── Step 9: Numeric mam_category backfill (v2.26.1) ───────────
+        # Pre-v2.26.1 bug stored MAM's numeric `category` field instead
+        # of `catname` here. Rewrite digit-only rows to the canonical
+        # `"Ebooks - Fantasy"` shape so future Send-to-Pipeline grabs
+        # don't re-introduce numeric grabs.category.
+        cat_fixed = await _backfill_numeric_mam_categories(db)
+        if cat_fixed:
+            _db_logger.info(
+                f"Numeric mam_category backfill: fixed {cat_fixed} book row(s)"
             )
     finally:
         await db.close()

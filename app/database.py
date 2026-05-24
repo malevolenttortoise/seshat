@@ -581,6 +581,51 @@ CREATE INDEX IF NOT EXISTS idx_replacement_opportunities_status
     ON replacement_opportunities(status, detected_at DESC);
 CREATE INDEX IF NOT EXISTS idx_replacement_opportunities_owned
     ON replacement_opportunities(owned_library_slug, owned_book_id);
+
+-- v2.27.0 (Bundle A.2 Phase 5b) — replacement enactment audit trail.
+--
+-- One row per attempted file swap, regardless of outcome. The
+-- audit history survives restore + re-enact cycles so the operator
+-- can see every destructive op that touched a given opportunity.
+--
+-- Lifecycle:
+--   * INSERT on enact attempt (success OR failure-then-rollback).
+--     `failed_at` + `failed_reason` populated on rollback paths.
+--   * UPDATE sets `restored_at` + `restored_by` when the user runs
+--     POST /restore on this row's opportunity.
+--
+-- The owned_path_before is the path the file was at before the move;
+-- owned_path_after is its location inside `.seshat-replaced/`. On a
+-- successful restore, the file moves back and owned_path_after is
+-- preserved (audit trail), but the operating reality is "file is at
+-- owned_path_before again."
+--
+-- candidate_path is captured for symmetry — if the candidate file is
+-- later moved or removed, we still have the audit pointer.
+CREATE TABLE IF NOT EXISTS replacement_enactments (
+    id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+    opportunity_id           INTEGER NOT NULL
+        REFERENCES replacement_opportunities(id) ON DELETE CASCADE,
+    enacted_at               REAL NOT NULL,
+    acted_by                 TEXT,         -- 'user', 'auto', or null
+    library_slug             TEXT NOT NULL,
+    owned_book_id_before     INTEGER,
+    owned_path_before        TEXT,
+    owned_path_after         TEXT,         -- inside .seshat-replaced/
+    owned_size_bytes         INTEGER,
+    candidate_path           TEXT,
+    candidate_size_bytes     INTEGER,
+    sink_result              TEXT,         -- calibredb / ABS scan output
+    failed_at                REAL,
+    failed_reason            TEXT,
+    restored_at              REAL,
+    restored_by              TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_replacement_enactments_opp
+    ON replacement_enactments(opportunity_id, enacted_at DESC);
+CREATE INDEX IF NOT EXISTS idx_replacement_enactments_active
+    ON replacement_enactments(library_slug, restored_at)
+    WHERE failed_at IS NULL;
 """
 
 
@@ -826,6 +871,31 @@ MIGRATIONS: list[str] = [
     "ON replacement_opportunities(status, detected_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_replacement_opportunities_owned "
     "ON replacement_opportunities(owned_library_slug, owned_book_id)",
+    # v2.27.0 — replacement enactments audit trail (Bundle A.2 Phase 5b).
+    """CREATE TABLE IF NOT EXISTS replacement_enactments (
+        id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+        opportunity_id           INTEGER NOT NULL
+            REFERENCES replacement_opportunities(id) ON DELETE CASCADE,
+        enacted_at               REAL NOT NULL,
+        acted_by                 TEXT,
+        library_slug             TEXT NOT NULL,
+        owned_book_id_before     INTEGER,
+        owned_path_before        TEXT,
+        owned_path_after         TEXT,
+        owned_size_bytes         INTEGER,
+        candidate_path           TEXT,
+        candidate_size_bytes     INTEGER,
+        sink_result              TEXT,
+        failed_at                REAL,
+        failed_reason            TEXT,
+        restored_at              REAL,
+        restored_by              TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_replacement_enactments_opp "
+    "ON replacement_enactments(opportunity_id, enacted_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_replacement_enactments_active "
+    "ON replacement_enactments(library_slug, restored_at) "
+    "WHERE failed_at IS NULL",
 ]
 
 
@@ -837,6 +907,41 @@ async def get_db() -> aiosqlite.Connection:
     await db.execute("PRAGMA foreign_keys=ON")
     await db.execute("PRAGMA busy_timeout=30000")
     return db
+
+
+async def _backfill_numeric_grab_categories(db) -> int:
+    """Replace numeric MAM category IDs in `grabs.category` with their
+    `catname` form (e.g. `"63"` → `"Ebooks - Fantasy"`).
+
+    Origin: pre-v2.26.1, `app/discovery/sources/mam.py` stored MAM's
+    numeric `category` field instead of `catname` on the discovery row.
+    That value rode through Send-to-Pipeline into `grabs.category`.
+    Cosmetic only — the grabs themselves linked fine — but breaks the
+    audiobook/ebook prefix check in the MAM search filter and makes
+    UI displays show raw IDs. Forward fix in mam.py prevents new dirty
+    rows; this backfill cleans existing ones. Idempotent.
+    """
+    from app.mam.enums import catname_for_id
+
+    cursor = await db.execute(
+        "SELECT id, category FROM grabs "
+        "WHERE category GLOB '[0-9]*' AND category NOT GLOB '*[^0-9]*'"
+    )
+    rows = await cursor.fetchall()
+    if not rows:
+        return 0
+    fixed = 0
+    for row_id, cat_id in rows:
+        resolved = catname_for_id(cat_id)
+        if resolved:
+            await db.execute(
+                "UPDATE grabs SET category = ? WHERE id = ?",
+                (resolved, row_id),
+            )
+            fixed += 1
+    if fixed:
+        await db.commit()
+    return fixed
 
 
 async def init_db():
@@ -885,5 +990,12 @@ async def init_db():
             await db.commit()
             await db.execute(f"PRAGMA user_version = {target_version}")
             await db.commit()
+
+        # Idempotent post-migration data fixes.
+        fixed = await _backfill_numeric_grab_categories(db)
+        if fixed:
+            _log.info(
+                f"Backfilled numeric category IDs on {fixed} grab row(s)"
+            )
     finally:
         await db.close()

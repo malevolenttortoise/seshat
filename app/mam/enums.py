@@ -175,6 +175,29 @@ async def get_categories(
     return flat
 
 
+def catname_for_id(cat_id: str | int) -> str | None:
+    """Resolve a MAM subcategory numeric id to its `catname` form.
+
+    Returns e.g. `"Ebooks - Fantasy"` for `"63"`. Returns `None` if
+    the id isn't in the bundled snapshot. The returned string matches
+    MAM's per-torrent `catname` field shape (lowercase 'b' in "Ebooks"),
+    not the categories endpoint's "E-Books" hyphenated form — the
+    backfill in `app/database.py::_backfill_numeric_grab_categories`
+    relies on this normalization so cleaned rows match what new grabs
+    produce.
+    """
+    target = str(cat_id).strip()
+    if not target:
+        return None
+    for group in _load_bundled_categories():
+        main_name = str(group.get("name", "")).replace("E-Books", "Ebooks")
+        for sub in group.get("categories", []):
+            if str(sub.get("id", "")) == target:
+                sub_name = str(sub.get("name", "")).strip()
+                return f"{main_name} - {sub_name}" if sub_name else main_name
+    return None
+
+
 def get_languages() -> list[str]:
     """Return the static MAM language list (lowercase)."""
     return list(_STATIC_LANGUAGES)

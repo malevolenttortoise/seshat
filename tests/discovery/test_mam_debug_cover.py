@@ -48,7 +48,7 @@ def _mam_item(
         "title": title,
         "author_info": '{"123":"' + (authors[0] if authors else "Author") + '"}',
         "numfiles": numfiles,
-        "category": category,
+        "catname": category,
         "filetype": filetypes,
         "filetypes": filetypes,
         "language": language,

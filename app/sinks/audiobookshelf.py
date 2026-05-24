@@ -14,6 +14,7 @@ structure matches what ABS expects for a clean auto-import.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 from pathlib import Path
 
@@ -162,6 +163,97 @@ class AudiobookshelfSink:
             success=True,
             sink_name=self.name,
             detail=str(dest),
+        )
+
+    async def remove(self, *, path: str) -> SinkResult:
+        """Remove an audiobook from the ABS library by filesystem deletion.
+
+        ABS is filesystem-of-truth: deleting the audiobook's folder
+        (or single file, for one-shot m4b/etc.) and triggering a
+        library scan causes ABS to drop the corresponding item from
+        its DB on the next scan pass.
+
+        Accepts both folder paths (multi-part audiobooks live in
+        `<library>/<Author>/<Title>/` directories) and single-file
+        paths (one-off m4b drops). Inverse of `deliver()`, which
+        always writes into an Author/Title directory.
+
+        Idempotent: a path that doesn't exist returns success — that's
+        the desired terminal state, and rollback after a partial
+        prior attempt should still be able to re-trigger the cleanup
+        without churning.
+
+        Library scan trigger is best-effort, matching `deliver()`:
+        failure to reach ABS doesn't fail the SinkResult because the
+        filesystem state is already authoritative.
+        """
+        if not path:
+            return SinkResult(
+                success=False,
+                sink_name=self.name,
+                error="remove requires path",
+            )
+
+        target = Path(path)
+        if not target.exists():
+            _log.info(
+                "audiobookshelf sink remove: %s does not exist — treating as success",
+                path,
+            )
+            # Still trigger a scan so ABS reconciles any stale row
+            # that may be pointing at a now-missing folder.
+            await self._maybe_trigger_scan()
+            return SinkResult(
+                success=True,
+                sink_name=self.name,
+                detail=f"no path at {path}",
+            )
+
+        # Defense-in-depth: refuse to delete anything outside the
+        # configured library path. Phase 5b's safety classifier
+        # already rejects OVERLAP libraries, but a second check here
+        # means a misconfigured caller can't reach into qBit-seeding
+        # directories by mistake.
+        if self.library_path:
+            try:
+                lib_root = Path(self.library_path).resolve()
+                target_resolved = target.resolve()
+                target_resolved.relative_to(lib_root)
+            except ValueError:
+                return SinkResult(
+                    success=False,
+                    sink_name=self.name,
+                    error=(
+                        f"refusing to remove path outside library_path: "
+                        f"{path!r} not under {self.library_path!r}"
+                    ),
+                )
+            except OSError as e:
+                return SinkResult(
+                    success=False,
+                    sink_name=self.name,
+                    error=f"could not resolve path: {type(e).__name__}: {e}",
+                )
+
+        try:
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                os.unlink(target)
+        except Exception as e:
+            _log.exception("audiobookshelf sink remove failed: %s", path)
+            return SinkResult(
+                success=False,
+                sink_name=self.name,
+                error=f"{type(e).__name__}: {e}",
+            )
+
+        _log.info("audiobookshelf sink: removed %s", path)
+        await self._maybe_trigger_scan()
+        return SinkResult(
+            success=True,
+            sink_name=self.name,
+            detail=f"removed {path}",
         )
 
     async def _maybe_trigger_scan(self) -> None:

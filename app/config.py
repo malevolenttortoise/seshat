@@ -247,6 +247,20 @@ DEFAULT_SETTINGS = {
     # the seeding copy). UAT default: never auto-enable; user must
     # opt in per library after reviewing the safety badge.
     "active_replacement_enabled_by_slug": {},
+    # v2.27.0 (5b) — per-library opt-in for AUTO-enact of detected
+    # opportunities. When False (default), detected upgrades sit in
+    # 'detected' status until the user manually clicks Enact. When
+    # True, the post-detection step auto-enacts each new opportunity
+    # — still gated by `active_replacement_enabled_by_slug` AND by
+    # the safety classification (OVERLAP hard-disables). Shape:
+    # { "<library_slug>": <bool> }. Default off everywhere.
+    "active_replacement_auto_enact_by_slug": {},
+    # v2.27.0 (5b) — how many days the soft-deleted owned file stays
+    # in `<library>/.seshat-replaced/<YYYYMMDD-HHMMSS>/` before the
+    # hygiene-job retention sweeper purges it. Restore must run
+    # within this window. Bounded at >= 1; tighter values shrink
+    # the recovery window without affecting enact semantics.
+    "active_replacement_soft_delete_retention_days": 30,
     # Audiobook acceptance is derived as of v2.9.0 from the Media
     # Type filter (`allowed_formats`): when empty (= "accept all") or
     # when it contains "audiobooks", audiobook announces flow through

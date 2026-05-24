@@ -21,6 +21,7 @@ from app.orchestrator.active_replacement import (
     _normalize,
     _paths_overlap,
     compute_library_safety,
+    is_auto_enact_allowed,
     is_replacement_allowed,
     library_replacement_status,
 )
@@ -61,10 +62,12 @@ def _abs_library(
 def _settings(
     *, qbit_path="/downloads",
     enabled_by_slug: dict | None = None,
+    auto_enact_by_slug: dict | None = None,
 ) -> dict:
     return {
         "local_path_prefix": qbit_path,
         "active_replacement_enabled_by_slug": enabled_by_slug or {},
+        "active_replacement_auto_enact_by_slug": auto_enact_by_slug or {},
     }
 
 
@@ -234,6 +237,8 @@ class TestLibraryReplacementStatus:
             "safety": "safe",
             "enabled": True,
             "effective": True,
+            "auto_enact": False,
+            "auto_enact_effective": False,
         }
 
     def test_overlap_makes_effective_false_even_when_enabled(self):
@@ -265,3 +270,106 @@ class TestLibraryReplacementStatus:
         status = library_replacement_status(lib, s)
         assert status["enabled"] is False
         assert status["effective"] is False
+        assert status["auto_enact"] is False
+        assert status["auto_enact_effective"] is False
+
+    def test_auto_enact_field_reflects_setting(self):
+        lib = _calibre_library(slug="cal", path="/calibre-library")
+        s = _settings(
+            qbit_path="/downloads",
+            enabled_by_slug={"cal": True},
+            auto_enact_by_slug={"cal": True},
+        )
+        status = library_replacement_status(lib, s)
+        assert status["auto_enact"] is True
+        assert status["auto_enact_effective"] is True
+
+    def test_auto_enact_effective_false_when_master_off(self):
+        # Auto-enact toggled on but master gate off → auto path inert.
+        lib = _calibre_library(slug="cal", path="/calibre-library")
+        s = _settings(
+            qbit_path="/downloads",
+            enabled_by_slug={"cal": False},
+            auto_enact_by_slug={"cal": True},
+        )
+        status = library_replacement_status(lib, s)
+        assert status["enabled"] is False
+        assert status["auto_enact"] is True
+        assert status["auto_enact_effective"] is False
+
+    def test_auto_enact_effective_false_when_overlap(self):
+        # OVERLAP hard-disables both manual and auto regardless of toggles.
+        lib = _calibre_library(slug="cal", path="/downloads/calibre")
+        s = _settings(
+            qbit_path="/downloads",
+            enabled_by_slug={"cal": True},
+            auto_enact_by_slug={"cal": True},
+        )
+        status = library_replacement_status(lib, s)
+        assert status["safety"] == "overlap"
+        assert status["effective"] is False
+        assert status["auto_enact_effective"] is False
+
+
+# ─── is_auto_enact_allowed ───────────────────────────────────
+
+
+class TestIsAutoEnactAllowed:
+    def test_all_gates_open_returns_true(self):
+        lib = _calibre_library(slug="cal", path="/calibre-library")
+        s = _settings(
+            qbit_path="/downloads",
+            enabled_by_slug={"cal": True},
+            auto_enact_by_slug={"cal": True},
+        )
+        assert is_auto_enact_allowed("cal", s, libraries=[lib]) is True
+
+    def test_master_off_blocks_auto(self):
+        lib = _calibre_library(slug="cal", path="/calibre-library")
+        s = _settings(
+            qbit_path="/downloads",
+            enabled_by_slug={"cal": False},
+            auto_enact_by_slug={"cal": True},
+        )
+        assert is_auto_enact_allowed("cal", s, libraries=[lib]) is False
+
+    def test_auto_off_blocks_auto(self):
+        lib = _calibre_library(slug="cal", path="/calibre-library")
+        s = _settings(
+            qbit_path="/downloads",
+            enabled_by_slug={"cal": True},
+            auto_enact_by_slug={"cal": False},
+        )
+        assert is_auto_enact_allowed("cal", s, libraries=[lib]) is False
+
+    def test_overlap_blocks_auto_even_when_both_on(self):
+        lib = _calibre_library(slug="cal", path="/downloads/calibre")
+        s = _settings(
+            qbit_path="/downloads",
+            enabled_by_slug={"cal": True},
+            auto_enact_by_slug={"cal": True},
+        )
+        assert is_auto_enact_allowed("cal", s, libraries=[lib]) is False
+
+    def test_missing_maps_default_off(self):
+        lib = _calibre_library(slug="cal", path="/calibre-library")
+        s = {"local_path_prefix": "/downloads"}
+        assert is_auto_enact_allowed("cal", s, libraries=[lib]) is False
+
+    def test_unknown_library_slug_returns_false(self):
+        s = _settings(
+            qbit_path="/downloads",
+            enabled_by_slug={"cal": True},
+            auto_enact_by_slug={"cal": True},
+        )
+        assert is_auto_enact_allowed("ghost", s, libraries=[]) is False
+
+    def test_unknown_safety_with_both_toggles_on_allowed(self):
+        # UNKNOWN safety lets the user attest. Master + auto both on → auto fires.
+        lib = _calibre_library(slug="cal", path="")
+        s = _settings(
+            qbit_path="/downloads",
+            enabled_by_slug={"cal": True},
+            auto_enact_by_slug={"cal": True},
+        )
+        assert is_auto_enact_allowed("cal", s, libraries=[lib]) is True

@@ -669,7 +669,7 @@ def _trace_for_decision(
             "title": mam_title,
             "author_info": ",".join(mam_authors),
             "filetypes": "epub",
-            "category": "Ebooks",
+            "catname": "Ebooks - Fantasy",
             "language": 1,
             "lang_code": "en",
             "seeders": 5,

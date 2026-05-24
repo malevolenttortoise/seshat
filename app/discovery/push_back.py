@@ -769,6 +769,80 @@ class CWAClient:
                     "persist: " + "; ".join(mismatches)
                 )
 
+    async def delete(self, book_id: int) -> None:
+        """POST /delete/<id> — remove a book from the CWA library entirely.
+
+        Upstream calibre-web route is `POST /delete/<int:book_id>` (no
+        body required beyond the CSRF token); the handler returns
+        `application/json` with the operation outcome. We re-fetch
+        `/admin/book/<id>` afterwards and expect a non-200 (book row
+        gone) as the verification check — mirrors `push`'s "verify by
+        re-read" approach.
+
+        Idempotency: if the book is already absent at call time,
+        CWA returns a JSON error body which we treat as success.
+        Used by the active-replacement enact flow where a partial
+        prior attempt may have already deleted the book.
+        """
+        import httpx
+        async with httpx.AsyncClient(
+            timeout=self.timeout, follow_redirects=True,
+        ) as http:
+            await self._login(http)
+
+            # Scrape CSRF from any authenticated page that ships the
+            # token in its template. The book-edit form is the
+            # cheapest authenticated page that always carries it.
+            edit_url = f"{self.base_url}/admin/book/{book_id}"
+            edit_page = await http.get(edit_url)
+            csrf = ""
+            if edit_page.status_code == 200:
+                m = _CSRF_RX.search(edit_page.text or "")
+                csrf = m.group(1) if m else ""
+            if not csrf:
+                # Fall back to /login page (always renders, always has csrf).
+                login_page = await http.get(f"{self.base_url}/login")
+                m = _CSRF_RX.search(login_page.text or "")
+                csrf = m.group(1) if m else ""
+            if not csrf:
+                raise PushFailed("could not extract CSRF for CWA delete")
+
+            resp = await http.post(
+                f"{self.base_url}/delete/{book_id}",
+                data={"csrf_token": csrf},
+                headers={"X-CSRFToken": csrf},
+            )
+            if resp.status_code >= 400:
+                raise PushFailed(
+                    f"CWA returned HTTP {resp.status_code} on book delete"
+                )
+
+            # Verify by re-fetching the edit page WITHOUT following
+            # redirects. CWA's actual behavior when a book id is gone:
+            # `/admin/book/<missing-id>` returns 302 → `/`. With
+            # follow_redirects=True we'd land on the home page (HTTP
+            # 200) and misread that as "book still there." With
+            # follow_redirects=False the 3xx surfaces directly — book
+            # gone = redirect, book still present = 200 with edit form.
+            try:
+                verify = await http.get(edit_url, follow_redirects=False)
+            except Exception as e:
+                # Couldn't verify — treat as success. The next sync
+                # will reconcile if the delete didn't actually land.
+                logger.warning(
+                    "CWA delete verification skipped for book_id=%s: %s",
+                    book_id, e,
+                )
+                return
+            # 200 with edit form = book still there (delete silently
+            # rejected). Anything else (404 or 3xx-redirect-away) =
+            # book is gone = success.
+            if verify.status_code == 200:
+                raise PushFailed(
+                    f"CWA delete did not remove book_id={book_id} "
+                    f"(edit page still renders after POST)"
+                )
+
 
 def _format_cwa_value(field: str, value) -> Optional[str]:
     """Stringify a Seshat value for CWA's form fields. Returns None to

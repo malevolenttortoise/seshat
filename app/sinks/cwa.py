@@ -104,3 +104,81 @@ class CWASink:
                     sink_name=self.name,
                     error=f"{type(e).__name__}: {e}",
                 )
+
+    async def remove(self, *, calibre_book_id: int) -> SinkResult:
+        """Remove a book from the CWA-managed library via its admin API.
+
+        Inverse of `deliver()` for the v2.27.0 active-replacement
+        path. Reuses the CWAClient login + CSRF machinery in
+        `app/discovery/push_back.py` (the natural home for CWA HTTP
+        interactions) rather than duplicating session handling here.
+
+        Reads CWA admin creds (`cwa_base_url`, `cwa_username`,
+        `cwa_password`) from settings at call time — matches the
+        pattern in `push_back.push_cwa`. The slim-image Calibre user
+        keeps a single CWA credential set; we don't store anything
+        sink-local.
+        """
+        if calibre_book_id is None:
+            return SinkResult(
+                success=False,
+                sink_name=self.name,
+                error="remove requires calibre_book_id",
+            )
+
+        # Lazy import to keep sinks/cwa.py free of bs4/httpx imports
+        # at module load when only the deliver path is exercised.
+        from app.config import load_settings
+        from app.discovery.push_back import (
+            CWAClient,
+            PushFailed,
+            PushUnavailable,
+        )
+        from app.secrets import get_secret
+
+        settings = load_settings()
+        base_url = (settings.get("cwa_base_url") or "").rstrip("/")
+        username = settings.get("cwa_username") or ""
+        password = await get_secret("cwa_password") or ""
+        if not (base_url and username and password):
+            return SinkResult(
+                success=False,
+                sink_name=self.name,
+                error=(
+                    "CWA admin API not configured. Set cwa_base_url, "
+                    "cwa_username, and cwa_password in Settings → Sinks."
+                ),
+            )
+
+        client = CWAClient(base_url, username, password)
+        try:
+            await client.delete(int(calibre_book_id))
+        except PushUnavailable as e:
+            return SinkResult(
+                success=False,
+                sink_name=self.name,
+                error=str(e),
+            )
+        except PushFailed as e:
+            _log.warning(
+                "cwa sink remove: book_id=%s failed: %s", calibre_book_id, e,
+            )
+            return SinkResult(
+                success=False,
+                sink_name=self.name,
+                error=str(e),
+            )
+        except Exception as e:
+            _log.exception("cwa sink remove raised")
+            return SinkResult(
+                success=False,
+                sink_name=self.name,
+                error=f"{type(e).__name__}: {e}",
+            )
+
+        _log.info("cwa sink: deleted book_id=%s", calibre_book_id)
+        return SinkResult(
+            success=True,
+            sink_name=self.name,
+            detail=f"deleted calibre_book_id={calibre_book_id}",
+        )
