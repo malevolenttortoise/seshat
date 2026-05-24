@@ -51,3 +51,37 @@ class TestEnumFetcher:
     async def test_refresh_without_token_falls_back_to_bundle(self):
         count = await mam_enums.refresh(token="")
         assert count > 30
+
+
+class TestCatnameForId:
+    def test_resolves_known_ebook_ids(self):
+        # The three IDs Mark's prod audit surfaced as numeric strings
+        # in grabs.category. Verifies the backfill mapping is correct.
+        assert mam_enums.catname_for_id("63") == "Ebooks - Fantasy"
+        assert mam_enums.catname_for_id("69") == "Ebooks - Science Fiction"
+        # cat 61's bundled name happens to be "Comics/Graphic novels"
+        assert mam_enums.catname_for_id("61") == "Ebooks - Comics/Graphic novels"
+
+    def test_resolves_audiobook_id(self):
+        # AudioBooks main_name doesn't get the "E-Books"→"Ebooks"
+        # substitution — it's already in the live catname form.
+        result = mam_enums.catname_for_id("39")
+        assert result is not None and result.startswith("AudioBooks - ")
+
+    def test_accepts_int_input(self):
+        assert mam_enums.catname_for_id(63) == "Ebooks - Fantasy"
+
+    def test_unknown_id_returns_none(self):
+        assert mam_enums.catname_for_id("999999") is None
+
+    def test_empty_input_returns_none(self):
+        assert mam_enums.catname_for_id("") is None
+        assert mam_enums.catname_for_id("   ") is None
+
+    def test_substitutes_ebooks_form(self):
+        # Bundled JSON has "E-Books"; live MAM catname uses "Ebooks".
+        # Backfill must match live form so future grabs stay consistent.
+        result = mam_enums.catname_for_id("63")
+        assert result is not None
+        assert "E-Books" not in result
+        assert result.startswith("Ebooks ")

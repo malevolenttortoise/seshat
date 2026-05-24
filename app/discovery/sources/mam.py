@@ -1933,7 +1933,13 @@ def _evaluate_results(
         # ebook-prefixed ones. The main_cat filter on the search
         # request already narrows this, but a handful of older
         # cross-category listings still slip through.
-        category = str(item.get("category") or "").strip()
+        #
+        # Read `catname` (human string) not `category` (numeric ID).
+        # MAM's loadSearchJSONbasic.php returns both; pre-v2.26.1 code
+        # read `category` and stored a numeric ID on the books row,
+        # which then propagated to grabs.category — cosmetic but
+        # broke the startswith() filter immediately below.
+        category = str(item.get("catname") or "").strip()
         cat_lower = category.lower()
         if content_type == "ebook" and cat_lower.startswith("audiobook"):
             logger.debug(f"  Eval: SKIP '{mam_title[:50]}' — audiobook category ({category})")
@@ -3278,7 +3284,7 @@ async def debug_check_book(
                 "mam_title": mam_title,
                 "mam_authors": mam_authors,
                 "all_keys": sorted(item.keys()) if idx > 0 else None,
-                "category": str(item.get("category") or ""),
+                "category": str(item.get("catname") or item.get("category") or ""),
                 "filetype": str(item.get("filetype") or item.get("filetypes") or ""),
                 "language": item.get("language"),
                 "lang_code": item.get("lang_code"),

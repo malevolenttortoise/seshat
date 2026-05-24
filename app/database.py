@@ -839,6 +839,41 @@ async def get_db() -> aiosqlite.Connection:
     return db
 
 
+async def _backfill_numeric_grab_categories(db) -> int:
+    """Replace numeric MAM category IDs in `grabs.category` with their
+    `catname` form (e.g. `"63"` → `"Ebooks - Fantasy"`).
+
+    Origin: pre-v2.26.1, `app/discovery/sources/mam.py` stored MAM's
+    numeric `category` field instead of `catname` on the discovery row.
+    That value rode through Send-to-Pipeline into `grabs.category`.
+    Cosmetic only — the grabs themselves linked fine — but breaks the
+    audiobook/ebook prefix check in the MAM search filter and makes
+    UI displays show raw IDs. Forward fix in mam.py prevents new dirty
+    rows; this backfill cleans existing ones. Idempotent.
+    """
+    from app.mam.enums import catname_for_id
+
+    cursor = await db.execute(
+        "SELECT id, category FROM grabs "
+        "WHERE category GLOB '[0-9]*' AND category NOT GLOB '*[^0-9]*'"
+    )
+    rows = await cursor.fetchall()
+    if not rows:
+        return 0
+    fixed = 0
+    for row_id, cat_id in rows:
+        resolved = catname_for_id(cat_id)
+        if resolved:
+            await db.execute(
+                "UPDATE grabs SET category = ? WHERE id = ?",
+                (resolved, row_id),
+            )
+            fixed += 1
+    if fixed:
+        await db.commit()
+    return fixed
+
+
 async def init_db():
     """Create schema and run migrations.
 
@@ -885,5 +920,12 @@ async def init_db():
             await db.commit()
             await db.execute(f"PRAGMA user_version = {target_version}")
             await db.commit()
+
+        # Idempotent post-migration data fixes.
+        fixed = await _backfill_numeric_grab_categories(db)
+        if fixed:
+            _log.info(
+                f"Backfilled numeric category IDs on {fixed} grab row(s)"
+            )
     finally:
         await db.close()
