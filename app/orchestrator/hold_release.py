@@ -93,6 +93,7 @@ async def tick(deps: DispatcherDeps) -> int:
             format_priority=deps.format_priority,
             hold_seconds=deps.format_dedup_hold_seconds,
             siblings=siblings,
+            quality_axes=deps.quality_axes,
         )
 
         if decision.action == "skip":

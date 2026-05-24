@@ -200,6 +200,53 @@ DEFAULT_SETTINGS = {
     # 600 = 10 minutes. Tunable for slow uploaders who submit the
     # second-format torrent minutes after the first.
     "format_dedup_hold_seconds": 600,
+    # v2.26.0 — numeric quality axes that tiebreak among same-format
+    # siblings (audiobook bitrate / channels). Format axis stays in
+    # `format_priority` above; this dict layers additional axes on
+    # top via app/quality/scoring.py::resolve_profile_from_settings.
+    # Missing media types default to format-only scoring (v2.9.0
+    # behavior preserved). Empty list = "no numeric axes for this
+    # media type" (ebook default; no reliable axis exists today).
+    "quality_axes": {
+        "audiobook": [
+            {
+                "axis": "audio_bitrate_kbps",
+                "tiers": [
+                    {"label": "320+ kbps", "min_value": 320},
+                    {"label": "192+ kbps", "min_value": 192},
+                    {"label": "128+ kbps", "min_value": 128},
+                    {"label": "64+ kbps",  "min_value": 64},
+                    {"label": "<64 kbps",  "min_value": 0},
+                ],
+            },
+            {
+                "axis": "audio_channels",
+                "tiers": [
+                    {"label": "Stereo+", "min_value": 2},
+                    {"label": "Mono",    "min_value": 1},
+                ],
+            },
+        ],
+        "ebook": [],
+    },
+    # v2.26.0 (A.3) — per-library partial profile overrides.
+    # Shape:  { "<library_slug>": { "format_priority": {<media_type>: [...]},
+    #                                "quality_axes":    {<media_type>: [...]} } }
+    # Resolution is whole-list replacement per (media_type, key) — see
+    # app/quality/scoring.py::resolve_profile_for_library. Empty dict
+    # (the default) means every library uses the global profile.
+    # Scope: applies to Phase 5 active-replacement decisions only;
+    # the announce-time dedup gate keeps using the global profile.
+    "quality_profile_overrides_by_slug": {},
+    # v2.26.0 (A.2) — per-library opt-in for active replacement
+    # (upgrade an owned book when a higher-quality torrent appears).
+    # Shape: { "<library_slug>": <bool> }. Default off everywhere.
+    # The safety layer in app/orchestrator/active_replacement.py
+    # hard-disables this when the library path overlaps qBit's
+    # download path (an overlap would mean replacement also overwrites
+    # the seeding copy). UAT default: never auto-enable; user must
+    # opt in per library after reviewing the safety badge.
+    "active_replacement_enabled_by_slug": {},
     # Audiobook acceptance is derived as of v2.9.0 from the Media
     # Type filter (`allowed_formats`): when empty (= "accept all") or
     # when it contains "audiobooks", audiobook announces flow through

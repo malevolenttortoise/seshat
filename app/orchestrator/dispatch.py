@@ -281,6 +281,12 @@ class DispatcherDeps:
     # a higher-priority sibling. See app/orchestrator/format_dedup.py.
     format_priority: dict = field(default_factory=dict)
     format_dedup_hold_seconds: int = 600
+    # v2.26.0 — numeric quality axes (bitrate/channels for audiobook;
+    # empty for ebook by default). Layered on top of `format_priority`
+    # by app/quality/scoring.py::resolve_profile_from_settings to form
+    # the QualityProfile the dedup gate scores against. Empty dict
+    # preserves v2.9.0 format-only behavior verbatim.
+    quality_axes: dict = field(default_factory=dict)
 
     # Optional: an audit hook for tests / future observability.
     on_event: Optional[Callable[[str, dict], None]] = None
@@ -704,6 +710,7 @@ async def _dispatch_with_decision(
                 format_priority=deps.format_priority,
                 hold_seconds=deps.format_dedup_hold_seconds,
                 siblings=siblings,
+                quality_axes=deps.quality_axes,
             )
 
             # Preempt held lower-priority siblings regardless of outcome
