@@ -50,6 +50,14 @@ from app import state
 from app.database import get_db
 from app.discovery.database import get_db as get_library_db
 from app.filter.gate import Announce
+from app.quality.extract import QualitySnapshot
+from app.quality.scoring import (
+    QualityProfile,
+    format_is_enabled,
+    format_rank,
+    resolve_profile_from_settings,
+    score_quality,
+)
 from app.works.normalize import match_key
 
 _log = logging.getLogger(__name__)
@@ -102,12 +110,19 @@ class SiblingMatch:
     format. Owned siblings block lower-priority disabled announces
     regardless of which specific format is owned, so picking the first
     is good enough; the priority check still fires correctly.
+
+    `quality_snapshot` (v2.26.0, optional) carries the sibling's
+    quality-metadata row when available. Phase 5 active-replacement
+    callers populate this for owned/in-flight siblings so the gate can
+    score-compare on numeric axes. Default None preserves v2.9.0
+    format-only dedup behavior for announce-time callers.
     """
     where: Literal["in_flight", "held", "owned"]
     book_format: str
     grab_id: Optional[int] = None
     hold_id: Optional[int] = None
     library_slug: Optional[str] = None
+    quality_snapshot: Optional[QualitySnapshot] = None
 
 
 @dataclass(frozen=True)
@@ -177,21 +192,6 @@ def normalize_dedup_key(title: str, author_blob: str) -> str:
     return match_key(first_author, title)
 
 
-def _format_index(plist: list[dict], fmt: str) -> int:
-    """Position of `fmt` in the priority list, or -1 if not present.
-
-    Lower index = higher priority. List order is the user's chosen
-    priority order, so position is the priority.
-    """
-    if not fmt:
-        return -1
-    target = fmt.lower()
-    for i, entry in enumerate(plist):
-        if (entry.get("fmt") or "").lower() == target:
-            return i
-    return -1
-
-
 # ─── The gate ─────────────────────────────────────────────────
 
 
@@ -201,6 +201,8 @@ def evaluate_format_dedup(
     format_priority: dict,
     hold_seconds: int,
     siblings: list[SiblingMatch],
+    quality_axes: Optional[dict] = None,
+    candidate_snapshot: Optional[QualitySnapshot] = None,
 ) -> FormatDedupDecision:
     """Pure decision function for format-priority dedup.
 
@@ -208,6 +210,14 @@ def evaluate_format_dedup(
     "allow"; this is the second gate that applies the dedup rules.
     No I/O — siblings is pre-fetched by `lookup_dedup_siblings` or
     stubbed by tests.
+
+    v2.26.0: scoring is delegated to app/quality/scoring.py via a
+    composed QualityProfile. `quality_axes` carries the numeric-axis
+    tiebreakers (audiobook bitrate/channels); when absent or empty for
+    the media type, scoring degrades cleanly to format-only — identical
+    to v2.9.0 dedup behavior. `candidate_snapshot` and the per-sibling
+    `quality_snapshot` field on SiblingMatch let Phase 5 active-
+    replacement callers pass real metadata for multi-axis comparison.
     """
     media_type = media_type_from_category(announce.category)
     fmt = (announce.filetype or "").strip().lower()
@@ -230,37 +240,53 @@ def evaluate_format_dedup(
             action="allow", reason="format_dedup_no_match_key", **base,
         )
 
-    plist = format_priority[media_type]
-    if not plist:
+    profile = resolve_profile_from_settings(
+        media_type,
+        {
+            "format_priority": format_priority,
+            "quality_axes": quality_axes or {},
+        },
+    )
+    if profile is None or not profile.format_tiers:
         return FormatDedupDecision(
             action="allow", reason="format_dedup_empty_priority_list", **base,
         )
 
-    fmt_idx = _format_index(plist, fmt)
-    if fmt_idx == -1:
-        # Format not in the user's priority list — could be a new MAM
-        # filetype, could be a one-off (fb2, djvu). Don't punish the
-        # unfamiliar; the existing media-type filter already gated it.
+    # `format_rank` returns len(format_tiers) for unknown formats; treat
+    # that as "not in the list" the same way the old _format_index == -1
+    # branch did. Could be a new MAM filetype, could be a one-off
+    # (fb2, djvu) — don't punish the unfamiliar.
+    fmt_idx = format_rank(profile, fmt)
+    if fmt_idx >= len(profile.format_tiers):
         return FormatDedupDecision(
             action="allow", reason="format_dedup_unknown_fmt", **base,
         )
 
-    enabled = bool(plist[fmt_idx].get("enabled"))
+    cand_score = score_quality(
+        profile=profile, fmt=fmt, snapshot=candidate_snapshot,
+    )
 
-    def _sib_idx(s: SiblingMatch) -> int:
-        return _format_index(plist, s.book_format)
+    def _sib_score(s: SiblingMatch) -> tuple[int, ...]:
+        return score_quality(
+            profile=profile, fmt=s.book_format, snapshot=s.quality_snapshot,
+        )
+
+    def _sib_known_format(s: SiblingMatch) -> bool:
+        # Mirror the old _format_index >= 0 check: only siblings whose
+        # format is actually in the profile participate in comparisons.
+        return format_rank(profile, s.book_format) < len(profile.format_tiers)
 
     # ── Enabled branch ───────────────────────────────────────
     # An enabled format always grabs (Scenarios 1 + 3.5). The only
-    # side-effect is to drop any pending hold for a LOWER-priority
+    # side-effect is to drop any pending hold for a LOWER-quality
     # sibling of the same book (the Delves preempt case): the user
     # said they want EPUB > AZW3, and now EPUB is arriving while
     # AZW3 sits in a 10-min hold, so the AZW3 hold should die.
-    if enabled:
+    if format_is_enabled(profile, fmt):
         preempt = tuple(
             s.hold_id for s in siblings
             if s.where == "held" and s.hold_id is not None
-            and 0 <= fmt_idx < _sib_idx(s)
+            and _sib_known_format(s) and cand_score < _sib_score(s)
         )
         return FormatDedupDecision(
             action="allow",
@@ -277,13 +303,13 @@ def evaluate_format_dedup(
             action="skip", reason="format_dedup_owned_sibling", **base,
         )
 
-    # Rule (b): a higher-priority sibling currently in flight (grab) or
-    # held blocks us — let the higher-priority one resolve first. This
-    # is the Duchy case: EPUB grabs immediately, AZW3 arrives 29s later
-    # and sees EPUB sitting in `grabs` with state != complete.
+    # Rule (b): a higher-quality sibling currently in flight (grab) or
+    # held blocks us — let the higher one resolve first. This is the
+    # Duchy case: EPUB grabs immediately, AZW3 arrives 29s later and
+    # sees EPUB sitting in `grabs` with state != complete.
     higher_siblings = [
         s for s in siblings
-        if 0 <= _sib_idx(s) < fmt_idx
+        if _sib_known_format(s) and _sib_score(s) < cand_score
     ]
     if any(s.where in ("in_flight", "held") for s in higher_siblings):
         return FormatDedupDecision(
@@ -294,13 +320,13 @@ def evaluate_format_dedup(
 
     # No blocking sibling. Hold for `hold_seconds` and let the scheduler
     # tick re-evaluate at release_at. While we're here, if any LOWER-
-    # priority hold exists for the same dedup_key, drop it — we're
-    # higher-priority among disabled options, so we become the active
-    # hold. (Invariant: at most one pending hold per dedup_key.)
+    # quality hold exists for the same dedup_key, drop it — we're
+    # better among disabled options, so we become the active hold.
+    # (Invariant: at most one pending hold per dedup_key.)
     preempt = tuple(
         s.hold_id for s in siblings
         if s.where == "held" and s.hold_id is not None
-        and 0 <= fmt_idx < _sib_idx(s)
+        and _sib_known_format(s) and cand_score < _sib_score(s)
     )
     return FormatDedupDecision(
         action="hold",

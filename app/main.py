@@ -412,6 +412,8 @@ async def _build_dispatcher(settings: dict, resolved_secrets: dict = None) -> Di
         format_dedup_hold_seconds=int(
             settings.get("format_dedup_hold_seconds", 600) or 600
         ),
+        # v2.26.0 — numeric quality axes layered on top of format_priority.
+        quality_axes=dict(settings.get("quality_axes") or {}),
     )
 
 

@@ -22,7 +22,6 @@ from app.filter.gate import Announce
 from app.orchestrator.format_dedup import (
     FormatDedupDecision,
     SiblingMatch,
-    _format_index,
     evaluate_format_dedup,
     lookup_dedup_siblings,
     media_type_from_category,
@@ -131,18 +130,9 @@ class TestNormalizeDedupKey:
                normalize_dedup_key("Foo", "Author X")
 
 
-class TestFormatIndex:
-    def test_present(self):
-        assert _format_index(EBOOK_PRIORITY, "epub") == 0
-        assert _format_index(EBOOK_PRIORITY, "azw3") == 1
-        assert _format_index(EBOOK_PRIORITY, "pdf") == 3
-
-    def test_case_insensitive(self):
-        assert _format_index(EBOOK_PRIORITY, "EPUB") == 0
-
-    def test_absent_returns_minus_one(self):
-        assert _format_index(EBOOK_PRIORITY, "fb2") == -1
-        assert _format_index(EBOOK_PRIORITY, "") == -1
+# Note: the format-rank helper that powered the old `_format_index`
+# inline function now lives in app/quality/scoring.py; its coverage is
+# in tests/quality/test_scoring.py::test_format_rank_*.
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -446,6 +436,156 @@ class TestFallThroughCases:
         )
         assert d.action == "allow"
         assert d.reason == "format_dedup_empty_priority_list"
+
+
+# ═══════════════════════════════════════════════════════════════
+# v2.26.0 — multi-axis quality scoring at the dedup gate
+# ═══════════════════════════════════════════════════════════════
+
+
+# Mirrors DEFAULT_QUALITY_AXES — kept local so a settings refactor
+# can't silently change the dedup behavior these tests pin.
+AUDIOBOOK_AXES = [
+    {
+        "axis": "audio_bitrate_kbps",
+        "tiers": [
+            {"label": "320+ kbps", "min_value": 320},
+            {"label": "192+ kbps", "min_value": 192},
+            {"label": "128+ kbps", "min_value": 128},
+            {"label": "64+ kbps",  "min_value": 64},
+            {"label": "<64 kbps",  "min_value": 0},
+        ],
+    },
+    {
+        "axis": "audio_channels",
+        "tiers": [
+            {"label": "Stereo+", "min_value": 2},
+            {"label": "Mono",    "min_value": 1},
+        ],
+    },
+]
+QUALITY_AXES = {"audiobook": AUDIOBOOK_AXES, "ebook": []}
+
+
+def _audio_snapshot(*, bitrate=None, channels=None, fmt="AAC"):
+    from app.quality.extract import QualitySnapshot
+    return QualitySnapshot(
+        mam_torrent_id="1",
+        source="mediainfo",
+        audio_format=fmt,
+        audio_bitrate_kbps=bitrate,
+        audio_channels=channels,
+    )
+
+
+class TestQualityAxesAtDedupGate:
+    """Numeric-axis tiebreakers fire when both candidate and sibling
+    have populated quality snapshots. When either side lacks data, the
+    gate falls back to format-only comparison (v2.9.0 behavior)."""
+
+    def _audio(self, **kw):
+        defaults = dict(
+            title="Red Rising", author="Pierce Brown",
+            category="Audiobooks - Sci-Fi", filetype="m4b",
+        )
+        defaults.update(kw)
+        return _announce(**defaults)
+
+    def test_better_bitrate_preempts_held_same_format(self):
+        """m4b@320 arriving preempts m4b@64 sitting on a hold.
+
+        Today's v2.9.0 same-format dedup never preempts; the new
+        multi-axis path fires when both sides have quality data.
+        """
+        held_sib = SiblingMatch(
+            where="held", book_format="m4b", hold_id=42,
+            quality_snapshot=_audio_snapshot(bitrate=64, channels=1),
+        )
+        d = evaluate_format_dedup(
+            announce=self._audio(),
+            format_priority=DEFAULT_PRIORITY,
+            quality_axes=QUALITY_AXES,
+            hold_seconds=HOLD_SECONDS,
+            siblings=[held_sib],
+            candidate_snapshot=_audio_snapshot(bitrate=320, channels=2),
+        )
+        assert d.action == "allow"
+        assert d.preempt_hold_ids == (42,)
+
+    def test_higher_quality_inflight_sibling_blocks_disabled(self):
+        """A disabled-format candidate (mp3) is blocked by a higher-
+        scoring in-flight m4b sibling — the v2.9.0 rule, untouched.
+        Quality-axis data isn't needed here because format already
+        differentiates them."""
+        inflight = SiblingMatch(
+            where="in_flight", book_format="m4b", grab_id=7,
+            quality_snapshot=_audio_snapshot(bitrate=128, channels=2),
+        )
+        d = evaluate_format_dedup(
+            announce=self._audio(filetype="mp3"),
+            format_priority=DEFAULT_PRIORITY,
+            quality_axes=QUALITY_AXES,
+            hold_seconds=HOLD_SECONDS,
+            siblings=[inflight],
+        )
+        assert d.action == "skip"
+        assert d.reason == "format_dedup_higher_priority_inflight"
+
+    def test_no_preempt_when_same_quality(self):
+        """m4b@128 arriving while m4b@128 is held — same score, no
+        preempt (we don't want a tied candidate stealing a hold)."""
+        held = SiblingMatch(
+            where="held", book_format="m4b", hold_id=99,
+            quality_snapshot=_audio_snapshot(bitrate=128, channels=2),
+        )
+        d = evaluate_format_dedup(
+            announce=self._audio(),
+            format_priority=DEFAULT_PRIORITY,
+            quality_axes=QUALITY_AXES,
+            hold_seconds=HOLD_SECONDS,
+            siblings=[held],
+            candidate_snapshot=_audio_snapshot(bitrate=128, channels=2),
+        )
+        assert d.action == "allow"
+        assert d.preempt_hold_ids == ()
+
+    def test_no_preempt_when_candidate_worse(self):
+        """m4b@64 arriving while m4b@320 is held — worse score, no
+        preempt. Held sibling is the better option; let it ride out
+        its window."""
+        held = SiblingMatch(
+            where="held", book_format="m4b", hold_id=99,
+            quality_snapshot=_audio_snapshot(bitrate=320, channels=2),
+        )
+        d = evaluate_format_dedup(
+            announce=self._audio(),
+            format_priority=DEFAULT_PRIORITY,
+            quality_axes=QUALITY_AXES,
+            hold_seconds=HOLD_SECONDS,
+            siblings=[held],
+            candidate_snapshot=_audio_snapshot(bitrate=64, channels=2),
+        )
+        assert d.action == "allow"
+        assert d.preempt_hold_ids == ()
+
+    def test_v290_behavior_preserved_when_no_snapshots(self):
+        """Announce-time path: no candidate_snapshot, no per-sibling
+        snapshots. Quality axes are present in config but every numeric
+        axis ranks as 'unknown' on both sides — comparison collapses
+        to format-only, identical to v2.9.0."""
+        held = SiblingMatch(
+            where="held", book_format="mp3", hold_id=55,
+        )
+        d = evaluate_format_dedup(
+            announce=self._audio(filetype="m4b"),
+            format_priority=DEFAULT_PRIORITY,
+            quality_axes=QUALITY_AXES,
+            hold_seconds=HOLD_SECONDS,
+            siblings=[held],
+        )
+        # m4b is enabled + higher-priority than mp3 → allow + preempt.
+        assert d.action == "allow"
+        assert d.preempt_hold_ids == (55,)
 
 
 # ═══════════════════════════════════════════════════════════════
