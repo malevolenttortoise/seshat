@@ -751,6 +751,38 @@ class TestCWAClientDelete:
         assert post_body["csrf_token"] == "fallback-csrf"
 
     @pytest.mark.asyncio
+    async def test_treats_302_redirect_as_success(self, monkeypatch):
+        """Real-CWA behavior caught in dev-stack UAT 2026-05-24:
+        /admin/book/<missing-id> returns 302 → /. With follow_redirects
+        enabled, httpx silently follows the redirect and returns 200
+        from the home page — which the naive verify-by-200 check
+        misreads as "book still there." The fix uses
+        follow_redirects=False on the verify GET so a 3xx-redirect-away
+        surfaces directly and is recognized as success (the book is
+        actually gone)."""
+        from app.discovery import push_back
+
+        responses = [
+            ("GET", "/login", _StubResponse(200, _form_html_for(
+                {"title": "T"}, csrf="login-csrf",
+            ))),
+            ("POST", "/login", _StubResponse(200, "ok", cookies={"session": "x"})),
+            ("GET", "/admin/book/42", _StubResponse(200, _form_html_for(
+                {"title": "Doomed"}, csrf="edit-csrf",
+            ))),
+            ("POST", "/delete/42", _StubResponse(200, '{"success":true}')),
+            # Real CWA's behavior after delete: 302 to home (not 404).
+            ("GET", "/admin/book/42", _StubResponse(302, "")),
+        ]
+        stub = _StubHttpClient(responses)
+        import httpx
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **_kw: stub)
+
+        client = push_back.CWAClient("http://cwa.local", "u", "p")
+        # Must NOT raise — the 302 means the book is gone.
+        await client.delete(42)
+
+    @pytest.mark.asyncio
     async def test_raises_when_book_still_renders_after_delete(self, monkeypatch):
         """CWA can return 200 on /delete while silently rejecting it
         (CSRF mismatch, permission, etc.). Re-fetching the edit page

@@ -817,10 +817,15 @@ class CWAClient:
                     f"CWA returned HTTP {resp.status_code} on book delete"
                 )
 
-            # Verify by re-fetching the edit page; CWA 404s (or
-            # redirects away) when the book id is gone.
+            # Verify by re-fetching the edit page WITHOUT following
+            # redirects. CWA's actual behavior when a book id is gone:
+            # `/admin/book/<missing-id>` returns 302 → `/`. With
+            # follow_redirects=True we'd land on the home page (HTTP
+            # 200) and misread that as "book still there." With
+            # follow_redirects=False the 3xx surfaces directly — book
+            # gone = redirect, book still present = 200 with edit form.
             try:
-                verify = await http.get(edit_url)
+                verify = await http.get(edit_url, follow_redirects=False)
             except Exception as e:
                 # Couldn't verify — treat as success. The next sync
                 # will reconcile if the delete didn't actually land.
@@ -829,10 +834,10 @@ class CWAClient:
                     book_id, e,
                 )
                 return
+            # 200 with edit form = book still there (delete silently
+            # rejected). Anything else (404 or 3xx-redirect-away) =
+            # book is gone = success.
             if verify.status_code == 200:
-                # Still there → the delete didn't take. CWA's JSON
-                # body from /delete may have flagged a permission /
-                # CSRF problem we shouldn't paper over.
                 raise PushFailed(
                     f"CWA delete did not remove book_id={book_id} "
                     f"(edit page still renders after POST)"
