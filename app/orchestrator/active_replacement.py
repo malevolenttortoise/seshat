@@ -1004,3 +1004,133 @@ async def restore_enactment(
             f"re-registration: {re_register_detail}"
         ),
     )
+
+
+# ─── Phase 5b Phase 6 — retention sweeper ────────────────────
+
+
+def purge_expired_soft_deletes(
+    settings: Optional[dict] = None,
+    libraries: Optional[list[dict]] = None,
+) -> dict:
+    """Walk every library's `.seshat-replaced/` folder and purge
+    timestamp subdirs older than the configured retention window.
+
+    The folder layout (`_soft_delete_dir_for`) is:
+        <library_path>/.seshat-replaced/<YYYYMMDD-HHMMSS>/<book_dir>/...
+
+    Each immediate child of `.seshat-replaced/` is a timestamp. We
+    parse the name; if the parse fails OR if the age (now - timestamp)
+    is older than `active_replacement_soft_delete_retention_days * 86400`
+    seconds, the whole subtree is `shutil.rmtree`'d.
+
+    Returns a stats dict:
+        {
+            "purged":     N total subtrees deleted across libraries
+            "kept":       M total subtrees within retention window
+            "malformed":  K dirs whose name didn't parse as a timestamp
+            "errors":     E rmtree failures (logged but don't raise)
+            "per_library": [{slug, library_path, purged, kept, malformed, errors}, ...]
+        }
+
+    Pure-Python + filesystem only. No DB writes — the audit
+    `replacement_enactments` rows survive purge; their
+    `owned_path_after` becomes a dangling pointer. The restore
+    endpoint already handles "soft-delete gone" with a 404 + the
+    "retention sweeper may have purged it" hint.
+
+    Idempotent: re-running is a no-op once steady state is reached.
+    """
+    from app.config import load_settings
+
+    if settings is None:
+        settings = load_settings()
+    libs = libraries if libraries is not None else list(state._discovered_libraries)
+
+    retention_days = int(
+        settings.get("active_replacement_soft_delete_retention_days") or 30
+    )
+    if retention_days < 1:
+        # Defensive: never accept zero/negative retention; the
+        # settings UI clamps to ≥1 but a hand-edited settings.json
+        # could land here.
+        retention_days = 30
+    cutoff = time.time() - retention_days * 86400
+
+    totals = {"purged": 0, "kept": 0, "malformed": 0, "errors": 0}
+    per_library: list[dict] = []
+
+    for lib in libs:
+        library_path = lib.get("library_path") or ""
+        slug = lib.get("slug") or ""
+        if not library_path:
+            continue
+        soft_root = Path(library_path) / ".seshat-replaced"
+        lib_stats = {
+            "slug": slug, "library_path": library_path,
+            "purged": 0, "kept": 0, "malformed": 0, "errors": 0,
+        }
+        if not soft_root.exists() or not soft_root.is_dir():
+            per_library.append(lib_stats)
+            continue
+
+        for entry in soft_root.iterdir():
+            if not entry.is_dir():
+                # Stray files don't belong here; skip them so the
+                # sweep doesn't blast an operator's manual artifact.
+                continue
+            ts = _parse_soft_delete_timestamp(entry.name)
+            if ts is None:
+                lib_stats["malformed"] += 1
+                continue
+            if ts >= cutoff:
+                lib_stats["kept"] += 1
+                continue
+            # Older than retention → purge.
+            try:
+                shutil.rmtree(entry)
+                lib_stats["purged"] += 1
+                _log.info(
+                    "soft-delete retention: purged %s "
+                    "(library=%s, age=%.1f days)",
+                    entry, slug,
+                    (time.time() - ts) / 86400,
+                )
+            except OSError as e:
+                lib_stats["errors"] += 1
+                _log.warning(
+                    "soft-delete retention: rmtree failed for %s: "
+                    "%s: %s",
+                    entry, type(e).__name__, e,
+                )
+
+        for k in ("purged", "kept", "malformed", "errors"):
+            totals[k] += lib_stats[k]
+        per_library.append(lib_stats)
+
+    return {**totals, "per_library": per_library}
+
+
+def _parse_soft_delete_timestamp(name: str) -> Optional[float]:
+    """Parse a `YYYYMMDD-HHMMSS` directory name to a unix timestamp.
+
+    Returns None on any parse failure so the caller can flag the dir
+    as malformed without crashing the sweep. The format must match
+    exactly — `time.strftime("%Y%m%d-%H%M%S")` is what
+    `_soft_delete_dir_for` writes, so anything else here is either
+    an operator-created folder we shouldn't touch OR a future-version
+    name we don't recognize.
+    """
+    try:
+        struct = time.strptime(name, "%Y%m%d-%H%M%S")
+    except (ValueError, TypeError):
+        return None
+    try:
+        # `mktime` interprets the struct as local time, which matches
+        # how _soft_delete_dir_for stamped it via strftime. UTC drift
+        # is up to ±1 day across local-time epoch boundaries, which
+        # is negligible at the retention granularity we care about
+        # (default 30 days; nobody tunes this below 1 day).
+        return time.mktime(struct)
+    except (ValueError, OverflowError):
+        return None

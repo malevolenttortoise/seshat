@@ -77,6 +77,7 @@ JOB_NAMES = (
     "Orphan author retrolink",
     "Cross-library person backfill",
     "Prune orphan author links",
+    "Soft-delete retention sweep",
 )
 TOTAL_JOBS = len(JOB_NAMES)
 
@@ -98,6 +99,11 @@ def _zero_stats() -> dict[str, Any]:
         "broken_image_urls_cleared": 0,
         "low_confidence_flagged": 0,
         "orphan_links_pruned": 0,
+        # v2.27.0 Phase 5b Phase 6 — soft-delete retention sweeper.
+        "soft_deletes_purged": 0,
+        "soft_deletes_kept": 0,
+        "soft_deletes_malformed": 0,
+        "soft_deletes_errors": 0,
         "errors": [],
     }
 
@@ -1398,6 +1404,35 @@ async def run_all() -> dict[str, Any]:
             "orphan_links_pruned": stats["orphan_links_pruned"],
         })
 
+        # Job 10 — Soft-delete retention sweep (v2.27.0 Phase 5b
+        # Phase 6). Filesystem-only; walks every library's
+        # .seshat-replaced/<ts>/ subdirs and purges anything older
+        # than `active_replacement_soft_delete_retention_days`
+        # (default 30). Idempotent — once steady state is reached,
+        # this is a near-no-op on every subsequent run.
+        _set_phase(9, library="(cross-library)")
+        try:
+            from app.orchestrator.active_replacement import (
+                purge_expired_soft_deletes,
+            )
+            sweep = purge_expired_soft_deletes(libraries=libs)
+            stats["soft_deletes_purged"]    = sweep["purged"]
+            stats["soft_deletes_kept"]      = sweep["kept"]
+            stats["soft_deletes_malformed"] = sweep["malformed"]
+            stats["soft_deletes_errors"]    = sweep["errors"]
+        except Exception as e:
+            logger.exception("hygiene: soft-delete sweep crashed")
+            stats["errors"].append(
+                f"soft_delete_sweep: {type(e).__name__}: {e}"
+            )
+        state._hygiene_progress["jobs"].append({
+            "name": JOB_NAMES[9],
+            "soft_deletes_purged":    stats["soft_deletes_purged"],
+            "soft_deletes_kept":      stats["soft_deletes_kept"],
+            "soft_deletes_malformed": stats["soft_deletes_malformed"],
+            "soft_deletes_errors":    stats["soft_deletes_errors"],
+        })
+
         state._hygiene_progress.update({
             "running": False,
             "status": "complete" if not stats["errors"] else "complete (with errors)",
@@ -1418,7 +1453,8 @@ async def run_all() -> dict[str, Any]:
                 f"+{stats['abs_authors_stamped']} ABS stamps, "
                 f"+{stats.get('orphan_authors_retrolinked', 0)} retrolinked, "
                 f"+{stats.get('person_ids_mirrored', 0)} IDs mirrored, "
-                f"-{stats.get('orphan_links_pruned', 0)} orphan links"
+                f"-{stats.get('orphan_links_pruned', 0)} orphan links, "
+                f"-{stats.get('soft_deletes_purged', 0)} expired soft-deletes"
             )
             await publish_toast(
                 "warning" if stats["errors"] else "success", summary,

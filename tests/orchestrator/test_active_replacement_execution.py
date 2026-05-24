@@ -529,3 +529,209 @@ class TestRestore:
         )
         assert result.status == "blocked"
         assert "occupied" in result.detail
+
+
+# ─── Phase 5b Phase 6 — retention sweeper ────────────────────
+
+
+import time as _time
+
+
+def _make_soft_delete(library_root: Path, age_days: float, label: str = "book") -> Path:
+    """Create <library>/.seshat-replaced/<ts>/<label>/file with `ts`
+    set to (now - age_days). Returns the timestamp subdir path."""
+    soft_root = library_root / ".seshat-replaced"
+    soft_root.mkdir(parents=True, exist_ok=True)
+    when = _time.localtime(_time.time() - age_days * 86400)
+    ts = _time.strftime("%Y%m%d-%H%M%S", when)
+    sub = soft_root / ts
+    # If the test creates two with the same second, suffix uniquely.
+    counter = 0
+    while sub.exists():
+        counter += 1
+        sub = soft_root / f"{ts}-{counter:02d}"
+    sub.mkdir(parents=True)
+    inner = sub / label
+    inner.mkdir()
+    (inner / "data.txt").write_bytes(b"x" * 50)
+    return sub
+
+
+class TestPurgeExpiredSoftDeletes:
+    """v2.27.0 Phase 6 — filesystem-only sweeper that purges
+    <library>/.seshat-replaced/<ts>/ subdirs older than the configured
+    retention window. Idempotent + handles malformed names + survives
+    missing .seshat-replaced/ folders."""
+
+    def test_purges_old_keeps_new(self, tmp_path):
+        root = tmp_path / "lib"
+        lib = {
+            "slug": "lib-1", "name": "Lib 1",
+            "app_type": "calibre", "library_path": str(root),
+        }
+        old = _make_soft_delete(root, age_days=40, label="old_book")
+        new = _make_soft_delete(root, age_days=5, label="new_book")
+
+        result = ar.purge_expired_soft_deletes(
+            settings={"active_replacement_soft_delete_retention_days": 30},
+            libraries=[lib],
+        )
+        assert result["purged"] == 1
+        assert result["kept"] == 1
+        assert not old.exists()
+        assert new.exists()
+        # Per-library stats present.
+        per_lib = result["per_library"]
+        assert len(per_lib) == 1
+        assert per_lib[0]["slug"] == "lib-1"
+        assert per_lib[0]["purged"] == 1
+        assert per_lib[0]["kept"] == 1
+
+    def test_idempotent_second_run_is_no_op(self, tmp_path):
+        """Re-running after steady state should purge nothing."""
+        root = tmp_path / "lib"
+        lib = {"slug": "lib", "library_path": str(root), "app_type": "calibre"}
+        _make_soft_delete(root, age_days=5, label="fresh")
+        # First sweep — purges nothing (only fresh entries).
+        first = ar.purge_expired_soft_deletes(
+            settings={"active_replacement_soft_delete_retention_days": 30},
+            libraries=[lib],
+        )
+        # Second sweep — same state.
+        second = ar.purge_expired_soft_deletes(
+            settings={"active_replacement_soft_delete_retention_days": 30},
+            libraries=[lib],
+        )
+        assert first["purged"] == 0
+        assert first["kept"] == 1
+        assert second["purged"] == 0
+        assert second["kept"] == 1
+
+    def test_malformed_dir_names_flagged_not_purged(self, tmp_path):
+        """A folder that doesn't parse as YYYYMMDD-HHMMSS must NOT
+        be purged — we conservatively skip anything we don't
+        understand. Operator-created sibling dirs survive sweeps."""
+        root = tmp_path / "lib"
+        lib = {"slug": "lib", "library_path": str(root), "app_type": "calibre"}
+        soft_root = root / ".seshat-replaced"
+        soft_root.mkdir(parents=True)
+        rando = soft_root / "operator-manual-folder"
+        rando.mkdir()
+        (rando / "important.txt").write_bytes(b"keep me")
+        _make_soft_delete(root, age_days=40, label="will_be_purged")
+
+        result = ar.purge_expired_soft_deletes(
+            settings={"active_replacement_soft_delete_retention_days": 30},
+            libraries=[lib],
+        )
+        assert result["malformed"] == 1
+        assert result["purged"] == 1
+        assert rando.exists()
+        assert (rando / "important.txt").exists()
+
+    def test_missing_seshat_replaced_dir_is_no_op(self, tmp_path):
+        """Library with no `.seshat-replaced/` folder should not error
+        — common pre-Phase-5b case + after a clean purge."""
+        root = tmp_path / "lib-no-folder"
+        root.mkdir()
+        lib = {"slug": "lib", "library_path": str(root), "app_type": "calibre"}
+        result = ar.purge_expired_soft_deletes(
+            settings={"active_replacement_soft_delete_retention_days": 30},
+            libraries=[lib],
+        )
+        assert result["purged"] == 0
+        assert result["kept"] == 0
+
+    def test_skips_stray_files_in_soft_root(self, tmp_path):
+        """A stray FILE (not dir) inside .seshat-replaced/ shouldn't
+        get rmtree'd or counted — we only target timestamp subdirs."""
+        root = tmp_path / "lib"
+        lib = {"slug": "lib", "library_path": str(root), "app_type": "calibre"}
+        soft_root = root / ".seshat-replaced"
+        soft_root.mkdir(parents=True)
+        stray = soft_root / "operator-notes.txt"
+        stray.write_bytes(b"don't touch")
+
+        result = ar.purge_expired_soft_deletes(
+            settings={"active_replacement_soft_delete_retention_days": 30},
+            libraries=[lib],
+        )
+        assert result["purged"] == 0
+        assert result["kept"] == 0
+        assert result["malformed"] == 0
+        assert stray.exists()
+
+    def test_multi_library_aggregation(self, tmp_path):
+        """Stats aggregate across all libraries; per-library breakdown
+        is preserved so the operator can see which library had the
+        most expired entries."""
+        a_root = tmp_path / "lib-a"
+        b_root = tmp_path / "lib-b"
+        libs = [
+            {"slug": "a", "library_path": str(a_root), "app_type": "calibre"},
+            {"slug": "b", "library_path": str(b_root), "app_type": "audiobookshelf"},
+        ]
+        # Vary ages by a few minutes so each call lands in its own
+        # second and gets a unique parseable timestamp dir name.
+        _make_soft_delete(a_root, age_days=40)
+        _make_soft_delete(a_root, age_days=41)
+        _make_soft_delete(a_root, age_days=5)
+        _make_soft_delete(b_root, age_days=100)
+
+        result = ar.purge_expired_soft_deletes(
+            settings={"active_replacement_soft_delete_retention_days": 30},
+            libraries=libs,
+        )
+        assert result["purged"] == 3
+        assert result["kept"] == 1
+        per_lib = {p["slug"]: p for p in result["per_library"]}
+        assert per_lib["a"]["purged"] == 2
+        assert per_lib["a"]["kept"] == 1
+        assert per_lib["b"]["purged"] == 1
+        assert per_lib["b"]["kept"] == 0
+
+    def test_zero_retention_falls_back_to_default(self, tmp_path):
+        """Defensive: settings.json hand-edited to 0 days shouldn't
+        purge everything immediately. The function clamps to a
+        sensible default."""
+        root = tmp_path / "lib"
+        lib = {"slug": "lib", "library_path": str(root), "app_type": "calibre"}
+        _make_soft_delete(root, age_days=5, label="fresh")
+
+        result = ar.purge_expired_soft_deletes(
+            settings={"active_replacement_soft_delete_retention_days": 0},
+            libraries=[lib],
+        )
+        # 5-day-old entry should NOT be purged (defaults to 30).
+        assert result["purged"] == 0
+        assert result["kept"] == 1
+
+    def test_libraries_without_library_path_skipped(self, tmp_path):
+        """Library entry without `library_path` (mis-configured discovery)
+        shouldn't crash the sweep — it just gets skipped."""
+        libs = [
+            {"slug": "no-path", "library_path": "", "app_type": "calibre"},
+        ]
+        result = ar.purge_expired_soft_deletes(
+            settings={"active_replacement_soft_delete_retention_days": 30},
+            libraries=libs,
+        )
+        assert result["purged"] == 0
+        # The empty-path library doesn't even produce a per-library
+        # entry (the function continues before building one).
+        assert result["per_library"] == []
+
+
+class TestParseSoftDeleteTimestamp:
+    def test_valid_timestamp_parses(self):
+        ts = ar._parse_soft_delete_timestamp("20260524-180000")
+        assert ts is not None
+        # Should be close to noon-ish on the actual date (local TZ),
+        # well into the 2026 range.
+        assert ts > _time.mktime(_time.strptime("2026-01-01", "%Y-%m-%d"))
+
+    def test_invalid_format_returns_none(self):
+        assert ar._parse_soft_delete_timestamp("not-a-timestamp") is None
+        assert ar._parse_soft_delete_timestamp("2026-05-24") is None
+        assert ar._parse_soft_delete_timestamp("20260524") is None
+        assert ar._parse_soft_delete_timestamp("") is None
