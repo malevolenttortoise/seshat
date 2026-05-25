@@ -249,6 +249,124 @@ async def ensure_enqueued(
 # ─── Read API ──────────────────────────────────────────────────
 
 
+async def read_books_by_author(
+    *,
+    source_name: str,
+    author_id: str,
+    library_slug: str = "",
+    book_format: str = "",
+    language: str = "",
+) -> list[dict]:
+    """Return raw cache rows for ``author_id`` as plain dicts.
+
+    Enricher-side read API (v2.29.0). The existing
+    :func:`read_cached_author` is discovery-flow: it requires a
+    state row (worker-scanned proof) and assembles an AuthorResult
+    for the merge layer. The enricher just wants candidates — any
+    cached book for this author is fair game, regardless of which
+    library the discovery worker happened to scan.
+
+    Filters:
+      - ``library_slug``: empty walks every library; non-empty
+        restricts to that one library's scan.
+      - ``book_format`` + ``language`` apply via the same
+        ``_format_matches`` / ``_language_matches`` helpers the
+        discovery path uses, so the binding-symbol mapping (e.g.
+        "kindle" → "kindle_edition") works here too.
+
+    Returns ``[]`` on cache miss (no books rows for this author).
+    """
+    bt = metadata_cache.books_table(source_name)
+    db = await metadata_cache.get_db(source_name)
+    try:
+        if library_slug:
+            sql = (
+                f"SELECT author_id, library_slug, book_asin, title, "
+                f"series_name, series_pos, pub_date, format, language, "
+                f"isbn, cover_url, raw_json, cached_at "
+                f"FROM {bt} WHERE author_id = ? AND library_slug = ?"
+            )
+            cur = await db.execute(sql, (author_id, library_slug))
+        else:
+            sql = (
+                f"SELECT author_id, library_slug, book_asin, title, "
+                f"series_name, series_pos, pub_date, format, language, "
+                f"isbn, cover_url, raw_json, cached_at "
+                f"FROM {bt} WHERE author_id = ?"
+            )
+            cur = await db.execute(sql, (author_id,))
+        rows = await cur.fetchall()
+    finally:
+        await db.close()
+
+    # Same read-time filters as `read_cached_author` so callers see a
+    # consistent shape regardless of which entry point ran.
+    seen_asins: set[str] = set()
+    out: list[dict] = []
+    for row in rows:
+        if not _language_matches(row["language"], language):
+            continue
+        if not _format_matches(row["format"], book_format):
+            continue
+        asin = row["book_asin"]
+        if not asin or asin in seen_asins:
+            continue
+        seen_asins.add(asin)
+        out.append(dict(row))
+    return out
+
+
+async def author_has_cached_books(
+    *,
+    source_name: str,
+    author_id: str,
+    library_slug: str = "",
+) -> bool:
+    """Cheap existence probe: is there at least one cached book for
+    this author?
+
+    Used by ``MetaSource.is_cheap_for`` to gate the
+    short-circuit-on-good-enough behavior in the enricher (F3). No
+    format/language filtering — the question is "does the cache
+    have anything we could try?" and "did the worker last succeed?"
+    The state-table ``last_outcome='ok'`` filter ensures we don't
+    declare the source cheap when the cache row is a permanent-fail
+    placeholder.
+    """
+    bt = metadata_cache.books_table(source_name)
+    st = metadata_cache.state_table(source_name)
+    db = await metadata_cache.get_db(source_name)
+    try:
+        if library_slug:
+            sql_state = (
+                f"SELECT 1 FROM {st} "
+                f"WHERE author_id = ? AND library_slug = ? "
+                f"AND last_outcome = 'ok' LIMIT 1"
+            )
+            cur = await db.execute(sql_state, (author_id, library_slug))
+        else:
+            sql_state = (
+                f"SELECT 1 FROM {st} WHERE author_id = ? "
+                f"AND last_outcome = 'ok' LIMIT 1"
+            )
+            cur = await db.execute(sql_state, (author_id,))
+        if (await cur.fetchone()) is None:
+            return False
+        if library_slug:
+            cur = await db.execute(
+                f"SELECT 1 FROM {bt} WHERE author_id = ? AND library_slug = ? LIMIT 1",
+                (author_id, library_slug),
+            )
+        else:
+            cur = await db.execute(
+                f"SELECT 1 FROM {bt} WHERE author_id = ? LIMIT 1",
+                (author_id,),
+            )
+        return (await cur.fetchone()) is not None
+    finally:
+        await db.close()
+
+
 async def read_cached_author(
     *,
     source_name: str,

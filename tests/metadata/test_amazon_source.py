@@ -197,3 +197,223 @@ class TestF2AudiobookRetry:
         assert result is None
         # No detail fetches when there are no candidates.
         assert all("/dp/" not in u for u in fetches)
+
+
+# ─── F1 — cache-first lookup ─────────────────────────────────
+
+
+class TestF1CacheFirst:
+    """When ``author_amazon_id`` is known and the cache holds rows for
+    that author, the search short-circuits to a cache scoring pass
+    plus a single detail fetch. On miss, the worker queue is bumped
+    and the live ``/s`` flow runs."""
+
+    async def test_cache_hit_uses_cache_then_one_detail_fetch(
+        self, source, monkeypatch,
+    ):
+        src, fetches, responses = source
+
+        async def fake_read(*, source_name, author_id, library_slug,
+                            book_format, language):
+            assert author_id == "B0C0AUTHOR"
+            assert book_format == "kindle_edition"
+            return [
+                {
+                    "title": "The Tale: A Novel",
+                    "book_asin": "B000CACHEK",
+                    "series_name": "Tale Series",
+                    "series_pos": 1.0,
+                    "cover_url": "https://amzn/cover.jpg",
+                    "language": "English",
+                    "isbn": None,
+                },
+            ]
+
+        async def fake_enqueue(**kw):
+            raise AssertionError("ensure_enqueued must NOT fire on hit")
+
+        from app.discovery import metadata_cache_reader
+        monkeypatch.setattr(
+            metadata_cache_reader, "read_books_by_author", fake_read,
+        )
+        monkeypatch.setattr(
+            metadata_cache_reader, "ensure_enqueued", fake_enqueue,
+        )
+        responses[
+            "https://www.amazon.com/dp/B000CACHEK"
+        ] = _kindle_detail_html("B000CACHEK", title="The Tale: A Novel")
+
+        result = await src.search_book(
+            "The Tale", "Author",
+            author_amazon_id="B0C0AUTHOR",
+            library_slug="calibre-library",
+        )
+
+        assert result is not None
+        assert result.external_id == "B000CACHEK"
+        assert getattr(result, "_from_cache", False) is True
+        # Cover URL filled from the cache row.
+        assert result.cover_url == "https://amzn/cover.jpg"
+        # Series filled from cache row.
+        assert result.series == "Tale Series"
+        # Exactly ONE detail fetch — no /s call, no second detail.
+        detail_fetches = [u for u in fetches if "/dp/" in u]
+        assert detail_fetches == ["https://www.amazon.com/dp/B000CACHEK"]
+        # /s never queried.
+        assert "SEARCH" not in fetches
+
+    async def test_cache_miss_enqueues_and_falls_back_to_live(
+        self, source, monkeypatch,
+    ):
+        src, fetches, responses = source
+        enqueued: list[dict] = []
+
+        async def fake_read(**_):
+            return []  # no cached rows
+
+        async def fake_enqueue(**kw):
+            enqueued.append(kw)
+            return True
+
+        from app.discovery import metadata_cache_reader
+        monkeypatch.setattr(
+            metadata_cache_reader, "read_books_by_author", fake_read,
+        )
+        monkeypatch.setattr(
+            metadata_cache_reader, "ensure_enqueued", fake_enqueue,
+        )
+        # Live fallback: a clean Kindle hit.
+        responses["SEARCH"] = _search_html(
+            ("B00LIVEK01", "The Tale: A Novel"),
+        )
+        responses[
+            "https://www.amazon.com/dp/B00LIVEK01"
+        ] = _kindle_detail_html("B00LIVEK01", title="The Tale: A Novel")
+
+        result = await src.search_book(
+            "The Tale", "Author",
+            author_amazon_id="B0C0AUTHOR",
+            library_slug="calibre-library",
+        )
+
+        assert result is not None
+        assert result.external_id == "B00LIVEK01"
+        assert getattr(result, "_from_cache", False) is False
+        # Enqueue fired with the right shape.
+        assert len(enqueued) == 1
+        assert enqueued[0]["author_id"] == "B0C0AUTHOR"
+        assert enqueued[0]["priority"] == 1000.0
+        assert enqueued[0]["enqueued_reason"] == "enrich_miss"
+
+    async def test_empty_amazon_author_id_skips_cache_phase(
+        self, source, monkeypatch,
+    ):
+        src, fetches, responses = source
+
+        async def fake_read(**_):
+            raise AssertionError(
+                "read_books_by_author must NOT fire when "
+                "author_amazon_id is missing"
+            )
+
+        async def fake_enqueue(**_):
+            raise AssertionError(
+                "ensure_enqueued must NOT fire on no-author-id call"
+            )
+
+        from app.discovery import metadata_cache_reader
+        monkeypatch.setattr(
+            metadata_cache_reader, "read_books_by_author", fake_read,
+        )
+        monkeypatch.setattr(
+            metadata_cache_reader, "ensure_enqueued", fake_enqueue,
+        )
+        responses["SEARCH"] = _search_html(
+            ("B00LIVEK02", "The Tale: A Novel"),
+        )
+        responses[
+            "https://www.amazon.com/dp/B00LIVEK02"
+        ] = _kindle_detail_html("B00LIVEK02", title="The Tale: A Novel")
+
+        result = await src.search_book("The Tale", "Author")
+        assert result is not None
+        assert result.external_id == "B00LIVEK02"
+
+    async def test_non_asin_shaped_author_id_skips_cache_phase(
+        self, source, monkeypatch,
+    ):
+        """Legacy pre-v2.11.0 installs stored author names in the
+        ``amazon_id`` column. Anything not matching the 10-char ASIN
+        shape skips the cache phase entirely."""
+        src, fetches, responses = source
+
+        async def fake_read(**_):
+            raise AssertionError("cache phase must skip on legacy id shape")
+
+        from app.discovery import metadata_cache_reader
+        monkeypatch.setattr(
+            metadata_cache_reader, "read_books_by_author", fake_read,
+        )
+        responses["SEARCH"] = _search_html(
+            ("B00LIVEK03", "Title"),
+        )
+        responses[
+            "https://www.amazon.com/dp/B00LIVEK03"
+        ] = _kindle_detail_html("B00LIVEK03", title="Title")
+
+        result = await src.search_book(
+            "Title", "Author",
+            author_amazon_id="Orson Scott Card",  # legacy name-as-id
+            library_slug="calibre-library",
+        )
+        assert result is not None
+
+    async def test_cache_hit_low_score_falls_back_to_live(
+        self, source, monkeypatch,
+    ):
+        """Cached rows that don't score above 0.5 against the query
+        should fall through to the live ``/s`` flow rather than picking
+        an obviously wrong book."""
+        src, fetches, responses = source
+
+        async def fake_read(**_):
+            return [
+                {
+                    "title": "Some Unrelated Book",
+                    "book_asin": "B00IRRELEV",
+                    "series_name": None,
+                    "series_pos": None,
+                    "cover_url": None,
+                    "language": None,
+                    "isbn": None,
+                },
+            ]
+
+        async def fake_enqueue(**kw):
+            # Score-too-low is NOT a cache miss — the cache HAS rows,
+            # they're just irrelevant. Don't enqueue.
+            raise AssertionError("enqueue must NOT fire on low-score hit")
+
+        from app.discovery import metadata_cache_reader
+        monkeypatch.setattr(
+            metadata_cache_reader, "read_books_by_author", fake_read,
+        )
+        monkeypatch.setattr(
+            metadata_cache_reader, "ensure_enqueued", fake_enqueue,
+        )
+        responses["SEARCH"] = _search_html(
+            ("B00LIVELO0", "The Tale"),
+        )
+        responses[
+            "https://www.amazon.com/dp/B00LIVELO0"
+        ] = _kindle_detail_html("B00LIVELO0", title="The Tale")
+
+        result = await src.search_book(
+            "The Tale", "Author",
+            author_amazon_id="B0C0AUTHOR",
+            library_slug="calibre-library",
+        )
+        assert result is not None
+        assert result.external_id == "B00LIVELO0"
+        # Live /s fired (low-score cache hit fell through).
+        assert "SEARCH" in fetches

@@ -108,11 +108,57 @@ class AmazonSource(MetaSource):
     async def _fetch(self, url: str, params: dict = None) -> Optional[str]:
         return await asyncio.to_thread(self._fetch_sync, url, params)
 
+    def is_cheap_for(
+        self,
+        *,
+        author_amazon_id: str = "",
+        library_slug: str = "",
+        **_,
+    ) -> bool:
+        """Return True iff this source can serve a hit for the given
+        identifiers from the local Amazon metadata cache (no HTTP).
+
+        Read by the enricher (F3) to decide whether to short-circuit
+        through cheap sources after a good-enough fuzzy match. The
+        probe is a single indexed SQLite SELECT — finishes in <1ms in
+        practice, so doing it synchronously inside the enricher's loop
+        doesn't meaningfully delay anything. Empty / non-ASIN-shaped
+        author IDs short-circuit to False without touching the file.
+        """
+        if not _is_amazon_author_id_shape(author_amazon_id):
+            return False
+        return _sync_author_has_cached_books(
+            author_id=author_amazon_id,
+            library_slug=library_slug or "",
+        )
+
     async def search_book(
-        self, title: str, author: str, **_,
+        self,
+        title: str,
+        author: str,
+        *,
+        author_amazon_id: str = "",
+        library_slug: str = "",
+        **_,
     ) -> Optional[MetaRecord]:
         if not title:
             return None
+
+        # v2.29.0 — cache-first phase. When the upstream pipeline
+        # resolved an Amazon Author Store ID (10-char ASIN shape), we
+        # can score the title against cached widget rows for that
+        # author instead of hitting amazon.com/s. On hit, one
+        # detail-page fetch suffices. On miss, enqueue a high-priority
+        # worker rescan for the author and fall through to the live
+        # /s search (with the F2 audiobook-retry loop intact).
+        if _is_amazon_author_id_shape(author_amazon_id):
+            cached = await self._cache_first_search(
+                title=title, author=author,
+                author_amazon_id=author_amazon_id,
+                library_slug=library_slug,
+            )
+            if cached is not None:
+                return cached
 
         query = f"{title} {author}".strip()
         search_html = await self._fetch(
@@ -219,6 +265,121 @@ class AmazonSource(MetaSource):
 
         return None
 
+    async def _cache_first_search(
+        self,
+        *,
+        title: str,
+        author: str,
+        author_amazon_id: str,
+        library_slug: str,
+    ) -> Optional[MetaRecord]:
+        """v2.29.0 cache-first phase.
+
+        Returns a :class:`MetaRecord` when the local Amazon metadata
+        cache surfaces a strong candidate for ``(title, author)`` under
+        ``author_amazon_id`` — one detail-page fetch needed. Returns
+        ``None`` on cache miss; in that case the caller falls through
+        to the live ``/s`` path.
+
+        Cache miss also enqueues a high-priority worker rescan for
+        ``author_amazon_id`` so the cache catches up the next time
+        the same book is enriched.
+
+        Hint for ``book_format``: we prefer ``kindle_edition`` when
+        the source is in its default ebook-pipeline configuration and
+        ``audible_audiobook`` when the enricher is operating on an
+        audiobook grab (the ``_audiobook_hint`` attribute set by
+        :class:`MetadataEnricher`).
+        """
+        try:
+            from app.discovery.metadata_cache_reader import (
+                ensure_enqueued, read_books_by_author, SOURCE_AMAZON,
+            )
+            from app.metadata.scoring import score_match
+        except Exception:
+            return None
+
+        book_format = (
+            "audible_audiobook"
+            if getattr(self, "_audiobook_hint", False)
+            else "kindle_edition"
+        )
+        try:
+            rows = await read_books_by_author(
+                source_name=SOURCE_AMAZON,
+                author_id=author_amazon_id,
+                library_slug=library_slug or "",
+                book_format=book_format,
+                language="English",
+            )
+        except Exception as e:
+            _log.debug("amazon cache lookup failed: %s", e)
+            return None
+
+        if not rows:
+            # Cache miss for this author — high-priority rescan so the
+            # next attempt hits. Best-effort; failures are non-fatal.
+            try:
+                await ensure_enqueued(
+                    source_name=SOURCE_AMAZON,
+                    author_id=author_amazon_id,
+                    priority=1000.0,
+                    enqueued_reason="enrich_miss",
+                )
+            except Exception as e:
+                _log.debug("amazon enqueue-on-miss failed: %s", e)
+            return None
+
+        # Score each cached title against the search query.
+        scored: list[tuple[float, dict]] = []
+        for row in rows:
+            row_title = row.get("title") or ""
+            if not row_title:
+                continue
+            sc = score_match(
+                record_title=row_title,
+                record_authors=[],
+                search_title=title,
+                search_authors=author,
+            )
+            scored.append((sc, row))
+
+        if not scored:
+            return None
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        best_score, best_row = scored[0]
+        # Lower than the enricher's 0.8 accept threshold — the cache
+        # surfaces candidates, the enricher's downstream re-score
+        # gates the final answer.
+        if best_score < 0.5:
+            return None
+
+        best_asin = best_row.get("book_asin") or ""
+        if not _AMAZON_AUTHOR_ID_RE.match(best_asin or ""):
+            # Book ASINs and author ASINs share the 10-char shape.
+            # Bail out if the row is malformed.
+            return None
+
+        detail_html = await self._fetch(f"{_PRODUCT_URL}/{best_asin}")
+        if not detail_html:
+            return None
+        record = _parse_detail_page(detail_html, best_asin)
+        if record is None:
+            # Detail page rejected (audiobook / pre-order). Fall back
+            # to the live path so we don't return None just because
+            # the cache pointed at a stale row.
+            return None
+
+        # Cache-row fields fill gaps the detail-page parse didn't cover
+        # (cover_url, series, language, isbn).
+        record = _merge_cache_into_record(record, best_row)
+        try:
+            record._from_cache = True  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        return record
+
     async def close(self) -> None:
         self._session = None
         await super().close()
@@ -227,6 +388,81 @@ class AmazonSource(MetaSource):
 def _extract_asin(url: str) -> Optional[str]:
     m = re.search(r"/dp/([A-Z0-9]{10})", url)
     return m.group(1) if m else None
+
+
+# 10-char uppercase alphanumeric = Amazon Author Store ID shape. Mirrors
+# the discovery-side `_is_amazon_author_id` heuristic but kept local
+# so this module doesn't take a hard dependency on the discovery cache
+# package.
+_AMAZON_AUTHOR_ID_RE = re.compile(r"^[A-Z0-9]{10}$")
+
+
+def _is_amazon_author_id_shape(value: str) -> bool:
+    return bool(value) and bool(_AMAZON_AUTHOR_ID_RE.match(value))
+
+
+def _sync_author_has_cached_books(*, author_id: str, library_slug: str) -> bool:
+    """Synchronous existence probe against the Amazon metadata cache.
+
+    Returns True iff (a) the state table records ``last_outcome='ok'``
+    for the author AND (b) at least one books-table row exists for the
+    same author. ``library_slug`` is optional — empty means "any
+    library that scanned this author counts".
+
+    Used by ``AmazonSource.is_cheap_for``. Kept sync because the cache
+    is a local SQLite file and the query is index-covered (~sub-ms).
+    """
+    import sqlite3
+    try:
+        from app.discovery.metadata_cache import get_db_path, SOURCE_AMAZON
+    except Exception:
+        return False
+    try:
+        db_path = get_db_path(SOURCE_AMAZON)
+    except Exception:
+        return False
+    if not db_path.exists():
+        return False
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)
+    except sqlite3.Error:
+        return False
+    try:
+        if library_slug:
+            row = conn.execute(
+                "SELECT 1 FROM metadata_cache_amazon_state "
+                "WHERE author_id = ? AND library_slug = ? "
+                "AND last_outcome = 'ok' LIMIT 1",
+                (author_id, library_slug),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT 1 FROM metadata_cache_amazon_state "
+                "WHERE author_id = ? AND last_outcome = 'ok' LIMIT 1",
+                (author_id,),
+            ).fetchone()
+        if row is None:
+            return False
+        if library_slug:
+            row = conn.execute(
+                "SELECT 1 FROM metadata_cache_amazon_books "
+                "WHERE author_id = ? AND library_slug = ? LIMIT 1",
+                (author_id, library_slug),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT 1 FROM metadata_cache_amazon_books "
+                "WHERE author_id = ? LIMIT 1",
+                (author_id,),
+            ).fetchone()
+        return row is not None
+    except sqlite3.Error:
+        return False
+    finally:
+        try:
+            conn.close()
+        except sqlite3.Error:
+            pass
 
 
 def _parse_detail_page(html_text: str, asin: str) -> Optional[MetaRecord]:
@@ -401,6 +637,34 @@ def _parse_detail_page(html_text: str, asin: str) -> Optional[MetaRecord]:
         source_url=f"https://www.amazon.com/dp/{asin}",
         external_id=asin,
     )
+
+
+def _merge_cache_into_record(
+    record: MetaRecord, row: dict,
+) -> MetaRecord:
+    """Fill record fields the detail-page parse missed using the
+    cache row.
+
+    Detail-page parses are authoritative when present (the live HTML
+    is the freshest source), so this helper ONLY fills empty/None
+    slots. Cover URL, series name + index, language, and ISBN are
+    the typical fields a cache row carries that the detail parse
+    sometimes misses.
+    """
+    if not record.cover_url and row.get("cover_url"):
+        record.cover_url = row["cover_url"]
+    if not record.series and row.get("series_name"):
+        record.series = row["series_name"]
+    if record.series_index is None and row.get("series_pos") is not None:
+        try:
+            record.series_index = float(row["series_pos"])
+        except (TypeError, ValueError):
+            pass
+    if not record.language and row.get("language"):
+        record.language = row["language"]
+    if not record.isbn and row.get("isbn"):
+        record.isbn = row["isbn"]
+    return record
 
 
 def _parse_amazon_date(text: str) -> Optional[str]:
