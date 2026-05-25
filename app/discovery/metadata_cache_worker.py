@@ -153,7 +153,27 @@ def _format_fields(**fields: Any) -> str:
     return " ".join(parts)
 
 
-# ─── ntfy emit helper (v2.21.0 Phase G) ────────────────────────
+# ─── ntfy emit helper (v2.21.0 Phase G — migrated to bus in v2.28.0) ────
+
+
+_EVENT_KEY_TO_BUS_EVENT: dict[str, str] = {}
+
+
+def _load_event_key_mapping() -> dict[str, str]:
+    """Lazy-import the bus event constants. The notifications package
+    pulls in app.config; importing it at module load on a fresh
+    worker process can race the settings file path setup, so defer."""
+    global _EVENT_KEY_TO_BUS_EVENT
+    if _EVENT_KEY_TO_BUS_EVENT:
+        return _EVENT_KEY_TO_BUS_EVENT
+    from app.notifications import events
+    _EVENT_KEY_TO_BUS_EVENT = {
+        "metadata_cache_daily_summary": events.SOURCE_METADATA_CACHE_DAILY_SUMMARY,
+        "metadata_cache_error": events.SOURCE_METADATA_CACHE_ERROR,
+        "metadata_cache_warning": events.SOURCE_METADATA_CACHE_WARNING,
+        "metadata_cache_new_book": events.SOURCE_METADATA_CACHE_NEW_BOOK,
+    }
+    return _EVENT_KEY_TO_BUS_EVENT
 
 
 async def _send_ntfy(
@@ -164,26 +184,30 @@ async def _send_ntfy(
     priority: int = 3,
     tags: Optional[list[str]] = None,
 ) -> bool:
-    """Fire a metadata-cache ntfy if (a) the event gate is on AND
-    (b) the ntfy server + topic are configured. Never raises — all
-    failures are logged at DEBUG and the worker keeps moving."""
-    from app.notify import ntfy as _ntfy
-    if not _ntfy.is_event_enabled(event_key):
-        return False
-    s = app_config.load_settings()
-    url = s.get("ntfy_url") or ""
-    topic = s.get("ntfy_topic") or ""
-    if not url or not topic:
+    """Fire a metadata-cache ntfy through the notification bus.
+
+    The bus handles the enabled gate (legacy + new shape), topic
+    routing, quiet-hours suppression, and never raises. ``priority``
+    and ``tags`` overrides at each call site flow through verbatim
+    so the metadata-cache worker can keep its established defaults
+    per event type."""
+    bus_event = _load_event_key_mapping().get(event_key)
+    if bus_event is None:
+        logger.warning(
+            "metadata_cache_worker: unknown event_key=%r — skipping ntfy",
+            event_key,
+        )
         return False
     try:
-        return await _ntfy.send(
-            url=url, topic=topic,
+        from app.notifications import bus
+        return await bus.emit(
+            bus_event,
             title=title, message=message,
             priority=priority, tags=tags,
         )
     except Exception:
         logger.exception(
-            "metadata_cache_worker: ntfy send failed for event=%s "
+            "metadata_cache_worker: bus.emit failed for event=%s "
             "(non-fatal)", event_key,
         )
         return False

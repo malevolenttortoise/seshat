@@ -37,7 +37,7 @@ from typing import Optional
 import aiosqlite
 
 from app.database import get_db
-from app.notify import ntfy
+from app.notifications import bus, events
 
 _log = logging.getLogger("seshat.notify.digests")
 
@@ -84,19 +84,18 @@ async def daily_accepted(ctx: DigestContext) -> bool:
 
     count = len(rows)
     if count == 0:
-        return await ntfy.send(
-            url=ctx.ntfy_url, topic=ctx.ntfy_topic,
+        return await bus.emit(
+            events.DIGEST_DAILY_ACCEPTED,
             title="Daily digest — no new books",
             message="No books were accepted in the last 24 hours.",
-            tags=["books"],
         )
 
     sample = "\n".join(
         f"• {r['torrent_name']} — {r['author_blob']}" for r in rows[:10]
     )
     extra = f"\n… and {count - 10} more" if count > 10 else ""
-    return await ntfy.send(
-        url=ctx.ntfy_url, topic=ctx.ntfy_topic,
+    return await bus.emit(
+        events.DIGEST_DAILY_ACCEPTED,
         title=f"Daily digest — {count} book(s) accepted",
         message=f"{sample}{extra}",
         tags=["books", "white_check_mark"],
@@ -123,14 +122,13 @@ async def daily_tentative(ctx: DigestContext) -> bool:
         f"• {r.torrent_name} — {r.author_blob}" for r in rows[:10]
     )
     extra = f"\n… and {count - 10} more" if count > 10 else ""
-    return await ntfy.send(
-        url=ctx.ntfy_url, topic=ctx.ntfy_topic,
+    return await bus.emit(
+        events.DIGEST_DAILY_TENTATIVE,
         title=f"Tentative review queue — {count} new",
         message=(
             f"{sample}{extra}\n\n"
             "Review at /tentative to approve or reject."
         ),
-        tags=["question"],
     )
 
 
@@ -159,8 +157,8 @@ async def daily_ignored(ctx: DigestContext) -> bool:
     top = sorted(per_author.items(), key=lambda kv: kv[1], reverse=True)[:5]
     top_lines = "\n".join(f"• {name} ({cnt})" for name, cnt in top)
 
-    return await ntfy.send(
-        url=ctx.ntfy_url, topic=ctx.ntfy_topic,
+    return await bus.emit(
+        events.DIGEST_DAILY_IGNORED,
         title=f"Ignored summary — {count} torrents, {unique_count} authors",
         message=(
             f"Most-frequent ignored authors (last 24h):\n{top_lines}"
@@ -279,11 +277,10 @@ async def run_weekly(ctx: DigestContext) -> bool:
         lines.append("Recent additions:")
         lines.extend(f"• {t}" for t in sample_titles[:5])
 
-    return await ntfy.send(
-        url=ctx.ntfy_url, topic=ctx.ntfy_topic,
+    return await bus.emit(
+        events.DIGEST_WEEKLY,
         title="Weekly digest",
         message="\n".join(lines),
-        tags=["books", "calendar"],
     )
 
 
@@ -408,8 +405,10 @@ async def run_calibre_audit(ctx: DigestContext) -> bool:
         if outside_count > 10:
             lines.append(f"  …and {outside_count - 10} more")
 
-    return await ntfy.send(
-        url=ctx.ntfy_url, topic=ctx.ntfy_topic,
+    # Calibre audit shares the weekly cadence — route through the
+    # weekly digest event so users see one toggle covering both.
+    return await bus.emit(
+        events.DIGEST_WEEKLY,
         title=f"Calibre audit — {outside_count} non-Seshat addition(s)",
         message="\n".join(lines),
         tags=["books", "mag"],

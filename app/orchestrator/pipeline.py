@@ -49,7 +49,6 @@ from app.metadata.extract import BookMetadata, extract as extract_metadata
 from app.metadata.enricher import MetadataEnricher
 from app.metadata.record import MetaRecord
 from app.metadata.writer import patch_epub_metadata
-from app.notify import ntfy
 from app.orchestrator.auto_train import train_authors_from_blob
 from app.orchestrator.download_watcher import CompletionEvent
 from app.orchestrator.file_copier import copy_to_staging, find_book_files
@@ -328,17 +327,17 @@ async def process_completion(
         # One download-complete notification per torrent (not per
         # group) — bundle children share the same torrent name and
         # spamming the ntfy channel N times would be noisy.
-        if ntfy_url and ntfy_topic and ntfy.is_event_enabled("download_complete"):
-            try:
-                await ntfy.notify_download_complete(
-                    ntfy_url, ntfy_topic,
-                    event.torrent_name,
-                    preps[0].metadata.author or "",
-                )
-            except Exception:
-                _log.exception(
-                    "per-event notify_download_complete failed (non-fatal)"
-                )
+        try:
+            from app.notifications import bus, events
+            await bus.emit(
+                events.PIPELINE_DOWNLOAD_COMPLETE,
+                title="Download complete",
+                message=f"{event.torrent_name}\nby {preps[0].metadata.author or ''}",
+            )
+        except Exception:
+            _log.exception(
+                "pipeline.download_complete bus emit failed (non-fatal)"
+            )
 
         # Fan out: each group becomes one review-queue entry (or
         # one direct sink delivery in legacy review-off mode). The
@@ -1179,18 +1178,15 @@ async def _stage_for_review(
         event.grab_id, event.torrent_name, dest,
     )
 
-    # v2.12.0 — gate on `notify_on_review_queued`. Pre-v2.12.0 this
-    # fired whenever per_event_notifications was on, with no per-event
-    # opt-out. Users who wanted "added to library" pushes but not
-    # "ready for review" pushes had no UI knob.
-    if ntfy_url and ntfy_topic and ntfy.is_event_enabled("review_queued"):
-        try:
-            await ntfy.notify_pipeline_complete(
-                ntfy_url, ntfy_topic,
-                event.torrent_name, "review_queue",
-            )
-        except Exception:
-            _log.exception("ntfy review-queue notify failed (non-fatal)")
+    try:
+        from app.notifications import bus, events
+        await bus.emit(
+            events.PIPELINE_REVIEW_QUEUED,
+            title="Added to review_queue",
+            message=event.torrent_name,
+        )
+    except Exception:
+        _log.exception("pipeline.review_queued bus emit failed (non-fatal)")
 
     return True
 
@@ -1322,20 +1318,15 @@ async def _deliver_prepared(
         event.grab_id, event.torrent_name, sink_result.sink_name,
     )
 
-    # v2.12.0 — gate on `notify_on_library_ingest`. This is the
-    # "Added to Calibre / Audiobookshelf / …" push — fires only after
-    # the book actually lands in the user's library app. Mark wanted a
-    # discrete toggle for this so users could mute the download/grab
-    # pushes while keeping the "book is now in your library" signal,
-    # or vice versa.
-    if ntfy_url and ntfy_topic and ntfy.is_event_enabled("library_ingest"):
-        try:
-            await ntfy.notify_pipeline_complete(
-                ntfy_url, ntfy_topic,
-                event.torrent_name, sink_result.sink_name,
-            )
-        except Exception:
-            _log.exception("ntfy pipeline-complete notify failed (non-fatal)")
+    try:
+        from app.notifications import bus, events
+        await bus.emit(
+            events.PIPELINE_LIBRARY_INGEST,
+            title=f"Added to {sink_result.sink_name}",
+            message=event.torrent_name,
+        )
+    except Exception:
+        _log.exception("pipeline.library_ingest bus emit failed (non-fatal)")
 
     return True
 
@@ -1656,12 +1647,12 @@ async def _fail(
     await pipe_storage.set_state(
         db, run_id, pipe_storage.PIPE_FAILED, error=error,
     )
-    # v2.11.1 N1: error notifications go through the same master +
-    # per-event gate as the other pipeline events. Pre-fix this call
-    # site bypassed both gates entirely, so users who explicitly
-    # disabled "Pipeline errors" in Settings still received them.
-    if ntfy_url and ntfy_topic and ntfy.is_event_enabled("pipeline_error"):
-        try:
-            await ntfy.notify_error(ntfy_url, ntfy_topic, event.torrent_name, error)
-        except Exception:
-            _log.exception("ntfy error notify failed (non-fatal)")
+    try:
+        from app.notifications import bus, events
+        await bus.emit(
+            events.PIPELINE_ERROR,
+            title="Pipeline error",
+            message=f"{event.torrent_name}\n{error}",
+        )
+    except Exception:
+        _log.exception("pipeline.error bus emit failed (non-fatal)")

@@ -81,6 +81,7 @@ from app.routers.qbittorrent import router as qbittorrent_router
 from app.routers.quality import router as quality_router
 from app.routers.metadata_cache import router as metadata_cache_router
 from app.routers.metadata_sources import router as metadata_sources_router
+from app.routers.notifications import router as notifications_router
 from app.routers.goodreads_session import router as goodreads_session_router
 from app.routers.migration import router as migration_router
 from app.routers.review import router as review_router
@@ -1324,6 +1325,7 @@ app.include_router(qbittorrent_router)
 app.include_router(quality_router)
 app.include_router(metadata_sources_router)
 app.include_router(metadata_cache_router)
+app.include_router(notifications_router)
 app.include_router(goodreads_session_router)
 app.include_router(migration_router)
 app.include_router(review_router)

@@ -1153,18 +1153,19 @@ async def _dispatch_with_decision(
             {"grab_id": grab_id, "qbit_hash": qbit_hash},
         )
 
-        if deps.ntfy_url:
-            from app.notify import ntfy as _ntfy
-            if _ntfy.is_event_enabled("grab"):
-                try:
-                    await _ntfy.notify_grab(
-                        deps.ntfy_url, deps.ntfy_topic,
-                        announce.torrent_name,
-                        announce.author_blob,
-                        announce.category,
-                    )
-                except Exception:
-                    _log.exception("per-event notify_grab failed (non-fatal)")
+        try:
+            from app.notifications import bus, events
+            await bus.emit(
+                events.GRAB_SUCCESS,
+                title="New book grabbed",
+                message=(
+                    f"{announce.torrent_name}\n"
+                    f"by {announce.author_blob}\n"
+                    f"{announce.category}"
+                ),
+            )
+        except Exception:
+            _log.exception("grab.success bus emit failed (non-fatal)")
         return DispatchResult(
             action="submit",
             reason="ok",
@@ -1328,20 +1329,19 @@ async def _record_buffer_gate_block(
         return
     _last_buffer_gate_notify_at[trigger] = now
     try:
-        from app.notify import ntfy as _ntfy
-        # v2.12.0 — gate on `notify_on_buffer_gate_block`. The 6h
-        # throttle still applies above; this gate lets the user opt
-        # out of buffer-gate pushes entirely while keeping per-event
-        # notifications on for other event types.
-        if not _ntfy.is_event_enabled("buffer_gate_block"):
-            return
-        await _ntfy.notify_buffer_gate_block(
-            deps.ntfy_url, deps.ntfy_topic,
-            announce.torrent_name or f"tid={announce.torrent_id}",
-            size_gb, buffer_gb,
+        from app.notifications import bus, events
+        torrent_name = announce.torrent_name or f"tid={announce.torrent_id}"
+        await bus.emit(
+            events.GRAB_BUFFER_BLOCKED,
+            title="Buffer gate blocked a grab",
+            message=(
+                f"{torrent_name}\n"
+                f"Size {size_gb:.1f} GB exceeds available buffer "
+                f"({buffer_gb:.1f} GB). Further blocks suppressed for 6h."
+            ),
         )
     except Exception:
-        _log.exception("buffer-gate ntfy failed (non-fatal)")
+        _log.exception("grab.buffer_blocked bus emit failed (non-fatal)")
 
 
 def _grab_failure_state(result: GrabResult) -> str:

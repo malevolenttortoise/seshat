@@ -83,11 +83,16 @@ def stub_session(monkeypatch):
 @pytest.fixture
 def captured_ntfy(monkeypatch):
     """Capture ntfy.send() calls so tests can assert on them without
-    making real HTTP."""
+    making real HTTP. Mirrors ntfy.send()'s real "no-op when ntfy is
+    unconfigured" behavior so the test surface matches production —
+    the v2.28.0 bus relies on ntfy.send's empty-URL handling instead
+    of a guard at the call site."""
     captured: list[dict] = []
     from app.notify import ntfy
 
     async def fake_send(*, url, topic, title, message, priority=3, tags=None):
+        if not url or not topic:
+            return False
         captured.append({
             "url": url, "topic": topic, "title": title,
             "message": message, "priority": priority, "tags": tags or [],

@@ -135,9 +135,8 @@ def register_goodreads_canary(scheduler: AsyncIOScheduler) -> None:
     (cf_clearance typically lasts hours-to-days).
     """
     async def _canary():
-        from app.config import load_settings
         from app.metadata import goodreads_session, id_cache
-        from app.notify import ntfy
+        from app.notifications import bus, events
 
         _log.info("goodreads canary tick")
         try:
@@ -160,25 +159,12 @@ def register_goodreads_canary(scheduler: AsyncIOScheduler) -> None:
             )
             return
 
-        # Soft-block: notify if the gate is on.
-        s = load_settings()
-        if not ntfy.is_event_enabled("goodreads_canary_failed"):
-            _log.info(
-                "goodreads canary: soft-block detected — ntfy gate off, "
-                "no notification sent",
-            )
-            return
-        ntfy_url = s.get("ntfy_url", "")
-        ntfy_topic = s.get("ntfy_topic", "")
-        if not ntfy_url or not ntfy_topic:
-            _log.info(
-                "goodreads canary: soft-block detected — ntfy unconfigured, "
-                "skipping notification",
-            )
-            return
+        # Soft-block detected — bus.emit handles the enable gate,
+        # ntfy config check, topic routing, quiet hours, and exception
+        # swallowing. Any "not sent" outcome is silent by design.
         try:
-            await ntfy.send(
-                url=ntfy_url, topic=ntfy_topic,
+            await bus.emit(
+                events.SOURCE_GOODREADS_CANARY_FAILED,
                 title="Goodreads soft-blocked",
                 message=(
                     "Weekly canary detected a Cloudflare soft-block. "
@@ -186,8 +172,6 @@ def register_goodreads_canary(scheduler: AsyncIOScheduler) -> None:
                     "to confirm + investigate. Discovery scans will skip "
                     "Goodreads until the session state is marked active."
                 ),
-                priority=3,
-                tags=["warning"],
             )
         except Exception:
             _log.exception("goodreads canary ntfy send failed (non-fatal)")
