@@ -319,6 +319,32 @@ CREATE INDEX IF NOT EXISTS idx_suggestions_status ON book_series_suggestions(sta
 CREATE INDEX IF NOT EXISTS idx_suggestions_book ON book_series_suggestions(book_id);
 CREATE INDEX IF NOT EXISTS idx_review_queue_book ON metadata_review_queue(book_id);
 CREATE INDEX IF NOT EXISTS idx_review_queue_source ON metadata_review_queue(source);
+
+-- v3.0.0 Phase 1 — multi-author rework. One row per (book, author)
+-- link, replacing the single `books.author_id` denormalization. The
+-- `books.author_id` column stays in place across Phase 1; this table
+-- runs alongside it. Phase 9 drops the column once every read path
+-- has been migrated to join through here.
+--
+--   position  Stable display order; 0 = primary. Two-author books
+--             have positions 0 and 1; co-author chains preserve the
+--             order the upstream source surfaced.
+--   role      NULL = author (the default). Phase 3 role-filter
+--             populates non-NULL values like 'translator' / 'illustrator'
+--             from source enrichment, with conservative dropping per
+--             Decision 4. Backfill only writes NULL.
+--
+-- Composite PK on (book_id, author_id) guarantees no duplicate links
+-- per book without needing a surrogate id column — every downstream
+-- consumer addresses these rows by the pair.
+CREATE TABLE IF NOT EXISTS book_authors (
+    book_id     INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+    author_id   INTEGER NOT NULL REFERENCES authors(id),
+    position    INTEGER NOT NULL DEFAULT 0,
+    role        TEXT,
+    PRIMARY KEY (book_id, author_id)
+);
+CREATE INDEX IF NOT EXISTS idx_book_authors_author ON book_authors(author_id);
 """
 
 # Migrations for existing databases
@@ -628,6 +654,20 @@ MIGRATIONS = [
     # all four badges instead of just two.
     "ALTER TABLE books ADD COLUMN hardcover_slug TEXT",
     "ALTER TABLE books ADD COLUMN kobo_slug TEXT",
+    # ── v3.0.0 Phase 1: multi-author rework ──────────────────────
+    # `book_authors` replaces the single-author `books.author_id`
+    # denormalization with a proper join table. See SCHEMA above
+    # for the column-level doc. Phase 1 ships the schema + backfill
+    # only; `books.author_id` stays in place across phases 2-8 and
+    # is dropped in Phase 9 once every read path joins through here.
+    """CREATE TABLE IF NOT EXISTS book_authors (
+        book_id     INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+        author_id   INTEGER NOT NULL REFERENCES authors(id),
+        position    INTEGER NOT NULL DEFAULT 0,
+        role        TEXT,
+        PRIMARY KEY (book_id, author_id)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_book_authors_author ON book_authors(author_id)",
 ]
 
 
