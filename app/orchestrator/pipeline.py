@@ -833,14 +833,34 @@ async def _prepare_group(
             )
             enriched = None
 
+    # v2.29.0: derive the destination library + audiobook flag up front
+    # so the `_PreparedBook` carries them downstream regardless of which
+    # enrichment branch (pre-baked vs live) executed above. Pre-v2.29.0
+    # the `_PreparedBook.library_slug` field was always None — see the
+    # "reserved for future multi-library routing" comment that this
+    # change retires.
+    grab_category = grab.category if grab else ""
+    is_audiobook = _is_audiobook_grab(book_format, grab_category)
+    from app.metadata.author_lookup import (
+        get_amazon_id_for_author,
+        get_goodreads_id_for_author,
+        get_library_slug_for_content_type,
+    )
+    target_library_slug = get_library_slug_for_content_type(
+        "audiobook" if is_audiobook else "ebook"
+    )
+
     if enriched is None and metadata_enricher is not None:
-        grab_category = grab.category if grab else ""
-        is_audiobook = _is_audiobook_grab(book_format, grab_category)
         # v2.13.2: anchor GoodreadsSource's T4/T5 resolver tiers with
         # the author's stored goodreads_id when we have one. Empty
         # string is fine — the resolver tiers no-op on absent anchor.
-        from app.metadata.author_lookup import get_goodreads_id_for_author
+        # v2.29.0: also resolve amazon_id so AmazonSource can take the
+        # cache-first path. Pre-v2.29.0 the cache was discovery-only —
+        # the live enricher always hit amazon.com/s.
         author_goodreads_id = await get_goodreads_id_for_author(metadata.author)
+        author_amazon_id = await get_amazon_id_for_author(
+            metadata.author, library_slug=target_library_slug,
+        )
         try:
             enriched = await metadata_enricher.enrich(
                 title=metadata.title,
@@ -866,6 +886,8 @@ async def _prepare_group(
                 audiobook=is_audiobook,
                 skip_mam=is_bundle,
                 author_goodreads_id=author_goodreads_id,
+                author_amazon_id=author_amazon_id,
+                library_slug=target_library_slug,
             )
         except Exception:
             _log.exception(
@@ -983,7 +1005,7 @@ async def _prepare_group(
         bundle_index=bundle_index,
         bundle_total=bundle_total,
         bundle_parent_grab_id=event.grab_id if is_bundle else None,
-        library_slug=None,  # reserved for future multi-library routing
+        library_slug=target_library_slug or None,
     )
 
 

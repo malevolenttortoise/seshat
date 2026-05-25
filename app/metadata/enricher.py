@@ -267,6 +267,8 @@ class MetadataEnricher:
         audiobook: bool = False,
         skip_mam: bool = False,
         author_goodreads_id: str = "",
+        author_amazon_id: str = "",
+        library_slug: str = "",
     ) -> Optional[MetaRecord]:
         """Run the priority list and return the best merged record.
 
@@ -407,6 +409,8 @@ class MetadataEnricher:
                 src, title=title, author=author, max_wait=remaining,
                 isbn=current_isbn, asin=current_asin,
                 author_goodreads_id=author_goodreads_id,
+                author_amazon_id=author_amazon_id,
+                library_slug=library_slug,
             )
             # Title-variant fallback. When a source returns no match
             # for the raw title, retry with the series/edition-stripped
@@ -436,6 +440,8 @@ class MetadataEnricher:
                             max_wait=remaining_after,
                             isbn=current_isbn, asin=current_asin,
                             author_goodreads_id=author_goodreads_id,
+                            author_amazon_id=author_amazon_id,
+                            library_slug=library_slug,
                         )
             if result is None:
                 # Emit at INFO so the log stream shows the full chain —
@@ -515,6 +521,8 @@ class MetadataEnricher:
         isbn: str = "",
         asin: str = "",
         author_goodreads_id: str = "",
+        author_amazon_id: str = "",
+        library_slug: str = "",
     ) -> Optional[MetaRecord]:
         # Clamp per-source timeout to the remaining global budget so a
         # slow late-stage source can't single-handedly blow the per-book
@@ -528,6 +536,8 @@ class MetadataEnricher:
                     title, author,
                     isbn=isbn, asin=asin,
                     author_goodreads_id=author_goodreads_id,
+                    author_amazon_id=author_amazon_id,
+                    library_slug=library_slug,
                 ),
                 timeout=timeout,
             )
