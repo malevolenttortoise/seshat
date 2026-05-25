@@ -58,6 +58,20 @@ function sourceKey(col: string): string {
   return col.endsWith("_id") ? col.slice(0, -3) : col;
 }
 
+type SourceFilterMode = "all" | "has" | "missing";
+
+const SOURCE_FILTER_CYCLE: Record<SourceFilterMode, SourceFilterMode> = {
+  all: "has",
+  has: "missing",
+  missing: "all",
+};
+
+function emptySourceFilters(): Record<string, SourceFilterMode> {
+  return Object.fromEntries(
+    SOURCE_ORDER.map((s) => [s, "all" as SourceFilterMode]),
+  );
+}
+
 interface PersonsManagerPageProps {
   onNav?: NavFn;
 }
@@ -68,7 +82,20 @@ export default function PersonsManagerPage({ onNav }: PersonsManagerPageProps) {
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
   const [onlyDivergent, setOnlyDivergent] = useState(false);
+  const [sourceFilters, setSourceFilters] = useState<Record<string, SourceFilterMode>>(emptySourceFilters);
   const [busy, setBusy] = useState<string | null>(null);
+
+  const cycleSourceFilter = useCallback((col: string) => {
+    setSourceFilters((prev) => ({
+      ...prev,
+      [col]: SOURCE_FILTER_CYCLE[prev[col] ?? "all"],
+    }));
+  }, []);
+
+  const activeSourceFilters = useMemo(
+    () => Object.entries(sourceFilters).filter(([, mode]) => mode !== "all"),
+    [sourceFilters],
+  );
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -90,13 +117,26 @@ export default function PersonsManagerPage({ onNav }: PersonsManagerPageProps) {
     const q = query.trim().toLowerCase();
     return data.persons.filter((p) => {
       if (onlyDivergent && p.divergent.length === 0) return false;
-      if (!q) return true;
-      return (
-        p.display_name.toLowerCase().includes(q) ||
-        p.normalized_name.toLowerCase().includes(q)
-      );
+      if (q) {
+        const nameMatch = (
+          p.display_name.toLowerCase().includes(q) ||
+          p.normalized_name.toLowerCase().includes(q)
+        );
+        if (!nameMatch) return false;
+      }
+      // Source-ID filters: per-source 3-state cycle. A person passes when
+      // every active filter agrees with the person's has/missing state
+      // for that source. Empty string / null / whitespace-only counts as
+      // "missing".
+      for (const [col, mode] of activeSourceFilters) {
+        const raw = p.source_ids[col];
+        const hasId = !!(raw && String(raw).trim());
+        if (mode === "has" && !hasId) return false;
+        if (mode === "missing" && hasId) return false;
+      }
+      return true;
     });
-  }, [data, query, onlyDivergent]);
+  }, [data, query, onlyDivergent, activeSourceFilters]);
 
   const saveSourceId = async (
     person_id: number, column: string, raw: string,
@@ -167,6 +207,72 @@ export default function PersonsManagerPage({ onNav }: PersonsManagerPageProps) {
         <span style={{ marginLeft: "auto", color: t.tg, fontSize: 12 }}>
           {filtered.length} of {data.persons.length} persons
         </span>
+      </div>
+
+      {/* v2.30.0 — per-source-ID filter chips. Click cycles
+          All → Has → Missing → All. Combinable across sources so
+          "missing Amazon AND has Goodreads" etc. is one chip-pair
+          apart. Active filters get colored borders so the at-a-glance
+          state of the page is readable. */}
+      <div style={{
+        display: "flex", gap: 6, margin: "0 0 12px", alignItems: "center",
+        flexWrap: "wrap", fontSize: 11,
+      }}>
+        <span style={{ color: t.tg, marginRight: 4 }}>Source ID:</span>
+        {SOURCE_ORDER.map((col) => {
+          const mode = sourceFilters[col] ?? "all";
+          const isActive = mode !== "all";
+          const borderColor = mode === "has"
+            ? t.grnt
+            : mode === "missing"
+              ? t.redt
+              : t.border;
+          const bg = mode === "has"
+            ? t.grnb
+            : mode === "missing"
+              ? t.redb
+              : t.bg;
+          return (
+            <button
+              key={col}
+              type="button"
+              onClick={() => cycleSourceFilter(col)}
+              title="Click to cycle All → Has → Missing"
+              style={{
+                padding: "3px 8px",
+                background: bg,
+                color: isActive ? t.text : t.td,
+                border: `1px solid ${borderColor}`,
+                borderRadius: 999,
+                cursor: "pointer",
+                fontWeight: isActive ? 600 : 400,
+                fontSize: 11,
+              }}
+            >
+              {SOURCE_LABELS[col] ?? col}
+              {mode === "has" && ": Has"}
+              {mode === "missing" && ": Missing"}
+            </button>
+          );
+        })}
+        {activeSourceFilters.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setSourceFilters(emptySourceFilters())}
+            style={{
+              padding: "3px 8px",
+              background: "transparent",
+              color: t.tg,
+              border: `1px solid ${t.border}`,
+              borderRadius: 999,
+              cursor: "pointer",
+              fontSize: 11,
+              marginLeft: 4,
+            }}
+          >
+            Clear ({activeSourceFilters.length})
+          </button>
+        )}
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
