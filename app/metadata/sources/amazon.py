@@ -156,53 +156,68 @@ class AmazonSource(MetaSource):
         if not links:
             return None
 
-        # Score and pick best from first 3 links.
-        best_url = None
-        best_score = 0.0
+        # Score the first 3 search hits and rank them — v2.29.0 swaps
+        # the old "pick best, single detail fetch" path for a ranked
+        # loop so an audiobook page at rank 1 (which `_parse_detail_page`
+        # rejects) falls through to the next-ranked ebook candidate
+        # instead of returning None. Same total cap of 3 detail fetches.
+        scored: list[tuple[str, str, float]] = []  # (asin, link, score)
         for link in links[:3]:
-            # Extract title from the search result if possible.
             asin = _extract_asin(link)
             if not asin:
                 continue
-            # Try to find the title text near this link.
+            # Title text near this link tells us how well the hit
+            # matches the query. Missing/empty title → score 0.3
+            # placeholder (some search rows lack a visible title but
+            # are still real product links worth trying).
+            result_score: Optional[float] = None
             for a in soup.find_all("a", href=lambda h: h and asin in h):
                 title_el = a.select_one("span")
                 if title_el:
                     result_title = title_el.get_text(strip=True)
-                    # Junk-listing pre-filter — drop third-party seller
-                    # titles before they get scored or fetched. Saves
-                    # a detail-page request for guaranteed-junk results.
                     if _RX_JUNK_TITLE.search(result_title):
                         _log.debug("amazon: SKIP junk title: %r", result_title)
+                        result_score = -1.0  # sentinel: drop entirely
                         break
-                    sc = score_match(
+                    result_score = score_match(
                         record_title=result_title,
                         record_authors=[],
                         search_title=title,
                         search_authors=author,
                     )
-                    if sc > best_score:
-                        best_score = sc
-                        best_url = link
                     break
+            if result_score is None:
+                result_score = 0.3  # untitled fallback (matches pre-v2.29.0 behavior)
+            if result_score < 0.0:
+                continue
+            scored.append((asin, link, result_score))
 
-        # If scoring didn't work, just use the first link.
-        if not best_url and links:
-            best_url = links[0]
-            best_score = 0.3
-
-        if not best_url or best_score < 0.2:
+        if not scored:
             return None
 
-        asin = _extract_asin(best_url)
-        if not asin:
-            return None
+        scored.sort(key=lambda x: x[2], reverse=True)
 
-        detail_html = await self._fetch(f"{_PRODUCT_URL}/{asin}")
-        if not detail_html:
-            return None
+        # Walk the ranked list, fetching each detail page until one
+        # parses to a usable record. `_parse_detail_page` returns None
+        # for audiobook + pre-order pages — those don't count toward
+        # the "match" and we move to the next candidate. Worst case is
+        # 3 detail fetches × rate_limit (~1.5s each) = 4.5s, well under
+        # the per-source 15s timeout.
+        for asin, _link, score in scored:
+            if score < 0.2:
+                break
+            detail_html = await self._fetch(f"{_PRODUCT_URL}/{asin}")
+            if not detail_html:
+                continue
+            record = _parse_detail_page(detail_html, asin)
+            if record is not None:
+                return record
+            _log.debug(
+                "amazon: candidate %s rejected (audiobook/preorder); "
+                "trying next", asin,
+            )
 
-        return _parse_detail_page(detail_html, asin)
+        return None
 
     async def close(self) -> None:
         self._session = None
