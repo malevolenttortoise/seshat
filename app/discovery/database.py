@@ -970,6 +970,109 @@ async def _backfill_normalized_author_names(db) -> int:
     return touched
 
 
+async def _backfill_book_authors(db) -> int:
+    """v3.0.0 Phase 1B — populate `book_authors` from snapshot
+    ``authors_json`` arrays.
+
+    Phase 1A added the join table; this step fills it from the
+    full author lists that ``books_calibre_snapshot.authors_json`` and
+    ``books_abs_snapshot.authors_json`` already preserve (faithful
+    reproductions of the upstream Calibre / ABS author tuples — not
+    flattened down to a single primary). For each book row, the
+    snapshot's array order becomes ``book_authors.position`` (0 =
+    primary, 1..N-1 = co-authors), names resolve to ``authors.id`` via
+    exact match against the same per-library authors table the sync
+    code wrote into.
+
+    Idempotent: ``INSERT OR IGNORE`` on the composite ``(book_id,
+    author_id)`` PK means re-runs after the first pass are no-ops.
+    Returns the number of new rows inserted, for logging.
+
+    Fallbacks:
+      - book with no snapshot row (sync hasn't run or library uses a
+        different snapshot table than this DB's flavor): inserts a
+        single row from the legacy ``books.author_id`` at position 0.
+      - snapshot present but name doesn't resolve in this DB's
+        ``authors`` table (cross-library name drift like "J.N. Chaney"
+        vs "J. N. Chaney"): silently skipped — the next sync after
+        Phase 2 ships will write the full set through the normal
+        author upsert path.
+      - book row with NO author_id and no snapshot resolution: no
+        rows inserted for that book. ``book_authors`` left empty for
+        it; downstream reads keep using ``books.author_id`` (NULL)
+        during phases 2-8.
+
+    Phase 9 drops ``books.author_id`` once every read path joins
+    through here; until then, both denormalizations co-exist.
+    """
+    import json
+
+    from app.metadata.author_names import normalize_author_name
+
+    cursor = await db.execute("SELECT id, name, normalized_name FROM authors")
+    rows_authors = await cursor.fetchall()
+    name_to_id = {row["name"]: row["id"] for row in rows_authors}
+    # Secondary lookup keyed on the normalized form (no punctuation /
+    # whitespace differences). Catches within-library snapshot drift
+    # like "J.N. Chaney" (snapshot) vs "J. N. Chaney" (authors row,
+    # collapsed by the dedup step earlier in init_db). UAT 2026-05-25
+    # in the abs-audiobooks dev-stack DB hit this: one snapshot row's
+    # second author silently disappeared from book_authors until we
+    # added this fallback.
+    normalized_to_id: dict[str, int] = {}
+    for row in rows_authors:
+        norm = row["normalized_name"] or normalize_author_name(row["name"] or "")
+        if norm and norm not in normalized_to_id:
+            normalized_to_id[norm] = row["id"]
+
+    cursor = await db.execute(
+        "SELECT b.id, b.author_id, c.authors_json AS calibre_json, "
+        "       a.authors_json AS abs_json "
+        "FROM books b "
+        "LEFT JOIN books_calibre_snapshot c ON c.book_id = b.id "
+        "LEFT JOIN books_abs_snapshot a ON a.book_id = b.id"
+    )
+    rows = await cursor.fetchall()
+    added = 0
+    for r in rows:
+        book_id = r["id"]
+        author_ids: list[int] = []
+        raw_json = r["calibre_json"] or r["abs_json"]
+        if raw_json:
+            try:
+                entries = json.loads(raw_json) or []
+            except (json.JSONDecodeError, TypeError):
+                entries = []
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                name = (entry.get("name") or "").strip()
+                if not name:
+                    continue
+                aid = name_to_id.get(name)
+                if aid is None:
+                    norm = normalize_author_name(name)
+                    if norm:
+                        aid = normalized_to_id.get(norm)
+                if aid is not None and aid not in author_ids:
+                    author_ids.append(aid)
+        if not author_ids and r["author_id"] is not None:
+            # Legacy single-author fallback — no snapshot or no
+            # snapshot names resolved against this library's authors.
+            author_ids = [r["author_id"]]
+        for pos, aid in enumerate(author_ids):
+            ins = await db.execute(
+                "INSERT OR IGNORE INTO book_authors "
+                "(book_id, author_id, position, role) "
+                "VALUES (?, ?, ?, NULL)",
+                (book_id, aid, pos),
+            )
+            added += ins.rowcount
+    if added:
+        await db.commit()
+    return added
+
+
 async def _dedupe_author_rows(db) -> int:
     """Collapse author rows whose `normalized_name` matches.
 
@@ -1608,6 +1711,17 @@ async def init_db(slug=None):
         if touched:
             _db_logger.info(
                 f"Backfilled normalized_name on {touched} author row(s)"
+            )
+
+        # ── Step 4.5b: v3.0.0 Phase 1B — book_authors backfill ───
+        # Populate the new join table from the snapshot author arrays
+        # so cross-author queries (Phase 4+) have the full ownership
+        # picture even before Phase 2 rewires the sync writers. See
+        # `_backfill_book_authors` for the resolution + fallback rules.
+        added = await _backfill_book_authors(db)
+        if added:
+            _db_logger.info(
+                f"Backfilled book_authors with {added} new link row(s)"
             )
 
         # ── Step 4.6: One-time dedup of duplicate author rows ──────
