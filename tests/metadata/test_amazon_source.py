@@ -531,3 +531,480 @@ class TestF1CacheFirst:
         assert result.external_id == "B00LIVELO0"
         # Live /s fired (low-score cache hit fell through).
         assert "SEARCH" in fetches
+
+
+# ─── F4 — Author Store fallback (Tier 3) ────────────────────
+
+
+def _make_product(
+    *, asin: str, title: str,
+    binding_symbol: str = "kindle_edition",
+    contributors: tuple = (),
+    series_title: str | None = None,
+    series_position: int | None = None,
+    cover_url: str | None = None,
+):
+    """Build a widget-parser Product object suitable for Tier 3 tests."""
+    from app.discovery.sources.amazon_widget_parser import Product
+    return Product(
+        asin=asin,
+        title=title,
+        contributors=contributors,
+        binding_symbol=binding_symbol,
+        binding_display=binding_symbol.replace("_", " ").title(),
+        series_title=series_title,
+        series_position=series_position,
+        series_total=None,
+        detail_page_link=f"/dp/{asin}",
+        cover_url=cover_url,
+        media_matrix=(),
+        genres=(),
+    )
+
+
+def _make_page_data(*products):
+    """Wrap a tuple of Product objects in an AllBooksPageData."""
+    from app.discovery.sources.amazon_widget_parser import AllBooksPageData
+    return AllBooksPageData(
+        author_id="B0C0AUTHOR",
+        store_id="store-id",
+        root_page_id="root-page-id",
+        version="v1",
+        slate_token="",
+        fresh_cart_csrf_token="",
+        amazon_api_csrf_token="",
+        visit_id="",
+        obfuscated_marketplace_id="",
+        asin_list=tuple(p.asin for p in products),
+        products=tuple(products),
+        total_result_count=len(products),
+        total_count=len(products),
+        available_languages=(),
+    )
+
+
+class TestF4AuthorStoreFallback:
+    """v2.31.0 Tier 3 — when cache (Tier 1) AND /s (Tier 2) both miss,
+    and `author_amazon_id` is ASIN-shaped, fetch the Author Store
+    storefront directly. URL is keyed on the verified author ID so
+    title hits are author-identity-guaranteed (treated as
+    `_from_cache=True` for merge-gate bypass)."""
+
+    async def test_tier3_fires_when_cache_and_search_both_miss(
+        self, source, monkeypatch,
+    ):
+        src, fetches, responses = source
+
+        async def fake_read(**_):
+            return []  # cache miss — Tier 1 returns None, /s runs
+
+        async def fake_enqueue(**_):
+            return True  # F1 enqueue-on-miss fires; doesn't matter here
+
+        from app.discovery import metadata_cache_reader
+        monkeypatch.setattr(
+            metadata_cache_reader, "read_books_by_author", fake_read,
+        )
+        monkeypatch.setattr(
+            metadata_cache_reader, "ensure_enqueued", fake_enqueue,
+        )
+
+        # Tier 2 (/s) returns an empty result set — no candidates.
+        responses["SEARCH"] = (
+            "<html><body><div data-component-type='s-search-results'>"
+            "</div></body></html>"
+        )
+
+        # Tier 3 storefront fetch — sentinel HTML routed past the
+        # real widget parser via the mock below.
+        async def fake_author_store_fetch(author_id):
+            assert author_id == "B0C0AUTHOR"
+            return "STOREFRONT_HTML"
+
+        monkeypatch.setattr(
+            src, "_fetch_author_store_html", fake_author_store_fetch,
+        )
+
+        from app.discovery.sources import amazon_widget_parser
+        page_data = _make_page_data(
+            _make_product(
+                asin="B0STORE001", title="The Tale: A Novel",
+                contributors=("Author",),
+                cover_url="https://amzn/store-cover.jpg",
+                series_title="Tale Series",
+                series_position=1,
+            ),
+            _make_product(
+                asin="B0STORE002", title="Some Other Work",
+                binding_symbol="kindle_edition",
+            ),
+        )
+        monkeypatch.setattr(
+            amazon_widget_parser, "parse_allbooks_html",
+            lambda html: page_data,
+        )
+
+        responses[
+            "https://www.amazon.com/dp/B0STORE001"
+        ] = _kindle_detail_html("B0STORE001", title="The Tale: A Novel")
+
+        result = await src.search_book(
+            "The Tale", "Author",
+            author_amazon_id="B0C0AUTHOR",
+            library_slug="calibre-library",
+        )
+
+        assert result is not None
+        assert result.external_id == "B0STORE001"
+        # Tier 3 hits get the cache-style treatment so the enricher's
+        # merge gate bypass applies.
+        assert getattr(result, "_from_cache", False) is True
+        # Widget fields fill detail-page gaps.
+        assert result.cover_url == "https://amzn/store-cover.jpg"
+        assert result.series == "Tale Series"
+        # Author populated from the search author (same reason as F1).
+        assert result.authors == ["Author"]
+
+    async def test_tier3_skipped_when_author_id_not_asin_shape(
+        self, source, monkeypatch,
+    ):
+        """Author Store URL needs a real ASIN — legacy name-as-id rows
+        from pre-v2.11.0 must not trigger a 404 fetch."""
+        src, fetches, responses = source
+
+        responses["SEARCH"] = (
+            "<html><body><div data-component-type='s-search-results'>"
+            "</div></body></html>"
+        )
+
+        async def must_not_fire(author_id):
+            raise AssertionError(
+                "Author Store fetch must NOT fire for non-ASIN id"
+            )
+
+        monkeypatch.setattr(
+            src, "_fetch_author_store_html", must_not_fire,
+        )
+
+        result = await src.search_book(
+            "The Tale", "Author",
+            author_amazon_id="Orson Scott Card",  # legacy name-as-id
+        )
+        assert result is None
+
+    async def test_tier3_skipped_when_no_author_id(
+        self, source, monkeypatch,
+    ):
+        """No author_amazon_id at all — Tier 3 has no URL to query."""
+        src, fetches, responses = source
+
+        responses["SEARCH"] = (
+            "<html><body><div data-component-type='s-search-results'>"
+            "</div></body></html>"
+        )
+
+        async def must_not_fire(author_id):
+            raise AssertionError(
+                "Author Store fetch must NOT fire without author_amazon_id"
+            )
+
+        monkeypatch.setattr(
+            src, "_fetch_author_store_html", must_not_fire,
+        )
+
+        result = await src.search_book("The Tale", "Author")
+        assert result is None
+
+    async def test_tier3_audiobook_hint_filters_by_audio_download_binding(
+        self, source, monkeypatch,
+    ):
+        """When `_audiobook_hint` is True the storefront filter targets
+        the Audible binding (`audio_download`), not Kindle."""
+        src, fetches, responses = source
+        src._audiobook_hint = True
+
+        async def fake_read(**_):
+            return []
+        async def fake_enqueue(**_):
+            return True
+
+        from app.discovery import metadata_cache_reader
+        monkeypatch.setattr(
+            metadata_cache_reader, "read_books_by_author", fake_read,
+        )
+        monkeypatch.setattr(
+            metadata_cache_reader, "ensure_enqueued", fake_enqueue,
+        )
+        responses["SEARCH"] = (
+            "<html><body><div data-component-type='s-search-results'>"
+            "</div></body></html>"
+        )
+
+        async def fake_author_store_fetch(_id):
+            return "STOREFRONT_HTML"
+        monkeypatch.setattr(
+            src, "_fetch_author_store_html", fake_author_store_fetch,
+        )
+
+        # Mix bindings — Kindle hit has the better title score but
+        # should be ignored because we're in audiobook mode.
+        from app.discovery.sources import amazon_widget_parser
+        page_data = _make_page_data(
+            _make_product(
+                asin="B0KINDLE01", title="The Tale: A Novel",
+                binding_symbol="kindle_edition",
+            ),
+            _make_product(
+                asin="B0AUDIO001", title="The Tale: A Novel",
+                binding_symbol="audio_download",
+                cover_url="https://amzn/audio-cover.jpg",
+            ),
+        )
+        monkeypatch.setattr(
+            amazon_widget_parser, "parse_allbooks_html",
+            lambda html: page_data,
+        )
+        responses[
+            "https://www.amazon.com/dp/B0AUDIO001"
+        ] = _kindle_detail_html("B0AUDIO001", title="The Tale: A Novel")
+
+        result = await src.search_book(
+            "The Tale", "Author",
+            author_amazon_id="B0C0AUTHOR",
+            library_slug="calibre-library",
+        )
+        assert result is not None
+        assert result.external_id == "B0AUDIO001"
+
+    async def test_tier3_returns_none_when_storefront_fetch_fails(
+        self, source, monkeypatch,
+    ):
+        """Soft-block, transport error, or non-200 from the storefront
+        fetch — Tier 3 must degrade to None (caller's overall result)."""
+        src, fetches, responses = source
+
+        async def fake_read(**_):
+            return []
+        async def fake_enqueue(**_):
+            return True
+
+        from app.discovery import metadata_cache_reader
+        monkeypatch.setattr(
+            metadata_cache_reader, "read_books_by_author", fake_read,
+        )
+        monkeypatch.setattr(
+            metadata_cache_reader, "ensure_enqueued", fake_enqueue,
+        )
+        responses["SEARCH"] = (
+            "<html><body><div data-component-type='s-search-results'>"
+            "</div></body></html>"
+        )
+
+        async def fetch_fails(_id):
+            return None  # storefront fetch returned None (soft-block etc.)
+        monkeypatch.setattr(
+            src, "_fetch_author_store_html", fetch_fails,
+        )
+
+        result = await src.search_book(
+            "The Tale", "Author",
+            author_amazon_id="B0C0AUTHOR",
+        )
+        assert result is None
+
+    async def test_tier3_parse_error_returns_none(
+        self, source, monkeypatch,
+    ):
+        """Widget parse failed (ParseError / SoftBlockSuspected) —
+        Tier 3 must degrade quietly without crashing the enrichment."""
+        src, fetches, responses = source
+
+        async def fake_read(**_):
+            return []
+        async def fake_enqueue(**_):
+            return True
+
+        from app.discovery import metadata_cache_reader
+        monkeypatch.setattr(
+            metadata_cache_reader, "read_books_by_author", fake_read,
+        )
+        monkeypatch.setattr(
+            metadata_cache_reader, "ensure_enqueued", fake_enqueue,
+        )
+        responses["SEARCH"] = (
+            "<html><body><div data-component-type='s-search-results'>"
+            "</div></body></html>"
+        )
+
+        async def fake_fetch(_id):
+            return "BROKEN_HTML"
+        monkeypatch.setattr(
+            src, "_fetch_author_store_html", fake_fetch,
+        )
+
+        from app.discovery.sources import amazon_widget_parser
+
+        def raise_parse(_):
+            raise amazon_widget_parser.SoftBlockSuspectedError(
+                "ProductGrid marker absent — soft-block suspected"
+            )
+        monkeypatch.setattr(
+            amazon_widget_parser, "parse_allbooks_html", raise_parse,
+        )
+
+        result = await src.search_book(
+            "The Tale", "Author",
+            author_amazon_id="B0C0AUTHOR",
+        )
+        assert result is None
+
+    async def test_tier3_author_only_floor_rejects_unrelated_books(
+        self, source, monkeypatch,
+    ):
+        """Regression for the live UAT finding: the Author Store URL
+        is keyed on the verified author, so EVERY product on the page
+        matches on author and ``score_match`` floors at exactly 0.300
+        (the ``0.3 * author`` term with zero title contribution). If
+        the threshold isn't tight enough every candidate trivially
+        passes and Tier 3 returns the first parseable book regardless
+        of whether the right book is actually in the SSR widget. The
+        threshold must be above 0.30 — empirically 0.40 lets the
+        IVH-1 case clear at ~0.475 while blocking pure author hits."""
+        src, fetches, responses = source
+
+        async def fake_read(**_):
+            return []
+        async def fake_enqueue(**_):
+            return True
+
+        from app.discovery import metadata_cache_reader
+        monkeypatch.setattr(
+            metadata_cache_reader, "read_books_by_author", fake_read,
+        )
+        monkeypatch.setattr(
+            metadata_cache_reader, "ensure_enqueued", fake_enqueue,
+        )
+        responses["SEARCH"] = (
+            "<html><body><div data-component-type='s-search-results'>"
+            "</div></body></html>"
+        )
+
+        async def fake_fetch(_id):
+            return "STOREFRONT_HTML"
+        monkeypatch.setattr(
+            src, "_fetch_author_store_html", fake_fetch,
+        )
+
+        # All products are by "Leon West" — author match floors them
+        # at 0.300 — but NONE of the titles overlap with the search
+        # term "Idle Village Hero". Pre-fix Tier 3 would have returned
+        # the first parseable one; post-fix it must return None.
+        from app.discovery.sources import amazon_widget_parser
+        page_data = _make_page_data(
+            _make_product(
+                asin="B0WRONGRA1",
+                title="Rise of the Class Smith: A Dungeon Building LitRPG Adventure",
+                contributors=("Leon West",),
+            ),
+            _make_product(
+                asin="B0WRONGAM2",
+                title="Isle of the Amazonian Elves: A Fateforged Adventure",
+                contributors=("Leon West",),
+            ),
+            _make_product(
+                asin="B0WRONGCH3",
+                title="Dungeon Champions Omnibus",
+                contributors=("Leon West",),
+            ),
+        )
+        monkeypatch.setattr(
+            amazon_widget_parser, "parse_allbooks_html",
+            lambda html: page_data,
+        )
+
+        # If Tier 3 ever fired a detail fetch we'd see it in `fetches`.
+        # A `_kindle_detail_html` response is staged for B0WRONGRA1 in
+        # case the threshold regressed — the assertion below would then
+        # surface that as a returned record instead of a silent miss.
+        responses[
+            "https://www.amazon.com/dp/B0WRONGRA1"
+        ] = _kindle_detail_html("B0WRONGRA1", title="Rise of the Class Smith")
+
+        result = await src.search_book(
+            "Idle Village Hero", "Leon West",
+            author_amazon_id="B0CMJC56GQ",
+        )
+
+        assert result is None, (
+            f"Tier 3 must reject author-only matches but returned "
+            f"{getattr(result, 'external_id', None)!r}"
+        )
+        # No detail fetch fired — we bailed at the threshold gate.
+        detail_fetches = [u for u in fetches if "/dp/B0WRONG" in u]
+        assert detail_fetches == [], (
+            f"detail fetch fired despite below-threshold score: {detail_fetches}"
+        )
+
+    async def test_tier3_volume_tiebreaker_picks_book_one(
+        self, source, monkeypatch,
+    ):
+        """Same volume-disambiguation issue as F1 (Idle Village Hero
+        scenario) applies to storefront listings: a no-volume query
+        against numbered siblings ties on pure Jaccard. The
+        volume-agreement tiebreaker must surface book 1 (no marker)."""
+        src, fetches, responses = source
+
+        async def fake_read(**_):
+            return []
+        async def fake_enqueue(**_):
+            return True
+
+        from app.discovery import metadata_cache_reader
+        monkeypatch.setattr(
+            metadata_cache_reader, "read_books_by_author", fake_read,
+        )
+        monkeypatch.setattr(
+            metadata_cache_reader, "ensure_enqueued", fake_enqueue,
+        )
+        responses["SEARCH"] = (
+            "<html><body><div data-component-type='s-search-results'>"
+            "</div></body></html>"
+        )
+
+        async def fake_fetch(_id):
+            return "STOREFRONT_HTML"
+        monkeypatch.setattr(
+            src, "_fetch_author_store_html", fake_fetch,
+        )
+
+        from app.discovery.sources import amazon_widget_parser
+        page_data = _make_page_data(
+            _make_product(
+                asin="B0BOOK0004",
+                title="Idle Village Hero 4: A Town-Building LitRPG",
+            ),
+            _make_product(
+                asin="B0BOOK0001",
+                title="Idle Village Hero: A Town-Building LitRPG",
+            ),
+            _make_product(
+                asin="B0BOOK0002",
+                title="Idle Village Hero 2: A Town-Building LitRPG",
+            ),
+        )
+        monkeypatch.setattr(
+            amazon_widget_parser, "parse_allbooks_html",
+            lambda html: page_data,
+        )
+
+        responses[
+            "https://www.amazon.com/dp/B0BOOK0001"
+        ] = _kindle_detail_html("B0BOOK0001", title="Idle Village Hero")
+
+        result = await src.search_book(
+            "Idle Village Hero: A Slice-of-Life LitRPG",
+            "Leon West",
+            author_amazon_id="B0CMJC56GQ",
+        )
+        assert result is not None
+        assert result.external_id == "B0BOOK0001"

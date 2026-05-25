@@ -85,6 +85,11 @@ class AmazonSource(MetaSource):
     def __init__(self, *, rate_limit: float = 1.5):
         super().__init__(rate_limit=rate_limit)
         self._session: Optional[requests.Session] = None
+        # v2.31.0 Tier 3 — lazy curl_cffi AsyncSession for the Author
+        # Store fetch path. Kept separate from the requests.Session
+        # because amazon.com/stores/author/* is Akamai-protected and
+        # only the Chrome 120 impersonation handshake gets through.
+        self._cffi_session = None
 
     def _get_session(self) -> requests.Session:
         if self._session is None:
@@ -160,6 +165,42 @@ class AmazonSource(MetaSource):
             if cached is not None:
                 return cached
 
+        live_hit = await self._live_search(title=title, author=author)
+        if live_hit is not None:
+            return live_hit
+
+        # v2.31.0 — Tier 3 Author Store fallback. Both the cache phase
+        # (Tier 1) and the live /s search (Tier 2) failed to surface a
+        # usable record. When `author_amazon_id` is a verified Author
+        # Store ID we can hit the storefront directly: the URL is keyed
+        # on the verified author, so any title-scored hit is
+        # author-identity-guaranteed by construction. Single SSR fetch
+        # via curl_cffi Chrome 120 + parse the embedded widget JSON
+        # (~85 candidate products) + one detail fetch for the best
+        # binding-match. No /juvec — the F1 enqueue-on-miss above
+        # already arranged a worker rescan for full coverage.
+        if _is_amazon_author_id_shape(author_amazon_id):
+            return await self._author_store_search(
+                title=title, author=author,
+                author_amazon_id=author_amazon_id,
+            )
+
+        return None
+
+    async def _live_search(
+        self, *, title: str, author: str,
+    ) -> Optional[MetaRecord]:
+        """v2.29.0 live /s search — F2 audiobook-retry loop.
+
+        Hits amazon.com/s with explicit book-store parameters, ranks
+        the top 3 hits by title score, walks the ranked list fetching
+        detail pages until one parses to a usable record (rejecting
+        audiobook + pre-order pages along the way).
+
+        Returns None when the search response is empty, no product
+        links surface, or every detail-page candidate is rejected.
+        Tier 3 callers handle None.
+        """
         query = f"{title} {author}".strip()
         search_html = await self._fetch(
             _SEARCH_URL,
@@ -426,8 +467,258 @@ class AmazonSource(MetaSource):
             pass
         return record
 
+    async def _author_store_search(
+        self,
+        *,
+        title: str,
+        author: str,
+        author_amazon_id: str,
+    ) -> Optional[MetaRecord]:
+        """v2.31.0 Tier 3 — Author Store direct fetch.
+
+        Single GET of ``/stores/author/<asin>/allbooks`` via curl_cffi
+        Chrome 120, parse the embedded SSR widget JSON, filter the
+        returned products to the active binding (Kindle or Audible),
+        score titles against the query, fetch one detail page for the
+        best match. Same ``_from_cache=True`` treatment as
+        :meth:`_cache_first_search` so the enricher's merge gate
+        bypass applies — the URL is keyed on the verified author ID,
+        so author identity is guaranteed by construction.
+
+        **SSR-only coverage.** This phase reads only the products
+        baked into the storefront's initial server-side render
+        (typically the first 29-ish across all bindings, ~15-20
+        Kindle-bound). Authors with larger catalogs hide later books
+        behind ``/juvec`` pagination that the discovery worker walks
+        but Tier 3 deliberately does not — Tier 3 is a best-effort
+        first-pass while the F1 enqueue-on-miss arranges a worker
+        rescan that populates the cache for the next attempt. If the
+        right book isn't in the SSR widget Tier 3 returns ``None``
+        (rather than guessing) and the eventual cache-backed Tier 1
+        re-attempt picks it up.
+
+        Returns ``None`` on:
+          - curl_cffi unavailable (install missing)
+          - Amazon soft-block cooldown active (penalty box)
+          - allbooks GET non-200 / soft-block-suspected
+          - widget parse failed
+          - no binding-matched product scored above 0.4 (the
+            author-only floor — see threshold comment below)
+          - detail-page parse rejected (audiobook / pre-order)
+        """
+        html = await self._fetch_author_store_html(author_amazon_id)
+        if not html:
+            return None
+
+        try:
+            from app.discovery.sources.amazon_widget_parser import (
+                FILTER_TO_BINDING, ParseError, parse_allbooks_html,
+            )
+        except Exception as e:
+            _log.debug("amazon author-store: widget parser import failed: %s", e)
+            return None
+
+        try:
+            page_data = parse_allbooks_html(html)
+        except ParseError as e:
+            # SoftBlockSuspectedError is a subclass; both surface here.
+            # `_fetch_author_store_html` already recorded the soft-block
+            # for the 202/429 + thin-body cases; bare parse failures on
+            # a substantive body are one-off schema drift, treat as miss.
+            _log.debug("amazon author-store: parse failed (%s)", e)
+            return None
+        except Exception as e:
+            _log.debug("amazon author-store: unexpected parse error: %s", e)
+            return None
+
+        target_binding = (
+            FILTER_TO_BINDING["audible_audiobook"]
+            if getattr(self, "_audiobook_hint", False)
+            else FILTER_TO_BINDING["kindle"]
+        )
+        candidates = [
+            p for p in page_data.products
+            if p.binding_symbol == target_binding
+        ]
+        if not candidates:
+            _log.debug(
+                "amazon author-store: no %s-binding products for %s "
+                "(total products=%d)",
+                target_binding, author_amazon_id, len(page_data.products),
+            )
+            return None
+
+        from app.metadata.scoring import _extract_volume, score_match
+        search_volume = _extract_volume(title)
+
+        # Score each candidate + apply the same volume-agreement
+        # tiebreaker the cache path uses (v2.29.0 273e28a). Storefront
+        # listings for an author with a numbered series tie on pure
+        # Jaccard the same way cache rows do.
+        scored: list[tuple[float, int, object]] = []
+        for product in candidates:
+            if not product.title or not product.asin:
+                continue
+            sc = score_match(
+                record_title=product.title,
+                record_authors=list(product.contributors),
+                search_title=title,
+                search_authors=author,
+            )
+            row_volume = _extract_volume(product.title)
+            if search_volume == row_volume:
+                vol_bonus = 1
+            elif search_volume is None or row_volume is None:
+                vol_bonus = 0
+            else:
+                vol_bonus = -1
+            scored.append((sc, vol_bonus, product))
+
+        if not scored:
+            return None
+
+        scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        best_score, _best_bonus, best_product = scored[0]
+        # The score_match formula is ``0.7 * title + 0.3 * author``;
+        # a pure-author hit with zero title overlap floors at exactly
+        # 0.300. The Author Store URL guarantees author identity for
+        # every candidate on the page, so EVERY product matches on
+        # author and the floor is meaningless — only meaningful title
+        # similarity can disambiguate the right book from the rest of
+        # the author's catalog. Threshold 0.40 requires at least ~0.14
+        # title contribution over the author-only floor, which the
+        # IVH→IVH-book-1 case clears at ~0.475 (observed) while
+        # author-only mismatches at 0.300 are correctly rejected.
+        if best_score < 0.4:
+            _log.debug(
+                "amazon author-store: best candidate %s scored %.3f < 0.4 "
+                "(author-only floor; the right book is not in the SSR "
+                "widget for this author)",
+                getattr(best_product, "asin", "?"), best_score,
+            )
+            return None
+
+        best_asin = best_product.asin
+        if not _AMAZON_AUTHOR_ID_RE.match(best_asin or ""):
+            return None
+
+        detail_html = await self._fetch(f"{_PRODUCT_URL}/{best_asin}")
+        if not detail_html:
+            return None
+        record = _parse_detail_page(detail_html, best_asin)
+        if record is None:
+            return None
+
+        # Widget fields fill detail-page gaps (cover/series). The
+        # storefront product never carries ISBN or language, so those
+        # come from the detail page or stay None.
+        widget_row = {
+            "cover_url": best_product.cover_url,
+            "series_name": best_product.series_title,
+            "series_pos": best_product.series_position,
+        }
+        record = _merge_cache_into_record(record, widget_row)
+        if author and not record.authors:
+            record.authors = [author]
+        try:
+            record._from_cache = True  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        return record
+
+    async def _fetch_author_store_html(
+        self, author_id: str,
+    ) -> Optional[str]:
+        """One GET of ``/stores/author/<author_id>/allbooks`` via the
+        curl_cffi Chrome 120 impersonation session.
+
+        Returns ``None`` on:
+          - curl_cffi missing (degrade gracefully)
+          - Amazon soft-block cooldown active (penalty box)
+          - transport error / non-200 response
+
+        202 (Akamai sensor challenge) and 429 (rate limit) record an
+        IP-level soft-block via the shared discovery-side penalty box
+        so subsequent author-store calls + worker scans short-circuit.
+        """
+        try:
+            from app.discovery.amazon_author_id_resolver import (
+                is_amazon_blocked,
+                parse_retry_after,
+                record_amazon_soft_block,
+            )
+            from app.discovery.sources.amazon import (
+                _ALLBOOKS_URL_TEMPLATE,
+                _create_impersonating_session,
+            )
+        except Exception as e:
+            _log.debug(
+                "amazon author-store: discovery helpers unavailable: %s", e,
+            )
+            return None
+
+        if is_amazon_blocked():
+            _log.info(
+                "amazon author-store: skipped — soft-block cooldown active",
+            )
+            return None
+
+        session = self._cffi_session
+        if session is None:
+            session = _create_impersonating_session()
+            if session is None:
+                # curl_cffi missing — log once at debug; the discovery
+                # source already logged the install warning at startup.
+                return None
+            self._cffi_session = session
+
+        url = _ALLBOOKS_URL_TEMPLATE.format(author_id=author_id)
+        try:
+            resp = await session.get(url, timeout=30.0)
+        except Exception as e:
+            _log.debug("amazon author-store fetch error: %s", e)
+            return None
+
+        status = getattr(resp, "status_code", None)
+        body = getattr(resp, "text", None) or ""
+        if status in (429, 202):
+            headers = getattr(resp, "headers", None)
+            raw_ra = None
+            if headers is not None:
+                try:
+                    raw_ra = (
+                        headers.get("Retry-After")
+                        or headers.get("retry-after")
+                    )
+                except Exception:
+                    raw_ra = None
+            record_amazon_soft_block(
+                f"enricher author-store GET {url} returned HTTP {status} "
+                f"with {len(body)}-byte body"
+                + (" (Akamai sensor challenge)" if status == 202 else ""),
+                retry_after_s=parse_retry_after(raw_ra),
+            )
+            return None
+        if status != 200 or not body:
+            _log.debug(
+                "amazon author-store: HTTP %s, %d-byte body — miss",
+                status, len(body),
+            )
+            return None
+        return body
+
     async def close(self) -> None:
         self._session = None
+        if self._cffi_session is not None:
+            try:
+                close_method = getattr(self._cffi_session, "close", None)
+                if close_method is not None:
+                    result = close_method()
+                    if hasattr(result, "__await__"):
+                        await result
+            except Exception:
+                pass
+            self._cffi_session = None
         await super().close()
 
 
