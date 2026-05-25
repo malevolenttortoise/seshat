@@ -349,10 +349,17 @@ class AmazonSource(MetaSource):
 
         scored.sort(key=lambda x: x[0], reverse=True)
         best_score, best_row = scored[0]
-        # Lower than the enricher's 0.8 accept threshold — the cache
-        # surfaces candidates, the enricher's downstream re-score
-        # gates the final answer.
-        if best_score < 0.5:
+        # Threshold for cache acceptance. The cache rows are
+        # pre-filtered to the queried author_id, so title similarity
+        # is the ONLY signal that matters here — a low title score
+        # vs. another book in the same author's catalog is still
+        # better-than-fuzzy because the author identity is verified.
+        # 0.3 catches subtitle variations like "A Slice-of-Life
+        # LitRPG" (MAM filename) vs. "A Town-Building LitRPG" (Amazon
+        # detail page) for Idle Village Hero — observed live at 0.475.
+        # Anything materially below 0.3 is a different book of the
+        # same author.
+        if best_score < 0.3:
             return None
 
         best_asin = best_row.get("book_asin") or ""

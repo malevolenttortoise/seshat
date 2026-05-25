@@ -704,6 +704,68 @@ class TestF3CheapSourceGate:
         assert gb.call_count == 1
         assert result.page_count == 300
 
+    async def test_cache_backed_record_bypasses_merge_threshold(self):
+        """Cache-backed results (with ``_from_cache=True``) skip the
+        ``accept_confidence`` gate even when the re-scored confidence
+        lands below threshold. Author identity is verified by the
+        cache key (author_amazon_id), so a subtitle variation that
+        scores 0.77 is still a real match — the cover URL + other
+        fields must merge in.
+
+        Regression scenario: Idle Village Hero MAM filename had
+        "A Slice-of-Life LitRPG" subtitle; Amazon's detail page had
+        "A Town-Building LitRPG". Pre-this-fix the rescored 0.775
+        was below 0.8 accept_confidence, status `below_threshold`,
+        Amazon cover never merged.
+        """
+        cfg = EnrichmentConfig(enabled=True, accept_confidence=0.8)
+        # Source 1: title-only fuzzy match at 0.5 — below threshold,
+        # not cache-backed → merge skipped.
+        cache_rec = MetaRecord(
+            title="Idle Village Hero",
+            authors=["Leon West"],
+            source="amazon",
+            cover_url="https://amzn/cover.jpg",
+            external_id="B0DVMMJJGZ",
+        )
+        cache_rec._from_cache = True  # type: ignore[attr-defined]
+        cache_src = _FakeSource(name="amazon", result=cache_rec)
+        enricher = MetadataEnricher(cfg, sources=[cache_src])
+
+        result = await enricher.enrich(
+            title="Idle Village Hero: A Slice-of-Life LitRPG Adventure",
+            author="Leon West",
+        )
+        # Result merges in despite low fuzzy score because of the
+        # cache-backed flag.
+        assert result is not None
+        assert result.cover_url == "https://amzn/cover.jpg"
+        assert result.external_id == "B0DVMMJJGZ"
+        log = getattr(result, "_source_log", [])
+        amazon_entry = next((e for e in log if e["source"] == "amazon"), None)
+        assert amazon_entry is not None
+        assert amazon_entry["status"] == "matched"
+
+    async def test_non_cache_record_still_gated_by_threshold(self):
+        """Non-cache results stay subject to the below-threshold gate
+        — the bypass is specifically for cache-backed records."""
+        cfg = EnrichmentConfig(enabled=True, accept_confidence=0.8)
+        # A junk match — wrong book, no cache flag, low rescore.
+        bad = MetaRecord(
+            title="Completely Different Book",
+            authors=["Wrong Author"],
+            source="kobo",
+            description="Should NOT leak through",
+        )
+        kobo = _FakeSource(name="kobo", result=bad)
+        enricher = MetadataEnricher(cfg, sources=[kobo])
+
+        result = await enricher.enrich(
+            title="Idle Village Hero", author="Leon West",
+        )
+        # No exact-ID, no cache flag, low fuzzy score → no merge.
+        assert result is None or result.description != "Should NOT leak through"
+
     async def test_cheap_source_threads_amazon_id_to_is_cheap_for(self):
         """The gate must pass the resolver identifiers through to
         ``is_cheap_for`` so a source can use them in its decision."""

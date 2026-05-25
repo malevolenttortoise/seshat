@@ -524,13 +524,26 @@ class MetadataEnricher:
             # source) bypass this because they're by definition the
             # right book regardless of fuzzy scoring.
             #
+            # v2.29.0 — cache-backed results also bypass. The cache
+            # query was keyed on the author's Amazon Author Store ID,
+            # so the row's author identity is verified — the only
+            # signal needing a check is title similarity, which the
+            # source's own cache-first internal threshold (currently
+            # 0.3) already enforces. Without this bypass, subtitle
+            # variations between MAM filenames and the Amazon detail
+            # page leave matched cache hits stranded at status
+            # `below_threshold` despite being the right book (live
+            # case: Idle Village Hero rescored 0.775, blocked).
+            #
             # Caught by Tier 1 UAT: Kobo returned "Mercy Temple
             # Chronicles: Collection 2" at confidence 0.44 when we
             # searched "Monster's Mercy 2", and its junk description
             # leaked into the review record because the merge fired
             # unconditionally.
+            is_cache_backed = getattr(result, "_from_cache", False)
             if (
                 not is_exact
+                and not is_cache_backed
                 and result.confidence < self.config.accept_confidence
             ):
                 _log.info(
