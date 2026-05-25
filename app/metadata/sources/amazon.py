@@ -330,8 +330,25 @@ class AmazonSource(MetaSource):
                 _log.debug("amazon enqueue-on-miss failed: %s", e)
             return None
 
-        # Score each cached title against the search query.
-        scored: list[tuple[float, dict]] = []
+        # Score each cached title against the search query plus a
+        # volume-agreement tiebreaker.
+        #
+        # Why the tiebreaker: when an author has multiple books in a
+        # series (e.g. "Idle Village Hero", "Idle Village Hero 2",
+        # "Idle Village Hero 3", "Idle Village Hero 4"), the search
+        # title for book 1 has no volume marker. Pure Jaccard scoring
+        # tokenizes "2", "3", "4" as ordinary tokens that contribute
+        # equally to the intersection/union pair, so all four siblings
+        # tie at the same score. score_match's volume-mismatch guard
+        # only fires when BOTH sides have volume markers — a
+        # no-volume query against numbered candidates can't disambiguate.
+        # Live /s sidesteps this because Amazon's search ranks book 1
+        # first; the cache scores everything in the catalog and would
+        # otherwise pick whichever sibling SQLite returned first.
+        from app.metadata.scoring import _extract_volume
+        search_volume = _extract_volume(title)
+
+        scored: list[tuple[float, int, dict]] = []  # (score, vol_bonus, row)
         for row in rows:
             row_title = row.get("title") or ""
             if not row_title:
@@ -342,13 +359,25 @@ class AmazonSource(MetaSource):
                 search_title=title,
                 search_authors=author,
             )
-            scored.append((sc, row))
+            # Volume-agreement tiebreaker:
+            #   +1 when both sides agree (both have the same volume,
+            #          or both have no volume marker)
+            #    0 when one side has a volume and the other doesn't
+            #   -1 when both sides have volumes that disagree
+            row_volume = _extract_volume(row_title)
+            if search_volume == row_volume:
+                vol_bonus = 1
+            elif search_volume is None or row_volume is None:
+                vol_bonus = 0
+            else:
+                vol_bonus = -1
+            scored.append((sc, vol_bonus, row))
 
         if not scored:
             return None
 
-        scored.sort(key=lambda x: x[0], reverse=True)
-        best_score, best_row = scored[0]
+        scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        best_score, _best_bonus, best_row = scored[0]
         # Threshold for cache acceptance. The cache rows are
         # pre-filtered to the queried author_id, so title similarity
         # is the ONLY signal that matters here — a low title score

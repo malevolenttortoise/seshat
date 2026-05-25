@@ -373,6 +373,115 @@ class TestF1CacheFirst:
         )
         assert result is not None
 
+    async def test_volume_agreement_tiebreaker_picks_book_one(
+        self, source, monkeypatch,
+    ):
+        """Regression test for the Idle Village Hero issue. Author has
+        four books in a series; the search title for book 1 has no
+        volume marker. Pure title scoring ties all four candidates at
+        the same score; the volume-agreement tiebreaker must pick the
+        no-volume candidate (book 1)."""
+        src, fetches, responses = source
+
+        async def fake_read(**_):
+            return [
+                {
+                    "title": "Idle Village Hero 4: A Town-Building LitRPG Adventure",
+                    "book_asin": "B0BOOK0004",
+                    "series_name": "Idle Village Hero",
+                    "series_pos": 4.0,
+                    "cover_url": None, "language": None, "isbn": None,
+                },
+                {
+                    "title": "Idle Village Hero 2: A Town-Building LitRPG Adventure",
+                    "book_asin": "B0BOOK0002",
+                    "series_name": "Idle Village Hero",
+                    "series_pos": 2.0,
+                    "cover_url": None, "language": None, "isbn": None,
+                },
+                {
+                    "title": "Idle Village Hero: A Town-Building LitRPG Adventure",
+                    "book_asin": "B0BOOK0001",
+                    "series_name": "Idle Village Hero",
+                    "series_pos": 1.0,
+                    "cover_url": None, "language": None, "isbn": None,
+                },
+                {
+                    "title": "Idle Village Hero 3: A Town-Building LitRPG Adventure",
+                    "book_asin": "B0BOOK0003",
+                    "series_name": "Idle Village Hero",
+                    "series_pos": 3.0,
+                    "cover_url": None, "language": None, "isbn": None,
+                },
+            ]
+
+        from app.discovery import metadata_cache_reader
+        monkeypatch.setattr(
+            metadata_cache_reader, "read_books_by_author", fake_read,
+        )
+        responses[
+            "https://www.amazon.com/dp/B0BOOK0001"
+        ] = _kindle_detail_html("B0BOOK0001", title="Idle Village Hero")
+
+        result = await src.search_book(
+            "Idle Village Hero: A Slice-of-Life LitRPG Adventure",
+            "Leon West",
+            author_amazon_id="B0CMJC56GQ",
+            library_slug="calibre-library",
+        )
+
+        assert result is not None
+        # Volume-agreement tiebreaker picks book 1 (no volume marker
+        # matches the query's no-volume marker).
+        assert result.external_id == "B0BOOK0001"
+
+    async def test_volume_agreement_picks_matching_volume(
+        self, source, monkeypatch,
+    ):
+        """When the query explicitly carries a volume marker, the
+        tiebreaker prefers the same-volume cached row over siblings."""
+        src, fetches, responses = source
+
+        async def fake_read(**_):
+            return [
+                {
+                    "title": "Idle Village Hero: A Town-Building LitRPG Adventure",
+                    "book_asin": "B0BOOK0001",
+                    "series_name": None, "series_pos": None,
+                    "cover_url": None, "language": None, "isbn": None,
+                },
+                {
+                    "title": "Idle Village Hero 3: A Town-Building LitRPG Adventure",
+                    "book_asin": "B0BOOK0003",
+                    "series_name": None, "series_pos": None,
+                    "cover_url": None, "language": None, "isbn": None,
+                },
+                {
+                    "title": "Idle Village Hero 2: A Town-Building LitRPG Adventure",
+                    "book_asin": "B0BOOK0002",
+                    "series_name": None, "series_pos": None,
+                    "cover_url": None, "language": None, "isbn": None,
+                },
+            ]
+
+        from app.discovery import metadata_cache_reader
+        monkeypatch.setattr(
+            metadata_cache_reader, "read_books_by_author", fake_read,
+        )
+        responses[
+            "https://www.amazon.com/dp/B0BOOK0003"
+        ] = _kindle_detail_html("B0BOOK0003", title="Idle Village Hero 3")
+
+        result = await src.search_book(
+            "Idle Village Hero 3: A Town-Building LitRPG",
+            "Leon West",
+            author_amazon_id="B0CMJC56GQ",
+            library_slug="calibre-library",
+        )
+
+        assert result is not None
+        assert result.external_id == "B0BOOK0003"
+
     async def test_cache_hit_low_score_falls_back_to_live(
         self, source, monkeypatch,
     ):
