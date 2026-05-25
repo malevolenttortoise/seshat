@@ -40,6 +40,36 @@ async def get_goodreads_id_for_author(name: str) -> str:
     stored goodreads_id, or the discovery state hasn't initialized
     (test mode).
     """
+    return await _get_author_column("goodreads_id", name, library_slug="")
+
+
+async def get_amazon_id_for_author(name: str, library_slug: str = "") -> str:
+    """Return the stored `authors.amazon_id` for `name`, or "".
+
+    Mirrors :func:`get_goodreads_id_for_author` but reads
+    ``authors.amazon_id``. When ``library_slug`` is non-empty the
+    walk is restricted to that library (the enricher passes the
+    grab's destination library so the cache-first Amazon path
+    queries against the library that actually owns the cached rows).
+    Empty ``library_slug`` walks every discovered library — useful
+    in tests and any future caller without an active library context.
+    """
+    return await _get_author_column("amazon_id", name, library_slug=library_slug)
+
+
+async def _get_author_column(
+    column: str, name: str, *, library_slug: str = "",
+) -> str:
+    """Internal helper — look up ``authors.<column>`` for ``name``.
+
+    Library selection:
+      - ``library_slug=""`` walks every discovered library and returns
+        the first non-empty match (identifier identity is global per
+        the module docstring above).
+      - Non-empty ``library_slug`` restricts the walk to that single
+        library. Returns "" if the library has the author but no
+        stored value, or if the library doesn't have the author at all.
+    """
     if not name or not name.strip():
         return ""
 
@@ -53,7 +83,13 @@ async def get_goodreads_id_for_author(name: str) -> str:
     except Exception:
         return ""
 
-    libraries = list(state._discovered_libraries or [])
+    all_libraries = list(state._discovered_libraries or [])
+    if not all_libraries:
+        return ""
+    if library_slug:
+        libraries = [lib for lib in all_libraries if (lib or {}).get("slug") == library_slug]
+    else:
+        libraries = all_libraries
     if not libraries:
         return ""
 
@@ -61,13 +97,12 @@ async def get_goodreads_id_for_author(name: str) -> str:
     if not individual_names:
         return ""
 
+    sql = f"SELECT {column} FROM authors WHERE normalized_name = ?"
     for individual_name in individual_names:
         # Match on `authors.normalized_name`, not `name`. MAM announces
         # often drop punctuation ("St Arkham") while Calibre keeps it
         # ("St. Arkham"); a strict `WHERE name = ?` misses the row and
-        # the enricher proceeds without an author_goodreads_id anchor,
-        # collapsing GoodreadsSource's T4/T5 tiers to no_result on
-        # obscure books with no ISBN/ASIN.
+        # the enricher proceeds without an author identifier anchor.
         norm_target = normalize_author_name(individual_name)
         if not norm_target:
             continue
@@ -80,20 +115,40 @@ async def get_goodreads_id_for_author(name: str) -> str:
             except Exception:
                 continue
             try:
-                row = await (await db.execute(
-                    "SELECT goodreads_id FROM authors WHERE normalized_name = ?",
-                    (norm_target,),
-                )).fetchone()
+                row = await (await db.execute(sql, (norm_target,))).fetchone()
                 if row and row[0]:
                     return str(row[0])
             except Exception as e:
                 _log.debug(
-                    "author_lookup: %s author lookup failed for %r: %s",
-                    slug, individual_name, e,
+                    "author_lookup: %s %s lookup failed for %r: %s",
+                    slug, column, individual_name, e,
                 )
             finally:
                 try:
                     await db.close()
                 except Exception:
                     pass
+    return ""
+
+
+def get_library_slug_for_content_type(content_type: str) -> str:
+    """Return the slug of the first discovered library matching
+    ``content_type`` ("ebook" or "audiobook"), or "" when none match.
+
+    Used by the orchestrator to derive a destination library at
+    enrichment time. Today's setups are one-library-per-content-type
+    so this is deterministic; future multi-library-per-content-type
+    work will need richer routing.
+    """
+    if not content_type:
+        return ""
+    try:
+        from app import state
+    except Exception:
+        return ""
+    for lib in state._discovered_libraries or []:
+        if (lib or {}).get("content_type") == content_type:
+            slug = (lib or {}).get("slug") or ""
+            if slug:
+                return str(slug)
     return ""

@@ -267,6 +267,8 @@ class MetadataEnricher:
         audiobook: bool = False,
         skip_mam: bool = False,
         author_goodreads_id: str = "",
+        author_amazon_id: str = "",
+        library_slug: str = "",
     ) -> Optional[MetaRecord]:
         """Run the priority list and return the best merged record.
 
@@ -356,6 +358,14 @@ class MetadataEnricher:
         merged: Optional[MetaRecord] = None
         source_log: list[dict] = []  # per-source contributions
         have_exact_id = False  # MAM exact-ID gives us the match; keep querying for supplemental data
+        # v2.29.0 — tracks whether ANY source has already produced a
+        # fuzzy match above accept_confidence. Pre-v2.29.0 the loop
+        # `break`-ed as soon as that happened; this flag instead gates
+        # subsequent sources via `is_cheap_for` so cache-backed sources
+        # still get a chance to contribute even after a fuzzy match
+        # locked in. Expensive sources (live HTTP) get skipped with
+        # `skipped_cheap_gate`.
+        have_good_enough = False
         known_series = ""  # populated by MAM exact-ID for series-aware scoring
         # Wall-clock start for the global per-book budget. Enforced
         # before each source so a stuck source can't blow the cap and
@@ -375,6 +385,35 @@ class MetadataEnricher:
                 )
                 source_log.append({"source": src.name, "confidence": None, "status": "budget_exceeded"})
                 break
+            # v2.29.0 — cheap-source short-circuit gate. After a
+            # good-enough fuzzy match locks in, expensive sources are
+            # skipped but cheap ones (cache-backed) still run so they
+            # can contribute their fields. Exact-ID matches (MAM with
+            # torrent_id) disable the gate entirely — we want every
+            # available source to fill in supplemental fields when we
+            # already have the right book.
+            if have_good_enough and not have_exact_id:
+                try:
+                    cheap = src.is_cheap_for(
+                        isbn=isbn,
+                        asin=asin,
+                        author_goodreads_id=author_goodreads_id,
+                        author_amazon_id=author_amazon_id,
+                        library_slug=library_slug,
+                    )
+                except Exception:
+                    cheap = False
+                if not cheap:
+                    _log.info(
+                        "enricher: %s → skip (have good-enough fuzzy match, "
+                        "source is not cheap)", src.name,
+                    )
+                    source_log.append({
+                        "source": src.name,
+                        "confidence": None,
+                        "status": "skipped_cheap_gate",
+                    })
+                    continue
             # v2.13.0 Stage 6 — skip Goodreads when its session state is
             # `soft_blocked`. Without this gate every per-book lookup
             # pays the full request → soft-block detect → next-source
@@ -407,6 +446,8 @@ class MetadataEnricher:
                 src, title=title, author=author, max_wait=remaining,
                 isbn=current_isbn, asin=current_asin,
                 author_goodreads_id=author_goodreads_id,
+                author_amazon_id=author_amazon_id,
+                library_slug=library_slug,
             )
             # Title-variant fallback. When a source returns no match
             # for the raw title, retry with the series/edition-stripped
@@ -436,6 +477,8 @@ class MetadataEnricher:
                             max_wait=remaining_after,
                             isbn=current_isbn, asin=current_asin,
                             author_goodreads_id=author_goodreads_id,
+                            author_amazon_id=author_amazon_id,
+                            library_slug=library_slug,
                         )
             if result is None:
                 # Emit at INFO so the log stream shows the full chain —
@@ -481,13 +524,26 @@ class MetadataEnricher:
             # source) bypass this because they're by definition the
             # right book regardless of fuzzy scoring.
             #
+            # v2.29.0 — cache-backed results also bypass. The cache
+            # query was keyed on the author's Amazon Author Store ID,
+            # so the row's author identity is verified — the only
+            # signal needing a check is title similarity, which the
+            # source's own cache-first internal threshold (currently
+            # 0.3) already enforces. Without this bypass, subtitle
+            # variations between MAM filenames and the Amazon detail
+            # page leave matched cache hits stranded at status
+            # `below_threshold` despite being the right book (live
+            # case: Idle Village Hero rescored 0.775, blocked).
+            #
             # Caught by Tier 1 UAT: Kobo returned "Mercy Temple
             # Chronicles: Collection 2" at confidence 0.44 when we
             # searched "Monster's Mercy 2", and its junk description
             # leaked into the review record because the merge fired
             # unconditionally.
+            is_cache_backed = getattr(result, "_from_cache", False)
             if (
                 not is_exact
+                and not is_cache_backed
                 and result.confidence < self.config.accept_confidence
             ):
                 _log.info(
@@ -503,7 +559,13 @@ class MetadataEnricher:
                 have_exact_id = True
                 continue  # we have the match; keep querying for covers/pages/etc.
             if result.confidence >= self.config.accept_confidence and not have_exact_id:
-                break  # good enough from a fuzzy source; stop here
+                # v2.29.0 — was `break` pre-fix. Now we flip the
+                # have_good_enough flag and keep iterating; the
+                # cheap-source gate at the top of the loop skips
+                # expensive sources but lets cache-backed sources
+                # contribute (notably the cache-first Amazon path).
+                have_good_enough = True
+                continue
 
         if merged is not None:
             merged._source_log = source_log  # type: ignore[attr-defined]
@@ -515,6 +577,8 @@ class MetadataEnricher:
         isbn: str = "",
         asin: str = "",
         author_goodreads_id: str = "",
+        author_amazon_id: str = "",
+        library_slug: str = "",
     ) -> Optional[MetaRecord]:
         # Clamp per-source timeout to the remaining global budget so a
         # slow late-stage source can't single-handedly blow the per-book
@@ -528,6 +592,8 @@ class MetadataEnricher:
                     title, author,
                     isbn=isbn, asin=asin,
                     author_goodreads_id=author_goodreads_id,
+                    author_amazon_id=author_amazon_id,
+                    library_slug=library_slug,
                 ),
                 timeout=timeout,
             )

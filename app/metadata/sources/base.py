@@ -117,19 +117,50 @@ class MetaSource:
         isbn: str = "",
         asin: str = "",
         author_goodreads_id: str = "",
+        author_amazon_id: str = "",
+        library_slug: str = "",
     ) -> Optional[MetaRecord]:
         """Search this source for a book matching title + author.
 
         Optional keyword args carry extra identifiers when the caller
         knows them. Sources that don't use a particular identifier
-        accept it (with `**_`) and ignore it. Today only GoodreadsSource
-        consumes them — its resolver chain (T1-T5) needs `isbn`/`asin`
-        for tiers 1-3 and `author_goodreads_id` for tiers 4-5.
+        accept it (with ``**_``) and ignore it. Two source families
+        consume them today:
 
-        Return the best match as a `MetaRecord`, or None if nothing
-        plausible came back. The enricher scores the result; sources
-        shouldn't self-score.
+        - **GoodreadsSource**: resolver chain (T1-T5) needs ``isbn`` /
+          ``asin`` for tiers 1-3 and ``author_goodreads_id`` for tiers
+          4-5.
+        - **AmazonSource** (v2.29.0): ``author_amazon_id`` +
+          ``library_slug`` activate the cache-first lookup path that
+          skips amazon.com/s and reads cached widget rows for the
+          author. Both kwargs together unlock the path; either alone
+          falls through to the live ``/s`` flow.
+
+        Return the best match as a ``MetaRecord``, or ``None`` if
+        nothing plausible came back. The enricher scores the result;
+        sources shouldn't self-score.
         """
         raise NotImplementedError(
             f"{self.__class__.__name__} does not implement search_book()"
         )
+
+    def is_cheap_for(
+        self,
+        *,
+        isbn: str = "",
+        asin: str = "",
+        author_goodreads_id: str = "",
+        author_amazon_id: str = "",
+        library_slug: str = "",
+    ) -> bool:
+        """Return True iff this source can answer the given lookup
+        without any outbound HTTP — typically because the answer
+        lives in a local cache.
+
+        Default ``False``. Sources opt in by overriding this method
+        and inspecting whatever identifiers they need. The enricher
+        uses the result to decide whether to short-circuit subsequent
+        sources after a good-enough fuzzy match (cheap sources still
+        run; expensive sources are skipped).
+        """
+        return False

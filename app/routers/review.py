@@ -450,8 +450,22 @@ async def re_enrich(review_id: int, body: SaveRequest) -> ReviewItem:
         # v2.13.2: anchor Goodreads' T4/T5 resolver tiers with the
         # author's stored goodreads_id when known. Empty string when
         # not — those tiers no-op cleanly.
-        from app.metadata.author_lookup import get_goodreads_id_for_author
+        # v2.29.0: also resolve target_library_slug + author_amazon_id
+        # so AmazonSource's cache-first path can activate on re-enrich
+        # exactly like it does in the pipeline. Pre-v2.29.0 rows have
+        # NULL `library_slug`, so derive from is_audiobook when missing.
+        from app.metadata.author_lookup import (
+            get_amazon_id_for_author,
+            get_goodreads_id_for_author,
+            get_library_slug_for_content_type,
+        )
+        target_library_slug = row.library_slug or get_library_slug_for_content_type(
+            "audiobook" if is_audiobook else "ebook"
+        )
         author_goodreads_id = await get_goodreads_id_for_author(author)
+        author_amazon_id = await get_amazon_id_for_author(
+            author, library_slug=target_library_slug or "",
+        )
         # v2.17.3: thread any ISBN/ASIN the user has on the review
         # row (file-embedded or hand-edited) into the resolver chain
         # so Goodreads' T1/T2 identifier tiers can fire even when
@@ -471,6 +485,8 @@ async def re_enrich(review_id: int, body: SaveRequest) -> ReviewItem:
             mam_token=_get_mam_token(),
             audiobook=is_audiobook,
             author_goodreads_id=author_goodreads_id,
+            author_amazon_id=author_amazon_id,
+            library_slug=target_library_slug or "",
         )
 
         if result is None:
