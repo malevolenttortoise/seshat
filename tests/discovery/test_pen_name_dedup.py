@@ -194,6 +194,31 @@ class TestFuzzyMatchBlocked:
         row = self._row("Super Sales 2", series_index=2.0)
         assert _fuzzy_match_blocked(bk, row) == "omnibus_mismatch"
 
+    # — AnimeCon Harem regression (v2.30.1) —
+
+    def test_colon_book_n_subtitle_blocks_sibling_volume_match(self):
+        """v2.30.1 regression: `_normalize("AnimeCon Harem: Book N")`
+        strips the colon-Book-N subtitle via `_RX_GENERIC_SUBTITLE`,
+        so all volumes of a series collapse to the same normalized
+        key. The lookup's exact-normalized match path picks the
+        lowest-numbered existing row and attaches every incoming
+        sibling's source URLs to it — Books 2 and 3 from every source
+        merged into Mark's owned Book 1 on the Fortysixtyfour scan
+        (2026-05-25). `_fuzzy_match_blocked` correctly extracts the
+        volume via `_title_extracted_index` and reports
+        `position_conflict`; the fix routes the exact-match path
+        through this same guard."""
+        bk = self._bk("AnimeCon Harem: Book 2", series_index=None)
+        row = self._row("AnimeCon Harem: Book 1", series_index=None)
+        assert _fuzzy_match_blocked(bk, row) == "position_conflict"
+
+    def test_colon_book_n_same_volume_does_not_block(self):
+        """Symmetric: the same-volume colon-Book-N case (a re-encounter
+        of Book 1 from a second source) must merge cleanly."""
+        bk = self._bk("AnimeCon Harem: Book 1", series_index=None)
+        row = self._row("AnimeCon Harem: Book 1", series_index=None)
+        assert _fuzzy_match_blocked(bk, row) is None
+
 
 # ─── _merge_result integration for pen-name dedup ────────────
 

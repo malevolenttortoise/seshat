@@ -1471,6 +1471,25 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                 if exclude_audiobooks and _is_audiobook(bk.title): continue
                 norm = _normalize(bk.title)
                 matched_row = rows_by_norm.get(norm)
+                # v2.30.1 — volume-conflict guard on the exact-normalized
+                # match path. `_normalize` strips "Book N" / "Volume N"
+                # subtitles via `_RX_GENERIC_SUBTITLE`, so every volume
+                # of a series can collapse to the same key (e.g.
+                # "AnimeCon Harem: Book 1/2/3" all → "animecon harem")
+                # and merge into the lowest-numbered existing row. The
+                # fuzzy path already ran this check; mirror it here so
+                # both paths reject series-sibling collisions
+                # symmetrically. Caught 2026-05-25 on the Fortysixtyfour
+                # scan where Books 2 and 3 from 5 sources merged into
+                # Mark's owned Book 1.
+                if matched_row is not None:
+                    reason = _fuzzy_match_blocked(bk, matched_row)
+                    if reason:
+                        logger.debug(
+                            f"    EXACT MATCH REJECTED ({reason}): "
+                            f"'{bk.title}' vs '{matched_row['title']}'"
+                        )
+                        matched_row = None
                 # ISBN merge: strongest dedup signal — same ISBN = same book
                 if matched_row is None and bk.isbn:
                     clean_isbn = bk.isbn.strip().replace("-", "")
@@ -1653,6 +1672,18 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
             if exclude_audiobooks and _is_audiobook(bk.title): continue
             norm = _normalize(bk.title)
             matched_row = rows_by_norm.get(norm)
+            # v2.30.1 — mirror the volume-conflict guard from the series
+            # path above onto this standalone path. Same rationale:
+            # exact-normalized match can falsely match siblings whose
+            # only disambiguator was the stripped "Book N" subtitle.
+            if matched_row is not None:
+                reason = _fuzzy_match_blocked(bk, matched_row)
+                if reason:
+                    logger.debug(
+                        f"    EXACT MATCH REJECTED ({reason}): "
+                        f"'{bk.title}' vs '{matched_row['title']}'"
+                    )
+                    matched_row = None
             if matched_row is None and bk.isbn:
                 clean_isbn = bk.isbn.strip().replace("-", "")
                 if clean_isbn in rows_by_isbn:
