@@ -139,18 +139,29 @@ async def send(
 
 async def _emit(
     *,
-    kind: str,
+    bus_event: str,
+    digest_kind: str,
     title: str,
     message: str,
-    priority: int = 3,
-    tags: Optional[list[str]] = None,
 ) -> bool:
-    """Either send immediately or enqueue for digest, based on settings."""
+    """Either enqueue for digest or route through the notification bus.
+
+    The bus handles gating (legacy + new shape), topic routing, quiet
+    hours, and priority overrides. ``digest_kind`` is only consulted
+    when the digest queue is on — it remains the string tag used by
+    ``app.digest.flush_digest`` to consolidate per-section.
+    """
     s = load_settings()
     if s.get("ntfy_digest_enabled"):
-        await enqueue_digest(DigestEvent(kind=kind, title=title, message=message))
+        # Pre-flight the enable gate so events the user has turned off
+        # don't accumulate in the digest queue waiting to be flushed.
+        from app.notifications import bus
+        if not bus.is_enabled(bus_event):
+            return False
+        await enqueue_digest(DigestEvent(kind=digest_kind, title=title, message=message))
         return True
-    return await send(title=title, message=message, priority=priority, tags=tags)
+    from app.notifications import bus
+    return await bus.emit(bus_event, title=title, message=message)
 
 
 # ─── Event-specific senders ─────────────────────────────────
@@ -163,18 +174,17 @@ async def notify_scan_complete(
     No-op if `new_books` is zero."""
     if new_books <= 0:
         return False
-    s = load_settings()
-    if not s.get("ntfy_on_scan_complete", True):
-        return False
     if authors_total <= 1:
         title = f"Scan complete: {label}"
         message = f"{new_books} new book(s) found"
     else:
         title = f"{label} complete"
         message = f"{new_books} new book(s) across {authors_total} author(s)"
+    from app.notifications import events
     return await _emit(
-        kind="scan_complete", title=title, message=message,
-        tags=["books", "mag"],
+        bus_event=events.DISCOVERY_SCAN_COMPLETE,
+        digest_kind="scan_complete",
+        title=title, message=message,
     )
 
 
@@ -183,70 +193,59 @@ async def notify_new_books(author_name: str, count: int) -> bool:
     user wants per-author granularity in addition to the summary."""
     if count <= 0:
         return False
-    s = load_settings()
-    if not s.get("ntfy_on_new_books", True):
-        return False
+    from app.notifications import events
     return await _emit(
-        kind="new_books",
+        bus_event=events.DISCOVERY_NEW_BOOKS,
+        digest_kind="new_books",
         title=f"New books: {author_name}",
         message=f"{count} new book(s) discovered",
-        tags=["books", "sparkles"],
     )
 
 
 async def notify_mam_scan_complete(
     scanned: int, found: int, possible: int, not_found: int,
 ) -> bool:
-    s = load_settings()
-    if not s.get("ntfy_on_mam_complete", True):
-        return False
+    from app.notifications import events
     return await _emit(
-        kind="mam",
+        bus_event=events.DISCOVERY_MAM_COMPLETE,
+        digest_kind="mam",
         title="MAM scan complete",
         message=(
             f"Scanned {scanned} books\n"
             f"Found: {found} · Possible: {possible} · Not found: {not_found}"
         ),
-        tags=["mag"],
     )
 
 
 async def notify_pipeline_sent(sent: int, skipped: int) -> bool:
     if sent <= 0:
         return False
-    s = load_settings()
-    if not s.get("ntfy_on_pipeline_sent", True):
-        return False
+    from app.notifications import events
     return await _emit(
-        kind="pipeline",
+        bus_event=events.DISCOVERY_PIPELINE_SENT,
+        digest_kind="pipeline",
         title=f"Sent {sent} book(s) to pipeline",
         message=f"{sent} queued for download" + (f", {skipped} skipped" if skipped else ""),
-        tags=["arrow_down", "books"],
     )
 
 
 async def notify_library_sync(library_name: str, new: int, updated: int) -> bool:
-    s = load_settings()
-    if not s.get("ntfy_on_library_sync", False):
-        return False
     if new == 0 and updated == 0:
         return False
+    from app.notifications import events
     return await _emit(
-        kind="library",
+        bus_event=events.SYNC_LIBRARY,
+        digest_kind="library",
         title=f"Library synced: {library_name}",
         message=f"{new} new, {updated} updated",
-        tags=["books"],
     )
 
 
 async def notify_mam_cookie_rotated() -> bool:
-    s = load_settings()
-    if not s.get("ntfy_on_mam_cookie_rotated", False):
-        return False
+    from app.notifications import events
     return await _emit(
-        kind="cookie",
+        bus_event=events.SYNC_MAM_COOKIE_ROTATED,
+        digest_kind="cookie",
         title="MAM cookie rotated",
         message="Session token automatically refreshed",
-        priority=2,
-        tags=["key"],
     )

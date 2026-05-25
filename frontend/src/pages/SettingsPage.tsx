@@ -3,6 +3,7 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from "
 import { Btn } from "../components/Btn";
 import { Spin } from "../components/Spin";
 import { MetadataSourcesPanel } from "../components/MetadataSourcesPanel";
+import { NotificationRoutingPanel } from "../components/NotificationRoutingPanel";
 import { api } from "../api";
 import { useTheme } from "../theme";
 import { useViewport } from "../hooks/useViewport";
@@ -1562,6 +1563,10 @@ function DesktopSettingsPage() {
               <button onClick={() => setUse12h(!use12h)} style={{ background: "none", border: "none", color: t.accent, cursor: "pointer", fontSize: 11, fontWeight: 600 }}>{use12h ? "24h" : "12h"}</button>
             </div>
           </SF>
+          {/* v2.28.0 — Bundle B.2 per-event routing + quiet hours.
+              Lives at the bottom of the notifications section so the
+              legacy toggles above stay the obvious first-pass surface. */}
+          <NotificationRoutingPanel s={s} upd={upd} />
         </></SectionScope>}
 
         {showSection("quality") && <SectionScope id="quality"><>

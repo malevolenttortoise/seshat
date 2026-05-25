@@ -606,6 +606,24 @@ DEFAULT_SETTINGS = {
     "notify_daily_tentative": True,
     "notify_daily_ignored": True,
     "notify_weekly_digest": True,
+    # v2.28.0 — Bundle B.2 notification taxonomy + routing + quiet hours.
+    # The legacy `notify_on_*` / `ntfy_on_*` keys above remain the
+    # source of truth until a user writes through this nested shape;
+    # `app.notifications.bus.is_enabled` consults the nested form
+    # first and falls back to the legacy keys when absent. Empty
+    # default = "no opinion yet, use legacy gates" so existing
+    # installs upgrade silently. See app/notifications/events.py
+    # for the catalogue of event names valid under `.events.<name>`.
+    "notifications": {
+        "master_enabled": True,
+        "events": {},
+        "quiet_hours": {
+            "enabled": False,
+            "start": "23:00",
+            "end": "07:00",
+            "timezone": "",
+        },
+    },
     # Download folder structure options.
     # "monthly" = [YYYY-MM]/ subfolders (default)
     # "yearly"   = [YYYY]/ subfolders
