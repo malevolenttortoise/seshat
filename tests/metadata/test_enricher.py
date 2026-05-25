@@ -565,3 +565,179 @@ class TestStripSeriesDecorator:
         assert _strip_series_decorator(
             "Monster's Mercy: book 2"
         ) == "Monster's Mercy 2"
+
+
+# ─── F3 — cheap-source short-circuit gate ────────────────────
+
+
+class _CheapSource(MetaSource):
+    """Test double: a source that always returns ``True`` from
+    ``is_cheap_for`` so the F3 gate lets it run even after a
+    good-enough fuzzy match locked in."""
+
+    def __init__(self, *, name: str, result: Optional[MetaRecord] = None):
+        super().__init__(rate_limit=0)
+        self.__class__.name = name
+        self.name = name
+        self._result = result
+        self.call_count = 0
+
+    async def search_book(self, title, author, **_):
+        self.call_count += 1
+        return self._result
+
+    def is_cheap_for(self, **_) -> bool:
+        return True
+
+
+class TestF3CheapSourceGate:
+    async def test_cheap_source_runs_after_good_enough(self):
+        """Fuzzy source #1 returns confidence ≥ accept_confidence;
+        pre-v2.29.0 the loop `break`-ed here. Now: cheap source #2
+        still runs and contributes."""
+        cfg = EnrichmentConfig(enabled=True, accept_confidence=0.6)
+        fuzzy = _FakeSource(
+            name="hardcover",
+            result=MetaRecord(
+                title="Idle Village Hero",
+                authors=["Leon West"],
+                source="hardcover",
+                description="Hardcover desc",
+            ),
+        )
+        cheap = _CheapSource(
+            name="amazon",
+            result=MetaRecord(
+                title="Idle Village Hero",
+                authors=["Leon West"],
+                source="amazon",
+                cover_url="https://amzn/cover.jpg",
+                external_id="B0DVMMJJGZ",
+            ),
+        )
+        enricher = MetadataEnricher(cfg, sources=[fuzzy, cheap])
+
+        result = await enricher.enrich(
+            title="Idle Village Hero", author="Leon West",
+        )
+        assert result is not None
+        assert cheap.call_count == 1, "cheap source must run after good-enough"
+        assert result.cover_url == "https://amzn/cover.jpg"
+        # Source-log should record amazon as matched, not skipped.
+        log = getattr(result, "_source_log", [])
+        amazon_entry = next((e for e in log if e["source"] == "amazon"), None)
+        assert amazon_entry is not None
+        assert amazon_entry["status"] == "matched"
+
+    async def test_expensive_source_skipped_after_good_enough(self):
+        """The default ``is_cheap_for`` returns False; a non-cheap
+        source after a good-enough match should be gated out with
+        source_log status ``skipped_cheap_gate``."""
+        cfg = EnrichmentConfig(enabled=True, accept_confidence=0.6)
+        fuzzy = _FakeSource(
+            name="hardcover",
+            result=MetaRecord(
+                title="Test Book",
+                authors=["Test Author"],
+                source="hardcover",
+            ),
+        )
+        expensive = _FakeSource(
+            name="openlibrary",
+            result=MetaRecord(title="X", authors=["Y"], source="openlibrary"),
+        )
+        enricher = MetadataEnricher(cfg, sources=[fuzzy, expensive])
+
+        result = await enricher.enrich(
+            title="Test Book", author="Test Author",
+        )
+        assert result is not None
+        # Expensive source must NOT have been called.
+        assert expensive.call_count == 0
+        log = getattr(result, "_source_log", [])
+        ol_entry = next(
+            (e for e in log if e["source"] == "openlibrary"), None
+        )
+        assert ol_entry is not None
+        assert ol_entry["status"] == "skipped_cheap_gate"
+
+    async def test_exact_id_match_runs_every_source_regardless(self):
+        """MAM exact-ID matches set ``have_exact_id=True`` which
+        disables the cheap-source gate entirely — every subsequent
+        source still runs so they can fill in supplemental fields
+        (covers, page counts, etc.)."""
+        cfg = EnrichmentConfig(enabled=True, accept_confidence=0.6)
+        mam_exact = _FakeSource(
+            name="mam",
+            result=MetaRecord(
+                title="Exact-ID Book",
+                authors=["Author"],
+                source="mam",
+                confidence=1.0,  # pinned exact-ID
+            ),
+        )
+        # Two follow-up sources, NEITHER cheap, both must still run.
+        ol = _FakeSource(
+            name="openlibrary",
+            result=MetaRecord(
+                title="Exact-ID Book",
+                authors=["Author"],
+                source="openlibrary",
+                page_count=300,
+            ),
+        )
+        gb = _FakeSource(
+            name="google_books",
+            result=MetaRecord(
+                title="Exact-ID Book",
+                authors=["Author"],
+                source="google_books",
+            ),
+        )
+        enricher = MetadataEnricher(cfg, sources=[mam_exact, ol, gb])
+
+        result = await enricher.enrich(
+            title="Exact-ID Book", author="Author",
+        )
+        assert result is not None
+        assert ol.call_count == 1
+        assert gb.call_count == 1
+        assert result.page_count == 300
+
+    async def test_cheap_source_threads_amazon_id_to_is_cheap_for(self):
+        """The gate must pass the resolver identifiers through to
+        ``is_cheap_for`` so a source can use them in its decision."""
+        seen: dict = {}
+
+        class _IntrospectingCheap(MetaSource):
+            name = "amazon"
+
+            def __init__(self):
+                super().__init__(rate_limit=0)
+                self.call_count = 0
+
+            async def search_book(self, title, author, **_):
+                self.call_count += 1
+                return None
+
+            def is_cheap_for(self, **kw) -> bool:
+                seen.update(kw)
+                return True
+
+        cfg = EnrichmentConfig(enabled=True, accept_confidence=0.6)
+        fuzzy = _FakeSource(
+            name="hardcover",
+            result=MetaRecord(
+                title="Test", authors=["X"], source="hardcover",
+            ),
+        )
+        amz = _IntrospectingCheap()
+        enricher = MetadataEnricher(cfg, sources=[fuzzy, amz])
+        await enricher.enrich(
+            title="Test", author="X",
+            author_amazon_id="B0CMJC56GQ",
+            library_slug="calibre-library",
+        )
+
+        assert seen.get("author_amazon_id") == "B0CMJC56GQ"
+        assert seen.get("library_slug") == "calibre-library"
