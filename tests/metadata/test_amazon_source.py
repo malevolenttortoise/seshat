@@ -256,6 +256,11 @@ class TestF1CacheFirst:
         assert result.cover_url == "https://amzn/cover.jpg"
         # Series filled from cache row.
         assert result.series == "Tale Series"
+        # Authors populated with the search author so the enricher's
+        # re-score sees author overlap (otherwise cache hits land
+        # below the 0.8 accept_confidence threshold via title-only
+        # scoring — observed live as Master Alvin at 0.77 → below_threshold).
+        assert result.authors == ["Author"]
         # Exactly ONE detail fetch — no /s call, no second detail.
         detail_fetches = [u for u in fetches if "/dp/" in u]
         assert detail_fetches == ["https://www.amazon.com/dp/B000CACHEK"]

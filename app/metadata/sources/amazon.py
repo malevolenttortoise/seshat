@@ -374,6 +374,16 @@ class AmazonSource(MetaSource):
         # Cache-row fields fill gaps the detail-page parse didn't cover
         # (cover_url, series, language, isbn).
         record = _merge_cache_into_record(record, best_row)
+        # Cache-first verified the author identity via author_id — set
+        # ``authors`` to the search author so the enricher's re-score
+        # gets author-overlap credit. Pre-this-fix `_parse_detail_page`
+        # always returned authors=[], dropping the score's author
+        # contribution to 0 and stranding cache hits below the 0.8
+        # accept_confidence threshold even though the book identity
+        # was confirmed (Master Alvin came in at 0.77, status
+        # below_threshold, so its cover never merged).
+        if author and not record.authors:
+            record.authors = [author]
         try:
             record._from_cache = True  # type: ignore[attr-defined]
         except Exception:
