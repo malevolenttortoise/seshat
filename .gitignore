@@ -29,6 +29,7 @@ htmlcov/
 
 # Seshat runtime
 data/
+files/
 *.db
 *.db-shm
 *.db-wal
