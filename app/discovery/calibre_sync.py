@@ -26,7 +26,7 @@ import logging
 import os
 from pathlib import Path
 from app.config import CALIBRE_DB_PATH, CALIBRE_LIBRARY_PATH
-from app.discovery.database import get_db, _norm_series_name
+from app.discovery.database import get_db, _norm_series_name, write_book_authors
 from app import state
 
 logger = logging.getLogger("seshat.discovery.calibre_sync")
@@ -1030,6 +1030,18 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
                 book["series"][0]["name"] if book["series"] else None
             )
 
+            # v3.0.0 Phase 2 — resolve the full ordered author list
+            # for the join-table write. `author_map` is keyed on
+            # Calibre author id, populated in Pass 1 above. Missing
+            # entries (rare — orphan link) are dropped, the rest
+            # preserve Calibre's array order so position 0 stays the
+            # primary author the user sees in Calibre.
+            resolved_author_ids = [
+                author_map[a["id"]]
+                for a in book["authors"]
+                if a.get("id") in author_map
+            ]
+
             if row:
                 # v2.3: structural fields (identity-tier) are written
                 # through directly. User-editable metadata fields go
@@ -1050,6 +1062,11 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
                 await _write_calibre_snapshot(
                     db, row["id"], book, cal_series_name
                 )
+                # v3.0.0 Phase 2 — dual-write to book_authors so the
+                # join table stays in lockstep with Calibre's view
+                # (drops co-authors removed since the last sync, adds
+                # new ones, positions match Calibre's ordering).
+                await write_book_authors(db, row["id"], resolved_author_ids)
                 progress["books_updated"] += 1
                 logger.debug(f"  Calibre: updated '{book['title']}' (calibre_id={book['book_id']}, tags={book['tags']}, rating={book['rating']})")
                 # v2.10.0 post-UPDATE merge sweep. When a user edits
@@ -1144,6 +1161,12 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
                     await _write_calibre_snapshot(
                         db, target_id, book, cal_series_name
                     )
+                    # v3.0.0 Phase 2 — see UPDATE branch above for rationale.
+                    # The merge target may have an existing book_authors
+                    # row populated by Phase 1B backfill from the unowned
+                    # source-discovered row; this overwrites with the
+                    # newly-arrived Calibre author tuple.
+                    await write_book_authors(db, target_id, resolved_author_ids)
                     progress["books_updated"] += 1
                     unhide_note = ", unhidden" if was_hidden else ""
                     logger.info(
@@ -1176,6 +1199,12 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
                     )
                     await _write_calibre_snapshot(
                         db, new_book_id, book, cal_series_name
+                    )
+                    # v3.0.0 Phase 2 — populate book_authors for the
+                    # newly-inserted row. No prior links to delete;
+                    # write_book_authors handles that case fine.
+                    await write_book_authors(
+                        db, new_book_id, resolved_author_ids,
                     )
                     # v2.3.7 acquisition link-back. Symmetric with ABS
                     # sync — if this Calibre book corresponds to a

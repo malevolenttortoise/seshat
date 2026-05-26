@@ -1073,6 +1073,58 @@ async def _backfill_book_authors(db) -> int:
     return added
 
 
+async def write_book_authors(
+    db, book_id: int, author_ids_in_order: list[int],
+) -> int:
+    """v3.0.0 Phase 2 — replace this book's ``book_authors`` rows.
+
+    Called from the sync writers (calibre_sync, audiobookshelf_sync)
+    on every INSERT or UPDATE of a ``books`` row so the join table
+    stays in lockstep with the upstream library's author tuple. Order
+    of ``author_ids_in_order`` becomes ``book_authors.position``
+    (0 = primary, 1..N-1 = co-authors).
+
+    Strategy: DELETE existing links for this book, then INSERT the
+    new ordered set. This handles the case where a user dropped a
+    co-author from Calibre between syncs (or fixed a duplicated
+    entry) — the previous Phase 1B "INSERT OR IGNORE" semantics
+    would have left the dropped author stranded.
+
+    No-ops cleanly when ``author_ids_in_order`` is empty (a sync that
+    can't resolve any author leaves the book's links untouched
+    rather than wiping them — defensive against transient resolution
+    failures).
+
+    Caller is responsible for the commit. Returns the count of rows
+    inserted (after dedup), or 0 if no resolution happened.
+    """
+    if not author_ids_in_order:
+        return 0
+    # Deduplicate while preserving order — a single author listed
+    # twice in the source collapses to one row, kept at the earlier
+    # position.
+    seen: set[int] = set()
+    ordered: list[int] = []
+    for aid in author_ids_in_order:
+        if aid is None or aid in seen:
+            continue
+        seen.add(aid)
+        ordered.append(aid)
+    if not ordered:
+        return 0
+    await db.execute(
+        "DELETE FROM book_authors WHERE book_id = ?", (book_id,)
+    )
+    for pos, aid in enumerate(ordered):
+        await db.execute(
+            "INSERT INTO book_authors "
+            "(book_id, author_id, position, role) "
+            "VALUES (?, ?, ?, NULL)",
+            (book_id, aid, pos),
+        )
+    return len(ordered)
+
+
 async def _dedupe_author_rows(db) -> int:
     """Collapse author rows whose `normalized_name` matches.
 
