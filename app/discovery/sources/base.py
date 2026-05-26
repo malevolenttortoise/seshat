@@ -40,6 +40,62 @@ def _redact_sensitive(s: object) -> str:
 # ─── Result Types ────────────────────────────────────────────
 
 @dataclass
+class Contributor:
+    """A single contributor to a book, as reported by a source.
+
+    v3.0.0 Phase 3 — sources populate ``BookResult.contributors`` with
+    the ordered contributor list parsed from a book / edition page.
+
+    ``role`` is the source's raw role label, left None (or "") for the
+    plain author role. The role-filter (`contributor_is_author`)
+    ALLOWLISTS the empty/author role and DROPS any non-empty label
+    (translator, illustrator, narrator, colorist, …). We never
+    blocklist specific role strings: role vocabularies are inconsistent
+    and localized across sources (one Hardcover edition tagged the
+    illustrator ``"Illustratore"`` in Italian; Amazon says ``Artist``,
+    Goodreads ``Colorist``), so the only robust reading of "drop on
+    ambiguity" is to accept solely the unambiguous author role.
+
+    ``source_author_id`` + ``image_url`` are captured now even though
+    Phase 3 only writes ``book_authors`` (author_id ints). They sit in
+    the same payload node as the name — nearly free to grab — and
+    pre-wire the v3.x author-ID / image enrichment arc (persons-identity
+    strengthening, author-image rework, role-aware match scoring).
+    """
+    name: str
+    role: Optional[str] = None
+    source_author_id: Optional[str] = None
+    image_url: Optional[str] = None
+
+
+def contributor_is_author(role: Optional[str]) -> bool:
+    """Return True only for the unambiguous author role.
+
+    v3.0.0 Phase 3 locked decision — ALLOWLIST the empty / ``"author"``
+    role; DROP every other label. Never blocklist role names (see
+    `Contributor` for why). This is the robust reading of Decision 4
+    ("drop on ambiguity rather than misattribute").
+    """
+    if role is None:
+        return True
+    r = role.strip().lower()
+    return r == "" or r == "author"
+
+
+# v3.0.0 Phase 3 — sources permitted to MINT a new per-library author
+# row for an unmatched, role-filtered co-author ("trusted-create").
+# Goodreads / Amazon / Hardcover / Audible (Audnexus) carry clean,
+# role-typed author data; MAM has no role field but `author_info` is
+# sanitized to real authors by uploader policy (translators/etc. go in
+# other fields). OpenLibrary + Google Books emit flat, untyped lists
+# that lump illustrators into the author field, so they are LINK-ONLY
+# everywhere else — resolve against EXISTING author rows, never mint.
+TRUSTED_CREATE_SOURCES: frozenset[str] = frozenset({
+    "goodreads", "amazon", "hardcover", "audible", "mam",
+})
+
+
+@dataclass
 class BookResult:
     title: str
     series_name: Optional[str] = None
@@ -83,6 +139,12 @@ class BookResult:
     goodreads_id: Optional[str] = None
     openlibrary_id: Optional[str] = None
     google_books_id: Optional[str] = None
+    # v3.0.0 Phase 3 — ordered contributor list parsed by the source.
+    # Empty for every source until its per-source 3.2+ parser populates
+    # it, which keeps the lookup-side `book_authors` write dormant (the
+    # 3.1 contract: zero behavior change until sources emit this). See
+    # `Contributor` for role/ID/image semantics and the role-filter.
+    contributors: list["Contributor"] = field(default_factory=list)
 
 
 @dataclass

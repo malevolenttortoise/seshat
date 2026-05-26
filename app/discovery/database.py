@@ -10,6 +10,7 @@ import asyncio
 import logging
 import re
 from collections import defaultdict
+from typing import Optional
 import aiosqlite
 from app.config import DATA_DIR
 
@@ -1123,6 +1124,73 @@ async def write_book_authors(
             (book_id, aid, pos),
         )
     return len(ordered)
+
+
+async def resolve_or_create_author(
+    db, name: str, *, allow_create: bool,
+) -> Optional[int]:
+    """v3.0.0 Phase 3 — resolve a source-reported contributor name to a
+    per-library ``authors.id`` (the FK target of ``book_authors``).
+
+    Matching mirrors `get_or_create_person`'s staged approach, but on
+    the per-library ``authors`` table rather than the cross-library
+    ``persons`` table:
+
+      1. Exact match on ``name`` (the table's UNIQUE key).
+      2. Exact match on ``normalized_name``.
+      3. Fuzzy match via ``authors_match`` (SequenceMatcher ≥ 0.92)
+         over existing rows — catches punctuation / initials drift
+         ("A K DuBoff" vs "A. K. DuBoff").
+
+    On a miss, the source's trust level decides:
+      - ``allow_create=True`` (trusted-create source) → INSERT a
+        name-only author row (``sort_name`` defaults to the display
+        name, mirroring author_mirror's stub pattern) and return its id.
+      - ``allow_create=False`` (link-only source) → return None; the
+        contributor is dropped rather than minting an unvetted row.
+
+    Caller owns the commit — the discovery INSERT path commits the
+    whole scan batch at once, and an uncommitted author row is already
+    visible to the subsequent ``book_authors`` INSERT on the same
+    connection (so the FK is satisfied without an interim commit).
+
+    Returns the author_id, or None on an empty name / link-only miss.
+    """
+    from app.metadata.author_names import normalize_author_name, authors_match
+    name = (name or "").strip()
+    if not name:
+        return None
+    # 1. Exact display name.
+    row = await (await db.execute(
+        "SELECT id FROM authors WHERE name = ?", (name,),
+    )).fetchone()
+    if row:
+        return row["id"]
+    normalized = normalize_author_name(name)
+    if normalized:
+        # 2. Exact normalized name.
+        row = await (await db.execute(
+            "SELECT id FROM authors WHERE normalized_name = ?", (normalized,),
+        )).fetchone()
+        if row:
+            return row["id"]
+        # 3. Fuzzy over existing rows. Only runs on a miss (a genuinely
+        # new contributor), so the full-table scan is bounded in
+        # practice — same cost rationale as get_or_create_person.
+        rows = await (await db.execute(
+            "SELECT id, name FROM authors"
+        )).fetchall()
+        for r in rows:
+            if authors_match(name, r["name"] or ""):
+                return r["id"]
+    if not allow_create:
+        return None
+    cur = await db.execute(
+        "INSERT INTO authors (name, sort_name, normalized_name) "
+        "VALUES (?, ?, ?)",
+        (name, name, normalized or name),
+    )
+    return cur.lastrowid
 
 
 async def _dedupe_author_rows(db) -> int:

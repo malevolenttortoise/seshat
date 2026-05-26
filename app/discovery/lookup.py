@@ -34,7 +34,7 @@ from typing import Any, Optional
 from difflib import SequenceMatcher
 import aiosqlite
 from app.config import load_settings
-from app.discovery.database import get_db
+from app.discovery.database import get_db, write_book_authors, resolve_or_create_author
 from app.discovery.sources.hardcover import HardcoverSource
 from app.discovery.sources.openlibrary import OpenLibrarySource
 from app.discovery.sources.goodreads import GoodreadsSource
@@ -49,7 +49,11 @@ from app.discovery.metadata_cache_reader import make_amazon_cached_source
 from app.discovery.sources.ibdb import IbdbSource
 from app.discovery.sources.google_books import GoogleBooksSource
 from app.discovery.sources.audible import AudibleDiscoverySource
-from app.discovery.sources.base import AuthorResult
+from app.discovery.sources.base import (
+    AuthorResult,
+    TRUSTED_CREATE_SOURCES,
+    contributor_is_author,
+)
 from app import state
 
 logger = logging.getLogger("seshat.discovery.lookup")
@@ -862,6 +866,43 @@ async def _validate_author(author_name: str, our_titles: list[str], result: Auth
     return False
 
 
+async def _link_discovered_contributors(db, book_id: int, scanned_author_id: int, bk, source_name: str) -> None:
+    """v3.0.0 Phase 3 — populate ``book_authors`` for a freshly-inserted
+    discovered book from the source's contributor list.
+
+    DORMANT until per-source parsers populate ``bk.contributors`` (the
+    3.2+ work): with an empty list this returns immediately, so step
+    3.1 ships zero behavior change. Once a source emits contributors:
+
+      - role-filter (`contributor_is_author` — allowlist the author
+        role, drop translators / illustrators / narrators / …),
+      - trusted-create gate (`TRUSTED_CREATE_SOURCES` keyed on
+        ``source_name`` — Goodreads/Amazon/Hardcover/Audible/MAM may
+        MINT an unmatched co-author; OpenLibrary/Google Books resolve
+        link-only), then
+      - `write_book_authors` records the ordered set
+        (position 0 = the source's primary).
+
+    The scanned author is guaranteed a link (appended if the source's
+    list omits or misspells them) so a discovered book is never
+    orphaned from the author whose scan surfaced it. Caller owns the
+    commit (same connection/transaction as the books INSERT).
+    """
+    if not bk.contributors:
+        return
+    allow_create = source_name in TRUSTED_CREATE_SOURCES
+    ordered: list[int] = []
+    for c in bk.contributors:
+        if not contributor_is_author(c.role):
+            continue
+        aid = await resolve_or_create_author(db, c.name, allow_create=allow_create)
+        if aid is not None:
+            ordered.append(aid)
+    if scanned_author_id not in ordered:
+        ordered.append(scanned_author_id)
+    await write_book_authors(db, book_id, ordered)
+
+
 async def _merge_result(author_id: int, result: AuthorResult, source_name: str, languages: list[str], full_scan: bool = False, owned_only: bool = False, series_collector: dict | None = None, on_new_book=None, exclude_audiobooks: bool = True, linked_author_ids: list[int] = None, link_type_by_id: dict[int, str] | None = None):
     """Merge an AuthorResult, filtering by language. In full_scan mode, updates metadata on existing books.
 
@@ -1657,8 +1698,10 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                 _xcols, _xvals = _cross_source_id_inserts(bk)
                 _x_col_sql = ("," + ",".join(_xcols)) if _xcols else ""
                 _x_q_sql = ("," + ",".join(["?"] * len(_xcols))) if _xcols else ""
-                await db.execute(f"INSERT OR IGNORE INTO books (title,author_id,series_id,series_index,isbn,cover_url,pub_date,expected_date,is_unreleased,description,page_count,source,source_url,owned,is_new,is_omnibus,{source_name}_id,amazon_format_asins{_x_col_sql}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,1,?,?,?{_x_q_sql})",
+                _ins_cur = await db.execute(f"INSERT OR IGNORE INTO books (title,author_id,series_id,series_index,isbn,cover_url,pub_date,expected_date,is_unreleased,description,page_count,source,source_url,owned,is_new,is_omnibus,{source_name}_id,amazon_format_asins{_x_col_sql}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,1,?,?,?{_x_q_sql})",
                     (bk.title, author_id, sid_use, s_idx, bk.isbn, bk.cover_url, bk.pub_date, bk.expected_date, 1 if bk.is_unreleased else 0, bk.description, bk.page_count, source_name, initial_urls, 1 if omnibus else 0, bk.external_id, bk.amazon_format_asins, *_xvals))
+                if _ins_cur.rowcount and _ins_cur.lastrowid:
+                    await _link_discovered_contributors(db, _ins_cur.lastrowid, author_id, bk, source_name)
                 existing.add(norm); new_books += 1
                 if on_new_book:
                     on_new_book()
@@ -1790,8 +1833,10 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
             _xcols, _xvals = _cross_source_id_inserts(bk)
             _x_col_sql = ("," + ",".join(_xcols)) if _xcols else ""
             _x_q_sql = ("," + ",".join(["?"] * len(_xcols))) if _xcols else ""
-            await db.execute(f"INSERT OR IGNORE INTO books (title,author_id,isbn,cover_url,pub_date,expected_date,is_unreleased,description,page_count,source,source_url,owned,is_new,is_omnibus,{source_name}_id,amazon_format_asins{_x_col_sql}) VALUES (?,?,?,?,?,?,?,?,?,?,?,0,1,?,?,?{_x_q_sql})",
+            _ins_cur = await db.execute(f"INSERT OR IGNORE INTO books (title,author_id,isbn,cover_url,pub_date,expected_date,is_unreleased,description,page_count,source,source_url,owned,is_new,is_omnibus,{source_name}_id,amazon_format_asins{_x_col_sql}) VALUES (?,?,?,?,?,?,?,?,?,?,?,0,1,?,?,?{_x_q_sql})",
                 (bk.title, author_id, bk.isbn, bk.cover_url, bk.pub_date, bk.expected_date, 1 if bk.is_unreleased else 0, bk.description, bk.page_count, source_name, initial_urls, 1 if omnibus else 0, bk.external_id, bk.amazon_format_asins, *_xvals))
+            if _ins_cur.rowcount and _ins_cur.lastrowid:
+                await _link_discovered_contributors(db, _ins_cur.lastrowid, author_id, bk, source_name)
             existing.add(norm); new_books += 1
             if on_new_book:
                 on_new_book()
