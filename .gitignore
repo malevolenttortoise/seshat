@@ -51,6 +51,9 @@ scratch/
 .tmp/
 *.tsbuildinfo
 
+# Understand Anything knowledge graph — local-only codebase analysis artifacts
+.understand-anything/
+
 # Local dev stack — Docker Compose sandbox for testing destructive
 # features (Phase 5b file-swap, etc.) against real Calibre + CWA + ABS
 # on Mark's Bazzite PC. Entire directory (configs + scripts + data) is
