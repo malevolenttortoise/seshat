@@ -17,6 +17,7 @@ This glossary is **seeded, not complete** — only the most stable, load-bearing
 - **Discovery** — the review-only surface that *proposes* books to add, distinct from reactive auto-grab. Candidates land in a queue for a human decision.
 - **Possible** — a discovery candidate match awaiting review (approve / hide / dismiss). Scoring tries to keep genuine Possibles separate from phantom ones.
 - **Source** — an external metadata provider (Goodreads, Amazon, Hardcover, Audnexus, OpenLibrary, Google Books, MAM itself). Each source may expose its own author/work IDs.
+- **Discovery source vs. matching source** — most sources are *discovery* sources: they implement `search_author()` → `AuthorResult`/`BookResult` and flow through `lookup._merge_result`, which can create discovered book rows. **MAM is NOT a discovery source** — it has no `search_author`/`BookResult`; it only *matches* announces/owned books to torrents and *enriches* (its `author_info` feeds match/score/dedup). MAM never creates a discovered book. A grabbed MAM torrent's authors reach `book_authors` via the **owned path** (Calibre/ABS ingest → Phase 2 sync), and its full authorlist is added to the `authors_allowed` filter list by grab-completion auto-train (`train_authors_from_blob`). MAM is "trusted-create" for authors (we trust its list) but only in that enrichment path, never to discover/insert new *books*.
 - **Enrichment** — fetching and merging metadata from sources onto a book/author.
 
 ## Library, identity, and sync
