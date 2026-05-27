@@ -38,7 +38,7 @@ import asyncio
 import re
 import httpx, logging
 from typing import Optional
-from app.discovery.sources.base import BaseSource, AuthorResult, BookResult, SeriesResult
+from app.discovery.sources.base import BaseSource, AuthorResult, BookResult, SeriesResult, Contributor
 
 logger = logging.getLogger("seshat.discovery.hardcover")
 API = "https://api.hardcover.app/v1/graphql"
@@ -154,6 +154,45 @@ def _pick_best_series(candidates: list, owned_norms: set) -> dict:
     candidates_sorted = sorted(candidates, key=_score, reverse=True)
     return candidates_sorted[0]
 
+
+def _parse_hardcover_contributors(book: dict) -> list[Contributor]:
+    """v3.0.0 Phase 3.3 — parse a book's contributor list.
+
+    Reads ``book["contributions"]`` (the BookData fragment's book-level
+    ``contributions`` relation). Each node carries:
+      - ``contribution`` → role label; ``null`` for the plain author role,
+        free-text otherwise (``"Translator"``, ``"Illustrator"``, …,
+        sometimes localized e.g. ``"Illustratore"``).
+      - ``author { name id }`` → the contributor (id captured into
+        ``source_author_id`` now for the v3.x author-ID enrichment arc;
+        Phase 3 only writes ``book_authors`` author_id ints).
+
+    The role-FILTER (allowlist author, drop the rest) lives in lookup's
+    ``contributor_is_author`` — this helper just surfaces what Hardcover
+    states, in source order. Returns ``[]`` when the relation is
+    absent/empty so callers degrade to single-author behavior gracefully.
+    """
+    contribs = book.get("contributions")
+    if not isinstance(contribs, list):
+        return []
+    out: list[Contributor] = []
+    for c in contribs:
+        if not isinstance(c, dict):
+            continue
+        author = c.get("author")
+        if not isinstance(author, dict):
+            continue
+        name = (author.get("name") or "").strip()
+        if not name:
+            continue
+        role = c.get("contribution")
+        role = role.strip() if isinstance(role, str) else None
+        aid = author.get("id")
+        sid = str(aid) if aid is not None else None
+        out.append(Contributor(name=name, role=role or None, source_author_id=sid))
+    return out
+
+
 # Fragments matching the official plugin + book-level contributions
 FRAGMENTS = """
 fragment BookData on books {
@@ -163,7 +202,7 @@ fragment BookData on books {
   tags: cached_tags
   canonical_id
   image: cached_image
-  contributions { author { name id } }
+  contributions { contribution author { name id } }
   book_mappings(where: {platform: {name: {_in: ["goodreads", "openlibrary", "google"]}}}) {
     external_id
     platform { name }
@@ -733,6 +772,7 @@ class HardcoverSource(BaseSource):
                     goodreads_id=gr_id,
                     openlibrary_id=ol_id,
                     google_books_id=gb_id,
+                    contributors=_parse_hardcover_contributors(book),
                 )
                 
                 # Check series info: try book_series relation first, then cached_featured_series
