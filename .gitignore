@@ -47,6 +47,7 @@ frontend/dist/
 
 # Local scratch
 scratch/
+.scratch/
 .tmp/
 *.tsbuildinfo
 
