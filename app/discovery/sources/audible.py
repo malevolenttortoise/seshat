@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from app.discovery.sources.base import BaseSource, AuthorResult, BookResult
+from app.discovery.sources.base import BaseSource, AuthorResult, BookResult, Contributor
 
 logger = logging.getLogger("seshat.discovery.audible")
 
@@ -174,6 +174,14 @@ def _record_to_book_result(rec) -> BookResult:
     """
     series_name = rec.series
     series_index = rec.series_index
+    # v3.0.0 Phase 3.5 — Audnexus keeps authors and narrators in
+    # separate fields (`rec.authors` vs `rec.narrator`), so `rec.authors`
+    # is already a clean author list with no role ambiguity. Every entry
+    # is the plain author role (role=None). Audible is trusted-create.
+    # (The per-author Audible ASIN is dropped upstream in
+    # `_item_to_record`, so it's not captured here — a deferred
+    # capture-now opportunity for the author-ID enrichment arc.)
+    contributors = [Contributor(name=n) for n in (rec.authors or []) if n]
     return BookResult(
         title=rec.title or "",
         series_name=series_name,
@@ -189,4 +197,5 @@ def _record_to_book_result(rec) -> BookResult:
         language=rec.language,
         source="audible",
         source_url=rec.source_url,
+        contributors=contributors,
     )

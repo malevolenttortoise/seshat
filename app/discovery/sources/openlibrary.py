@@ -213,6 +213,15 @@ def _has_cjk(s: str) -> bool:
 
 class OpenLibrarySource(BaseSource):
     name = "openlibrary"
+    # v3.0.0 Phase 3.5 — OpenLibrary deliberately does NOT populate
+    # `BookResult.contributors` (it stays single-author; lookup's
+    # never-orphan still links the scanned author). Two reasons:
+    # (1) the discovery flow walks `/authors/{key}/works.json`, where
+    # works carry author KEYS not names — resolving co-author names
+    # would cost N extra API calls per work; and (2) OpenLibrary is
+    # link-only + recon-flagged "risky" (its flat author lists lump
+    # illustrators in with authors). Skipping is the conservative
+    # choice. Decision locked with Mark 2026-05-27.
     default_headers = {
         "Accept": "application/json",
         "User-Agent": "Seshat/2.10 (https://github.com/malevolenttortoise/seshat)",

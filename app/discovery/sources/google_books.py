@@ -18,7 +18,7 @@ from typing import Optional
 
 import httpx
 
-from app.discovery.sources.base import BaseSource, AuthorResult, SeriesResult, BookResult, _redact_sensitive
+from app.discovery.sources.base import BaseSource, AuthorResult, SeriesResult, BookResult, Contributor, _redact_sensitive
 from app.metadata.scoring import author_overlap
 
 logger = logging.getLogger("seshat.discovery.google_books")
@@ -308,6 +308,14 @@ class GoogleBooksSource(BaseSource):
                 external_id=item.get("id", ""),
                 source="google_books",
                 source_url=vi.get("infoLink") or vi.get("canonicalVolumeLink"),
+                # v3.0.0 Phase 3.5 — `volumeInfo.authors` is a flat name
+                # list with no role signal, so each entry is treated as the
+                # plain author role (role=None). Google Books is LINK-ONLY
+                # (not in TRUSTED_CREATE_SOURCES): `_link_discovered_contributors`
+                # resolves these against EXISTING author rows and never mints,
+                # which is the safeguard against its untyped lists pulling in
+                # non-authors. No per-author IDs exposed by the API.
+                contributors=[Contributor(name=a) for a in item_authors if a],
             )
 
             if series_name:
