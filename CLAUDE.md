@@ -26,7 +26,8 @@ Each rule below cost at least one hotfix to learn. Keep the *why* in mind so edg
 ### Testing
 
 - **Default to targeted test slices** matching touched files (`tests/metadata/`, `tests/orchestrator/test_pipeline.py`). The full suite sits silently for 20–35+ min.
-- **Run pytest in the foreground.** A known post-test asyncio teardown hang (aiosqlite worker threads on a closed loop) means a backgrounded `pytest -q | tail` never signals exit even though tests passed. If background is unavoidable, wrap in `timeout 600 …`. Don't side-quest fixing the teardown leak.
+- **Run pytest in the foreground.** A known post-test asyncio teardown hang (aiosqlite worker threads on a closed loop) means a backgrounded `pytest -q | tail` never signals exit even though tests passed. If background is unavoidable, wrap in `timeout 600 …`. Don't side-quest fixing the teardown leak. (Corollary: a `timeout`-wrapped run can exit **124 _after_** printing `N passed` — that's the teardown hang, not a failure; trust the summary line.)
+- **Seed `book_authors` in any test that exercises an author/series read or the merge/recompute paths.** From v3.0.0, `book_authors` is the authoritative author↔book relation on reads ([ADR-0008](docs/adr/0008-book-authors-authoritative-on-reads.md)); author detail, per-author/series counts, the scan-dedup prefilter, `_recompute_series_author`, and `merge_books`/prune-linkage all read it. A test that seeds a `books` row with only `author_id` (no `book_authors`) will silently fall out of those queries (vanished book, no-op recompute). Mirror prod backfill in the test's seed helper — `INSERT OR IGNORE INTO book_authors (book_id, author_id, position) SELECT id, author_id, 0 FROM books WHERE author_id IS NOT NULL AND id NOT IN (SELECT book_id FROM book_authors)`, or link per-insert. Pure-unit tests that don't touch those paths don't need it.
 
 ### Release
 
