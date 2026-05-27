@@ -81,6 +81,21 @@ async def _insert_book(discovery, **fields) -> int:
         f"INSERT INTO books ({', '.join(cols)}) VALUES ({placeholders})",
         list(defaults.values()),
     )
+    # v3.0.0 Phase 5 (ADR-0009): merge union + prune-overlap read
+    # book_authors. Seed a position-0 link when the author row exists
+    # (mirrors backfill/sync in prod); skip silently otherwise so tests
+    # using the default author_id without an authors row don't FK-fail.
+    aid = defaults.get("author_id")
+    if aid is not None:
+        has_author = await (await discovery.execute(
+            "SELECT 1 FROM authors WHERE id = ?", (aid,),
+        )).fetchone()
+        if has_author:
+            await discovery.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+                "VALUES (?, ?, 0)",
+                (cur.lastrowid, aid),
+            )
     await discovery.commit()
     return cur.lastrowid
 
@@ -539,3 +554,165 @@ class TestTransferLinkageBeforePrune:
             "SELECT book_id FROM book_grab_links WHERE grab_id = 42",
         )).fetchone()
         assert row["book_id"] == survivor
+
+
+# ─── v3.0.0 Phase 5 — contributor-set union + prune overlap (ADR-0009) ───
+
+
+async def _link(discovery, book_id: int, author_id: int, position: int) -> None:
+    await discovery.execute(
+        "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+        "VALUES (?, ?, ?)",
+        (book_id, author_id, position),
+    )
+    await discovery.commit()
+
+
+async def _author_ids_for(discovery, book_id: int) -> list[int]:
+    rows = await (await discovery.execute(
+        "SELECT author_id FROM book_authors WHERE book_id = ? ORDER BY position",
+        (book_id,),
+    )).fetchall()
+    return [r["author_id"] for r in rows]
+
+
+class TestMergeContributorUnion:
+    """merge_books unions the winner's + loser's contributor sets,
+    winner-first, never silently dropping a co-author (ADR-0009)."""
+
+    async def test_union_winner_first_dedups_shared_author(self, merge_dbs):
+        discovery, pipeline = merge_dbs
+        a = await _insert_author(discovery, "J.N. Chaney")
+        b = await _insert_author(discovery, "Jason Anspach")
+        c = await _insert_author(discovery, "Rick Partlow")
+        # winner = owned calibre [A, B]; loser = discovered [A, C].
+        winner = await _insert_book(
+            discovery, title="Able Bodied Soldier", author_id=a,
+            source="calibre", owned=1, calibre_id=10,
+        )
+        await _link(discovery, winner, b, 1)         # winner co-author B (A seeded at 0)
+        loser = await _insert_book(
+            discovery, title="Able Bodied Soldier", author_id=a,
+            source="goodreads", owned=0,
+        )
+        await _link(discovery, loser, c, 1)          # loser co-author C
+
+        await merge_books(
+            discovery, pipeline, library_slug="testlib",
+            winner_id=winner, loser_id=loser, reason="manual",
+        )
+
+        # Winner-first union: A@0 (deduped), B@1, C@2 appended.
+        assert await _author_ids_for(discovery, winner) == [a, b, c]
+
+    async def test_union_recovers_loser_only_coauthor(self, merge_dbs):
+        discovery, pipeline = merge_dbs
+        a = await _insert_author(discovery, "J.N. Chaney")
+        b = await _insert_author(discovery, "Jason Anspach")
+        # winner had only the primary; loser found the co-author.
+        winner = await _insert_book(
+            discovery, title="Able Bodied Soldier", author_id=a,
+            source="calibre", owned=1, calibre_id=10,
+        )
+        loser = await _insert_book(
+            discovery, title="Able Bodied Soldier", author_id=a,
+            source="goodreads", owned=0,
+        )
+        await _link(discovery, loser, b, 1)          # loser-only co-author B
+
+        await merge_books(
+            discovery, pipeline, library_slug="testlib",
+            winner_id=winner, loser_id=loser, reason="manual",
+        )
+
+        assert await _author_ids_for(discovery, winner) == [a, b]
+
+    async def test_audit_snapshot_captures_loser_book_authors(self, merge_dbs):
+        discovery, pipeline = merge_dbs
+        a = await _insert_author(discovery, "J.N. Chaney")
+        b = await _insert_author(discovery, "Jason Anspach")
+        winner = await _insert_book(
+            discovery, title="Able Bodied Soldier", author_id=a,
+            source="calibre", owned=1, calibre_id=10,
+        )
+        loser = await _insert_book(
+            discovery, title="Able Bodied Soldier", author_id=a,
+            source="goodreads", owned=0,
+        )
+        await _link(discovery, loser, b, 1)
+
+        await merge_books(
+            discovery, pipeline, library_slug="testlib",
+            winner_id=winner, loser_id=loser, reason="manual",
+        )
+
+        row = await (await discovery.execute(
+            "SELECT loser_snapshot_json FROM book_merges WHERE loser_id = ?",
+            (loser,),
+        )).fetchone()
+        snap = json.loads(row["loser_snapshot_json"])
+        assert "_book_authors" in snap
+        snap_ids = [ba["author_id"] for ba in snap["_book_authors"]]
+        assert snap_ids == [a, b]
+
+
+class TestPruneLinkageOverlap:
+    """transfer_linkage_before_prune finds the owned sibling by
+    OVERLAPPING contributor set, not strict primary author_id (ADR-0009)."""
+
+    async def test_finds_coauthored_sibling_with_different_primary(self, merge_dbs):
+        from app.discovery.book_merge import transfer_linkage_before_prune
+        discovery, pipeline = merge_dbs
+        a = await _insert_author(discovery, "J.N. Chaney")
+        b = await _insert_author(discovery, "Jason Anspach")
+        # Disappearing row: primary A, co-author B.
+        loser = await _insert_book(
+            discovery, title="Able Bodied Soldier", author_id=a,
+            source="calibre", owned=1, calibre_id=11,
+            mam_torrent_id="999", mam_status="found",
+        )
+        await _link(discovery, loser, b, 1)
+        # Owned sibling: DIFFERENT primary B, co-author A. Strict
+        # `author_id = A` would miss it; contributor overlap finds it.
+        survivor = await _insert_book(
+            discovery, title="Able Bodied Soldier", author_id=b,
+            source="calibre", owned=1, calibre_id=22,
+            mam_status="not_found",
+        )
+        await _link(discovery, survivor, a, 1)
+        await _insert_grab_link(pipeline, grab_id=77, slug="testlib", book_id=loser)
+
+        moved = await transfer_linkage_before_prune(
+            discovery, pipeline, library_slug="testlib",
+            disappearing_book_id=loser,
+        )
+        assert moved is True
+        # Linkage redirected onto the co-authored sibling.
+        row = await (await pipeline.execute(
+            "SELECT book_id FROM book_grab_links WHERE grab_id = 77",
+        )).fetchone()
+        assert row["book_id"] == survivor
+        # No author union onto the survivor — its Calibre tuple stands.
+        assert await _author_ids_for(discovery, survivor) == [b, a]
+
+    async def test_no_contributor_overlap_does_not_match(self, merge_dbs):
+        from app.discovery.book_merge import transfer_linkage_before_prune
+        discovery, pipeline = merge_dbs
+        a = await _insert_author(discovery, "J.N. Chaney")
+        c = await _insert_author(discovery, "Unrelated Author")
+        loser = await _insert_book(
+            discovery, title="Able Bodied Soldier", author_id=a,
+            source="calibre", owned=1, calibre_id=11,
+            mam_torrent_id="999", mam_status="found",
+        )
+        # Same title, owned calibre, but NO shared contributor.
+        await _insert_book(
+            discovery, title="Able Bodied Soldier", author_id=c,
+            source="calibre", owned=1, calibre_id=22,
+            mam_status="not_found",
+        )
+        moved = await transfer_linkage_before_prune(
+            discovery, pipeline, library_slug="testlib",
+            disappearing_book_id=loser,
+        )
+        assert moved is False

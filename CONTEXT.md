@@ -27,6 +27,7 @@ This glossary is **seeded, not complete** — only the most stable, load-bearing
 - **Owned** — a book present in a user library (`owned=1` on the per-library `books` row).
 - **Contributor** — an author credited on a book, with an ordered **position** and an optional **role** (translator, illustrator, narrator, …). A book has one or more contributors; this is the domain concept behind the `book_authors` relation. Role-filtering drops non-author contributors on ingest (see `.scratch/v3.0.0-multi-author/`).
 - **Primary author** — the contributor at **position 0**: the one shown when a single author is displayed, and the sort key for a book. Distinct from co-authors at positions 1…N.
+- **Contributor set** — a book's full set of contributors (its `book_authors` rows). Write-time operations reason over the set, not the single primary: merge **unions** the two books' sets (never drops a co-author), and prune-linkage finds an owned sibling by **overlapping** contributor set (≥1 shared contributor), not strict primary-author equality (see [ADR-0009](docs/adr/0009-merge-union-prune-overlap.md)).
 - **Co-authored ownership** — a book is **owned for every one of its contributors**, not just its primary author. Hiding it hides it for all of them (per-book, not per-contributor). From v3.0.0, the author↔book relation is authoritative via contributors, not the single-author column (see [ADR-0008](docs/adr/0008-book-authors-authoritative-on-reads.md)).
 - **Person** — a canonical, cross-library author identity (the `persons` table), linked to per-library author rows via **author links**. Resolves "same author across Calibre + ABS." Distinct from a **contributor**: a person is *who* the author is across libraries; a contributor is *that author's credited role + position on one book*.
 - **Mirror** — write-through that propagates a canonical value (bio, image) to per-library author siblings and the canonical `persons` row (`mirror_bio`, planned `mirror_image_url`).
@@ -37,6 +38,7 @@ This glossary is **seeded, not complete** — only the most stable, load-bearing
 - **Bundle** — a single torrent containing multiple works (an omnibus / "Books 1–10"). Fanned out into N review entries; bias is to keep the bundle even at the cost of duplicate children (see [ADR-0003](docs/adr/0003-bundle-dedup-prefer-duplicates.md)).
 - **Fan-out** — `_prepare_book` expanding a bundle into one review entry per child work.
 - **Dedup key** — the normalized `match_key(first_author, title)` used to recognize the same work across announces, grabs, holds, and owned books.
+- **Merge** — folding one book row (loser) into another (winner) when they're the same work; the loser is deleted and its linkage redirected. The winner's identity (title, primary author) is canonical, but the **contributor set is unioned** so no co-author is lost (see [ADR-0009](docs/adr/0009-merge-union-prune-overlap.md)).
 - **Hold** — a deferred announce parked in `pending_holds` during the format-dedup window so slow split-uploads don't lose the preferred format (see [ADR-0004](docs/adr/0004-format-priority-dedup.md)).
 
 ## Quality & replacement
