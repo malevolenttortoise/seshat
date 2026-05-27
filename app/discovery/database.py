@@ -669,6 +669,15 @@ MIGRATIONS = [
         PRIMARY KEY (book_id, author_id)
     )""",
     "CREATE INDEX IF NOT EXISTS idx_book_authors_author ON book_authors(author_id)",
+    # ── v3.0.0 Phase 6: series taxonomy ──────────────────────────
+    # `series.author_mode` ∈ {per_author, multi_author, shared} — the
+    # explicit 3-way discriminator (ADR-0010). Computed by
+    # `_recompute_series_author` from the intersection of the series'
+    # books' contributor sets; `series.author_id` coexists as an owner
+    # pointer (per→owner, multi→anchor, shared→NULL). Nullable here;
+    # the startup backfill computes it for every existing row (after
+    # the book_authors backfill, which it reads).
+    "ALTER TABLE series ADD COLUMN author_mode TEXT",
 ]
 
 
@@ -1082,6 +1091,31 @@ async def _backfill_book_authors(db) -> int:
     if added:
         await db.commit()
     return added
+
+
+async def _backfill_series_author_mode(db) -> int:
+    """v3.0.0 Phase 6 (ADR-0010) — compute `series.author_mode` for every
+    series row from current membership.
+
+    Runs at startup AFTER `_backfill_book_authors` + the series dedup
+    steps: the recompute reads `book_authors` and book→series
+    membership, so both must already be settled. Idempotent — the
+    recompute is deterministic. Returns the number of series touched.
+
+    Lazy-imports `_recompute_series_author` (defined in the series
+    router) so authority logic stays single-sourced; the function-level
+    import avoids the database↔router module import cycle at load time.
+    """
+    from app.discovery.routers.series import _recompute_series_author
+
+    sids = [
+        r[0] for r in await (await db.execute("SELECT id FROM series")).fetchall()
+    ]
+    if not sids:
+        return 0
+    await _recompute_series_author(db, sids)
+    await db.commit()
+    return len(sids)
 
 
 async def write_book_authors(
@@ -1943,6 +1977,17 @@ async def init_db(slug=None):
         if cat_fixed:
             _db_logger.info(
                 f"Numeric mam_category backfill: fixed {cat_fixed} book row(s)"
+            )
+
+        # ── Step 10: v3.0.0 Phase 6 — series author_mode backfill ─────
+        # Compute series.author_mode (per/multi/shared) for every row
+        # from the contributor-set intersection (ADR-0010). MUST run
+        # last: it reads book_authors (Step 4.5b) and the post-dedup
+        # series/book membership (Steps 5-5.5). Idempotent.
+        mode_series = await _backfill_series_author_mode(db)
+        if mode_series:
+            _db_logger.info(
+                f"Series author_mode backfill: recomputed {mode_series} series"
             )
     finally:
         await db.close()

@@ -39,6 +39,12 @@ This glossary is **seeded, not complete** — only the most stable, load-bearing
 - **Fan-out** — `_prepare_book` expanding a bundle into one review entry per child work.
 - **Dedup key** — the normalized `match_key(first_author, title)` used to recognize the same work across announces, grabs, holds, and owned books.
 - **Merge** — folding one book row (loser) into another (winner) when they're the same work; the loser is deleted and its linkage redirected. The winner's identity (title, primary author) is canonical, but the **contributor set is unioned** so no co-author is lost (see [ADR-0009](docs/adr/0009-merge-union-prune-overlap.md)).
+
+## Series
+
+- **Series** — a named, ordered set of books. Each series has an **author mode** that classifies its authorship shape (see [ADR-0010](docs/adr/0010-series-author-mode-taxonomy.md)).
+- **Author mode** — `per_author` / `multi_author` / `shared`, decided by which authors appear in **every** book of the series (the intersection of the books' contributor sets): exactly one → per_author; a team of two or more → multi_author; none in common → shared.
+- **Series owner** — an author in that intersection (present in every book); owns the series and sees it in full. A **shared** series has no owner. A contributor who appears in only some books is *incidental*, not an owner — they see only their own entries, badged.
 - **Hold** — a deferred announce parked in `pending_holds` during the format-dedup window so slow split-uploads don't lose the preferred format (see [ADR-0004](docs/adr/0004-format-priority-dedup.md)).
 
 ## Quality & replacement

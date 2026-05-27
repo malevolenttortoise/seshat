@@ -307,7 +307,7 @@ async def _author_detail_for_slug(slug: str, aid: int) -> Optional[dict]:
                 COUNT(DISTINCT CASE WHEN bca.author_id IS NOT NULL AND {HF} AND COALESCE(b.is_omnibus,0)=1 THEN b.id END) as author_omnibus_count,
                 SUM(CASE WHEN b.owned=1 AND bca.author_id IS NOT NULL AND {HF} AND COALESCE(b.is_omnibus,0)=0 THEN 1 ELSE 0 END) as owned_count,
                 SUM(CASE WHEN b.owned=0 AND bca.author_id IS NOT NULL AND {HF} AND COALESCE(b.is_omnibus,0)=0 THEN 1 ELSE 0 END) as missing_count,
-                CASE WHEN COUNT(DISTINCT b.author_id) > 1 THEN 1 ELSE 0 END as multi_author
+                CASE WHEN s.author_mode = 'multi_author' THEN 1 ELSE 0 END as multi_author
             FROM series s
             JOIN books b ON s.id=b.series_id
             LEFT JOIN book_authors bca ON bca.book_id=b.id AND bca.author_id=?
