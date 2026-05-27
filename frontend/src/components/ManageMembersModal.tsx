@@ -58,6 +58,8 @@ export function ManageMembersModal({
 }: ManageMembersModalProps) {
   const t = useTheme();
   const [authors, setAuthors] = useState<SeriesAuthor[] | null>(null);
+  // v3.0.0 Phase 7 — stored author_mode (ADR-0010) drives the 3-way header label.
+  const [authorMode, setAuthorMode] = useState<string | null>(null);
   const [busyAuthorId, setBusyAuthorId] = useState<number | null>(null);
   const [err, setErr] = useState("");
 
@@ -71,10 +73,13 @@ export function ManageMembersModal({
 
   const refresh = () => {
     api
-      .get<{ series_id: number; authors: SeriesAuthor[] }>(
+      .get<{ series_id: number; author_mode?: string | null; authors: SeriesAuthor[] }>(
         `/discovery/series/${seriesId}/authors`,
       )
-      .then((r) => setAuthors(r.authors))
+      .then((r) => {
+        setAuthors(r.authors);
+        setAuthorMode(r.author_mode ?? null);
+      })
       .catch((e) => {
         console.error(e);
         setErr(`Failed to load authors: ${(e as Error).message}`);
@@ -184,7 +189,22 @@ export function ManageMembersModal({
   const totalBooks = authors
     ? authors.reduce((sum, a) => sum + a.book_count, 0)
     : 0;
-  const authority = authors && authors.length >= 2 ? "shared" : "per-author";
+  // v3.0.0 Phase 7 — 3-way label from the stored author_mode (ADR-0010);
+  // fall back to a count guess only until the mode loads.
+  const modeLabel =
+    authorMode === "multi_author"
+      ? "Co-authored"
+      : authorMode === "shared"
+        ? "Shared"
+        : authorMode === "per_author"
+          ? "Per-author"
+          : authors && authors.length >= 2
+            ? "Shared"
+            : "Per-author";
+  const accentBadge =
+    authorMode === "shared" ||
+    authorMode === "multi_author" ||
+    (!authorMode && !!authors && authors.length >= 2);
 
   return (
     <div
@@ -239,16 +259,14 @@ export function ManageMembersModal({
                 fontWeight: 600,
                 padding: "2px 8px",
                 borderRadius: 4,
-                background: authority === "shared" ? t.abg : t.bg,
-                color: authority === "shared" ? t.accent : t.tf,
-                border: `1px solid ${
-                  authority === "shared" ? t.abr : t.border
-                }`,
+                background: accentBadge ? t.abg : t.bg,
+                color: accentBadge ? t.accent : t.tf,
+                border: `1px solid ${accentBadge ? t.abr : t.border}`,
                 textTransform: "uppercase",
                 letterSpacing: "0.04em",
               }}
             >
-              {authority}
+              {modeLabel}
             </span>
           </h2>
           <div style={{ fontSize: 12, color: t.td, marginTop: 4 }}>

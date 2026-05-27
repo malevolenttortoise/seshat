@@ -142,6 +142,11 @@ export interface Book {
   title: string;
   author_id?: number;
   author_name?: string;
+  // v3.0.0 Phase 7 — full ordered contributor set (position 0 = primary).
+  // Stamped by the backend `attach_contributors` helper on every book-list
+  // endpoint that feeds the shared card. The byline renders these (first
+  // two + "+N more"); `author_name` remains the single-author fallback.
+  contributors?: Contributor[];
   series_id?: number | null;
   series_name?: string | null;
   series_index?: number | null;
@@ -222,6 +227,17 @@ export interface WorkSibling {
   content_type: string;
 }
 
+// v3.0.0 Phase 7 — one credited author on a book, with its ordered
+// position (0 = primary) and optional role (null = author; non-author
+// roles are dropped on ingest per ADR-0008/Decision 4, so role is
+// effectively always null on read today but kept for forward-compat).
+export interface Contributor {
+  author_id: number;
+  name: string;
+  position: number;
+  role: string | null;
+}
+
 export interface Series {
   id: number;
   name: string;
@@ -235,6 +251,16 @@ export interface Series {
   owned_count?: number;
   missing_count?: number;
   multi_author?: 0 | 1;
+  // v3.0.0 Phase 6/7 — series author-mode taxonomy (ADR-0010) + the
+  // per-author ownership flag the author-detail endpoint computes on read
+  // (ADR-0011). `is_owner` is true when the viewed author is in every book
+  // of the series (sees the full series); false = incidental guest (own
+  // entries only + "N of M" pill, where N=author_book_count, M=book_count).
+  author_mode?: "per_author" | "multi_author" | "shared";
+  contributor_count?: number;
+  author_visible_count?: number;
+  series_linked_count?: number;
+  is_owner?: boolean;
 }
 
 export interface Library {

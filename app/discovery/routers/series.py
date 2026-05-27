@@ -63,7 +63,7 @@ import sqlite3
 from typing import Iterable
 from fastapi import APIRouter, Body, HTTPException, Query
 
-from app.discovery.database import get_db, HF
+from app.discovery.database import get_db, HF, attach_contributors
 
 logger = logging.getLogger("seshat.discovery")
 
@@ -136,6 +136,8 @@ async def get_series(sid: int, slug: str | None = None):
                 ORDER BY COALESCE(b.series_index,999), b.pub_date ASC
             """, (sid,))).fetchall()
         ]
+        # v3.0.0 Phase 7 — multi-author byline on series book cards.
+        await attach_contributors(db, rows)
         s["books"] = await _stamp_work_siblings(rows, effective_slug)
         return s
     finally:
@@ -818,6 +820,17 @@ async def list_series_authors(sid: int):
     db = await get_db()
     try:
         await _series_or_404(db, sid)
+        # v3.0.0 Phase 7 — surface the stored author_mode (ADR-0010) so the
+        # modal header shows the accurate 3-way label (per_author /
+        # multi_author / shared) instead of guessing from the author count.
+        # The current-authors list below stays grouped by PRIMARY author_id
+        # (the Remove affordance detaches by primary) — surfacing pure
+        # co-authors here would dead-end Remove (404) or, made
+        # contributor-aware, would nuke a whole co-authored series; that
+        # membership-management question is deliberately out of Phase 7.
+        srow = await (await db.execute(
+            "SELECT author_mode FROM series WHERE id = ?", (sid,)
+        )).fetchone()
         rows = await (await db.execute(
             "SELECT a.id AS author_id, a.name AS name, "
             "COUNT(b.id) AS book_count "
@@ -827,7 +840,11 @@ async def list_series_authors(sid: int):
             "ORDER BY a.name COLLATE NOCASE ASC",
             (sid,),
         )).fetchall()
-        return {"series_id": sid, "authors": [dict(r) for r in rows]}
+        return {
+            "series_id": sid,
+            "author_mode": srow["author_mode"] if srow else None,
+            "authors": [dict(r) for r in rows],
+        }
     finally:
         await db.close()
 

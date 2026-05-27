@@ -30,7 +30,7 @@ import time
 from fastapi import APIRouter, HTTPException, Query
 
 from app.config import load_settings, save_settings
-from app.discovery.database import get_db
+from app.discovery.database import get_db, attach_contributors
 from app.discovery.sources.mam import (
     _NEEDS_SCAN_BASIC_BARE,
     validate_connection as mam_validate,
@@ -703,6 +703,8 @@ async def mam_books_endpoint(section: str = "upload", search: str = "",
             {**dict(r), "library_slug": resolved_slug, "content_type": content_type}
             for r in rows
         ]
+        # v3.0.0 Phase 7 — multi-author byline on the MAM-status book cards.
+        await attach_contributors(db, books)
 
         return {"books": books, "total": total, "page": page, "per_page": per_page,
                 "total_pages": (total + per_page - 1) // per_page}

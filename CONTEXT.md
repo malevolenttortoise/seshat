@@ -43,7 +43,7 @@ This glossary is **seeded, not complete** — only the most stable, load-bearing
 ## Series
 
 - **Series** — a named, ordered set of books. Each series has an **author mode** that classifies its authorship shape (see [ADR-0010](docs/adr/0010-series-author-mode-taxonomy.md)).
-- **Author mode** — `per_author` / `multi_author` / `shared`, decided by which authors appear in **every** book of the series (the intersection of the books' contributor sets): exactly one → per_author; a team of two or more → multi_author; none in common → shared.
+- **Author mode** — `per_author` / `multi_author` / `shared`, decided by which authors appear in **every** book of the series (the intersection of the books' contributor sets): exactly one → per_author; a team of two or more → multi_author; none in common → shared. Surfaced in the UI as **Per-author** / **Co-authored** / **Shared** respectively.
 - **Series owner** — an author in that intersection (present in every book); owns the series and sees it in full. A **shared** series has no owner. A contributor who appears in only some books is *incidental*, not an owner — they see only their own entries, badged.
 - **Hold** — a deferred announce parked in `pending_holds` during the format-dedup window so slow split-uploads don't lose the preferred format (see [ADR-0004](docs/adr/0004-format-priority-dedup.md)).
 

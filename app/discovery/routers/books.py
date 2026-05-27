@@ -17,7 +17,7 @@ import time
 from fastapi import APIRouter, Body, HTTPException, Query
 
 from app import state
-from app.discovery.database import get_db, HF, cleanup_empty_series
+from app.discovery.database import get_db, HF, cleanup_empty_series, attach_contributors
 from app.discovery.cross_library import (
     run_across_libraries,
     sort_and_paginate,
@@ -91,7 +91,16 @@ def _build_books_where(search, author_id, series_id, owned, book_type, mam_statu
         c.append("(b.title LIKE ? OR a.name LIKE ? OR COALESCE(s.name,'') LIKE ?)")
         p.extend([f"%{search}%"] * 3)
     if author_id:
-        c.append("b.author_id=?"); p.append(author_id)
+        # v3.0.0 Phase 7 — contributor-aware: "books by author X" means X
+        # is ANY contributor (book_authors), not just the legacy primary
+        # `books.author_id`. Completes the ADR-0008 read-path flip for
+        # this filter, so a co-author (Anspach on a Chaney-primary book)
+        # surfaces their co-authored books everywhere this endpoint feeds
+        # — the author-detail lists, the Manage-Members picker, etc.
+        # IN-subquery (not a JOIN) → one row per book, so COUNT(*) stays
+        # exact without DISTINCT.
+        c.append("b.id IN (SELECT book_id FROM book_authors WHERE author_id=?)")
+        p.append(author_id)
     if series_id:
         c.append("b.series_id=?"); p.append(series_id)
     if owned is True:
@@ -149,7 +158,9 @@ async def _query_books_for_lib(db, where_sql: str, where_params: list, sort: str
     }.get(sort, f"b.title {d}")
     base = f"{_BOOKS_SELECT_X} WHERE {where_sql} ORDER BY {o}"
     rows = await (await db.execute(base, where_params)).fetchall()
-    return [dict(r) for r in rows]
+    books = [dict(r) for r in rows]
+    await attach_contributors(db, books)  # v3.0.0 Phase 7 — multi-author byline
+    return books
 
 
 @router.get("/books")
@@ -201,7 +212,9 @@ async def get_books(search: str = Query(None), author_id: int = Query(None), ser
         o = {"title": f"b.title {d}", "author": f"a.sort_name {d}, b.title ASC", "series": f"COALESCE(s.name,'zzz') {d}, b.series_index ASC", "date": f"b.pub_date {d}", "added": f"b.first_seen_at {d}"}.get(sort, f"b.title {d}")
         off = (page-1)*per_page
         rows = await (await db.execute(f"{_BOOKS_SELECT} WHERE {w} ORDER BY {o} LIMIT ? OFFSET ?", p+[per_page, off])).fetchall()
-        return {"books": [dict(r) for r in rows], "total": cnt, "page": page, "per_page": per_page, "pages": max(1, (cnt+per_page-1)//per_page)}
+        books = [dict(r) for r in rows]
+        await attach_contributors(db, books)  # v3.0.0 Phase 7 — multi-author byline
+        return {"books": books, "total": cnt, "page": page, "per_page": per_page, "pages": max(1, (cnt+per_page-1)//per_page)}
     finally: await db.close()
 
 
@@ -329,7 +342,9 @@ async def get_upcoming(search: str = Query(None), sort: str = Query("date"), sor
                 f"{_BOOKS_SELECT_X} WHERE {w} ORDER BY {o}",
                 p,
             )).fetchall()
-            return [dict(r) for r in rows]
+            books = [dict(r) for r in rows]
+            await attach_contributors(db, books)  # v3.0.0 Phase 7 — multi-author byline
+            return books
 
         rows = await run_across_libraries(content_type, q)
         window, total = sort_and_paginate(
@@ -358,7 +373,9 @@ async def get_upcoming(search: str = Query(None), sort: str = Query("date"), sor
         o = {"date": f"COALESCE(b.expected_date, '9999') {d}", "title": f"b.title {d}", "author": f"a.sort_name {d}"}.get(sort, f"COALESCE(b.expected_date, '9999') {d}")
         off = (page-1)*per_page
         rows = await (await db.execute(f"{_BOOKS_SELECT} WHERE {w} ORDER BY {o} LIMIT ? OFFSET ?", p+[per_page, off])).fetchall()
-        return {"books": [dict(r) for r in rows], "total": cnt, "page": page, "per_page": per_page, "pages": max(1, (cnt+per_page-1)//per_page)}
+        books = [dict(r) for r in rows]
+        await attach_contributors(db, books)  # v3.0.0 Phase 7 — multi-author byline
+        return {"books": books, "total": cnt, "page": page, "per_page": per_page, "pages": max(1, (cnt+per_page-1)//per_page)}
     finally: await db.close()
 
 
@@ -456,7 +473,9 @@ async def get_hidden(search: str = Query(None), sort: str = Query("title"), sort
         o = {"title": f"b.title {d}", "author": f"a.sort_name {d}, b.title ASC", "series": f"COALESCE(s.name,'zzz') {d}, b.series_index ASC", "date": f"b.pub_date {d}", "added": f"b.first_seen_at {d}"}.get(sort, f"b.title {d}")
         off = (page-1)*per_page
         rows = await (await db.execute(f"{_BOOKS_SELECT} WHERE {w} ORDER BY {o} LIMIT ? OFFSET ?", p+[per_page, off])).fetchall()
-        return {"books": [dict(r) for r in rows], "total": cnt, "page": page, "per_page": per_page, "pages": max(1, (cnt+per_page-1)//per_page)}
+        books = [dict(r) for r in rows]
+        await attach_contributors(db, books)  # v3.0.0 Phase 7 — multi-author byline
+        return {"books": books, "total": cnt, "page": page, "per_page": per_page, "pages": max(1, (cnt+per_page-1)//per_page)}
     finally: await db.close()
 
 
@@ -477,7 +496,9 @@ async def get_book(bid: int, slug: str | None = Query(None)):
         )).fetchone()
         if not row:
             raise HTTPException(404, f"book {bid} not found")
-        return dict(row)
+        book = dict(row)
+        await attach_contributors(db, [book])  # v3.0.0 Phase 7 — multi-author byline
+        return book
     finally:
         await db.close()
 

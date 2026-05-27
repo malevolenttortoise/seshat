@@ -94,6 +94,8 @@ interface ISProps extends SectionSharedProps {
   // `${librarySlug}:${series.id}` to disambiguate cross-library
   // namespaces.
   onBooksLoaded?: (key: string, books: Book[]) => void;
+  // v3.0.0 Phase 7 — nav for the guest "N of M" pill + clickable byline names.
+  onNav: NavFn;
 }
 
 // ─── Inline Series (for Author Detail) ─────────────────────
@@ -114,18 +116,45 @@ function IS({
   onSelectMany,
   onDeselectMany,
   onBooksLoaded,
+  onNav,
 }: ISProps) {
   const t = useTheme();
   const [ld, setLd] = useState(false);
   const [bks, setBks] = useState<Book[] | null>(null);
   const lkey = `${librarySlug || "active"}:${series.id}`;
 
+  // v3.0.0 Phase 7 (ADR-0011) — owner-vs-incidental display.
+  // `is_owner` (computed on read by the author-detail endpoint) is true
+  // when this author is in every book of the series → show the FULL
+  // series, no badge. When false the author is an incidental guest →
+  // show only their own entries + an "N of M" pill linking to the full
+  // series. `is_owner` is undefined on stale payloads → default to owner
+  // (the pre-Phase-7 full-series behavior).
+  const isOwner = series.is_owner ?? true;
+  // A co-authored (multi_author) series the author co-owns still shows
+  // the byline so the co-author team is visible on each card; a plain
+  // per-author owned series suppresses it (redundant — every book is
+  // this author). `multi_author` is the legacy flag fallback.
+  const isCoauthored =
+    series.author_mode === "multi_author" || !!series.multi_author;
+  const showByline = !isOwner || isCoauthored;
+  const onAuthorClick = (aid: number) => onNav("disc-author-detail", aid);
+
   const load = () => {
     if (bks) return;
     setLd(true);
     const qs = librarySlug ? `?slug=${encodeURIComponent(librarySlug)}` : "";
+    // Owner sees the whole series; an incidental guest sees only their
+    // own entries — fetched via the now-contributor-aware
+    // /discovery/books?author_id=&series_id= filter (Phase 7 flip), so a
+    // co-author's entries surface without dragging in the rest of the
+    // series they didn't write.
+    const url = isOwner
+      ? `/discovery/series/${series.id}${qs}`
+      : `/discovery/books?author_id=${authorId}&series_id=${series.id}` +
+        (librarySlug ? `&slug=${encodeURIComponent(librarySlug)}` : "");
     api
-      .get<{ books?: Book[] }>(`/discovery/series/${series.id}${qs}`)
+      .get<{ books?: Book[] }>(url)
       .then((d) => {
         const books = d.books || [];
         setBks(books);
@@ -140,27 +169,39 @@ function IS({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const isMulti = !!series.multi_author;
-  const header = isMulti ? (
-    <span>
-      {series.name}{" "}
-      <span
+  // Guest "N of M" pill — this author's entry count vs the whole series,
+  // clickable through to the series. (Series detail page is Phase 8; the
+  // whole v3.0.0 arc ships as one PR, so it resolves by release. For now
+  // it routes to the Series Manager list.)
+  const pill =
+    !isOwner ? (
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          onNav("disc-series", series.id);
+        }}
+        title="Part of a larger series — view the full series"
         style={{
           fontSize: 11,
-          color: t.cyant,
           fontWeight: 600,
-          textTransform: "none",
+          color: t.cyant,
           background: t.cyan + "22",
+          border: `1px solid ${t.cyan}44`,
           padding: "2px 8px",
-          borderRadius: 4,
-          marginLeft: 4,
+          borderRadius: 99,
+          marginLeft: 8,
+          cursor: "pointer",
+          textTransform: "none",
         }}
       >
-        shared series
-      </span>
+        {series.author_book_count ?? 0} of {series.book_count ?? 0} →
+      </button>
+    ) : null;
+  const header = (
+    <span>
+      {series.name}
+      {pill}
     </span>
-  ) : (
-    series.name
   );
 
   // Separate regular books from omnibus entries for display.
@@ -180,7 +221,7 @@ function IS({
     (omnibus ? omnibus.length > 0 : (series.author_omnibus_count || 0) > 0);
   const countStr = omnibusOnly
     ? "Omnibus"
-    : isMulti
+    : !isOwner
       ? `${ownCount}/${regCount} · ${series.book_count || 0} total`
       : `${ownCount}/${regCount}`;
 
@@ -236,8 +277,9 @@ function IS({
               books={regular || []}
               onAction={onAction}
               onBookClick={onBookClick}
-              showAuthor={isMulti}
+              showAuthor={showByline}
               highlightAuthorId={authorId}
+              onAuthorClick={onAuthorClick}
               selMode={selMode}
               sel={sel}
               onToggleSel={onToggleSel}
@@ -247,8 +289,9 @@ function IS({
               books={regular || []}
               onAction={onAction}
               onBookClick={onBookClick}
-              showAuthor={isMulti}
+              showAuthor={showByline}
               highlightAuthorId={authorId}
+              onAuthorClick={onAuthorClick}
               selMode={selMode}
               sel={sel}
               onToggleSel={onToggleSel}
@@ -284,8 +327,9 @@ function IS({
                   books={omnibus}
                   onAction={onAction}
                   onBookClick={onBookClick}
-                  showAuthor={isMulti}
+                  showAuthor={showByline}
                   highlightAuthorId={authorId}
+                  onAuthorClick={onAuthorClick}
                   selMode={selMode}
                   sel={sel}
                   onToggleSel={onToggleSel}
@@ -295,8 +339,9 @@ function IS({
                   books={omnibus}
                   onAction={onAction}
                   onBookClick={onBookClick}
-                  showAuthor={isMulti}
+                  showAuthor={showByline}
                   highlightAuthorId={authorId}
+                  onAuthorClick={onAuthorClick}
                   selMode={selMode}
                   sel={sel}
                   onToggleSel={onToggleSel}
@@ -313,6 +358,8 @@ function IS({
 // ─── Standalone Section ─────────────────────────────────────
 interface SAProps extends SectionSharedProps {
   books: Book[];
+  // v3.0.0 Phase 7 — nav for clickable co-author byline names.
+  onNav: NavFn;
 }
 
 function SA({
@@ -326,8 +373,10 @@ function SA({
   onToggleSel,
   onSelectMany,
   onDeselectMany,
+  onNav,
 }: SAProps) {
   const t = useTheme();
+  const onAuthorClick = (aid: number) => onNav("disc-author-detail", aid);
   const ids = books.map((b) => b.id);
   const selectedHere = sel ? ids.filter((id) => sel.has(id)).length : 0;
   const allSelected = ids.length > 0 && selectedHere === ids.length;
@@ -367,6 +416,7 @@ function SA({
           books={books}
           onAction={onAction}
           onBookClick={onBookClick}
+          onAuthorClick={onAuthorClick}
           selMode={selMode}
           sel={sel}
           onToggleSel={onToggleSel}
@@ -376,6 +426,7 @@ function SA({
           books={books}
           onAction={onAction}
           onBookClick={onBookClick}
+          onAuthorClick={onAuthorClick}
           selMode={selMode}
           sel={sel}
           onToggleSel={onToggleSel}
@@ -1678,6 +1729,7 @@ function DesktopAuthorDetailPage({
         onSelectMany={selectMany}
         onDeselectMany={deselectMany}
         onBooksLoaded={onBooksLoaded}
+        onNav={onNav}
       />
 
       {sb ? (
@@ -1788,6 +1840,7 @@ function PerLibraryBlocks({
   onSelectMany,
   onDeselectMany,
   onBooksLoaded,
+  onNav,
 }: {
   a: AuthorDetail;
   fmtTab: string;
@@ -1804,6 +1857,7 @@ function PerLibraryBlocks({
   onSelectMany: (ids: number[]) => void;
   onDeselectMany: (ids: number[]) => void;
   onBooksLoaded: (key: string, books: Book[]) => void;
+  onNav: NavFn;
 }) {
   const crossLib = a.cross_library || {};
   const crossSlugs = Object.keys(crossLib);
@@ -2012,6 +2066,7 @@ function PerLibraryBlocks({
                 onSelectMany={onSelectMany}
                 onDeselectMany={onDeselectMany}
                 onBooksLoaded={onBooksLoaded}
+                onNav={onNav}
               />
             ))}
             {standalone.length > 0 && (
@@ -2026,6 +2081,7 @@ function PerLibraryBlocks({
                 onToggleSel={onToggleSel}
                 onSelectMany={onSelectMany}
                 onDeselectMany={onDeselectMany}
+                onNav={onNav}
               />
             )}
             {series.length === 0 && standalone.length === 0 && (

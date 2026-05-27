@@ -182,8 +182,10 @@ export function MobileBookCard({
           )}
         </div>
 
-        {/* Author */}
-        {showAuthor && book.author_name && (
+        {/* Author — v3.0.0 Phase 7 multi-author byline (first 2 + "+N
+            more"); names aren't tappable on mobile (the card tap opens the
+            book). Falls back to author_name when no contributors stamped. */}
+        {showAuthor && (book.contributors?.length || book.author_name) && (
           <div
             style={{
               fontSize: s.type.caption,
@@ -193,7 +195,14 @@ export function MobileBookCard({
               whiteSpace: "nowrap",
             }}
           >
-            {book.author_name}
+            {book.contributors && book.contributors.length > 0
+              ? (() => {
+                  const c = book.contributors;
+                  const shown = c.slice(0, 2).map((x) => x.name).join(", ");
+                  const extra = c.length - Math.min(2, c.length);
+                  return extra > 0 ? `${shown} +${extra} more` : shown;
+                })()
+              : book.author_name}
           </div>
         )}
 

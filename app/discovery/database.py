@@ -10,7 +10,7 @@ import asyncio
 import logging
 import re
 from collections import defaultdict
-from typing import Optional
+from typing import Iterable, Optional
 import aiosqlite
 from app.config import DATA_DIR
 
@@ -1116,6 +1116,58 @@ async def _backfill_series_author_mode(db) -> int:
     await _recompute_series_author(db, sids)
     await db.commit()
     return len(sids)
+
+
+async def load_contributors(
+    db, book_ids: Iterable[int],
+) -> dict[int, list[dict]]:
+    """v3.0.0 Phase 7 — batch-load ordered contributors for a page of books.
+
+    Returns ``{book_id: [{"author_id", "name", "position", "role"}, …]}``
+    ordered by ``position`` (0 = primary). One query for the whole page so
+    a list endpoint that returns N books doesn't fire N per-book lookups
+    (the multi-author byline render needs every contributor, not just the
+    primary that ``books.author_id`` carries).
+
+    Books with no ``book_authors`` rows are simply absent from the map
+    (callers default them to ``[]``); post-ADR-0008 backfill every book
+    carries at least the primary, so that's a defensive case.
+    """
+    ids = [int(b) for b in book_ids if b is not None]
+    if not ids:
+        return {}
+    ph = ",".join("?" * len(ids))
+    rows = await (await db.execute(
+        f"SELECT ba.book_id, ba.author_id, a.name, ba.position, ba.role "
+        f"FROM book_authors ba JOIN authors a ON a.id = ba.author_id "
+        f"WHERE ba.book_id IN ({ph}) "
+        f"ORDER BY ba.book_id, ba.position",
+        ids,
+    )).fetchall()
+    out: dict[int, list[dict]] = {}
+    for r in rows:
+        out.setdefault(r["book_id"], []).append({
+            "author_id": r["author_id"],
+            "name": r["name"],
+            "position": r["position"],
+            "role": r["role"],
+        })
+    return out
+
+
+async def attach_contributors(db, books: list[dict]) -> None:
+    """v3.0.0 Phase 7 — stamp each book dict with a ``contributors`` list.
+
+    Mutates ``books`` in place so every book-list response that feeds the
+    shared book card carries the full ordered contributor set (ADR-0008 /
+    Decision 4 — the byline renders all authors, not just the primary).
+    One batched ``load_contributors`` query covers the whole page.
+    """
+    if not books:
+        return
+    mapping = await load_contributors(db, [b.get("id") for b in books])
+    for b in books:
+        b["contributors"] = mapping.get(b.get("id"), [])
 
 
 async def write_book_authors(

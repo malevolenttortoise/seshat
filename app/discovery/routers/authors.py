@@ -38,7 +38,7 @@ from app.metadata.source_url_parsers import (
     known_sources,
     parse_source_id,
 )
-from app.discovery.database import get_db, get_active_library, HF, cleanup_empty_series
+from app.discovery.database import get_db, get_active_library, HF, cleanup_empty_series, attach_contributors
 from app.discovery.routers.series import _recompute_series_author
 from app.discovery.lookup import lookup_author
 from app.discovery.cross_library import (
@@ -299,12 +299,19 @@ async def _author_detail_for_slug(slug: str, aid: int) -> Optional[dict]:
         # `book_count` (whole-series total, any author) stays on the
         # books row; `multi_author` (a series-taxonomy hint owned by
         # Phase 6) stays on the legacy author_id for now.
-        a["series"] = [dict(s) for s in await (await db.execute(
+        # `series_linked_count` = visible books in the series carrying
+        # ≥1 book_authors row (any author) — exactly the basis Phase 6's
+        # `_recompute_series_author` intersects over (visible books with
+        # contributor links). Compared against `author_visible_count`
+        # (visible books where aid is a contributor) it yields the
+        # owner-vs-incidental split on read — see ADR-0011 + the loop below.
+        series_rows = await (await db.execute(
             f"""SELECT s.*,
                 COUNT(DISTINCT CASE WHEN {HF} AND COALESCE(b.is_omnibus,0)=0 THEN b.id END) as book_count,
                 COUNT(DISTINCT CASE WHEN bca.author_id IS NOT NULL AND {HF} AND COALESCE(b.is_omnibus,0)=0 THEN b.id END) as author_book_count,
                 COUNT(DISTINCT CASE WHEN bca.author_id IS NOT NULL AND {HF} THEN b.id END) as author_visible_count,
                 COUNT(DISTINCT CASE WHEN bca.author_id IS NOT NULL AND {HF} AND COALESCE(b.is_omnibus,0)=1 THEN b.id END) as author_omnibus_count,
+                COUNT(DISTINCT CASE WHEN {HF} AND EXISTS(SELECT 1 FROM book_authors bax WHERE bax.book_id=b.id) THEN b.id END) as series_linked_count,
                 SUM(CASE WHEN b.owned=1 AND bca.author_id IS NOT NULL AND {HF} AND COALESCE(b.is_omnibus,0)=0 THEN 1 ELSE 0 END) as owned_count,
                 SUM(CASE WHEN b.owned=0 AND bca.author_id IS NOT NULL AND {HF} AND COALESCE(b.is_omnibus,0)=0 THEN 1 ELSE 0 END) as missing_count,
                 CASE WHEN s.author_mode = 'multi_author' THEN 1 ELSE 0 END as multi_author
@@ -318,7 +325,23 @@ async def _author_detail_for_slug(slug: str, aid: int) -> Optional[dict]:
             HAVING author_visible_count > 0
             ORDER BY s.name""",
             (aid, aid)
-        )).fetchall()]
+        )).fetchall()
+        # v3.0.0 Phase 7 (ADR-0011) — owner-vs-incidental on read via
+        # count-equality: aid OWNS the series iff it contributes to every
+        # visible linked book (author_visible_count == series_linked_count),
+        # i.e. aid ∈ the Phase 6 intersection I. Owner → the frontend shows
+        # the full series, no badge. Incidental guest → only aid's own
+        # entries + the "N of M" pill (author_book_count / book_count). No
+        # owner set is persisted; recomputed every read.
+        series_list: list[dict] = []
+        for s in series_rows:
+            sd = dict(s)
+            sd["is_owner"] = bool(
+                sd["series_linked_count"] > 0
+                and sd["author_visible_count"] == sd["series_linked_count"]
+            )
+            series_list.append(sd)
+        a["series"] = series_list
         # v3.0.0 Phase 4 — standalone list joins book_authors scoped to
         # aid (INNER → only books where aid is a contributor). The
         # `author_name` display still resolves the primary via
@@ -351,6 +374,8 @@ async def _author_detail_for_slug(slug: str, aid: int) -> Optional[dict]:
                          "content_type": w.content_type}
                         for w in s
                     ]
+        # v3.0.0 Phase 7 — multi-author byline on the standalone cards.
+        await attach_contributors(db, standalone)
         a["standalone_books"] = standalone
         return a
     finally:

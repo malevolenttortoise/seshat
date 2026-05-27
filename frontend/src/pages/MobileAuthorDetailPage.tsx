@@ -66,8 +66,10 @@ function MobileSeriesSection({
   onSelectMany,
   onDeselectMany,
   onBooksLoaded,
+  authorId,
 }: {
   series: Series;
+  authorId: number | string;
   librarySlug?: string | null;
   onBookClick: (b: Book) => void;
   showMamLink: boolean;
@@ -83,12 +85,24 @@ function MobileSeriesSection({
   const [ld, setLd] = useState(false);
   const lkey = `${librarySlug || "active"}:${series.id}`;
 
+  // v3.0.0 Phase 7 (ADR-0011) — owner sees the full series; an incidental
+  // guest sees only their own entries (own-entries fetch) + an "N of M"
+  // subtitle. `is_owner` undefined → owner (pre-Phase-7 behavior).
+  const isOwner = series.is_owner ?? true;
+  const isCoauthored =
+    series.author_mode === "multi_author" || !!series.multi_author;
+  const showByline = !isOwner || isCoauthored;
+
   const load = useCallback(() => {
     if (bks) return;
     setLd(true);
     const qs = librarySlug ? `?slug=${encodeURIComponent(librarySlug)}` : "";
+    const url = isOwner
+      ? `/discovery/series/${series.id}${qs}`
+      : `/discovery/books?author_id=${authorId}&series_id=${series.id}` +
+        (librarySlug ? `&slug=${encodeURIComponent(librarySlug)}` : "");
     api
-      .get<{ books?: Book[] }>(`/discovery/series/${series.id}${qs}`)
+      .get<{ books?: Book[] }>(url)
       .then((d) => {
         const books = d.books || [];
         setBks(books);
@@ -96,7 +110,7 @@ function MobileSeriesSection({
         if (onBooksLoaded) onBooksLoaded(lkey, books);
       })
       .catch(() => setLd(false));
-  }, [series.id, librarySlug, bks, lkey, onBooksLoaded]);
+  }, [series.id, librarySlug, bks, lkey, onBooksLoaded, isOwner, authorId]);
 
   // Triggered by MobileSection's open state — we use the lazy
   // pattern by rendering a tiny effect inside the children that
@@ -117,7 +131,11 @@ function MobileSeriesSection({
     (bks
       ? bks.some((b) => b.is_omnibus)
       : (series.author_omnibus_count || 0) > 0);
-  const countLabel = omnibusOnly ? "Omnibus" : `${owned}/${total}`;
+  const countLabel = omnibusOnly
+    ? "Omnibus"
+    : isOwner
+      ? `${owned}/${total}`
+      : `${series.author_book_count ?? 0} of ${total}`;
 
   const ids = bks ? bks.map((b) => b.id) : [];
   const selectedHere = sel ? ids.filter((id) => sel.has(id)).length : 0;
@@ -154,7 +172,11 @@ function MobileSeriesSection({
       title={series.name}
       count={countLabel}
       subtitle={
-        missing > 0 ? `${missing} missing` : undefined
+        !isOwner
+          ? "part of a larger series"
+          : missing > 0
+            ? `${missing} missing`
+            : undefined
       }
       defaultOpen={false}
       right={quickPick}
@@ -172,6 +194,7 @@ function MobileSeriesSection({
             book={b}
             onClick={() => onBookClick(b)}
             showMamLink={showMamLink}
+            showAuthor={showByline}
             selMode={selMode}
             selected={sel ? sel.has(b.id) : false}
             onToggleSel={onToggleSel}
@@ -703,6 +726,7 @@ export default function MobileAuthorDetailPage({
             <MobileSeriesSection
               key={`${block.slug}-${s.id}`}
               series={s}
+              authorId={block.data?.id ?? authorIdNum}
               librarySlug={block.slug}
               onBookClick={setSb}
               showMamLink={mamOn}

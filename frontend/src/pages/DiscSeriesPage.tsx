@@ -383,7 +383,18 @@ function SeriesRowCard({
   onRemove,
 }: SeriesRowCardProps) {
   const t = useTheme();
+  // v3.0.0 Phase 7 — 3-way author-mode label (ADR-0010): per_author /
+  // multi_author ("Co-authored", a team on every book) / shared. The
+  // backend `multi_author` + `is_shared` flags give all three; both
+  // non-per_author modes use the accent badge styling.
   const isShared = s.is_shared === 1;
+  const isCoauthored = s.multi_author === 1;
+  const modeLabel = isShared
+    ? "Shared"
+    : isCoauthored
+      ? "Co-authored"
+      : "Per-Author";
+  const accentBadge = isShared || isCoauthored;
 
   return (
     <div
@@ -453,20 +464,28 @@ function SeriesRowCard({
               padding: "2px 8px",
               borderRadius: 4,
               fontSize: 11,
-              background: isShared ? t.abg : t.bg,
-              color: isShared ? t.accent : t.tf,
-              border: `1px solid ${isShared ? t.abr : t.border}`,
+              background: accentBadge ? t.abg : t.bg,
+              color: accentBadge ? t.accent : t.tf,
+              border: `1px solid ${accentBadge ? t.abr : t.border}`,
               textTransform: "uppercase",
               letterSpacing: "0.04em",
             }}
           >
-            {isShared ? "Shared" : "Per-Author"}
+            {modeLabel}
           </span>
         </div>
         <div style={{ fontSize: 13, color: t.tf }}>
           {isShared ? (
             <span>
               shared across{" "}
+              <span style={{ color: t.accent, fontWeight: 600 }}>
+                {s.contributor_count}
+              </span>{" "}
+              authors
+            </span>
+          ) : isCoauthored ? (
+            <span>
+              co-authored by{" "}
               <span style={{ color: t.accent, fontWeight: 600 }}>
                 {s.contributor_count}
               </span>{" "}
