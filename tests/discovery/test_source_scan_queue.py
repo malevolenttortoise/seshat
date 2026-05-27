@@ -74,6 +74,13 @@ async def _insert_book(
             (title, author_id, description, pub_date, isbn,
              page_count, cover_url, source),
         )
+        # v3.0.0 Phase 4 (ADR-0008): scan prefilter reads existing books
+        # via book_authors — seed the author link (backfill/sync parity).
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+            "VALUES (?, ?, 0)",
+            (cur.lastrowid, author_id),
+        )
         await db.commit()
         return cur.lastrowid
     finally:

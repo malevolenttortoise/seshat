@@ -210,10 +210,12 @@ async def _seed_book(db, *, author_id=1, author_name="J.N. Chaney"):
     return cur.lastrowid
 
 
-async def test_link_empty_contributors_is_dormant(discovery_db):
-    """THE 3.1 CONTRACT: an empty contributor list (every source until
-    3.2+ populates it) writes NO book_authors rows — zero behavior
-    change for discovered books."""
+async def test_link_empty_contributors_links_scanned_author(discovery_db):
+    """v3.0.0 Phase 4 (ADR-0008) retires the 3.1 dormancy contract: an
+    empty contributor list no longer writes ZERO rows — the scanned
+    author is always linked at position 0, so the discovered book is
+    visible to the now-authoritative book_authors read paths the
+    instant it's inserted."""
     from app.discovery.database import get_db
     from app.discovery.lookup import _link_discovered_contributors
     db = await get_db()
@@ -224,7 +226,7 @@ async def test_link_empty_contributors_is_dormant(discovery_db):
         await db.commit()
     finally:
         await db.close()
-    assert await _book_authors(book_id) == []
+    assert await _book_authors(book_id) == [(0, "J.N. Chaney")]
 
 
 async def test_link_trusted_source_mints_and_orders(discovery_db):

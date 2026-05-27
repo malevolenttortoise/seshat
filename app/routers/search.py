@@ -126,10 +126,16 @@ async def search(
     async def search_authors(db: aiosqlite.Connection) -> list[dict]:
         cur = await db.execute(
             """
+            -- v3.0.0 Phase 4 — per-author count routes through
+            -- book_authors (ADR-0008) so co-authored books count for
+            -- each author. COUNT(DISTINCT b.id) against join fan-out;
+            -- hidden filter on the books join drops hidden books from
+            -- the count (b is NULL for them).
             SELECT a.id, a.name,
-                   COUNT(b.id) AS book_count
+                   COUNT(DISTINCT b.id) AS book_count
             FROM authors a
-            LEFT JOIN books b ON b.author_id = a.id AND b.hidden = 0
+            LEFT JOIN book_authors ba ON ba.author_id = a.id
+            LEFT JOIN books b ON b.id = ba.book_id AND b.hidden = 0
             WHERE a.name LIKE ? COLLATE NOCASE
             GROUP BY a.id
             ORDER BY

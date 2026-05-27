@@ -870,9 +870,7 @@ async def _link_discovered_contributors(db, book_id: int, scanned_author_id: int
     """v3.0.0 Phase 3 — populate ``book_authors`` for a freshly-inserted
     discovered book from the source's contributor list.
 
-    DORMANT until per-source parsers populate ``bk.contributors`` (the
-    3.2+ work): with an empty list this returns immediately, so step
-    3.1 ships zero behavior change. Once a source emits contributors:
+    For a source that emits ``bk.contributors``:
 
       - role-filter (`contributor_is_author` — allowlist the author
         role, drop translators / illustrators / narrators / …),
@@ -887,9 +885,18 @@ async def _link_discovered_contributors(db, book_id: int, scanned_author_id: int
     list omits or misspells them) so a discovered book is never
     orphaned from the author whose scan surfaced it. Caller owns the
     commit (same connection/transaction as the books INSERT).
+
+    v3.0.0 Phase 4 — **always link the scanned author**, even when the
+    source emits no contributors (the empty-list case the 3.1-3.5
+    "dormancy contract" left as a no-op). Phase 4 makes ``book_authors``
+    authoritative on read paths (see ADR-0008), so every discovered
+    book must carry at least its position-0 link the instant it's
+    inserted — otherwise a contributor-less discovered book would be
+    invisible to the author-detail / counts / scan-prefilter joins until
+    the next startup backfill picks it up. The empty list now falls
+    through to the never-orphan append below → one row, scanned author
+    at position 0.
     """
-    if not bk.contributors:
-        return
     allow_create = source_name in TRUSTED_CREATE_SOURCES
     ordered: list[int] = []
     for c in bk.contributors:
@@ -987,10 +994,24 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
         # under the pen name).
         all_author_ids = [author_id] + (linked_author_ids or [])
         id_ph = ",".join("?" * len(all_author_ids))
+        # v3.0.0 Phase 4 — the scan dedup prefilter reads existing books
+        # where ANY of {scanned author + pen-name-linked authors} is a
+        # contributor, via book_authors (ADR-0008), not just where it's
+        # the legacy primary `books.author_id`. This is the root-cause
+        # fix for the co-author scan-duplication pathology: a book
+        # co-authored by the scanned author but OWNED under a different
+        # (un-linked) primary used to be invisible here, so the scan
+        # re-inserted it as a duplicate. `id IN (subquery)` is set
+        # membership — a book linking two of the all_author_ids returns
+        # once. Pen-name links compose via the id set; co-author links
+        # via the join. (cross_isbn_owners below still backstops the
+        # "Various authors" anthology case where the scanned author
+        # isn't even a contributor.)
         rows = await (await db.execute(
             f"SELECT id, title, source_url, series_id, series_index, source, "
             f"pub_date, expected_date, description, isbn, author_id, is_omnibus, hidden "
-            f"FROM books WHERE author_id IN ({id_ph})",
+            f"FROM books WHERE id IN "
+            f"(SELECT book_id FROM book_authors WHERE author_id IN ({id_ph}))",
             all_author_ids,
         )).fetchall()
         existing = {_normalize(r["title"]) for r in rows}
@@ -1026,18 +1047,24 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
         # consensus pass will reconcile), and curated co-author rows
         # where the user owns one entry per author also stay safe
         # (those rows would already be in the same-author set above).
+        # v3.0.0 Phase 4 — "handled by the same-author dedup path" now
+        # means "the scanned author set is a contributor of this book"
+        # (i.e. the book is already in `rows` above), not merely "is the
+        # legacy primary author_id". A book the scanned author co-wrote
+        # but that's owned under a different primary is now in `rows`
+        # and dedups there, so skip it here; cross_isbn_owners is left
+        # to flag only TRULY external owners — e.g. a "Various authors"
+        # anthology the scanned author didn't contribute to at all.
+        prefilter_book_ids = {r["id"] for r in rows}
         cross_isbn_owners: dict[str, int] = {}
         for r in await (await db.execute(
-            "SELECT author_id, isbn FROM books "
+            "SELECT id, author_id, isbn FROM books "
             "WHERE owned = 1 AND isbn IS NOT NULL AND isbn != ''"
         )).fetchall():
             isbn = (r["isbn"] or "").strip().replace("-", "")
             if not isbn or len(isbn) < 10:
                 continue
-            # Skip ISBNs already owned by this author or its linked
-            # authors — those are handled by the same-author dedup
-            # path. We only want to flag truly external owners.
-            if r["author_id"] in all_author_ids:
+            if r["id"] in prefilter_book_ids:
                 continue
             cross_isbn_owners.setdefault(isbn, r["author_id"])
 

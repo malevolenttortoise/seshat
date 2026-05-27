@@ -25,7 +25,10 @@ This glossary is **seeded, not complete** — only the most stable, load-bearing
 - **Library** — a connected collection (Calibre/CWA for ebooks, Audiobookshelf for audiobooks). Each has a **slug**.
 - **Slug** — the per-library identifier. Book ids are auto-increment **per library**, not globally unique — hence slug-scoped mutations (see [ADR-0002](docs/adr/0002-multi-library-slug-routing.md)).
 - **Owned** — a book present in a user library (`owned=1` on the per-library `books` row).
-- **Person** — a canonical, cross-library author identity (the `persons` table), linked to per-library author rows via **author links**. Resolves "same author across Calibre + ABS."
+- **Contributor** — an author credited on a book, with an ordered **position** and an optional **role** (translator, illustrator, narrator, …). A book has one or more contributors; this is the domain concept behind the `book_authors` relation. Role-filtering drops non-author contributors on ingest (see `.scratch/v3.0.0-multi-author/`).
+- **Primary author** — the contributor at **position 0**: the one shown when a single author is displayed, and the sort key for a book. Distinct from co-authors at positions 1…N.
+- **Co-authored ownership** — a book is **owned for every one of its contributors**, not just its primary author. Hiding it hides it for all of them (per-book, not per-contributor). From v3.0.0, the author↔book relation is authoritative via contributors, not the single-author column (see [ADR-0008](docs/adr/0008-book-authors-authoritative-on-reads.md)).
+- **Person** — a canonical, cross-library author identity (the `persons` table), linked to per-library author rows via **author links**. Resolves "same author across Calibre + ABS." Distinct from a **contributor**: a person is *who* the author is across libraries; a contributor is *that author's credited role + position on one book*.
 - **Mirror** — write-through that propagates a canonical value (bio, image) to per-library author siblings and the canonical `persons` row (`mirror_bio`, planned `mirror_image_url`).
 - **Sync** — reconciling Seshat's working rows against the authoritative sources (Calibre `metadata.db`, ABS API).
 

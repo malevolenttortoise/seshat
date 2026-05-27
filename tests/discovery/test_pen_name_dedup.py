@@ -282,6 +282,14 @@ async def _insert_book(
             "source, owned) VALUES (?, ?, ?, ?, ?, ?)",
             (title, author_id, series_id, series_index, source, owned),
         )
+        # v3.0.0 Phase 4 (ADR-0008): the scan dedup prefilter reads
+        # existing books via book_authors, so a seeded book must carry
+        # its author link — mirroring backfill-all / sync in prod.
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+            "VALUES (?, ?, 0)",
+            (cur.lastrowid, author_id),
+        )
         await db.commit()
         return cur.lastrowid
     finally:

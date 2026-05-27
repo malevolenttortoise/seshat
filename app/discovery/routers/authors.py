@@ -63,7 +63,16 @@ def _build_authors_sql(search, has_missing, book_type, include_orphans, sort, so
         f"COUNT(DISTINCT b.series_id) as series_count, "
         f"(SELECT COUNT(*) FROM pen_name_links pl "
         f" WHERE pl.canonical_author_id=a.id OR pl.alias_author_id=a.id) as link_count "
-        f"FROM authors a LEFT JOIN books b ON a.id=b.author_id"
+        # v3.0.0 Phase 4 — per-author counts route through book_authors
+        # (ADR-0008) so a co-authored book counts for EACH of its authors,
+        # not just the primary. `book_authors` PK is (book_id,author_id),
+        # so a book links to a given author at most once → the existing
+        # COUNT(DISTINCT b.id) / SUM(CASE…) aggregates don't fan out.
+        # (Whole-library totals live elsewhere and stay on distinct
+        # `books` rows — never summed from these per-author counts.)
+        f"FROM authors a "
+        f"LEFT JOIN book_authors ba ON a.id=ba.author_id "
+        f"LEFT JOIN books b ON b.id=ba.book_id"
     )
     p: list = []; c: list[str] = []
     if search:
@@ -281,28 +290,46 @@ async def _author_detail_for_slug(slug: str, aid: int) -> Optional[dict]:
         # `author_book_count` (omnibus EXCLUDED) is what the count
         # badge displays so progress reflects actual entries, not
         # collections.
+        # v3.0.0 Phase 4 — author-scoped counts read from book_authors
+        # (ADR-0008). `bca` is scoped to THIS author (bca.author_id=aid),
+        # so `bca.author_id IS NOT NULL` means "aid is a contributor of
+        # this book" — a co-authored book now counts for every one of
+        # its authors, not just the primary. At most one `bca` row per
+        # book (the (book_id,author_id) PK), so no GROUP fan-out.
+        # `book_count` (whole-series total, any author) stays on the
+        # books row; `multi_author` (a series-taxonomy hint owned by
+        # Phase 6) stays on the legacy author_id for now.
         a["series"] = [dict(s) for s in await (await db.execute(
             f"""SELECT s.*,
                 COUNT(DISTINCT CASE WHEN {HF} AND COALESCE(b.is_omnibus,0)=0 THEN b.id END) as book_count,
-                COUNT(DISTINCT CASE WHEN b.author_id=? AND {HF} AND COALESCE(b.is_omnibus,0)=0 THEN b.id END) as author_book_count,
-                COUNT(DISTINCT CASE WHEN b.author_id=? AND {HF} THEN b.id END) as author_visible_count,
-                COUNT(DISTINCT CASE WHEN b.author_id=? AND {HF} AND COALESCE(b.is_omnibus,0)=1 THEN b.id END) as author_omnibus_count,
-                SUM(CASE WHEN b.owned=1 AND b.author_id=? AND {HF} AND COALESCE(b.is_omnibus,0)=0 THEN 1 ELSE 0 END) as owned_count,
-                SUM(CASE WHEN b.owned=0 AND b.author_id=? AND {HF} AND COALESCE(b.is_omnibus,0)=0 THEN 1 ELSE 0 END) as missing_count,
+                COUNT(DISTINCT CASE WHEN bca.author_id IS NOT NULL AND {HF} AND COALESCE(b.is_omnibus,0)=0 THEN b.id END) as author_book_count,
+                COUNT(DISTINCT CASE WHEN bca.author_id IS NOT NULL AND {HF} THEN b.id END) as author_visible_count,
+                COUNT(DISTINCT CASE WHEN bca.author_id IS NOT NULL AND {HF} AND COALESCE(b.is_omnibus,0)=1 THEN b.id END) as author_omnibus_count,
+                SUM(CASE WHEN b.owned=1 AND bca.author_id IS NOT NULL AND {HF} AND COALESCE(b.is_omnibus,0)=0 THEN 1 ELSE 0 END) as owned_count,
+                SUM(CASE WHEN b.owned=0 AND bca.author_id IS NOT NULL AND {HF} AND COALESCE(b.is_omnibus,0)=0 THEN 1 ELSE 0 END) as missing_count,
                 CASE WHEN COUNT(DISTINCT b.author_id) > 1 THEN 1 ELSE 0 END as multi_author
             FROM series s
             JOIN books b ON s.id=b.series_id
-            WHERE s.id IN (SELECT DISTINCT series_id FROM books WHERE author_id=? AND series_id IS NOT NULL)
+            LEFT JOIN book_authors bca ON bca.book_id=b.id AND bca.author_id=?
+            WHERE s.id IN (SELECT DISTINCT b2.series_id FROM books b2
+                           JOIN book_authors ba2 ON ba2.book_id=b2.id
+                           WHERE ba2.author_id=? AND b2.series_id IS NOT NULL)
             GROUP BY s.id
             HAVING author_visible_count > 0
             ORDER BY s.name""",
-            (aid, aid, aid, aid, aid, aid)
+            (aid, aid)
         )).fetchall()]
+        # v3.0.0 Phase 4 — standalone list joins book_authors scoped to
+        # aid (INNER → only books where aid is a contributor). The
+        # `author_name` display still resolves the primary via
+        # b.author_id; per-book multi-author display is Phase 7.
         standalone = [
             {**dict(b), "library_slug": slug, "content_type": content_type}
             for b in await (await db.execute(
-                f"SELECT b.*, a2.name as author_name FROM books b JOIN authors a2 ON b.author_id=a2.id "
-                f"WHERE b.author_id=? AND b.series_id IS NULL AND {HF} ORDER BY b.pub_date ASC, b.title ASC",
+                f"SELECT b.*, a2.name as author_name FROM books b "
+                f"JOIN book_authors bca ON bca.book_id=b.id AND bca.author_id=? "
+                f"JOIN authors a2 ON b.author_id=a2.id "
+                f"WHERE b.series_id IS NULL AND {HF} ORDER BY b.pub_date ASC, b.title ASC",
                 (aid,)
             )).fetchall()
         ]

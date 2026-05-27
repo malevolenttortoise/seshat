@@ -13,3 +13,4 @@ New decisions get the next number; supersede rather than rewrite when a decision
 | [0005](0005-backfill-attempted-set.md) | Backfill workers track an in-process attempted-set |
 | [0006](0006-mam-not-found-is-permanent.md) | Treat MAM "not found in search results" as permanent |
 | [0007](0007-development-main-release-flow.md) | All work on `development`; `main` gets merges + tags only |
+| [0008](0008-book-authors-authoritative-on-reads.md) | `book_authors` authoritative on reads; backfill-all (not fallback) |

@@ -108,6 +108,13 @@ async def cross_lib_http_env(tmp_path, monkeypatch):
                 "VALUES (?, ?, ?, ?)",
                 (title, author_id, hidden, owned),
             )
+            # v3.0.0 Phase 4 (ADR-0008): author/person detail reads via
+            # book_authors — link the seeded book to its author at pos 0.
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+                "VALUES (?, ?, 0)",
+                (cur.lastrowid, author_id),
+            )
             await db.commit()
             return cur.lastrowid
         finally:

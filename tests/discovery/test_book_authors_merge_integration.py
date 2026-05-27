@@ -246,11 +246,14 @@ async def test_scanned_author_never_orphaned_through_merge(discovery_db):
     ]
 
 
-async def test_empty_contributors_writes_no_book_authors(discovery_db):
-    """The 3.1 dormancy contract, end-to-end: a source that emits no
-    contributors (any pre-3.2 source, or a book page with no parsable
-    contributor block) inserts the book under the legacy author_id but
-    writes ZERO book_authors rows. No phantom single-author links."""
+async def test_empty_contributors_links_scanned_author(discovery_db):
+    """v3.0.0 Phase 4 (ADR-0008) retires the 3.1 dormancy contract. A
+    source that emits NO contributors (a book page with no parsable
+    contributor block, or a source not yet emitting them) no longer
+    leaves book_authors empty: the discovery INSERT always links the
+    scanned author at position 0, so the book is visible to the
+    now-authoritative book_authors read paths (author detail, counts,
+    scan prefilter) the instant it's inserted."""
     chaney_id = await _insert_author("J.N. Chaney")
 
     new, _ = await _merge_result(
@@ -261,8 +264,9 @@ async def test_empty_contributors_writes_no_book_authors(discovery_db):
     )
 
     assert new == 1
-    assert await _book_count("Ruins of the Galaxy") == 1   # book still inserted
-    assert await _book_authors_for("Ruins of the Galaxy") == []  # but no links
+    assert await _book_count("Ruins of the Galaxy") == 1
+    # Always-link: exactly the scanned author at position 0.
+    assert await _book_authors_for("Ruins of the Galaxy") == [(0, "J.N. Chaney")]
 
 
 # ─── multi-source convergence ────────────────────────────────
@@ -306,6 +310,65 @@ async def test_multi_source_convergence_no_duplicate_links(discovery_db):
     assert await _book_count("Ruins of the Galaxy") == 1
     # No dupes, no loss — the discovery-INSERT-time set stands.
     assert await _book_authors_for("Ruins of the Galaxy") == first
+
+
+# ─── scan-dedup: the co-author duplication pathology (Phase 4) ─
+
+
+async def test_coauthored_owned_book_not_duplicated_on_coauthor_scan(discovery_db):
+    """v3.0.0 Phase 4 (ADR-0008) — the Chaney/Anspach fix. A book OWNED
+    under primary author A with co-author B (book_authors=[A,B]) must NOT
+    be re-inserted as a new discovered row when co-author B is scanned.
+
+    Before Phase 4 the scan prefilter only saw books where
+    `books.author_id = B`, so A's co-authored book was invisible to B's
+    scan and got duplicated. Now the prefilter reads `book_authors`, so
+    B's scan matches A's owned row and the cross-author dedup suppresses
+    the insert."""
+    from app.discovery.database import get_db
+    chaney_id = await _insert_author("J.N. Chaney")      # A — primary / owner
+    anspach_id = await _insert_author("Jason Anspach")    # B — co-author
+
+    # Owned co-authored book under A, linked to BOTH via book_authors
+    # (what backfill / sync produce in prod).
+    db = await get_db()
+    try:
+        cur = await db.execute(
+            "INSERT INTO books (title, author_id, source, owned) "
+            "VALUES ('Able Bodied Soldier', ?, 'calibre', 1)",
+            (chaney_id,),
+        )
+        bid = cur.lastrowid
+        for pos, aid in enumerate((chaney_id, anspach_id)):
+            await db.execute(
+                "INSERT INTO book_authors (book_id, author_id, position) "
+                "VALUES (?, ?, ?)",
+                (bid, aid, pos),
+            )
+        await db.commit()
+    finally:
+        await db.close()
+
+    # Scan co-author B — the source returns the same title.
+    new, _ = await _merge_result(
+        author_id=anspach_id,
+        result=_scan(
+            "goodreads",
+            Contributor(name="Jason Anspach"),
+            Contributor(name="J.N. Chaney"),
+            title="Able Bodied Soldier",
+        ),
+        source_name="goodreads",
+        languages=["English"],
+    )
+
+    assert new == 0                                  # matched A's owned row, no dup
+    assert await _book_count("Able Bodied Soldier") == 1
+    # The owned row's links are untouched.
+    assert await _book_authors_for("Able Bodied Soldier") == [
+        (0, "J.N. Chaney"),
+        (1, "Jason Anspach"),
+    ]
 
 
 # ─── scale / ordering — the 7-author anthology fixture ───────

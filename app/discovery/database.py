@@ -1060,6 +1060,16 @@ async def _backfill_book_authors(db) -> int:
         if not author_ids and r["author_id"] is not None:
             # Legacy single-author fallback — no snapshot or no
             # snapshot names resolved against this library's authors.
+            # This is the "backfill-all" arm: it links EVERY book with
+            # an author_id (owned without a resolvable snapshot AND
+            # discovered books, which never have a snapshot) to its
+            # primary at position 0. As of v3.0.0 Phase 4 this arm is
+            # load-bearing, not just a nicety — read paths now join
+            # book_authors authoritatively (ADR-0008), so a book left
+            # without a link here would be invisible to author detail /
+            # counts / the scan prefilter until the next restart. The
+            # runtime equivalent is `_link_discovered_contributors`
+            # always-linking the scanned author on insert (Phase 4).
             author_ids = [r["author_id"]]
         for pos, aid in enumerate(author_ids):
             ins = await db.execute(
