@@ -69,13 +69,20 @@ async def _seed_pair(*, winner_kind="calibre_owned", loser_kind="unowned_goodrea
         author_id = cur.lastrowid
 
         async def _insert(fields):
-            cols = ["title", "author_id"] + list(fields.keys())
-            vals = ["Right of Retribution 2", author_id] + list(fields.values())
+            # v3.0.0: books.author_id dropped; use book_authors join.
+            cols = ["title"] + list(fields.keys())
+            vals = ["Right of Retribution 2"] + list(fields.values())
             ph = ", ".join("?" * len(cols))
             cur2 = await db.execute(
                 f"INSERT INTO books ({', '.join(cols)}) VALUES ({ph})", vals,
             )
-            return cur2.lastrowid
+            bid = cur2.lastrowid
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+                "VALUES (?, ?, 0)",
+                (bid, author_id),
+            )
+            return bid
 
         w_id = await _insert(kind_to_fields[winner_kind])
         l_id = await _insert(kind_to_fields[loser_kind])
@@ -143,18 +150,26 @@ class TestMergeEndpoint:
                 ("Arand", "Arand", normalize_author_name("Arand")),
             )
             author_id = cur.lastrowid
+            # v3.0.0: books.author_id dropped; use book_authors join.
             a = await db.execute(
-                "INSERT INTO books (title, author_id, source, owned, "
-                "calibre_id) VALUES ('X', ?, 'calibre', 1, 3796)",
-                (author_id,),
+                "INSERT INTO books (title, source, owned, "
+                "calibre_id) VALUES ('X', 'calibre', 1, 3796)",
+            )
+            a_id = a.lastrowid
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+                "VALUES (?, ?, 0)", (a_id, author_id),
             )
             b = await db.execute(
-                "INSERT INTO books (title, author_id, source, owned, "
-                "calibre_id) VALUES ('X', ?, 'calibre', 1, 3897)",
-                (author_id,),
+                "INSERT INTO books (title, source, owned, "
+                "calibre_id) VALUES ('X', 'calibre', 1, 3897)",
+            )
+            b_id = b.lastrowid
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+                "VALUES (?, ?, 0)", (b_id, author_id),
             )
             await db.commit()
-            a_id, b_id = a.lastrowid, b.lastrowid
         finally:
             await db.close()
         r = await merge_endpoint.post(

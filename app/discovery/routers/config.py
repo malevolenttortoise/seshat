@@ -153,7 +153,7 @@ async def get_stats(slug: str | None = None):
         # Match the Authors page browse view (routers/authors.py:get_authors)
         # by excluding orphans. Otherwise the Dashboard's author count is
         # higher than the Authors page list and looks like a bug to users.
-        authors = (await (await g("SELECT COUNT(*) c FROM authors WHERE id IN (SELECT DISTINCT author_id FROM books)")).fetchone())["c"]
+        authors = (await (await g("SELECT COUNT(*) c FROM authors WHERE id IN (SELECT DISTINCT author_id FROM book_authors)")).fetchone())["c"]
         total = (await (await g(f"SELECT COUNT(*) c FROM books b WHERE {HF}")).fetchone())["c"]
         owned = (await (await g(f"SELECT COUNT(*) c FROM books b WHERE owned=1 AND {HF}")).fetchone())["c"]
         missing = (await (await g(f"SELECT COUNT(*) c FROM books b WHERE owned=0 AND {HF}")).fetchone())["c"]

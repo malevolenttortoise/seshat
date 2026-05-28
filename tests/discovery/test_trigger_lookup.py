@@ -67,9 +67,13 @@ async def _seed_due_author(slug: str, name: str = "Author"):
             (name, name),
         )
         aid = cur.lastrowid
+        cur = await db.execute(
+            "INSERT INTO books (title) VALUES (?)", ("T",),
+        )
+        bid = cur.lastrowid
         await db.execute(
-            "INSERT INTO books (title, author_id) VALUES (?, ?)",
-            ("T", aid),
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+            "VALUES (?, ?, 0)", (bid, aid),
         )
         await db.commit()
     finally:

@@ -63,7 +63,7 @@ import sqlite3
 from typing import Iterable
 from fastapi import APIRouter, Body, HTTPException, Query
 
-from app.discovery.database import get_db, HF
+from app.discovery.database import get_db, HF, attach_contributors
 
 logger = logging.getLogger("seshat.discovery")
 
@@ -115,11 +115,12 @@ async def get_series(sid: int, slug: str | None = None):
         rows = [
             {**dict(b), "library_slug": effective_slug, "content_type": content_type}
             for b in await (await db.execute(f"""
-                SELECT b.*, a.name as author_name, sr.name as series_name,
+                SELECT b.*, bpa.author_id AS author_id, a.name as author_name, sr.name as series_name,
                     COALESCE(st.series_total, 0) as series_total,
                     COALESCE(st.mainline_total, 0) as mainline_total
                 FROM books b
-                JOIN authors a ON b.author_id=a.id
+                JOIN book_authors bpa ON bpa.book_id=b.id AND bpa.position=0
+                JOIN authors a ON a.id=bpa.author_id
                 LEFT JOIN series sr ON b.series_id=sr.id
                 LEFT JOIN (
                     SELECT series_id,
@@ -136,7 +137,37 @@ async def get_series(sid: int, slug: str | None = None):
                 ORDER BY COALESCE(b.series_index,999), b.pub_date ASC
             """, (sid,))).fetchall()
         ]
+        # v3.0.0 Phase 7 — multi-author byline on series book cards.
+        await attach_contributors(db, rows)
         s["books"] = await _stamp_work_siblings(rows, effective_slug)
+        # v3.0.0 Phase 8 — contributing-authors section for the series
+        # detail page: every author on any visible book of the series,
+        # with their in-series book count + an `is_owner` flag. Same
+        # ADR-0011 count-equality basis as author detail — an author in
+        # EVERY visible linked book is an owner; on only some is incidental.
+        # `linked` = visible books carrying ≥1 contributor link (matches
+        # the Phase 6 intersection basis).
+        linked = (await (await db.execute(
+            "SELECT COUNT(DISTINCT b.id) AS n FROM books b "
+            "WHERE b.series_id=? AND b.hidden=0 "
+            "AND EXISTS (SELECT 1 FROM book_authors ba WHERE ba.book_id=b.id)",
+            (sid,),
+        )).fetchone())["n"]
+        ca_rows = await (await db.execute(
+            "SELECT a.id AS author_id, a.name AS name, "
+            "COUNT(DISTINCT b.id) AS book_count "
+            "FROM book_authors ba "
+            "JOIN books b ON b.id = ba.book_id "
+            "JOIN authors a ON a.id = ba.author_id "
+            "WHERE b.series_id=? AND b.hidden=0 "
+            "GROUP BY a.id, a.name "
+            "ORDER BY book_count DESC, a.name COLLATE NOCASE ASC",
+            (sid,),
+        )).fetchall()
+        s["contributing_authors"] = [
+            {**dict(ca), "is_owner": bool(linked > 0 and ca["book_count"] == linked)}
+            for ca in ca_rows
+        ]
         return s
     finally:
         await db.close()
@@ -179,9 +210,10 @@ async def list_series(
     sort_dir: str = Query("asc"),
     has_missing: bool = Query(None),
     shared: bool = Query(None),
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(50, ge=1, le=10000),
     offset: int = Query(0, ge=0),
     include_empty: bool = Query(False),
+    slug: str | None = Query(None),  # v3.0.0 Phase 8 — per-library tab scope
 ):
     """List series with author info, owned/missing counts, multi-author
     flag, plus a `cover_book_id` per row for thumbnail rendering.
@@ -208,7 +240,7 @@ async def list_series(
     `total` is the count of series matching all filters before
     pagination; the frontend uses it to render "showing X–Y of N".
     """
-    db = await get_db()
+    db = await get_db(slug)
     try:
         # Per-row cover pick: prefer books with any cover signal, then
         # series_index, then pub_date, then id. Correlated subquery on
@@ -226,9 +258,15 @@ async def list_series(
             f"COUNT(DISTINCT CASE WHEN {HF} THEN b.id END) as book_count, "
             f"SUM(CASE WHEN b.owned=1 AND {HF} THEN 1 ELSE 0 END) as owned_count, "
             f"SUM(CASE WHEN b.owned=0 AND {HF} THEN 1 ELSE 0 END) as missing_count, "
-            f"CASE WHEN COUNT(DISTINCT b.author_id) > 1 THEN 1 ELSE 0 END as multi_author, "
-            f"CASE WHEN s.author_id IS NULL THEN 1 ELSE 0 END as is_shared, "
-            f"COUNT(DISTINCT b.author_id) as contributor_count, "
+            # v3.0.0 Phase 6 (ADR-0010): flags read the stored author_mode
+            # discriminator. contributor_count counts distinct CONTRIBUTORS
+            # via book_authors — as a scalar subquery, NOT a join, so it
+            # doesn't fan out the SUM() aggregates above.
+            f"CASE WHEN s.author_mode = 'multi_author' THEN 1 ELSE 0 END as multi_author, "
+            f"CASE WHEN s.author_mode = 'shared' THEN 1 ELSE 0 END as is_shared, "
+            f"(SELECT COUNT(DISTINCT ba.author_id) FROM book_authors ba "
+            f" JOIN books b2 ON b2.id = ba.book_id "
+            f" WHERE b2.series_id = s.id AND b2.hidden = 0) as contributor_count, "
             f"{cover_subq} as cover_book_id"
         )
         from_join = (
@@ -321,82 +359,125 @@ async def _series_or_404(db, sid: int) -> dict:
 
 
 async def _recompute_series_author(db, sids: Iterable[int]) -> None:
-    """Recompute `series.author_id` from current membership for each
-    series id passed in.
+    """Recompute `series.author_mode` + `series.author_id` from current
+    membership for each series id passed in (v3.0.0 Phase 6, ADR-0010).
 
-    The rule (counts VISIBLE books only — hidden=ignored):
-      - exactly 1 distinct author across the series's visible books →
-        `series.author_id` set to that author (per-author authority)
-      - 2+ distinct authors → `series.author_id = NULL` (shared)
-      - 0 visible books → no-op (orphaned or fully-hidden series; we
-        leave authority alone so a freshly-emptied row doesn't
-        silently change shape before the caller gets a chance to
-        delete it)
+    Computes over the **intersection** `I` of the series' visible books'
+    contributor sets (`book_authors`) — the authors present in EVERY
+    book (the "owner set"):
 
-    Hidden books are explicitly excluded — Mark's mental model is
-    "hidden = ignore". A per-author Alice series with one hidden Bob
-    book stays per-author Alice. (If the hidden book is later
-    un-hidden, the un-hide endpoint re-runs this helper so authority
-    catches up.)
+      - `|I| == 1` → `author_mode='per_author'`, `author_id` = that owner.
+      - `|I| >= 2` → `author_mode='multi_author'`, `author_id` = a
+        deterministic anchor from `I` (most-common primary across the
+        books; tiebreak lowest author_id). Non-NULL.
+      - `|I| == 0` → `author_mode='shared'`, `author_id = NULL`.
+      - 0 visible contributor-bearing books → no-op (orphaned or
+        fully-hidden series; leave shape alone so a freshly-emptied row
+        doesn't change before the caller can delete it).
 
-    Callers that mutate book→series membership pass every affected
-    series id (destination + every source series the books moved off
-    of). Duplicates are fine — we dedupe inside.
+    Hidden books are excluded — "hidden = ignore". A per-author Alice
+    series with one hidden Bob book stays per-author Alice (the un-hide
+    endpoint re-runs this helper so authority catches up).
 
-    Does NOT commit — caller owns the transaction so a multi-step
-    mutation (e.g. add author + recompute several series) lands as
-    one atomic write.
+    Keying on the intersection (not distinct primaries) is what makes a
+    co-authored-team series multi_author (Galaxy's Edge → owners Chaney +
+    Anspach) while a guest co-author on a single book stays incidental
+    (the series stays per_author its through-line author).
+
+    `author_id` coexists as an owner pointer so `is_shared =
+    (author_id IS NULL)` keeps meaning shared-only; `author_mode` is
+    what distinguishes per_author from multi_author (both non-NULL).
+
+    Callers pass every affected series id (destination + every source
+    series). Duplicates are fine — deduped inside. Does NOT commit —
+    caller owns the transaction.
     """
     seen: set[int] = set()
     for sid in sids:
         if sid is None or sid in seen:
             continue
         seen.add(sid)
-        row = await (await db.execute(
-            "SELECT COUNT(DISTINCT author_id) AS n_authors, "
-            "MIN(author_id) AS only_author, "
-            "COUNT(*) AS n_books "
-            "FROM books "
-            "WHERE series_id = ? AND author_id IS NOT NULL "
-            "AND hidden = 0",
+        # Visible books + their book_authors contributor sets, plus each
+        # book's primary (position 0) for the multi_author anchor tiebreak.
+        # v3.0.0 Phase 9 (ADR-0012): the primary is book_authors position 0
+        # (books.author_id is gone) — a correlated subquery rather than the
+        # all-positions `ba` join, which fans out across contributors.
+        rows = await (await db.execute(
+            "SELECT b.id AS book_id, "
+            "       (SELECT author_id FROM book_authors "
+            "          WHERE book_id = b.id AND position = 0) AS primary_author_id, "
+            "       ba.author_id AS contributor_id "
+            "FROM books b "
+            "LEFT JOIN book_authors ba ON ba.book_id = b.id "
+            "WHERE b.series_id = ? AND b.hidden = 0",
             (sid,),
-        )).fetchone()
-        if not row:
-            continue
-        n_books = row["n_books"] or 0
-        if n_books == 0:
-            continue
-        n_authors = row["n_authors"] or 0
-        if n_authors >= 2:
-            # Shared direction: NULL is distinct in SQLite UNIQUE so this
-            # can never collide with another shared row of the same name.
+        )).fetchall()
+        per_book: dict[int, set[int]] = {}
+        primary_of: dict[int, int] = {}
+        for r in rows:
+            bid = r["book_id"]
+            per_book.setdefault(bid, set())
+            if r["contributor_id"] is not None:
+                per_book[bid].add(r["contributor_id"])
+            if r["primary_author_id"] is not None:
+                primary_of[bid] = r["primary_author_id"]
+        # Only books that actually carry contributor links count toward
+        # the intersection (an empty set would zero it spuriously).
+        book_sets = [s for s in per_book.values() if s]
+        if not book_sets:
+            continue  # nothing to compute authority from — leave as-is
+        intersection = set.intersection(*book_sets)
+
+        if len(intersection) == 1:
+            mode = "per_author"
+            owner = next(iter(intersection))
+        elif len(intersection) >= 2:
+            mode = "multi_author"
+            # Anchor = most-common primary among the intersection;
+            # tiebreak lowest author_id (deterministic).
+            primary_counts: dict[int, int] = {}
+            for bid, pa in primary_of.items():
+                if pa in intersection:
+                    primary_counts[pa] = primary_counts.get(pa, 0) + 1
+            owner = max(
+                intersection,
+                key=lambda a: (primary_counts.get(a, 0), -a),
+            )
+        else:
+            mode = "shared"
+            owner = None
+
+        if owner is None:
+            # NULL is distinct in SQLite UNIQUE — never collides.
             await db.execute(
-                "UPDATE series SET author_id = NULL WHERE id = ? "
-                "AND author_id IS NOT NULL",
+                "UPDATE series SET author_mode = 'shared', author_id = NULL "
+                "WHERE id = ?",
                 (sid,),
             )
-        elif n_authors == 1:
-            # Per-author direction: a per-author row with the same
-            # (name, author_id) might already exist — UNIQUE would fire.
-            # Degrade gracefully: leave authority as-is (NULL) and log
-            # so the user can manually reconcile via rename or delete.
+        else:
+            # A series with the same (name, author_id) might already
+            # exist — UNIQUE would fire. Degrade gracefully: still record
+            # author_mode, leave author_id unchanged, and log.
             try:
                 await db.execute(
-                    "UPDATE series SET author_id = ? WHERE id = ? "
-                    "AND (author_id IS NULL OR author_id != ?)",
-                    (row["only_author"], sid, row["only_author"]),
+                    "UPDATE series SET author_mode = ?, author_id = ? WHERE id = ?",
+                    (mode, owner, sid),
                 )
             except sqlite3.IntegrityError:
                 logger.warning(
-                    "series %s flip to per-author (author_id=%s) "
-                    "blocked by UNIQUE(name, author_id); leaving "
-                    "authority unchanged",
-                    sid, row["only_author"],
+                    "series %s flip to author_mode=%s (author_id=%s) "
+                    "blocked by UNIQUE(name, author_id); recording mode "
+                    "only, leaving author_id unchanged",
+                    sid, mode, owner,
+                )
+                await db.execute(
+                    "UPDATE series SET author_mode = ? WHERE id = ?",
+                    (mode, sid),
                 )
 
 
 @router.post("/series/promote")
-async def promote_series(payload: dict = Body(...)):
+async def promote_series(payload: dict = Body(...), slug: str | None = Query(None)):
     """Promote 2+ per-author series rows into a single shared row.
 
     Request body:
@@ -427,7 +508,7 @@ async def promote_series(payload: dict = Body(...)):
     if not isinstance(series_ids, list) or len(series_ids) < 2:
         raise HTTPException(400, "series_ids must be a list of 2+ ids")
 
-    db = await get_db()
+    db = await get_db(slug)
     try:
         # Validate all rows + collect names. Reject if any is already
         # shared (author_id IS NULL) — the user should pick a different
@@ -463,10 +544,19 @@ async def promote_series(payload: dict = Body(...)):
             shared_id = shared_row["id"]
         else:
             cur = await db.execute(
-                "INSERT INTO series (name, author_id) VALUES (?, NULL)",
+                "INSERT INTO series (name, author_id, author_mode) "
+                "VALUES (?, NULL, 'shared')",
                 (canonical_name,),
             )
             shared_id = cur.lastrowid
+        # v3.0.0 Phase 6 (ADR-0010): a promoted row is shared by user
+        # intent — keep author_mode consistent with author_id=NULL.
+        # (Membership changes re-run _recompute_series_author, and the
+        # startup backfill recomputes the accurate mode after restart.)
+        await db.execute(
+            "UPDATE series SET author_mode = 'shared' WHERE id = ?",
+            (shared_id,),
+        )
 
         # Re-link books from every source row to the shared row, then
         # delete the source rows. Skip the shared_id itself if it
@@ -497,7 +587,7 @@ async def promote_series(payload: dict = Body(...)):
 
 
 @router.post("/series/{sid}/demote")
-async def demote_series(sid: int):
+async def demote_series(sid: int, slug: str | None = Query(None)):
     """Split a shared series row into per-author rows.
 
     For each distinct author whose books currently point at this
@@ -511,7 +601,7 @@ async def demote_series(sid: int):
     400 if the shared row has no books — there's nothing to split,
     just call DELETE instead.
     """
-    db = await get_db()
+    db = await get_db(slug)
     try:
         row = await _series_or_404(db, sid)
         if row["author_id"] is not None:
@@ -519,9 +609,13 @@ async def demote_series(sid: int):
                 400, "series is not shared (author_id is not NULL)"
             )
 
+        # v3.0.0 Phase 9 (ADR-0012): contributor-aware — every author who
+        # appears on any book in the series (book_authors, not the dropped
+        # books.author_id primary).
         author_rows = await (await db.execute(
-            "SELECT DISTINCT author_id FROM books "
-            "WHERE series_id = ? AND author_id IS NOT NULL",
+            "SELECT DISTINCT ba.author_id AS author_id FROM book_authors ba "
+            "JOIN books b ON b.id = ba.book_id "
+            "WHERE b.series_id = ?",
             (sid,),
         )).fetchall()
         author_ids = [r["author_id"] for r in author_rows]
@@ -543,14 +637,19 @@ async def demote_series(sid: int):
             if existing:
                 new_id = existing["id"]
             else:
+                # v3.0.0 Phase 6 (ADR-0010): demote splits by primary
+                # author → the new rows are per_author by intent.
                 cur = await db.execute(
-                    "INSERT INTO series (name, author_id) VALUES (?, ?)",
+                    "INSERT INTO series (name, author_id, author_mode) "
+                    "VALUES (?, ?, 'per_author')",
                     (row["name"], aid),
                 )
                 new_id = cur.lastrowid
+            # v3.0.0 Phase 9 (ADR-0012): split by primary (position 0).
             cur = await db.execute(
                 "UPDATE books SET series_id = ? "
-                "WHERE series_id = ? AND author_id = ?",
+                "WHERE series_id = ? AND id IN "
+                "(SELECT book_id FROM book_authors WHERE author_id = ? AND position = 0)",
                 (new_id, sid, aid),
             )
             books_moved_total += cur.rowcount or 0
@@ -569,7 +668,7 @@ async def demote_series(sid: int):
 
 
 @router.patch("/series/{sid}")
-async def rename_series(sid: int, payload: dict = Body(...)):
+async def rename_series(sid: int, payload: dict = Body(...), slug: str | None = Query(None)):
     """Rename a series.
 
     Request body: {"name": "New Name"}
@@ -583,7 +682,7 @@ async def rename_series(sid: int, payload: dict = Body(...)):
     if not new_name:
         raise HTTPException(400, "name must not be empty")
 
-    db = await get_db()
+    db = await get_db(slug)
     try:
         row = await _series_or_404(db, sid)
         if new_name == row["name"]:
@@ -621,7 +720,7 @@ async def rename_series(sid: int, payload: dict = Body(...)):
 
 
 @router.delete("/series/{sid}")
-async def delete_series(sid: int):
+async def delete_series(sid: int, slug: str | None = Query(None)):
     """Delete a series row. Books pointing at it fall back to
     standalone (series_id=NULL, series_index=NULL).
 
@@ -630,7 +729,7 @@ async def delete_series(sid: int):
     of "this series row is wrong, here's the correct one" prefer
     promote/demote/membership-edit instead.
     """
-    db = await get_db()
+    db = await get_db(slug)
     try:
         await _series_or_404(db, sid)
         cur = await db.execute(
@@ -646,7 +745,7 @@ async def delete_series(sid: int):
 
 
 @router.post("/series/{sid}/books")
-async def add_books_to_series(sid: int, payload: dict = Body(...)):
+async def add_books_to_series(sid: int, payload: dict = Body(...), slug: str | None = Query(None)):
     """Bulk-add books to a series.
 
     Request body:
@@ -670,7 +769,7 @@ async def add_books_to_series(sid: int, payload: dict = Body(...)):
         raise HTTPException(400, "book_ids must be a non-empty list")
     indices = payload.get("indices") or {}
 
-    db = await get_db()
+    db = await get_db(slug)
     try:
         await _series_or_404(db, sid)
         # Capture the source series of every moving book BEFORE the
@@ -706,7 +805,7 @@ async def add_books_to_series(sid: int, payload: dict = Body(...)):
 
 
 @router.delete("/series/{sid}/books/{book_id}")
-async def remove_book_from_series(sid: int, book_id: int):
+async def remove_book_from_series(sid: int, book_id: int, slug: str | None = Query(None)):
     """Detach a book from this series. Book becomes standalone
     (series_id=NULL, series_index=NULL). 404 if the book isn't
     actually on this series.
@@ -715,7 +814,7 @@ async def remove_book_from_series(sid: int, book_id: int):
     this book leaves a single distinct author behind, the series
     flips from shared to per-author).
     """
-    db = await get_db()
+    db = await get_db(slug)
     try:
         row = await (await db.execute(
             "SELECT id FROM books WHERE id = ? AND series_id = ?",
@@ -746,7 +845,7 @@ def _authority_label(author_id) -> str:
 
 
 @router.get("/series/{sid}/authors")
-async def list_series_authors(sid: int):
+async def list_series_authors(sid: int, slug: str | None = Query(None)):
     """Distinct author list for a series with per-author book counts.
 
     Drives the v2.3.3 Manage Members modal. Hidden books are excluded
@@ -759,25 +858,42 @@ async def list_series_authors(sid: int):
     Per-author book_count counts visible books only — matches what
     the user sees on the row.
     """
-    db = await get_db()
+    db = await get_db(slug)
     try:
         await _series_or_404(db, sid)
+        # v3.0.0 Phase 7 — surface the stored author_mode (ADR-0010) so the
+        # modal header shows the accurate 3-way label (per_author /
+        # multi_author / shared) instead of guessing from the author count.
+        # The current-authors list below stays grouped by PRIMARY author_id
+        # (the Remove affordance detaches by primary) — surfacing pure
+        # co-authors here would dead-end Remove (404) or, made
+        # contributor-aware, would nuke a whole co-authored series; that
+        # membership-management question is deliberately out of Phase 7.
+        srow = await (await db.execute(
+            "SELECT author_mode FROM series WHERE id = ?", (sid,)
+        )).fetchone()
         rows = await (await db.execute(
             "SELECT a.id AS author_id, a.name AS name, "
             "COUNT(b.id) AS book_count "
-            "FROM books b JOIN authors a ON a.id = b.author_id "
+            "FROM books b "
+            "JOIN book_authors bpa ON bpa.book_id = b.id AND bpa.position = 0 "
+            "JOIN authors a ON a.id = bpa.author_id "
             "WHERE b.series_id = ? AND b.hidden = 0 "
             "GROUP BY a.id, a.name "
             "ORDER BY a.name COLLATE NOCASE ASC",
             (sid,),
         )).fetchall()
-        return {"series_id": sid, "authors": [dict(r) for r in rows]}
+        return {
+            "series_id": sid,
+            "author_mode": srow["author_mode"] if srow else None,
+            "authors": [dict(r) for r in rows],
+        }
     finally:
         await db.close()
 
 
 @router.post("/series/{sid}/authors")
-async def add_author_to_series(sid: int, payload: dict = Body(...)):
+async def add_author_to_series(sid: int, payload: dict = Body(...), slug: str | None = Query(None)):
     """Assign one author's books to this series.
 
     Request body:
@@ -812,7 +928,7 @@ async def add_author_to_series(sid: int, payload: dict = Body(...)):
     if not all(isinstance(b, int) for b in book_ids):
         raise HTTPException(400, "book_ids must be a list of ints")
 
-    db = await get_db()
+    db = await get_db(slug)
     try:
         await _series_or_404(db, sid)
         # Validate the author exists. (Authors table is in the same
@@ -829,7 +945,7 @@ async def add_author_to_series(sid: int, payload: dict = Body(...)):
         # confusing state.
         ph = ",".join("?" * len(book_ids))
         rows = await (await db.execute(
-            f"SELECT id, author_id, series_id FROM books "
+            f"SELECT id, series_id FROM books "
             f"WHERE id IN ({ph})",
             book_ids,
         )).fetchall()
@@ -838,7 +954,18 @@ async def add_author_to_series(sid: int, payload: dict = Body(...)):
             found = {r["id"] for r in rows}
             missing = [b for b in book_ids if b not in found]
             raise HTTPException(404, f"books not found: {missing}")
-        wrong_author = [r["id"] for r in rows if r["author_id"] != author_id]
+        # v3.0.0 Phase 6 (ADR-0010): a book "belongs to" the author if the
+        # author is ANY contributor (book_authors), not just the legacy
+        # primary `books.author_id`. This is the dropdown fix — a
+        # co-author (e.g. Anspach on a Chaney-primary co-authored book)
+        # can now be associated with the series.
+        contrib_rows = await (await db.execute(
+            f"SELECT DISTINCT book_id FROM book_authors "
+            f"WHERE author_id = ? AND book_id IN ({ph})",
+            (author_id, *book_ids),
+        )).fetchall()
+        contributor_books = {r["book_id"] for r in contrib_rows}
+        wrong_author = [bid for bid in book_ids if bid not in contributor_books]
         if wrong_author:
             raise HTTPException(
                 400,
@@ -875,7 +1002,7 @@ async def add_author_to_series(sid: int, payload: dict = Body(...)):
 
 
 @router.delete("/series/{sid}/authors/{author_id}")
-async def remove_author_from_series(sid: int, author_id: int):
+async def remove_author_from_series(sid: int, author_id: int, slug: str | None = Query(None)):
     """Detach every book by `author_id` from `sid`.
 
     Books fall back to standalone (series_id=NULL, series_index=NULL).
@@ -886,13 +1013,17 @@ async def remove_author_from_series(sid: int, author_id: int):
     the common one: a 2-author shared series whose Bob is removed
     flips back to per-author Alice.
     """
-    db = await get_db()
+    db = await get_db(slug)
     try:
         await _series_or_404(db, sid)
         # Verify there's something to remove.
+        # v3.0.0 Phase 9 (ADR-0012): detach by PRIMARY (position 0) —
+        # matches the documented "Remove detaches by primary" semantics;
+        # contributor-aware here would wrongly detach co-authored books.
         cur = await db.execute(
             "SELECT COUNT(*) AS n FROM books "
-            "WHERE series_id = ? AND author_id = ?",
+            "WHERE series_id = ? AND id IN "
+            "(SELECT book_id FROM book_authors WHERE author_id = ? AND position = 0)",
             (sid, author_id),
         )
         n = (await cur.fetchone())["n"]
@@ -904,7 +1035,8 @@ async def remove_author_from_series(sid: int, author_id: int):
 
         await db.execute(
             "UPDATE books SET series_id = NULL, series_index = NULL "
-            "WHERE series_id = ? AND author_id = ?",
+            "WHERE series_id = ? AND id IN "
+            "(SELECT book_id FROM book_authors WHERE author_id = ? AND position = 0)",
             (sid, author_id),
         )
         await _recompute_series_author(db, [sid])

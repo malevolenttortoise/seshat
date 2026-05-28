@@ -154,6 +154,58 @@ class TestSearchAuthor:
         assert src.region == "us"
         assert src._catalog_url().endswith(".com/1.0/catalog/products")
 
+
+class TestContributors:
+    """v3.0.0 Phase 3.5 — Audnexus keeps authors + narrators in separate
+    fields, so `BookResult.contributors` is populated from the clean
+    `authors[]` list (role None, all authors); narrators never leak in.
+    Audible is trusted-create."""
+
+    async def test_co_authors_populated_narrator_excluded(self, monkeypatch):
+        from app.discovery.sources.audible import AudibleDiscoverySource
+        from app.discovery.sources.base import contributor_is_author
+
+        handler = _make_handler(
+            catalog_pages=[[{"asin": "B0COAUTH01"}]],
+            audnexus_items={
+                "B0COAUTH01": {
+                    "asin": "B0COAUTH01", "title": "A Co-Authored Audiobook",
+                    "authors": [{"name": "Jason Anspach"}, {"name": "Nick Cole"}],
+                    "narrators": [{"name": "R.C. Bray"}],
+                },
+            },
+        )
+        _inject_transport(monkeypatch, handler)
+
+        result = await AudibleDiscoverySource(rate_limit=0).search_author("Jason Anspach")
+        bk = result.books[0]
+        assert [(c.name, c.role) for c in bk.contributors] == [
+            ("Jason Anspach", None),
+            ("Nick Cole", None),
+        ]
+        # narrator stays out of contributors (it's in rec.narrator)
+        assert "R.C. Bray" not in [c.name for c in bk.contributors]
+        # both survive the role-filter
+        kept = [c.name for c in bk.contributors if contributor_is_author(c.role)]
+        assert kept == ["Jason Anspach", "Nick Cole"]
+
+    async def test_single_author_one_contributor(self, monkeypatch):
+        from app.discovery.sources.audible import AudibleDiscoverySource
+
+        handler = _make_handler(
+            catalog_pages=[[{"asin": "B0SOLO0001"}]],
+            audnexus_items={
+                "B0SOLO0001": {
+                    "asin": "B0SOLO0001", "title": "Solo",
+                    "authors": [{"name": "Brandon Sanderson"}],
+                    "narrators": [{"name": "Michael Kramer"}],
+                },
+            },
+        )
+        _inject_transport(monkeypatch, handler)
+        result = await AudibleDiscoverySource(rate_limit=0).search_author("Brandon Sanderson")
+        assert [c.name for c in result.books[0].contributors] == ["Brandon Sanderson"]
+
     def test_region_tld_mapping(self):
         from app.discovery.sources.audible import AudibleDiscoverySource
         assert AudibleDiscoverySource(region="uk")._catalog_url().endswith(".co.uk/1.0/catalog/products")

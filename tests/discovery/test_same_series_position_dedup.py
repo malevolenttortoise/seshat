@@ -74,9 +74,15 @@ async def _insert_book(
     db = await get_db()
     try:
         cur = await db.execute(
-            "INSERT INTO books (title, author_id, series_id, series_index, "
-            "source, owned) VALUES (?, ?, ?, ?, ?, ?)",
-            (title, author_id, series_id, series_index, source, owned),
+            "INSERT INTO books (title, series_id, series_index, "
+            "source, owned) VALUES (?, ?, ?, ?, ?)",
+            (title, series_id, series_index, source, owned),
+        )
+        # v3.0.0 Phase 9: authorship lives in book_authors, not books.
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+            "VALUES (?, ?, 0)",
+            (cur.lastrowid, author_id),
         )
         await db.commit()
         return cur.lastrowid
@@ -89,8 +95,10 @@ async def _book_rows(author_id: int) -> list[dict]:
     db = await get_db()
     try:
         rows = await (await db.execute(
-            "SELECT id, title, series_id, series_index, owned FROM books "
-            "WHERE author_id = ? ORDER BY series_index NULLS LAST, id",
+            "SELECT b.id, b.title, b.series_id, b.series_index, b.owned "
+            "FROM books b "
+            "JOIN book_authors ba ON ba.book_id = b.id AND ba.position = 0 "
+            "WHERE ba.author_id = ? ORDER BY b.series_index NULLS LAST, b.id",
             (author_id,),
         )).fetchall()
         return [dict(r) for r in rows]

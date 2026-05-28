@@ -177,10 +177,14 @@ async def _load_cross_library_book_names(libs: list[dict]) -> frozenset[str]:
             )
             continue
         try:
+            # v3.0.0 Phase 9 (ADR-0012): contributor-aware — an author
+            # "has books" if they're a contributor (book_authors), not just
+            # the dropped books.author_id primary.
             cur = await db.execute(
                 "SELECT DISTINCT a.normalized_name "
                 "FROM authors a "
-                "JOIN books b ON b.author_id = a.id "
+                "JOIN book_authors bpa ON bpa.author_id = a.id "
+                "JOIN books b ON b.id = bpa.book_id "
                 "WHERE a.normalized_name IS NOT NULL "
                 "  AND a.normalized_name != ''"
             )
@@ -238,9 +242,12 @@ async def job_empty_cleanup(
         # names, skip cross-library mirrors, delete the rest.
         allowed_norms = await _load_allowed_norms()
 
+        # v3.0.0 Phase 9 (ADR-0012): contributor-aware — an author with any
+        # book_authors link is NOT an orphan (protects pure co-authors).
         cur = await db.execute(
             "SELECT a.id, a.name FROM authors a "
-            "LEFT JOIN books b ON b.author_id = a.id "
+            "LEFT JOIN book_authors bpa ON bpa.author_id = a.id "
+            "LEFT JOIN books b ON b.id = bpa.book_id "
             "GROUP BY a.id HAVING COUNT(b.id) = 0"
         )
         candidates = await cur.fetchall()

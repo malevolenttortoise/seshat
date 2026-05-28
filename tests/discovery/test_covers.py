@@ -53,12 +53,16 @@ async def library_db(tmp_path, monkeypatch):
 
     db = await disco_db.get_db("testlib")
     try:
-        # Minimal author row to satisfy NOT NULL author_id.
+        # Minimal author row.
         await db.execute(
             "INSERT INTO authors (id, name, sort_name) VALUES (1, 'A', 'A')"
         )
         await db.execute(
-            "INSERT INTO books (id, title, author_id) VALUES (42, 'Test', 1)"
+            "INSERT INTO books (id, title) VALUES (42, 'Test')"
+        )
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+            "VALUES (42, 1, 0)"
         )
         await db.commit()
     finally:

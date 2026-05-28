@@ -66,9 +66,16 @@ CREATE TABLE authors (
 );
 CREATE TABLE books (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    title TEXT NOT NULL,
-    author_id INTEGER REFERENCES authors(id)
+    title TEXT NOT NULL
 );
+CREATE TABLE book_authors (
+    book_id INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+    author_id INTEGER NOT NULL REFERENCES authors(id),
+    position INTEGER NOT NULL DEFAULT 0,
+    role TEXT,
+    PRIMARY KEY (book_id, author_id)
+);
+CREATE INDEX IF NOT EXISTS idx_book_authors_author ON book_authors(author_id);
 CREATE TABLE pen_name_links (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     canonical_author_id INTEGER NOT NULL,
@@ -147,11 +154,17 @@ async def cross_lib_env(tmp_path, monkeypatch):
         db = await aiosqlite.connect(str(path))
         try:
             cur = await db.execute(
-                "INSERT INTO books (title, author_id) VALUES (?, ?)",
-                (title, author_id),
+                "INSERT INTO books (title) VALUES (?)",
+                (title,),
+            )
+            book_id = cur.lastrowid
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+                "VALUES (?, ?, 0)",
+                (book_id, author_id),
             )
             await db.commit()
-            return cur.lastrowid
+            return book_id
         finally:
             await db.close()
 

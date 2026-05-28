@@ -67,13 +67,19 @@ async def _insert_unowned_discovery_row(*, author_id, title, mam_torrent_id,
     db = await get_db()
     try:
         cur = await db.execute(
-            "INSERT INTO books (title, author_id, source, owned, "
+            "INSERT INTO books (title, source, owned, "
             "mam_torrent_id, goodreads_id) "
-            "VALUES (?, ?, 'goodreads', 0, ?, ?)",
-            (title, author_id, mam_torrent_id, goodreads_id),
+            "VALUES (?, 'goodreads', 0, ?, ?)",
+            (title, mam_torrent_id, goodreads_id),
+        )
+        book_id = cur.lastrowid
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+            "VALUES (?, ?, 0)",
+            (book_id, author_id),
         )
         await db.commit()
-        return cur.lastrowid
+        return book_id
     finally:
         await db.close()
 
@@ -157,7 +163,9 @@ class TestPostUpdateMergeSweep:
         db = await get_db()
         try:
             count = await (await db.execute(
-                "SELECT COUNT(*) AS n FROM books WHERE author_id = ?",
+                "SELECT COUNT(*) AS n FROM books b "
+                "JOIN book_authors ba ON ba.book_id = b.id AND ba.position = 0 "
+                "WHERE ba.author_id = ?",
                 (author_id,),
             )).fetchone()
         finally:
@@ -177,7 +185,9 @@ class TestPostUpdateMergeSweep:
         db = await get_db()
         try:
             count = await (await db.execute(
-                "SELECT COUNT(*) AS n FROM books WHERE author_id = ?",
+                "SELECT COUNT(*) AS n FROM books b "
+                "JOIN book_authors ba ON ba.book_id = b.id AND ba.position = 0 "
+                "WHERE ba.author_id = ?",
                 (author_id,),
             )).fetchone()
         finally:
@@ -235,7 +245,9 @@ class TestPostUpdateMergeSweep:
         db = await get_db()
         try:
             count = await (await db.execute(
-                "SELECT COUNT(*) AS n FROM books WHERE author_id = ?",
+                "SELECT COUNT(*) AS n FROM books b "
+                "JOIN book_authors ba ON ba.book_id = b.id AND ba.position = 0 "
+                "WHERE ba.author_id = ?",
                 (author_id,),
             )).fetchone()
         finally:
@@ -273,16 +285,26 @@ class TestPostUpdateMergeSweep:
         from app.discovery.database import get_db
         db = await get_db()
         try:
-            await db.execute(
-                "INSERT INTO books (title, author_id, source, owned, "
-                "calibre_id) VALUES (?, ?, 'calibre', 1, 3901)",
-                ("Dungeon Deposed 2", author_id),
+            cur1 = await db.execute(
+                "INSERT INTO books (title, source, owned, "
+                "calibre_id) VALUES (?, 'calibre', 1, 3901)",
+                ("Dungeon Deposed 2",),
             )
             await db.execute(
-                "INSERT INTO books (title, author_id, source, owned, "
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+                "VALUES (?, ?, 0)",
+                (cur1.lastrowid, author_id),
+            )
+            cur2 = await db.execute(
+                "INSERT INTO books (title, source, owned, "
                 "mam_torrent_id, goodreads_id) "
-                "VALUES (?, ?, 'goodreads', 1, '501690', '44164269')",
-                ("Dungeon Deposed 2", author_id),
+                "VALUES (?, 'goodreads', 1, '501690', '44164269')",
+                ("Dungeon Deposed 2",),
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+                "VALUES (?, ?, 0)",
+                (cur2.lastrowid, author_id),
             )
             await db.commit()
         finally:
@@ -310,7 +332,9 @@ class TestPostUpdateMergeSweep:
         db = await get_db()
         try:
             count = await (await db.execute(
-                "SELECT COUNT(*) AS n FROM books WHERE author_id = ?",
+                "SELECT COUNT(*) AS n FROM books b "
+                "JOIN book_authors ba ON ba.book_id = b.id AND ba.position = 0 "
+                "WHERE ba.author_id = ?",
                 (author_id,),
             )).fetchone()
         finally:
@@ -363,7 +387,9 @@ class TestPostUpdateMergeSweep:
         db = await get_db()
         try:
             count = await (await db.execute(
-                "SELECT COUNT(*) AS n FROM books WHERE author_id = ?",
+                "SELECT COUNT(*) AS n FROM books b "
+                "JOIN book_authors ba ON ba.book_id = b.id AND ba.position = 0 "
+                "WHERE ba.author_id = ?",
                 (author_id,),
             )).fetchone()
         finally:

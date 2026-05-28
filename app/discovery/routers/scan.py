@@ -150,7 +150,7 @@ async def _count_due_authors(cutoff: float) -> int:
     db = await get_db()
     try:
         row = await (await db.execute(
-            "SELECT COUNT(*) c FROM authors WHERE COALESCE(last_lookup_at,0) < ? AND id IN (SELECT DISTINCT author_id FROM books)",
+            "SELECT COUNT(*) c FROM authors WHERE COALESCE(last_lookup_at,0) < ? AND id IN (SELECT DISTINCT author_id FROM book_authors)",
             (cutoff,),
         )).fetchone()
         return row["c"] if row else 0

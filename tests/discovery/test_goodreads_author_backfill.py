@@ -71,15 +71,20 @@ async def _insert_book(
     db = await get_db()
     try:
         cur = await db.execute(
-            "INSERT INTO books (title, author_id, source, owned, hidden, "
+            "INSERT INTO books (title, source, owned, hidden, "
             "goodreads_id, isbn, asin, amazon_id) "
-            "VALUES (?, ?, 'calibre', ?, ?, ?, ?, ?, ?)",
-            (title, author_id, owned, hidden,
+            "VALUES (?, 'calibre', ?, ?, ?, ?, ?, ?)",
+            (title, owned, hidden,
              goodreads_id or None, isbn or None,
              asin or None, amazon_id or None),
         )
+        book_id = cur.lastrowid
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (?, ?, 0)",
+            (book_id, author_id),
+        )
         await db.commit()
-        return cur.lastrowid
+        return book_id
     finally:
         await db.close()
 

@@ -89,6 +89,11 @@ async def _book_series(book_id: int):
         await db.close()
 
 
+async def _link_book_authors(db) -> None:
+    """No-op placeholder — book_authors rows are now seeded at insert time."""
+    pass
+
+
 async def _seed_two_per_author_series():
     """Seed: two authors, each with their own per-author 'Halo' row,
     one book per series. Mirrors the legacy promote-target setup."""
@@ -105,9 +110,15 @@ async def _seed_two_per_author_series():
             "(900, 'Halo', 101), (901, 'Halo', 102)"
         )
         await db.execute(
-            "INSERT INTO books (id, title, author_id, series_id, series_index) "
-            "VALUES (1, 'Reach', 101, 900, 1.0), "
-            "(2, 'Cole Protocol', 102, 901, 6.0)"
+            "INSERT INTO books (id, title, series_id, series_index) "
+            "VALUES (1, 'Reach', 900, 1.0), "
+            "(2, 'Cole Protocol', 901, 6.0)"
+        )
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (1, 101, 0)"
+        )
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (2, 102, 0)"
         )
         await db.commit()
     finally:
@@ -130,9 +141,15 @@ async def _seed_shared_two_author():
             "(900, 'Halo', NULL)"
         )
         await db.execute(
-            "INSERT INTO books (id, title, author_id, series_id) "
-            "VALUES (1, 'Reach', 101, 900), "
-            "(2, 'Cole Protocol', 102, 900)"
+            "INSERT INTO books (id, title, series_id) "
+            "VALUES (1, 'Reach', 900), "
+            "(2, 'Cole Protocol', 900)"
+        )
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (1, 101, 0)"
+        )
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (2, 102, 0)"
         )
         await db.commit()
     finally:
@@ -414,8 +431,11 @@ class TestHiddenBooksRespected:
         try:
             # Insert a hidden Bob book on series 900.
             await db.execute(
-                "INSERT INTO books (id, title, author_id, series_id, hidden) "
-                "VALUES (3, 'Hidden Bob Book', 102, 900, 1)"
+                "INSERT INTO books (id, title, series_id, hidden) "
+                "VALUES (3, 'Hidden Bob Book', 900, 1)"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (3, 102, 0)"
             )
             await db.commit()
         finally:
@@ -472,8 +492,11 @@ class TestHideUnhideRecomputeAuthority:
         db = await get_db()
         try:
             await db.execute(
-                "INSERT INTO books (id, title, author_id, series_id, hidden) "
-                "VALUES (3, 'Hidden Bob Book', 102, 900, 1)"
+                "INSERT INTO books (id, title, series_id, hidden) "
+                "VALUES (3, 'Hidden Bob Book', 900, 1)"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (3, 102, 0)"
             )
             await db.commit()
         finally:
@@ -502,10 +525,19 @@ class TestHideUnhideRecomputeAuthority:
                 "VALUES (900, 'Halo', NULL)"
             )
             await db.execute(
-                "INSERT INTO books (id, title, author_id, series_id) "
-                "VALUES (1, 'A1', 101, 900), "
-                "(2, 'B1', 102, 900), "
-                "(3, 'B2', 102, 900)"
+                "INSERT INTO books (id, title, series_id) "
+                "VALUES (1, 'A1', 900), "
+                "(2, 'B1', 900), "
+                "(3, 'B2', 900)"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (1, 101, 0)"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (2, 102, 0)"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (3, 102, 0)"
             )
             await db.commit()
         finally:
@@ -533,9 +565,15 @@ class TestHideUnhideRecomputeAuthority:
                 "VALUES (900, 'Halo', NULL)"
             )
             await db.execute(
-                "INSERT INTO books (id, title, author_id, series_id, source) "
-                "VALUES (1, 'A1', 101, 900, 'goodreads'), "
-                "(2, 'B1', 102, 900, 'goodreads')"
+                "INSERT INTO books (id, title, series_id, source) "
+                "VALUES (1, 'A1', 900, 'goodreads'), "
+                "(2, 'B1', 900, 'goodreads')"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (1, 101, 0)"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (2, 102, 0)"
             )
             await db.commit()
         finally:
@@ -556,8 +594,11 @@ class TestHideUnhideRecomputeAuthority:
                 "(101, 'Alice', 'Alice')"
             )
             await db.execute(
-                "INSERT INTO books (id, title, author_id) "
-                "VALUES (1, 'Standalone', 101)"
+                "INSERT INTO books (id, title) "
+                "VALUES (1, 'Standalone')"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (1, 101, 0)"
             )
             await db.commit()
         finally:
@@ -565,3 +606,121 @@ class TestHideUnhideRecomputeAuthority:
 
         r = await book_client.post("/api/discovery/books/1/hide")
         assert r.status_code == 200
+
+
+# ─── v3.0.0 Phase 6 — author_mode taxonomy (ADR-0010) ────────────
+
+
+async def _seed_series_with_contributors(series_books):
+    """series_books: list of (book_id, primary_author_id, [contributor_ids]).
+    Seeds the union of authors, one series (900, author_id NULL), the
+    books, and their book_authors rows. Series 900 is left for the
+    caller to recompute."""
+    from app.discovery.database import get_db
+    db = await get_db()
+    try:
+        all_authors = sorted({a for _, _, cs in series_books for a in cs})
+        vals = ", ".join(f"({a}, 'Author{a}', 'Author{a}')" for a in all_authors)
+        await db.execute(f"INSERT INTO authors (id, name, sort_name) VALUES {vals}")
+        await db.execute(
+            "INSERT INTO series (id, name, author_id) VALUES (900, 'S', NULL)")
+        for bid, primary, cs in series_books:
+            await db.execute(
+                "INSERT INTO books (id, title, series_id) "
+                "VALUES (?, ?, 900)", (bid, f"B{bid}"))
+            for pos, a in enumerate(cs):
+                await db.execute(
+                    "INSERT INTO book_authors (book_id, author_id, position) "
+                    "VALUES (?, ?, ?)", (bid, a, pos))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def _recompute_900():
+    from app.discovery.database import get_db
+    from app.discovery.routers.series import _recompute_series_author
+    db = await get_db()
+    try:
+        await _recompute_series_author(db, [900])
+        await db.commit()
+        row = await (await db.execute(
+            "SELECT author_mode, author_id FROM series WHERE id = 900")).fetchone()
+        return row["author_mode"], row["author_id"]
+    finally:
+        await db.close()
+
+
+class TestAuthorModeTaxonomy:
+    """author_mode is computed from |I| = authors in EVERY book."""
+
+    async def test_per_author_single_author(self, discovery_db):
+        await _seed_series_with_contributors([(1, 101, [101]), (2, 101, [101])])
+        assert await _recompute_900() == ("per_author", 101)
+
+    async def test_multi_author_consistent_team(self, discovery_db):
+        # Every book {101,102}, primary 101 → multi_author, anchor 101.
+        await _seed_series_with_contributors([(1, 101, [101, 102]), (2, 101, [101, 102])])
+        assert await _recompute_900() == ("multi_author", 101)
+
+    async def test_shared_disjoint_authors(self, discovery_db):
+        # Book 1 by 101, Book 2 by 102 — no common author → shared.
+        await _seed_series_with_contributors([(1, 101, [101]), (2, 102, [102])])
+        assert await _recompute_900() == ("shared", None)
+
+    async def test_guest_coauthor_stays_per_author(self, discovery_db):
+        # 101 in every book; 102 a guest on book 2 only → |I|={101} → per_author.
+        await _seed_series_with_contributors([(1, 101, [101]), (2, 101, [101, 102])])
+        assert await _recompute_900() == ("per_author", 101)
+
+    async def test_multi_author_anchor_is_most_common_primary(self, discovery_db):
+        # I={101,102}; 102 is primary in 2 books, 101 in 1 → anchor 102.
+        await _seed_series_with_contributors([
+            (1, 102, [102, 101]), (2, 102, [102, 101]), (3, 101, [101, 102]),
+        ])
+        assert await _recompute_900() == ("multi_author", 102)
+
+    async def test_through_line_team_is_multi_author(self, discovery_db):
+        # 101 AND 102 in every book, but co-authors rotate (103, 104).
+        # I={101,102} → multi_author.
+        await _seed_series_with_contributors([
+            (1, 101, [101, 102, 103]), (2, 101, [101, 102, 104]),
+        ])
+        mode, aid = await _recompute_900()
+        assert mode == "multi_author" and aid == 101
+
+
+class TestAddCoAuthorToSeries:
+    """v3.0.0 Phase 6: add_author_to_series validates by contributor,
+    so a co-author (not the primary) can be associated."""
+
+    async def test_coauthor_can_be_added(self, book_client):
+        from app.discovery.database import get_db
+        db = await get_db()
+        try:
+            await db.execute(
+                "INSERT INTO authors (id, name, sort_name) VALUES "
+                "(101, 'Chaney', 'Chaney'), (102, 'Anspach', 'Anspach')")
+            await db.execute(
+                "INSERT INTO series (id, name, author_id, author_mode) "
+                "VALUES (900, 'Galaxy Edge', 101, 'per_author')")
+            # A co-authored book (primary Chaney, co-author Anspach), not
+            # yet in the series.
+            await db.execute(
+                "INSERT INTO books (id, title) VALUES (1, 'GE1')")
+            for pos, a in enumerate((101, 102)):
+                await db.execute(
+                    "INSERT INTO book_authors (book_id, author_id, position) "
+                    "VALUES (1, ?, ?)", (a, pos))
+            await db.commit()
+        finally:
+            await db.close()
+
+        # Add the book under co-author Anspach (102) — primary is Chaney.
+        # Pre-Phase-6 this 400'd ("books not by author 102"); now it's OK.
+        r = await book_client.post(
+            "/api/discovery/series/900/authors",
+            json={"author_id": 102, "book_ids": [1]},
+        )
+        assert r.status_code == 200, r.text
+        assert (await _book_series(1))["series_id"] == 900

@@ -412,9 +412,14 @@ class TestAutoUnhideOnMerge:
                 "INSERT INTO authors (name, sort_name, normalized_name, calibre_id) "
                 "VALUES ('Eric Vall', 'Vall, Eric', 'eric vall', 100)"
             )
+            cur = await db.execute(
+                "INSERT INTO books (title, source, owned, hidden) "
+                "VALUES ('Fantasy World Farm 2', 'goodreads', 0, 1)"
+            )
             await db.execute(
-                "INSERT INTO books (title, author_id, source, owned, hidden) "
-                "VALUES ('Fantasy World Farm 2', 1, 'goodreads', 0, 1)"
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+                "VALUES (?, 1, 0)",
+                (cur.lastrowid,),
             )
             await db.commit()
         finally:
@@ -503,9 +508,14 @@ class TestAutoUnhideOnMerge:
                 "INSERT INTO authors (name, sort_name, normalized_name, calibre_id) "
                 "VALUES ('Eric Vall', 'Vall, Eric', 'eric vall', 100)"
             )
+            cur = await db.execute(
+                "INSERT INTO books (title, source, owned, hidden) "
+                "VALUES ('Visible Source Book', 'goodreads', 0, 0)"
+            )
             await db.execute(
-                "INSERT INTO books (title, author_id, source, owned, hidden) "
-                "VALUES ('Visible Source Book', 1, 'goodreads', 0, 0)"
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+                "VALUES (?, 1, 0)",
+                (cur.lastrowid,),
             )
             await db.commit()
         finally:

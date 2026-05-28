@@ -92,14 +92,22 @@ async def _insert_book(db, **fields) -> int:
         "hidden": 0,
     }
     defaults.update(fields)
+    # author_id lives in book_authors, not books — pull it out before INSERT.
+    author_id = defaults.pop("author_id")
     cols = list(defaults.keys())
     cur = await db.execute(
         f"INSERT INTO books ({', '.join(cols)}) "
         f"VALUES ({', '.join('?' * len(cols))})",
         list(defaults.values()),
     )
+    book_id = cur.lastrowid
+    await db.execute(
+        "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+        "VALUES (?, ?, 0)",
+        (book_id, author_id),
+    )
     await db.commit()
-    return cur.lastrowid
+    return book_id
 
 
 # ─── Job 1 — Empty cleanup ──────────────────────────────────────────
@@ -237,11 +245,13 @@ class TestEmptyCleanup:
         # Library 1 (the fixture's): one book-bearing author.
         await _insert_author(hygiene_dbs, "Lib1 Author")
         rid = await _insert_book(hygiene_dbs)  # noqa: F841
-        # Re-target the book to the just-created author.
+        # Re-target the book to the just-created author via book_authors.
+        # The _insert_book helper already seeded a position-0 row with
+        # the default author_id=1; update it to point at Lib1 Author.
         await hygiene_dbs.execute(
-            "UPDATE books SET author_id = "
+            "UPDATE book_authors SET author_id = "
             "(SELECT id FROM authors WHERE name = 'Lib1 Author') "
-            "WHERE id = (SELECT MAX(id) FROM books)"
+            "WHERE book_id = (SELECT MAX(id) FROM books) AND position = 0"
         )
         await hygiene_dbs.commit()
 
@@ -257,11 +267,16 @@ class TestEmptyCleanup:
                 ("Lib2 Author", "Lib2 Author",
                  normalize_author_name("Lib2 Author")),
             )
+            other_cur = await other.execute(
+                "INSERT INTO books (title, source, owned, hidden) "
+                "VALUES ('B', 'test', 0, 0)"
+            )
             await other.execute(
-                "INSERT INTO books (title, author_id, source, owned, hidden) "
-                "VALUES ('B', "
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+                "VALUES (?, "
                 "(SELECT id FROM authors WHERE name = 'Lib2 Author'), "
-                "'test', 0, 0)"
+                "0)",
+                (other_cur.lastrowid,),
             )
             await other.commit()
         finally:

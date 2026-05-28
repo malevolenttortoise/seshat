@@ -63,8 +63,8 @@ async def _seed(author_name: str = "A", **fields) -> int:
             "SELECT id FROM authors WHERE name=?", (author_name,)
         )).fetchone()
         aid = aid_row["id"]
-        cols = ["title", "author_id", "source"]
-        vals = ["t", aid, "goodreads"]
+        cols = ["title", "source"]
+        vals = ["t", "goodreads"]
         for k, v in fields.items():
             cols.append(k)
             vals.append(v)
@@ -72,8 +72,13 @@ async def _seed(author_name: str = "A", **fields) -> int:
         cur = await db.execute(
             f"INSERT INTO books ({','.join(cols)}) VALUES ({ph})", vals,
         )
+        book_id = cur.lastrowid
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+            "VALUES (?, ?, 0)", (book_id, aid),
+        )
         await db.commit()
-        return cur.lastrowid
+        return book_id
     finally:
         await db.close()
 
@@ -187,7 +192,7 @@ async def test_skip_authors_mam_clears_stale_url(client):
     db = await get_db()
     try:
         aid = (await (await db.execute(
-            "SELECT author_id FROM books WHERE id=?", (bid,)
+            "SELECT author_id FROM book_authors WHERE book_id=? AND position=0", (bid,)
         )).fetchone())["author_id"]
     finally:
         await db.close()

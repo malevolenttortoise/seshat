@@ -103,7 +103,8 @@ async def _pick_seed_book(author_id: int) -> Optional[dict]:
                     ELSE 99
                 END AS tier
             FROM books
-            WHERE author_id = ? AND hidden = 0
+            WHERE id IN (SELECT book_id FROM book_authors WHERE author_id = ?)
+              AND hidden = 0
             ORDER BY tier, id
             LIMIT 1
             """,
@@ -479,7 +480,8 @@ async def backfill_missing_author_ids(*, limit: Optional[int] = None) -> dict:
             """
             SELECT DISTINCT a.id, a.name
             FROM authors a
-            JOIN books b ON b.author_id = a.id
+            JOIN book_authors bpa ON bpa.author_id = a.id
+            JOIN books b ON b.id = bpa.book_id
             WHERE (a.goodreads_id IS NULL OR a.goodreads_id = '')
               AND b.hidden = 0
               AND (

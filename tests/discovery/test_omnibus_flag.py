@@ -50,8 +50,10 @@ async def _book_by_title(author_id: int, title: str) -> dict:
     db = await get_db()
     try:
         row = await (await db.execute(
-            "SELECT id, title, series_id, series_index, is_omnibus "
-            "FROM books WHERE author_id = ? AND title = ?",
+            "SELECT b.id, b.title, b.series_id, b.series_index, b.is_omnibus "
+            "FROM books b "
+            "JOIN book_authors ba ON ba.book_id = b.id AND ba.position = 0 "
+            "WHERE ba.author_id = ? AND b.title = ?",
             (author_id, title),
         )).fetchone()
         return dict(row) if row else None
@@ -178,15 +180,25 @@ class TestBackfillOmnibus:
         author_id = await _insert_author("Stoham Baginbott")
         db = await get_db()
         try:
-            await db.execute(
-                "INSERT INTO books (title, author_id, source, owned, "
-                "is_omnibus, series_index) VALUES (?, ?, 'calibre', 1, 0, 1.0)",
-                ("Hero Support: Omnibus", author_id),
+            cur1 = await db.execute(
+                "INSERT INTO books (title, source, owned, "
+                "is_omnibus, series_index) VALUES (?, 'calibre', 1, 0, 1.0)",
+                ("Hero Support: Omnibus",),
             )
             await db.execute(
-                "INSERT INTO books (title, author_id, source, owned, "
-                "is_omnibus) VALUES (?, ?, 'hardcover', 0, 0)",
-                ("Stay at Home Hero", author_id),
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+                "VALUES (?, ?, 0)",
+                (cur1.lastrowid, author_id),
+            )
+            cur2 = await db.execute(
+                "INSERT INTO books (title, source, owned, "
+                "is_omnibus) VALUES (?, 'hardcover', 0, 0)",
+                ("Stay at Home Hero",),
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+                "VALUES (?, ?, 0)",
+                (cur2.lastrowid, author_id),
             )
             await db.commit()
             touched = await _backfill_omnibus_flag(db)
@@ -207,10 +219,15 @@ class TestBackfillOmnibus:
         author_id = await _insert_author("Stoham Baginbott")
         db = await get_db()
         try:
+            cur = await db.execute(
+                "INSERT INTO books (title, source, owned, "
+                "is_omnibus) VALUES (?, 'calibre', 1, 0)",
+                ("Amazonian Master Omnibus",),
+            )
             await db.execute(
-                "INSERT INTO books (title, author_id, source, owned, "
-                "is_omnibus) VALUES (?, ?, 'calibre', 1, 0)",
-                ("Amazonian Master Omnibus", author_id),
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+                "VALUES (?, ?, 0)",
+                (cur.lastrowid, author_id),
             )
             await db.commit()
             first = await _backfill_omnibus_flag(db)

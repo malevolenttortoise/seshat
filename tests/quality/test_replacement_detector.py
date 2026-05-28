@@ -130,13 +130,18 @@ async def _insert_owned_book(
         )
         author_id = cur.lastrowid
         cur = await db.execute(
-            "INSERT INTO books (title, author_id, source, owned, formats, "
+            "INSERT INTO books (title, source, owned, formats, "
             "                   hidden, mam_torrent_id) "
-            "VALUES (?, ?, 'audiobookshelf', 1, ?, 0, ?)",
-            (title, author_id, formats, mam_torrent_id or None),
+            "VALUES (?, 'audiobookshelf', 1, ?, 0, ?)",
+            (title, formats, mam_torrent_id or None),
+        )
+        book_id = cur.lastrowid
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+            "VALUES (?, ?, 0)", (book_id, author_id),
         )
         await db.commit()
-        return cur.lastrowid
+        return book_id
     finally:
         await db.close()
 

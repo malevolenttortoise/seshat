@@ -23,6 +23,8 @@ from typing import Any, Optional
 
 import aiosqlite
 
+from app.discovery.database import write_book_authors
+
 _log = logging.getLogger("seshat.discovery.book_merge")
 
 
@@ -180,8 +182,14 @@ async def merge_books(
     update_values = [resolved[c] for c in update_cols] + [winner_id]
 
     # Snapshot the loser row (full state) into the audit row so a
-    # later forensic / rollback step has everything it needs.
-    snapshot_json = json.dumps(dict(loser), default=str, sort_keys=True)
+    # later forensic / rollback step has everything it needs. v3.0.0
+    # Phase 5 (ADR-0009): also capture the loser's book_authors under
+    # `_book_authors` so the contributor-set union is reversible from
+    # the audit row alone.
+    loser_author_rows = await _book_author_rows(discovery_db, loser_id)
+    loser_snapshot = dict(loser)
+    loser_snapshot["_book_authors"] = loser_author_rows
+    snapshot_json = json.dumps(loser_snapshot, default=str, sort_keys=True)
 
     # Redirect any book_grab_links that pointed at the loser to the
     # winner. UNIQUE(library_slug, book_id) means if the winner
@@ -217,6 +225,21 @@ async def merge_books(
         f"UPDATE books SET {set_clause} WHERE id = ?",
         update_values,
     )
+    # v3.0.0 Phase 5 (ADR-0009) — UNION the contributor set onto the
+    # winner BEFORE the loser delete cascades the loser's book_authors
+    # away. winner-first: write_book_authors order-preserving-dedups, so
+    # the winner's contributors keep their positions (primary at 0) and
+    # the loser's not-already-present authors append. Recovers a
+    # co-author the (usually owned) winner was missing; never silently
+    # drops one. `author_id` (see _resolve_fields) stays the winner's,
+    # which is exactly position 0 of the union.
+    winner_author_ids = [
+        r["author_id"] for r in await _book_author_rows(discovery_db, winner_id)
+    ]
+    loser_author_ids = [r["author_id"] for r in loser_author_rows]
+    union_ids = winner_author_ids + loser_author_ids
+    if union_ids:
+        await write_book_authors(discovery_db, winner_id, union_ids)
     await discovery_db.execute(
         "DELETE FROM books WHERE id = ?", (loser_id,),
     )
@@ -243,16 +266,33 @@ async def _fetch_book(db: aiosqlite.Connection, book_id: int):
     )).fetchone()
 
 
+async def _book_author_rows(db: aiosqlite.Connection, book_id: int) -> list[dict]:
+    """Ordered `book_authors` rows for a book (position 0 = primary).
+
+    v3.0.0 Phase 5 (ADR-0009) — used to union the contributor set onto
+    the merge winner and to snapshot the loser's links into the merge
+    audit row.
+    """
+    rows = await (await db.execute(
+        "SELECT author_id, position, role FROM book_authors "
+        "WHERE book_id = ? ORDER BY position",
+        (book_id,),
+    )).fetchall()
+    return [dict(r) for r in rows]
+
+
 def _resolve_fields(winner, loser) -> dict[str, Any]:
     """Compute the merged column values per the rules in `merge_books`."""
     w = dict(winner)
     l = dict(loser)
     out: dict[str, Any] = {}
 
-    # Title + author_id stay anchored to the winner (the merge is
-    # the user's assertion that the loser IS the winner).
+    # Title stays anchored to the winner (the merge is the user's
+    # assertion that the loser IS the winner). v3.0.0 Phase 9 (ADR-0012):
+    # books.author_id is gone — authorship is the unioned book_authors set
+    # written by merge_books (winner's contributor positions preserved,
+    # loser-only co-authors appended); there is no author_id column to set.
     out["title"] = w["title"]
-    out["author_id"] = w["author_id"]
 
     # Boolean / counter aggregates.
     out["owned"] = 1 if (w.get("owned") or l.get("owned")) else 0
@@ -423,24 +463,41 @@ async def transfer_linkage_before_prune(
     if not mtid or (isinstance(mtid, str) and not mtid.strip()):
         return False
 
-    # Same-author, same-title (article-insensitive) owned Calibre
-    # sibling — same matching shape calibre_sync.py uses for the
-    # ownership-flip pass at line 1192. Excludes self.
+    # v3.0.0 Phase 5 (ADR-0009) — find the owned Calibre sibling by
+    # OVERLAPPING contributor set (shares ≥1 author via book_authors) +
+    # same article-insensitive title, not strict primary `author_id =`.
+    # A co-authored disappearing row whose owned sibling has a DIFFERENT
+    # primary author was invisible to the old `author_id = ?` filter, so
+    # its MAM linkage was silently lost on prune. We do NOT union the
+    # dead row's authors onto the survivor — the survivor is the owned
+    # Calibre row the user kept when CWA consolidated the duplicate, so
+    # its tuple is authoritative (ADR-0009). Excludes self.
+    disappearing_author_ids = [
+        r["author_id"]
+        for r in await _book_author_rows(discovery_db, disappearing_book_id)
+    ]
+    if not disappearing_author_ids:
+        # No contributor links to overlap on (shouldn't happen
+        # post-Phase-4 backfill, which links every book) — bail.
+        return False
+    aid_ph = ",".join("?" * len(disappearing_author_ids))
     candidates = await (await discovery_db.execute(
-        """
+        f"""
         SELECT id, mam_status
         FROM books
-        WHERE author_id = ?
-          AND id != ?
+        WHERE id != ?
           AND owned = 1
           AND source = 'calibre'
+          AND id IN (
+              SELECT book_id FROM book_authors WHERE author_id IN ({aid_ph})
+          )
           AND (
               LOWER(TRIM(title)) = LOWER(TRIM(?))
               OR REPLACE(LOWER(TRIM(title)), 'the ', '') =
                  REPLACE(LOWER(TRIM(?)), 'the ', '')
           )
         """,
-        (loser["author_id"], disappearing_book_id,
+        (disappearing_book_id, *disappearing_author_ids,
          loser["title"], loser["title"]),
     )).fetchall()
     if len(candidates) != 1:

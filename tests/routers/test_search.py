@@ -60,18 +60,24 @@ async def two_libraries(tmp_path, monkeypatch):
                          ("Kingkiller Chronicle",))
         # Books — mix of owned + unowned, hidden + not, prefix + mid-string matches
         await db.execute(
-            "INSERT INTO books (id, title, author_id, series_id, owned, hidden, is_unreleased) "
-            "VALUES (1, ?, 1, 1, 1, 0, 0)", ("Mistborn: The Final Empire",))
+            "INSERT INTO books (id, title, series_id, owned, hidden, is_unreleased) "
+            "VALUES (1, ?, 1, 1, 0, 0)", ("Mistborn: The Final Empire",))
         await db.execute(
-            "INSERT INTO books (id, title, author_id, series_id, owned, hidden, is_unreleased) "
-            "VALUES (2, ?, 1, NULL, 0, 0, 0)", ("Way of Kings",))
+            "INSERT INTO books (id, title, series_id, owned, hidden, is_unreleased) "
+            "VALUES (2, ?, NULL, 0, 0, 0)", ("Way of Kings",))
         await db.execute(
-            "INSERT INTO books (id, title, author_id, series_id, owned, hidden, is_unreleased) "
-            "VALUES (3, ?, 2, 2, 1, 0, 0)", ("The Name of the Wind",))
+            "INSERT INTO books (id, title, series_id, owned, hidden, is_unreleased) "
+            "VALUES (3, ?, 2, 1, 0, 0)", ("The Name of the Wind",))
         # Hidden book — should NOT appear in search results.
         await db.execute(
-            "INSERT INTO books (id, title, author_id, series_id, owned, hidden, is_unreleased) "
-            "VALUES (4, ?, 1, NULL, 1, 1, 0)", ("Hidden Mistborn Outtake",))
+            "INSERT INTO books (id, title, series_id, owned, hidden, is_unreleased) "
+            "VALUES (4, ?, NULL, 1, 1, 0)", ("Hidden Mistborn Outtake",))
+        # v3.0.0 Phase 4 (ADR-0008): author book_count reads via
+        # book_authors — link each seeded book to its author at pos 0.
+        for bid, aid in ((1, 1), (2, 1), (3, 2), (4, 1)):
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+                "VALUES (?, ?, 0)", (bid, aid))
         await db.commit()
     finally:
         await db.close()
@@ -86,8 +92,11 @@ async def two_libraries(tmp_path, monkeypatch):
         await db.execute("INSERT INTO series (id, name, author_id) VALUES (1, ?, 1)",
                          ("Realm of the Elderlings",))
         await db.execute(
-            "INSERT INTO books (id, title, author_id, series_id, owned, hidden, is_unreleased) "
-            "VALUES (1, ?, 1, 1, 1, 0, 0)", ("Assassin's Apprentice",))
+            "INSERT INTO books (id, title, series_id, owned, hidden, is_unreleased) "
+            "VALUES (1, ?, 1, 1, 0, 0)", ("Assassin's Apprentice",))
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+            "VALUES (1, 1, 0)")
         await db.commit()
     finally:
         await db.close()

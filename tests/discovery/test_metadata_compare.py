@@ -71,11 +71,15 @@ async def _seed_book(
         # user_edited_fields is NOT NULL DEFAULT '[]' — pass an empty
         # array literal when the test doesn't provide one.
         await db.execute(
-            "INSERT INTO books (id, title, author_id, description, pub_date, "
+            "INSERT INTO books (id, title, description, pub_date, "
             "isbn, source, owned, user_edited_fields) "
-            "VALUES (?, ?, 101, ?, ?, ?, 'goodreads', 0, ?)",
+            "VALUES (?, ?, ?, ?, ?, 'goodreads', 0, ?)",
             (book_id, title, description, pub_date, isbn,
              json.dumps(user_edited or [])),
+        )
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+            "VALUES (?, 101, 0)", (book_id,),
         )
         await db.commit()
     finally:

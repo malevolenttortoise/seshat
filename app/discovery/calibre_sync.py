@@ -26,7 +26,7 @@ import logging
 import os
 from pathlib import Path
 from app.config import CALIBRE_DB_PATH, CALIBRE_LIBRARY_PATH
-from app.discovery.database import get_db, _norm_series_name
+from app.discovery.database import get_db, _norm_series_name, write_book_authors
 from app import state
 
 logger = logging.getLogger("seshat.discovery.calibre_sync")
@@ -538,15 +538,21 @@ async def _heal_legacy_duplicates(db, pipeline_db, slug):
     """
     from app.discovery.book_merge import merge_books, MergeError
 
+    # v3.0.0 Phase 9 (ADR-0012): primary author = book_authors position 0.
+    # The legacy heal is a destructive dedup, so it stays primary-only
+    # (behavior-preserving) rather than widening to any-contributor.
     cal_rows = await (await db.execute(
-        "SELECT id, author_id, title FROM books "
+        "SELECT id, "
+        "(SELECT author_id FROM book_authors WHERE book_id=books.id AND position=0) AS author_id, "
+        "title FROM books "
         "WHERE source = 'calibre' AND calibre_id IS NOT NULL",
     )).fetchall()
     healed = 0
     for row in cal_rows:
         candidates = await (await db.execute("""
             SELECT id FROM books
-            WHERE author_id = ? AND calibre_id IS NULL AND source != 'calibre'
+            WHERE id IN (SELECT book_id FROM book_authors WHERE author_id = ? AND position = 0)
+            AND calibre_id IS NULL AND source != 'calibre'
             AND id != ?
             AND (
                 LOWER(TRIM(title)) = LOWER(TRIM(?))
@@ -601,7 +607,8 @@ async def _post_update_merge_sweep(
 
     candidates = await (await db.execute("""
         SELECT id FROM books
-        WHERE author_id = ? AND calibre_id IS NULL AND source != 'calibre'
+        WHERE id IN (SELECT book_id FROM book_authors WHERE author_id = ? AND position = 0)
+        AND calibre_id IS NULL AND source != 'calibre'
         AND id != ?
         AND (
             LOWER(TRIM(title)) = LOWER(TRIM(?))
@@ -1030,16 +1037,30 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
                 book["series"][0]["name"] if book["series"] else None
             )
 
+            # v3.0.0 Phase 2 — resolve the full ordered author list
+            # for the join-table write. `author_map` is keyed on
+            # Calibre author id, populated in Pass 1 above. Missing
+            # entries (rare — orphan link) are dropped, the rest
+            # preserve Calibre's array order so position 0 stays the
+            # primary author the user sees in Calibre.
+            resolved_author_ids = [
+                author_map[a["id"]]
+                for a in book["authors"]
+                if a.get("id") in author_map
+            ]
+
             if row:
                 # v2.3: structural fields (identity-tier) are written
                 # through directly. User-editable metadata fields go
                 # through the auto-flow-vs-review-queue helper which
                 # routes per `user_edited_fields`. Snapshot table
                 # mirrors Calibre's POV regardless.
+                # v3.0.0 Phase 9 (ADR-0012): no books.author_id — authorship
+                # is the ordered book_authors set written below.
                 await db.execute(
-                    "UPDATE books SET author_id=?, series_id=?, owned=1 "
+                    "UPDATE books SET series_id=?, owned=1 "
                     "WHERE id=?",
-                    (our_author_id, our_series_id, row["id"]),
+                    (our_series_id, row["id"]),
                 )
                 await _apply_calibre_diff(db, row["id"], book)
                 # v2.13.0 — fill any empty identifier columns from
@@ -1050,6 +1071,11 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
                 await _write_calibre_snapshot(
                     db, row["id"], book, cal_series_name
                 )
+                # v3.0.0 Phase 2 — dual-write to book_authors so the
+                # join table stays in lockstep with Calibre's view
+                # (drops co-authors removed since the last sync, adds
+                # new ones, positions match Calibre's ordering).
+                await write_book_authors(db, row["id"], resolved_author_ids)
                 progress["books_updated"] += 1
                 logger.debug(f"  Calibre: updated '{book['title']}' (calibre_id={book['book_id']}, tags={book['tags']}, rating={book['rating']})")
                 # v2.10.0 post-UPDATE merge sweep. When a user edits
@@ -1094,7 +1120,8 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
                 # auto-unhide fires (see UPDATE below).
                 merge_candidates = await (await db.execute("""
                     SELECT id, hidden FROM books
-                    WHERE author_id = ? AND calibre_id IS NULL AND source != 'calibre'
+                    WHERE id IN (SELECT book_id FROM book_authors WHERE author_id = ? AND position = 0)
+                    AND calibre_id IS NULL AND source != 'calibre'
                     AND (
                         LOWER(TRIM(title)) = LOWER(TRIM(?))
                         OR REPLACE(LOWER(TRIM(title)), 'the ', '') =
@@ -1129,12 +1156,13 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
                     # leaves hidden alone, so a user who explicitly
                     # hides a book they own (duplicate edition, wrong
                     # language, etc.) keeps that hide.
+                    # v3.0.0 Phase 9 (ADR-0012): no books.author_id —
+                    # authorship is the book_authors set written below.
                     await db.execute("""
-                        UPDATE books SET author_id=?, series_id=?,
+                        UPDATE books SET series_id=?,
                         owned=1, calibre_id=?, source='calibre', hidden=0
                         WHERE id=?
-                    """, (our_author_id, our_series_id,
-                          book["book_id"], target_id))
+                    """, (our_series_id, book["book_id"], target_id))
                     await _apply_calibre_diff(db, target_id, book)
                     # v2.13.0 — fill any empty identifier columns from
                     # Calibre's `identifiers` table mining.
@@ -1144,6 +1172,12 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
                     await _write_calibre_snapshot(
                         db, target_id, book, cal_series_name
                     )
+                    # v3.0.0 Phase 2 — see UPDATE branch above for rationale.
+                    # The merge target may have an existing book_authors
+                    # row populated by Phase 1B backfill from the unowned
+                    # source-discovered row; this overwrites with the
+                    # newly-arrived Calibre author tuple.
+                    await write_book_authors(db, target_id, resolved_author_ids)
                     progress["books_updated"] += 1
                     unhide_note = ", unhidden" if was_hidden else ""
                     logger.info(
@@ -1156,12 +1190,14 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
                     # Calibre values (no diff routing; nothing to
                     # diff against). Snapshot mirrors. user_edited_fields
                     # defaults to '[]' via the column default.
+                    # v3.0.0 Phase 9 (ADR-0012): no books.author_id —
+                    # authorship is the book_authors set written below.
                     cur = await db.execute("""
-                        INSERT INTO books (title, author_id, series_id, series_index,
+                        INSERT INTO books (title, series_id, series_index,
                         isbn, calibre_id, source, owned, pub_date, cover_path,
                         description, tags, rating, language, publisher, formats)
-                        VALUES (?, ?, ?, ?, ?, ?, 'calibre', 1, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (book["title"], our_author_id, our_series_id,
+                        VALUES (?, ?, ?, ?, ?, 'calibre', 1, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (book["title"], our_series_id,
                           series_index, book["isbn"], book["book_id"],
                           book["pubdate"], book["cover_path"],
                           book["description"], book["tags"], book["rating"],
@@ -1176,6 +1212,12 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
                     )
                     await _write_calibre_snapshot(
                         db, new_book_id, book, cal_series_name
+                    )
+                    # v3.0.0 Phase 2 — populate book_authors for the
+                    # newly-inserted row. No prior links to delete;
+                    # write_book_authors handles that case fine.
+                    await write_book_authors(
+                        db, new_book_id, resolved_author_ids,
                     )
                     # v2.3.7 acquisition link-back. Symmetric with ABS
                     # sync — if this Calibre book corresponds to a
@@ -1212,7 +1254,8 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
             # row sitting around as an unowned duplicate.
             await db.execute("""
                 UPDATE books SET owned = 1
-                WHERE author_id = ? AND owned = 0 AND source != 'calibre'
+                WHERE id IN (SELECT book_id FROM book_authors WHERE author_id = ? AND position = 0)
+                AND owned = 0 AND source != 'calibre'
                 AND (
                     LOWER(TRIM(title)) = LOWER(TRIM(?))
                     OR REPLACE(LOWER(TRIM(title)), 'the ', '') =

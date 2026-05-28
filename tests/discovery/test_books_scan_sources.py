@@ -77,10 +77,13 @@ async def _seed_author_with_book(name: str, title: str) -> tuple[int, int]:
         )
         aid = cur.lastrowid
         cur = await db.execute(
-            "INSERT INTO books (author_id, title) VALUES (?, ?)",
-            (aid, title),
+            "INSERT INTO books (title) VALUES (?)", (title,),
         )
         bid = cur.lastrowid
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+            "VALUES (?, ?, 0)", (bid, aid),
+        )
         await db.commit()
     finally:
         await db.close()

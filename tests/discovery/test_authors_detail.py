@@ -57,10 +57,15 @@ async def _seed(author_name: str, series_name: str, titles_hidden: list[tuple[st
         )
         sid = cur.lastrowid
         for title, hidden in titles_hidden:
+            cur = await db.execute(
+                "INSERT INTO books (title, series_id, hidden, owned) "
+                "VALUES (?, ?, ?, ?)",
+                (title, sid, hidden, 0),
+            )
             await db.execute(
-                "INSERT INTO books (title, author_id, series_id, hidden, owned) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (title, aid, sid, hidden, 0),
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+                "VALUES (?, ?, 0)",
+                (cur.lastrowid, aid),
             )
         await db.commit()
         return aid
@@ -96,6 +101,50 @@ async def test_series_with_one_visible_book_still_appears(client):
     series = r.json()["series"]
     assert len(series) == 1
     assert series[0]["author_book_count"] == 1
+
+
+async def test_coauthored_book_surfaces_on_coauthor_detail_and_counts(client):
+    """v3.0.0 Phase 4 (ADR-0008) — a book OWNED under primary author A
+    with co-author B (book_authors=[A,B]) surfaces on B's author-detail
+    page AND counts toward B's owned total, even though
+    `books.author_id` is A. This is the core value of the multi-author
+    rework: co-authored books are owned for every contributor."""
+    from app.discovery.database import get_db
+    db = await get_db()
+    try:
+        a = await db.execute(
+            "INSERT INTO authors (name, sort_name) VALUES ('J.N. Chaney', 'Chaney')")
+        chaney = a.lastrowid
+        b = await db.execute(
+            "INSERT INTO authors (name, sort_name) VALUES ('Jason Anspach', 'Anspach')")
+        anspach = b.lastrowid
+        bk = await db.execute(
+            "INSERT INTO books (title, owned, hidden) "
+            "VALUES ('Able Bodied Soldier', 1, 0)")
+        bid = bk.lastrowid
+        for pos, aid in enumerate((chaney, anspach)):
+            await db.execute(
+                "INSERT INTO book_authors (book_id, author_id, position) "
+                "VALUES (?, ?, ?)", (bid, aid, pos))
+        await db.commit()
+    finally:
+        await db.close()
+
+    # B's detail page lists the co-authored book.
+    r = await client.get(f"/api/discovery/authors/{anspach}")
+    assert r.status_code == 200
+    titles = [bk["title"] for bk in r.json()["standalone_books"]]
+    assert "Able Bodied Soldier" in titles, (
+        f"co-authored book should surface on co-author B's detail — got {titles!r}"
+    )
+
+    # ...and counts toward B's owned total on the authors list.
+    rl = await client.get("/api/discovery/authors?content_type=all&search=Anspach")
+    rows = [x for x in rl.json()["authors"] if x["name"] == "Jason Anspach"]
+    assert len(rows) == 1
+    assert rows[0]["owned_count"] == 1, (
+        f"co-authored owned book should count for B — got {rows[0]}"
+    )
 
 
 async def test_authors_list_counts_are_global_on_every_tab(
@@ -140,10 +189,13 @@ async def test_authors_list_counts_are_global_on_every_tab(
     try:
         await db.execute("INSERT INTO authors (name, sort_name) VALUES ('Emrys Ambrosius', 'Ambrosius')")
         for i in range(5):
-            await db.execute(
-                "INSERT INTO books (title, author_id, owned, hidden) "
-                "VALUES (?, 1, 0, 0)",
+            cur = await db.execute(
+                "INSERT INTO books (title, owned, hidden) VALUES (?, 0, 0)",
                 (f"Ebook {i+1}",),
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (?, 1, 0)",
+                (cur.lastrowid,),
             )
         await db.commit()
     finally:
@@ -153,9 +205,12 @@ async def test_authors_list_counts_are_global_on_every_tab(
     db = await get_db("abs")
     try:
         await db.execute("INSERT INTO authors (name, sort_name) VALUES ('Emrys Ambrosius', 'Ambrosius')")
+        cur = await db.execute(
+            "INSERT INTO books (title, owned, hidden) VALUES ('Audio 1', 1, 0)"
+        )
         await db.execute(
-            "INSERT INTO books (title, author_id, owned, hidden) "
-            "VALUES ('Audio 1', 1, 1, 0)"
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (?, 1, 0)",
+            (cur.lastrowid,),
         )
         await db.commit()
     finally:
@@ -241,10 +296,12 @@ async def test_authors_list_sorts_by_last_name(
                 (name, sort_name),
             )
             aid = cur.lastrowid
+            bk = await db.execute(
+                "INSERT INTO books (title, owned, hidden) VALUES ('B', 0, 0)",
+            )
             await db.execute(
-                "INSERT INTO books (title, author_id, owned, hidden) "
-                "VALUES ('B', ?, 0, 0)",
-                (aid,),
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (?, ?, 0)",
+                (bk.lastrowid, aid),
             )
         await db.commit()
     finally:
@@ -305,9 +362,12 @@ async def test_authors_list_audiobook_only_excluded_from_ebook_tab(
     db = await get_db("abs")
     try:
         await db.execute("INSERT INTO authors (name, sort_name) VALUES ('Eugene Astakhov', 'Astakhov')")
+        cur = await db.execute(
+            "INSERT INTO books (title, owned, hidden) VALUES ('Audio', 1, 0)"
+        )
         await db.execute(
-            "INSERT INTO books (title, author_id, owned, hidden) "
-            "VALUES ('Audio', 1, 1, 0)"
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (?, 1, 0)",
+            (cur.lastrowid,),
         )
         await db.commit()
     finally:
@@ -377,10 +437,14 @@ async def test_bulk_hide_authors_books_cascades_across_libraries(
                 "INSERT INTO authors (name, sort_name) VALUES ('R. A. Hatton', 'Hatton')"
             )
             for i in range(n_books):
-                await db.execute(
-                    "INSERT INTO books (title, author_id, owned, hidden) "
-                    "VALUES (?, 1, 0, 0)",
+                cur = await db.execute(
+                    "INSERT INTO books (title, owned, hidden) VALUES (?, 0, 0)",
                     (f"Book {i} ({slug})",),
+                )
+                await db.execute(
+                    "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+                    "VALUES (?, 1, 0)",
+                    (cur.lastrowid,),
                 )
             await db.commit()
         finally:
@@ -456,18 +520,27 @@ async def test_bulk_delete_authors_books_skips_library_synced(
             "INSERT INTO authors (name, sort_name) VALUES ('Test Author', 'Test')"
         )
         # 2 unowned discovery rows (deletable).
-        await db.execute(
-            "INSERT INTO books (title, author_id, owned, hidden) "
-            "VALUES ('Unowned A', 1, 0, 0)"
+        cur = await db.execute(
+            "INSERT INTO books (title, owned, hidden) VALUES ('Unowned A', 0, 0)"
         )
         await db.execute(
-            "INSERT INTO books (title, author_id, owned, hidden) "
-            "VALUES ('Unowned B', 1, 0, 0)"
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (?, 1, 0)",
+            (cur.lastrowid,),
+        )
+        cur = await db.execute(
+            "INSERT INTO books (title, owned, hidden) VALUES ('Unowned B', 0, 0)"
+        )
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (?, 1, 0)",
+            (cur.lastrowid,),
         )
         # 1 Calibre-synced row (must be skipped).
+        cur = await db.execute(
+            "INSERT INTO books (title, owned, hidden, calibre_id) VALUES ('Calibre-synced', 1, 0, 42)"
+        )
         await db.execute(
-            "INSERT INTO books (title, author_id, owned, hidden, calibre_id) "
-            "VALUES ('Calibre-synced', 1, 1, 0, 42)"
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (?, 1, 0)",
+            (cur.lastrowid,),
         )
         await db.commit()
     finally:
@@ -542,10 +615,13 @@ async def test_global_stats_sums_primary_plus_cross_library(
         await db.execute("INSERT INTO authors (id, name, sort_name) VALUES (10, 'V. E. Schwab', 'Schwab')")
         await db.execute("INSERT INTO series (id, name, author_id) VALUES (1, 'Shades of Magic', 10)")
         for i in range(4):
-            await db.execute(
-                "INSERT INTO books (title, author_id, series_id, owned, hidden) "
-                "VALUES (?, 10, 1, 0, 0)",
+            cur = await db.execute(
+                "INSERT INTO books (title, series_id, owned, hidden) VALUES (?, 1, 0, 0)",
                 (f"Ebook {i+1}",),
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (?, 10, 0)",
+                (cur.lastrowid,),
             )
         await db.commit()
     finally:
@@ -557,9 +633,12 @@ async def test_global_stats_sums_primary_plus_cross_library(
     try:
         await db.execute("INSERT INTO authors (id, name, sort_name) VALUES (266, 'V. E. Schwab', 'Schwab')")
         await db.execute("INSERT INTO series (id, name, author_id) VALUES (1, 'Audio Stories', 266)")
+        cur = await db.execute(
+            "INSERT INTO books (title, series_id, owned, hidden) VALUES ('Audio 1', 1, 1, 0)"
+        )
         await db.execute(
-            "INSERT INTO books (title, author_id, series_id, owned, hidden) "
-            "VALUES ('Audio 1', 266, 1, 1, 0)"
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (?, 266, 0)",
+            (cur.lastrowid,),
         )
         await db.commit()
     finally:

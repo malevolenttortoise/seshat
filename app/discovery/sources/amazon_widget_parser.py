@@ -67,11 +67,31 @@ class FormatVariant:
 
 
 @dataclass(frozen=True)
+class ContributorInfo:
+    """One byLine contributor with its role + identity, parsed from the
+    Author-Store product-grid widget (v3.0.0 Phase 3.4).
+
+    The widget byLine carries everything the role-filter needs WITHOUT a
+    detail-page fetch: a `roles` array (`{displayString,type}`), the
+    contributor's Amazon author ASIN (in the `contributor.author` path),
+    and an author-media image link. ``role`` follows the `Contributor`
+    convention — None for the plain author role, the non-author role's
+    displayString (e.g. "Illustrator", "Translator") otherwise — so the
+    downstream `contributor_is_author` allowlist drops non-authors. The
+    ASIN + image are captured for the v3.x author-ID enrichment arc.
+    """
+    name: str
+    role: str | None = None
+    author_id: str | None = None  # Amazon author ASIN, e.g. B001IGFHW6
+    image_url: str | None = None
+
+
+@dataclass(frozen=True)
 class Product:
     """One book entry parsed from Amazon's product-grid widget."""
     asin: str
     title: str
-    contributors: tuple[str, ...]  # author names from byLine
+    contributors: tuple[str, ...]  # author names from byLine (legacy: names only)
     binding_symbol: str  # e.g. "kindle_edition"
     binding_display: str  # e.g. "Kindle Edition"
     series_title: str | None
@@ -81,6 +101,10 @@ class Product:
     cover_url: str | None  # hi-res image URL on m.media-amazon.com
     media_matrix: tuple[FormatVariant, ...]  # sibling formats
     genres: tuple[str, ...]
+    # v3.0.0 Phase 3.4 — byLine contributors with role + Amazon author
+    # ASIN + image. Trailing default so existing Product() construction
+    # sites (and test helpers) stay valid; the live parser always sets it.
+    contributor_details: tuple[ContributorInfo, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -372,6 +396,57 @@ def _extract_string_token(html: str, key: str) -> str | None:
         return raw
 
 
+def _parse_byline_contributor(c: object) -> ContributorInfo | None:
+    """Parse one byLine contributor node into a ``ContributorInfo``.
+
+    v3.0.0 Phase 3.4. The node shape (confirmed against a live allbooks
+    payload) is::
+
+        {"name": "Brandon Sanderson",
+         "roles": [{"displayString": "Author", "type": "author"}],
+         "contributor": {"author": "/marketplaces/.../authors/B001IGFHW6"},
+         "links": [..., {"url": ".../amzn-author-media-prod/o1ehb….jpg"}]}
+
+    Role rule (matches the locked allowlist): ``role`` is None when the
+    node has no roles or *every* role is type "author"; otherwise it is
+    the first non-author role's displayString (so the downstream
+    `contributor_is_author` filter drops it). Returns None for a node
+    with no usable name.
+    """
+    if not isinstance(c, dict):
+        return None
+    name = (c.get("name") or "").strip()
+    if not name:
+        return None
+
+    roles = c.get("roles") or []
+    non_author = [
+        (r.get("displayString") or "").strip()
+        for r in roles
+        if isinstance(r, dict) and (r.get("type") or "").strip().lower() != "author"
+    ]
+    non_author = [d for d in non_author if d]
+    role = non_author[0] if non_author else None
+
+    # Amazon author ASIN — last path segment of the contributor reference.
+    author_id = None
+    cobj = c.get("contributor")
+    if isinstance(cobj, dict):
+        ref = next((v for v in cobj.values() if isinstance(v, str) and v), "")
+        seg = ref.rstrip("/").rsplit("/", 1)[-1] if ref else ""
+        author_id = seg or None
+
+    # Author-media image link, if Amazon included one among the links.
+    image_url = None
+    for lk in c.get("links") or []:
+        u = lk.get("url") if isinstance(lk, dict) else None
+        if u and ("author-media" in u or u.lower().rsplit("?", 1)[0].endswith((".jpg", ".jpeg", ".png"))):
+            image_url = u
+            break
+
+    return ContributorInfo(name=name, role=role, author_id=author_id, image_url=image_url)
+
+
 def _parse_products(raw_products: list) -> tuple[Product, ...]:
     """Convert raw product dicts to immutable Product tuples.
 
@@ -403,15 +478,15 @@ def _parse_products(raw_products: list) -> tuple[Product, ...]:
             )
             continue
 
-        # ─ contributors (authors) ─
+        # ─ contributors (authors + roles + ids + images) ─
         by_line = raw.get("byLine") or {}
         contributors_raw = by_line.get("contributors") or []
-        contributors: list[str] = []
+        contributor_details: list[ContributorInfo] = []
         for c in contributors_raw:
-            if isinstance(c, dict):
-                name = c.get("name")
-                if name:
-                    contributors.append(name)
+            ci = _parse_byline_contributor(c)
+            if ci is not None:
+                contributor_details.append(ci)
+        contributors = [ci.name for ci in contributor_details]  # legacy names-only view
 
         # ─ series info ─
         series_raw = raw.get("bookSeriesInfo")
@@ -465,6 +540,7 @@ def _parse_products(raw_products: list) -> tuple[Product, ...]:
             asin=asin,
             title=title,
             contributors=tuple(contributors),
+            contributor_details=tuple(contributor_details),
             binding_symbol=binding_symbol,
             binding_display=binding_display,
             series_title=series_title,

@@ -32,7 +32,7 @@ from datetime import datetime
 from typing import Optional
 import httpx
 from bs4 import BeautifulSoup
-from app.discovery.sources.base import BaseSource, AuthorResult, BookResult, SeriesResult
+from app.discovery.sources.base import BaseSource, AuthorResult, BookResult, SeriesResult, Contributor
 # v2.13.0 — Goodreads HTTP plumbing centralized for Cloudflare bypass.
 # `_get` override below routes every goodreads.com fetch through this
 # module so TLS impersonation + soft-block detection + runtime-state
@@ -64,6 +64,49 @@ def _parse_date(text: str) -> Optional[str]:
         except ValueError:
             continue
     return None
+
+
+def _parse_book_contributors(soup) -> list[Contributor]:
+    """v3.0.0 Phase 3.2 — parse a book page's contributor byline.
+
+    Scopes to the first ``div.ContributorLinksList`` (the primary
+    byline) and reads each ``a.ContributorLink``:
+      - name → ``span.ContributorLink__name``
+      - role → ``span.ContributorLink__role`` (ABSENT for authors;
+        carries ``(Illustrator)`` / ``(Translator)`` / … for
+        non-authors — surrounding parens stripped)
+      - id   → ``/author/show/<id>`` from the anchor href (captured now
+        for the v3.x author-ID enrichment arc; Phase 3 only writes
+        ``book_authors`` author_id ints)
+
+    The role-FILTER (allowlist author, drop the rest) lives in lookup's
+    ``contributor_is_author`` — this helper just surfaces what the page
+    states. Returns ``[]`` on the older layout (no ContributorLinksList)
+    so callers degrade to single-author behavior gracefully.
+    """
+    lst = soup.select_one("div.ContributorLinksList")
+    if not lst:
+        return []
+    out: list[Contributor] = []
+    for a in lst.select("a.ContributorLink"):
+        name_el = a.select_one("span.ContributorLink__name")
+        name = (name_el.get_text(strip=True) if name_el
+                else a.get_text(strip=True)).strip()
+        if not name:
+            continue
+        role_el = a.select_one("span.ContributorLink__role")
+        role = role_el.get_text(strip=True).strip("() ").strip() if role_el else None
+        # Goodreads badges registered authors as "(Goodreads Author)" —
+        # that's an author, not a contributor role. Normalize it back so
+        # the downstream role-filter doesn't drop a real author.
+        if role and role.lower() == "goodreads author":
+            role = None
+        gid = None
+        m = re.search(r"/author/show/(\d+)", a.get("href", "") or "")
+        if m:
+            gid = m.group(1)
+        out.append(Contributor(name=name, role=role or None, source_author_id=gid))
+    return out
 
 
 def _is_future(d: str) -> bool:
@@ -244,7 +287,7 @@ class GoodreadsSource(BaseSource):
             "is_unreleased": False, "is_set": False, "is_translation": False,
             "is_audiobook": False,
             "series_name": None, "series_index": None, "description": None,
-            "page_count": None, "cover_url": None,
+            "page_count": None, "cover_url": None, "contributors": [],
         }
         try:
             r = await self._get(f"{BASE}/book/show/{book_id}")
@@ -416,6 +459,13 @@ class GoodreadsSource(BaseSource):
                 else:
                     details["description"] = desc_el.get_text(strip=True)[:500]
 
+            # --- Contributors (v3.0.0 Phase 3.2) ---
+            # Scoped a.ContributorLink parse → ordered author list +
+            # per-contributor role + Goodreads author id. Drives
+            # book_authors via lookup's role-filter; the captured ids
+            # pre-wire the v3.x author-ID enrichment arc.
+            details["contributors"] = _parse_book_contributors(soup)
+
         except Exception as e:
             logger.debug(f"  Goodreads: error getting details for book {book_id} '{title}': {e}")
 
@@ -512,7 +562,19 @@ class GoodreadsSource(BaseSource):
             list_path = str(r.url).split("?", 1)[0]
 
             nm_el = soup.select_one("a.authorName span")
-            author_name = nm_el.get_text(strip=True) if nm_el else "Unknown"
+            author_name = nm_el.get_text(strip=True) if nm_el else None
+            # Fallback if the byline anchor is absent on this layout:
+            # the list page's <h1> reads "Books by <Author>" — a
+            # page-author-specific signal that never picks up a book
+            # row's co-author (the failure mode recorded in
+            # feedback_seshat_goodreads_authorname_selector_bug).
+            if not author_name or author_name == "Unknown":
+                h1 = soup.find("h1")
+                if h1:
+                    hm = re.match(r"\s*Books by\s+(.+?)\s*$", h1.get_text(strip=True))
+                    if hm:
+                        author_name = hm.group(1).strip()
+            author_name = author_name or "Unknown"
 
             # Get author image
             author_img = None
@@ -847,6 +909,7 @@ class GoodreadsSource(BaseSource):
                     source="goodreads",
                     source_url=f"https://www.goodreads.com/book/show/{rb['book_id']}",
                     language=details.get("language") or "English",
+                    contributors=details.get("contributors") or [],
                 )
 
                 if sname:

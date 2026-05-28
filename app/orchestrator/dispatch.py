@@ -50,7 +50,7 @@ from app.mam.grab import GrabResult
 from app.mam.torrent_meta import BencodeError, info_hash
 from app.mam.torrent_info import TorrentInfoError, get_torrent_info
 from app.mam.user_status import UserStatusError, get_user_status
-from app.orchestrator.auto_train import train_author
+from app.orchestrator.auto_train import train_authors_from_torrent_info
 from app.orchestrator.delayed import rotate_oldest_to_delayed
 from app.orchestrator.download_folders import (
     compute_download_folder,
@@ -787,20 +787,30 @@ async def _dispatch_with_decision(
             # normal grab path. The grab-create call below stamps
             # book_format + dedup_key on the new row.
 
-        # Co-author auto-train: if the filter allowed this announce
-        # because one co-author matched, add the unknown co-authors
-        # to the allow list too. They're collaborating with a known-
-        # good author, so they're likely relevant to the user's taste.
+        # Co-author auto-train (v3.0.0 Phase 10, ITEM 1): train the
+        # AUTHORITATIVE MAM authorlist for this grab into the allow list, so
+        # future announces by any co-author of a book we acquired pass the
+        # filter. Fires when the filter allowed because a known author
+        # matched, OR for any programmatic/manual grab (skip_filter — covers
+        # inject / tentative-approve / hold-release / delayed / discovery
+        # send-to-pipeline). One cached-or-fetched torrent_info call per grab
+        # (grabs are rare + deliberate); the announce blob is the fail-safe
+        # fallback. Trains `authors_allowed` only — the owned book's
+        # book_authors come from Calibre/ABS sync (Phase 2). Best-effort:
+        # never block the grab.
         if (
-            filter_decision.reason == "allowed_author"
-            and filter_decision.all_authors
-            and not skip_filter
-        ):
-            for raw_author in filter_decision.all_authors:
-                try:
-                    await train_author(db, raw_author, source="coauthor_train")
-                except Exception:
-                    pass  # best-effort, don't block the grab
+            filter_decision.reason == "allowed_author" or skip_filter
+        ) and announce.torrent_id:
+            try:
+                await train_authors_from_torrent_info(
+                    db,
+                    announce.torrent_id,
+                    token=deps.mam_token,
+                    fallback_blob=announce.author_blob or "",
+                    source="coauthor_train",
+                )
+            except Exception:
+                pass  # best-effort, don't block the grab
 
         # Filter said allow (or we're injecting). Build the economic
         # context for the policy engine. Start with what we already

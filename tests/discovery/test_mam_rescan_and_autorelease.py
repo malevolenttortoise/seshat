@@ -68,14 +68,17 @@ async def test_basic_predicate_includes_null_possible_and_not_found(
 
     db, aid = single_library
     # Seed one book per status state.
-    await db.execute(
-        "INSERT INTO books (title, author_id, mam_status) VALUES "
-        "('null-row', ?, NULL),"
-        "('possible-row', ?, 'possible'),"
-        "('not_found-row', ?, 'not_found'),"
-        "('found-row', ?, 'found')",
-        (aid, aid, aid, aid),
-    )
+    for title, status in [
+        ("null-row", None), ("possible-row", "possible"),
+        ("not_found-row", "not_found"), ("found-row", "found"),
+    ]:
+        cur = await db.execute(
+            "INSERT INTO books (title, mam_status) VALUES (?, ?)", (title, status),
+        )
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+            "VALUES (?, ?, 0)", (cur.lastrowid, aid),
+        )
     await db.commit()
 
     rows = await db.execute_fetchall(
@@ -94,14 +97,19 @@ async def test_basic_predicate_excludes_unreleased_and_hidden(
     from app.discovery.sources.mam import _NEEDS_SCAN_BASIC_BARE
 
     db, aid = single_library
-    await db.execute(
-        "INSERT INTO books "
-        "(title, author_id, mam_status, is_unreleased, hidden) VALUES "
-        "('unreleased-not_found', ?, 'not_found', 1, 0),"
-        "('hidden-possible', ?, 'possible', 0, 1),"
-        "('eligible-not_found', ?, 'not_found', 0, 0)",
-        (aid, aid, aid),
-    )
+    for title, status, is_unrel, hidden in [
+        ("unreleased-not_found", "not_found", 1, 0),
+        ("hidden-possible", "possible", 0, 1),
+        ("eligible-not_found", "not_found", 0, 0),
+    ]:
+        cur = await db.execute(
+            "INSERT INTO books (title, mam_status, is_unreleased, hidden) "
+            "VALUES (?, ?, ?, ?)", (title, status, is_unrel, hidden),
+        )
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+            "VALUES (?, ?, 0)", (cur.lastrowid, aid),
+        )
     await db.commit()
 
     rows = await db.execute_fetchall(
@@ -121,14 +129,20 @@ async def test_strict_predicate_keeps_url_guard_for_null_rows(
     from app.discovery.sources.mam import _NEEDS_SCAN_STRICT_BARE
 
     db, aid = single_library
-    await db.execute(
-        "INSERT INTO books (title, author_id, mam_status, mam_url) VALUES "
-        "('null-no-url', ?, NULL, NULL),"
-        "('null-with-stale-url', ?, NULL, 'https://stale'),"
-        "('possible-with-url', ?, 'possible', 'https://match'),"
-        "('not_found-no-url', ?, 'not_found', NULL)",
-        (aid, aid, aid, aid),
-    )
+    for title, status, mam_url in [
+        ("null-no-url", None, None),
+        ("null-with-stale-url", None, "https://stale"),
+        ("possible-with-url", "possible", "https://match"),
+        ("not_found-no-url", "not_found", None),
+    ]:
+        cur = await db.execute(
+            "INSERT INTO books (title, mam_status, mam_url) VALUES (?, ?, ?)",
+            (title, status, mam_url),
+        )
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+            "VALUES (?, ?, 0)", (cur.lastrowid, aid),
+        )
     await db.commit()
 
     rows = await db.execute_fetchall(
@@ -153,14 +167,27 @@ async def test_scheduler_clears_expired_unreleased(
     db, aid = single_library
     # Seed: past-date book (should flip), today book (should flip),
     # future-date book (must NOT flip), no-date book (must NOT flip).
+    for title, exp_date in [
+        ("past-book", "2020-01-01"),
+        ("future-book", "2099-12-31"),
+        ("no-date-book", None),
+    ]:
+        cur = await db.execute(
+            "INSERT INTO books (title, owned, is_unreleased, expected_date) "
+            "VALUES (?, 0, 1, ?)", (title, exp_date),
+        )
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+            "VALUES (?, ?, 0)", (cur.lastrowid, aid),
+        )
+    # today-book uses a SQL expression for the date, must be a separate statement
+    cur = await db.execute(
+        "INSERT INTO books (title, owned, is_unreleased, expected_date) "
+        "VALUES ('today-book', 0, 1, date('now', 'localtime'))"
+    )
     await db.execute(
-        "INSERT INTO books (title, author_id, owned, is_unreleased, "
-        "expected_date) VALUES "
-        "('past-book', ?, 0, 1, '2020-01-01'),"
-        "('today-book', ?, 0, 1, date('now', 'localtime')),"
-        "('future-book', ?, 0, 1, '2099-12-31'),"
-        "('no-date-book', ?, 0, 1, NULL)",
-        (aid, aid, aid, aid),
+        "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+        "VALUES (?, ?, 0)", (cur.lastrowid, aid),
     )
     await db.commit()
 
@@ -344,14 +371,18 @@ async def test_skip_clause_excludes_recently_scanned_rows(single_library):
 
     db, aid = single_library
     now = _time.time()
-    await db.execute(
-        "INSERT INTO books (title, author_id, mam_status, mam_last_scanned_at) "
-        "VALUES "
-        "('never-scanned', ?, 'possible', NULL),"
-        "('day-old', ?, 'possible', ?),"
-        "('ten-days-old', ?, 'possible', ?)",
-        (aid, aid, now - 86400, aid, now - 10 * 86400),
-    )
+    for title, ts in [
+        ("never-scanned", None), ("day-old", now - 86400),
+        ("ten-days-old", now - 10 * 86400),
+    ]:
+        cur = await db.execute(
+            "INSERT INTO books (title, mam_status, mam_last_scanned_at) "
+            "VALUES (?, 'possible', ?)", (title, ts),
+        )
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+            "VALUES (?, ?, 0)", (cur.lastrowid, aid),
+        )
     await db.commit()
 
     # 7-day window — day-old should be excluded; ten-days-old included.
@@ -377,13 +408,15 @@ async def test_skip_clause_disabled_includes_all(single_library):
     import time as _time
 
     db, aid = single_library
-    await db.execute(
-        "INSERT INTO books (title, author_id, mam_status, mam_last_scanned_at) "
-        "VALUES "
-        "('just-scanned', ?, 'possible', ?),"
-        "('never-scanned', ?, 'possible', NULL)",
-        (aid, _time.time(), aid),
-    )
+    for title, ts in [("just-scanned", _time.time()), ("never-scanned", None)]:
+        cur = await db.execute(
+            "INSERT INTO books (title, mam_status, mam_last_scanned_at) "
+            "VALUES (?, 'possible', ?)", (title, ts),
+        )
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+            "VALUES (?, ?, 0)", (cur.lastrowid, aid),
+        )
     await db.commit()
 
     skip_clause = _recent_scan_skip_clause(0)  # disabled → empty string
@@ -404,15 +437,20 @@ async def test_oldest_first_ordering(single_library):
     db, aid = single_library
     now = _time.time()
     # Insert with explicit ids so we can pin tiebreaker behavior.
-    await db.execute(
-        "INSERT INTO books "
-        "(id, title, author_id, owned, mam_status, mam_last_scanned_at) VALUES "
-        "(1, 'old-unowned', ?, 0, 'possible', ?),"
-        "(2, 'recent-unowned', ?, 0, 'possible', ?),"
-        "(3, 'never-unowned', ?, 0, 'possible', NULL),"
-        "(4, 'old-owned', ?, 1, 'possible', ?)",
-        (aid, now - 30 * 86400, aid, now - 1 * 86400, aid, aid, now - 30 * 86400),
-    )
+    for bid, title, owned, ts in [
+        (1, "old-unowned", 0, now - 30 * 86400),
+        (2, "recent-unowned", 0, now - 1 * 86400),
+        (3, "never-unowned", 0, None),
+        (4, "old-owned", 1, now - 30 * 86400),
+    ]:
+        await db.execute(
+            "INSERT INTO books (id, title, owned, mam_status, mam_last_scanned_at) "
+            "VALUES (?, ?, ?, 'possible', ?)", (bid, title, owned, ts),
+        )
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+            "VALUES (?, ?, 0)", (bid, aid),
+        )
     await db.commit()
 
     rows = await db.execute_fetchall(
@@ -441,9 +479,13 @@ async def test_auth_error_does_not_stamp_timestamp(single_library):
     db, aid = single_library
     original_ts = _time.time() - 10 * 86400  # 10 days ago
     await db.execute(
-        "INSERT INTO books (id, title, author_id, mam_status, mam_last_scanned_at) "
-        "VALUES (1, 't', ?, 'possible', ?)",
-        (aid, original_ts),
+        "INSERT INTO books (id, title, mam_status, mam_last_scanned_at) "
+        "VALUES (1, 't', 'possible', ?)",
+        (original_ts,),
+    )
+    await db.execute(
+        "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+        "VALUES (1, ?, 0)", (aid,),
     )
     await db.commit()
 
@@ -620,10 +662,12 @@ async def test_per_book_pause_for_library_sync(single_library, monkeypatch):
 
     # Seed one eligible book.
     db, aid = single_library
+    cur = await db.execute(
+        "INSERT INTO books (title, mam_status) VALUES ('one', NULL)",
+    )
     await db.execute(
-        "INSERT INTO books (title, author_id, mam_status) "
-        "VALUES ('one', ?, NULL)",
-        (aid,),
+        "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+        "VALUES (?, ?, 0)", (cur.lastrowid, aid),
     )
     await db.commit()
 
@@ -692,16 +736,21 @@ async def test_command_center_router_snapshot_applies_skip(
     db, aid = single_library
     now = _time.time()
     fresh_ts = now - 3600  # 1 hour ago
-    await db.execute(
-        "INSERT INTO books (title, author_id, mam_status, mam_last_scanned_at) "
-        "VALUES "
-        "('fresh-1', ?, 'possible', ?),"
-        "('fresh-2', ?, 'not_found', ?),"
-        "('fresh-3', ?, 'possible', ?),"
-        "('never-1', ?, NULL, NULL),"
-        "('never-2', ?, 'possible', NULL)",
-        (aid, fresh_ts, aid, fresh_ts, aid, fresh_ts, aid, aid),
-    )
+    for title, status, ts in [
+        ("fresh-1", "possible", fresh_ts),
+        ("fresh-2", "not_found", fresh_ts),
+        ("fresh-3", "possible", fresh_ts),
+        ("never-1", None, None),
+        ("never-2", "possible", None),
+    ]:
+        cur = await db.execute(
+            "INSERT INTO books (title, mam_status, mam_last_scanned_at) "
+            "VALUES (?, ?, ?)", (title, status, ts),
+        )
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+            "VALUES (?, ?, 0)", (cur.lastrowid, aid),
+        )
     await db.commit()
 
     # The endpoint reads settings via load_settings, then builds the
@@ -735,9 +784,13 @@ async def test_successful_scan_stamps_timestamp(single_library):
     db, aid = single_library
     original_ts = _time.time() - 10 * 86400
     await db.execute(
-        "INSERT INTO books (id, title, author_id, mam_status, mam_last_scanned_at) "
-        "VALUES (1, 't', ?, 'possible', ?)",
-        (aid, original_ts),
+        "INSERT INTO books (id, title, mam_status, mam_last_scanned_at) "
+        "VALUES (1, 't', 'possible', ?)",
+        (original_ts,),
+    )
+    await db.execute(
+        "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+        "VALUES (1, ?, 0)", (aid,),
     )
     await db.commit()
 

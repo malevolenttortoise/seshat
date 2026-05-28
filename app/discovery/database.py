@@ -10,6 +10,7 @@ import asyncio
 import logging
 import re
 from collections import defaultdict
+from typing import Iterable, Optional
 import aiosqlite
 from app.config import DATA_DIR
 
@@ -93,9 +94,11 @@ CREATE TABLE IF NOT EXISTS series (
 );
 
 CREATE TABLE IF NOT EXISTS books (
+    -- v3.0.0 Phase 9 (ADR-0012): no `author_id` column — authorship is the
+    -- `book_authors` join (position 0 = primary). Existing DBs drop the
+    -- legacy column via `_drop_legacy_books_author_id` at startup.
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,
-    author_id INTEGER NOT NULL,
     series_id INTEGER,
     series_index REAL,
     isbn TEXT,
@@ -170,7 +173,6 @@ CREATE TABLE IF NOT EXISTS books (
     source_url TEXT,
     first_seen_at REAL NOT NULL DEFAULT (strftime('%s','now')),
     created_at REAL NOT NULL DEFAULT (strftime('%s','now')),
-    FOREIGN KEY (author_id) REFERENCES authors(id),
     FOREIGN KEY (series_id) REFERENCES series(id)
 );
 
@@ -303,22 +305,44 @@ CREATE TABLE IF NOT EXISTS metadata_review_queue (
     FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_books_author ON books(author_id);
+-- v3.0.0 Phase 9 (ADR-0012): author→books lookups go through
+-- idx_book_authors_author joined to books. The legacy idx_books_author
+-- and idx_books_author_owned indexes are gone with the author_id column.
 CREATE INDEX IF NOT EXISTS idx_books_series ON books(series_id);
 CREATE INDEX IF NOT EXISTS idx_books_owned ON books(owned);
 CREATE INDEX IF NOT EXISTS idx_books_new ON books(is_new);
 CREATE INDEX IF NOT EXISTS idx_books_hidden ON books(hidden);
 CREATE INDEX IF NOT EXISTS idx_authors_name ON authors(name);
 CREATE INDEX IF NOT EXISTS idx_books_mam_status ON books(mam_status);
--- Composite index for the most common combined filter across the app:
--- "all owned (or missing) books for a given author". Used heavily by
--- the author-detail page and the lookup-merge pass that runs once per
--- author during source scans.
-CREATE INDEX IF NOT EXISTS idx_books_author_owned ON books(author_id, owned);
 CREATE INDEX IF NOT EXISTS idx_suggestions_status ON book_series_suggestions(status);
 CREATE INDEX IF NOT EXISTS idx_suggestions_book ON book_series_suggestions(book_id);
 CREATE INDEX IF NOT EXISTS idx_review_queue_book ON metadata_review_queue(book_id);
 CREATE INDEX IF NOT EXISTS idx_review_queue_source ON metadata_review_queue(source);
+
+-- v3.0.0 multi-author rework. One row per (book, author) link; position 0
+-- is the primary author. This REPLACED the single `books.author_id`
+-- denormalization, which Phase 9 (ADR-0012) dropped once every read path
+-- was migrated to join through here. Authorship now lives only here.
+--
+--   position  Stable display order; 0 = primary. Two-author books
+--             have positions 0 and 1; co-author chains preserve the
+--             order the upstream source surfaced.
+--   role      NULL = author (the default). Phase 3 role-filter
+--             populates non-NULL values like 'translator' / 'illustrator'
+--             from source enrichment, with conservative dropping per
+--             Decision 4. Backfill only writes NULL.
+--
+-- Composite PK on (book_id, author_id) guarantees no duplicate links
+-- per book without needing a surrogate id column — every downstream
+-- consumer addresses these rows by the pair.
+CREATE TABLE IF NOT EXISTS book_authors (
+    book_id     INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+    author_id   INTEGER NOT NULL REFERENCES authors(id),
+    position    INTEGER NOT NULL DEFAULT 0,
+    role        TEXT,
+    PRIMARY KEY (book_id, author_id)
+);
+CREATE INDEX IF NOT EXISTS idx_book_authors_author ON book_authors(author_id);
 """
 
 # Migrations for existing databases
@@ -628,6 +652,28 @@ MIGRATIONS = [
     # all four badges instead of just two.
     "ALTER TABLE books ADD COLUMN hardcover_slug TEXT",
     "ALTER TABLE books ADD COLUMN kobo_slug TEXT",
+    # ── v3.0.0 Phase 1: multi-author rework ──────────────────────
+    # `book_authors` replaces the single-author `books.author_id`
+    # denormalization with a proper join table. See SCHEMA above for the
+    # column-level doc. `books.author_id` was dropped in Phase 9 (ADR-0012)
+    # once every read path joined through here; authorship lives only here.
+    """CREATE TABLE IF NOT EXISTS book_authors (
+        book_id     INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+        author_id   INTEGER NOT NULL REFERENCES authors(id),
+        position    INTEGER NOT NULL DEFAULT 0,
+        role        TEXT,
+        PRIMARY KEY (book_id, author_id)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_book_authors_author ON book_authors(author_id)",
+    # ── v3.0.0 Phase 6: series taxonomy ──────────────────────────
+    # `series.author_mode` ∈ {per_author, multi_author, shared} — the
+    # explicit 3-way discriminator (ADR-0010). Computed by
+    # `_recompute_series_author` from the intersection of the series'
+    # books' contributor sets; `series.author_id` coexists as an owner
+    # pointer (per→owner, multi→anchor, shared→NULL). Nullable here;
+    # the startup backfill computes it for every existing row (after
+    # the book_authors backfill, which it reads).
+    "ALTER TABLE series ADD COLUMN author_mode TEXT",
 ]
 
 
@@ -753,7 +799,9 @@ async def _backfill_series_index_from_title(db) -> tuple[int, int]:
             sid_by_author_name.setdefault((s["author_id"], norm), s["id"])
 
     targets = await (await db.execute(
-        "SELECT id, title, author_id, series_id, owned "
+        "SELECT id, title, "
+        "(SELECT author_id FROM book_authors WHERE book_id=books.id AND position=0) AS author_id, "
+        "series_id, owned "
         "FROM books "
         "WHERE series_id IS NOT NULL AND series_index IS NULL "
         "AND title IS NOT NULL"
@@ -792,9 +840,11 @@ async def _backfill_series_index_from_title(db) -> tuple[int, int]:
             continue
 
         # Check whether another row already holds (author_id, series_id, idx).
+        # v3.0.0 Phase 9 (ADR-0012): primary = book_authors position 0.
         existing = await (await db.execute(
             "SELECT id, title, owned FROM books "
-            "WHERE author_id = ? AND series_id = ? "
+            "WHERE id IN (SELECT book_id FROM book_authors WHERE author_id = ? AND position = 0) "
+            "AND series_id = ? "
             "AND series_index = ? AND id != ?",
             (t["author_id"], t["series_id"], idx, t["id"]),
         )).fetchone()
@@ -930,6 +980,325 @@ async def _backfill_normalized_author_names(db) -> int:
     return touched
 
 
+async def _backfill_book_authors(db) -> int:
+    """v3.0.0 Phase 1B — populate `book_authors` from snapshot
+    ``authors_json`` arrays.
+
+    Phase 1A added the join table; this step fills it from the
+    full author lists that ``books_calibre_snapshot.authors_json`` and
+    ``books_abs_snapshot.authors_json`` already preserve (faithful
+    reproductions of the upstream Calibre / ABS author tuples — not
+    flattened down to a single primary). For each book row, the
+    snapshot's array order becomes ``book_authors.position`` (0 =
+    primary, 1..N-1 = co-authors), names resolve to ``authors.id`` via
+    exact match against the same per-library authors table the sync
+    code wrote into.
+
+    Idempotent: ``INSERT OR IGNORE`` on the composite ``(book_id,
+    author_id)`` PK means re-runs after the first pass are no-ops.
+    Returns the number of new rows inserted, for logging.
+
+    Fallbacks:
+      - book with no snapshot row (sync hasn't run or library uses a
+        different snapshot table than this DB's flavor): inserts a
+        single row from the legacy ``books.author_id`` at position 0.
+      - snapshot present but name doesn't resolve in this DB's
+        ``authors`` table (cross-library name drift like "J.N. Chaney"
+        vs "J. N. Chaney"): silently skipped — the next sync after
+        Phase 2 ships will write the full set through the normal
+        author upsert path.
+      - book row with NO author_id and no snapshot resolution: no
+        rows inserted for that book. ``book_authors`` left empty for it
+        (rare; pre-Phase-9 such a book had a NULL primary anyway).
+
+    On the first v3.0.0 boot this still reads ``books.author_id`` (the
+    legacy fallback arm) because it runs BEFORE Phase 9's column drop;
+    on later boots the column is gone and the fallback is column-presence-
+    gated (selects NULL), so only snapshot resolution contributes.
+    """
+    import json
+
+    from app.metadata.author_names import normalize_author_name
+
+    cursor = await db.execute("SELECT id, name, normalized_name FROM authors")
+    rows_authors = await cursor.fetchall()
+    name_to_id = {row["name"]: row["id"] for row in rows_authors}
+    # Secondary lookup keyed on the normalized form (no punctuation /
+    # whitespace differences). Catches within-library snapshot drift
+    # like "J.N. Chaney" (snapshot) vs "J. N. Chaney" (authors row,
+    # collapsed by the dedup step earlier in init_db). UAT 2026-05-25
+    # in the abs-audiobooks dev-stack DB hit this: one snapshot row's
+    # second author silently disappeared from book_authors until we
+    # added this fallback.
+    normalized_to_id: dict[str, int] = {}
+    for row in rows_authors:
+        norm = row["normalized_name"] or normalize_author_name(row["name"] or "")
+        if norm and norm not in normalized_to_id:
+            normalized_to_id[norm] = row["id"]
+
+    # v3.0.0 Phase 9 (ADR-0012): `books.author_id` is dropped once every
+    # read path joins book_authors. On the FIRST v3.0.0 boot the column
+    # still exists (this backfill's legacy fallback arm needs it, and runs
+    # BEFORE the drop migration); on every later boot it's gone, so select
+    # NULL in its place — the fallback arm then no-ops (every book already
+    # carries its position-0 link from the earlier backfill + always-link).
+    _bcols = await (await db.execute("PRAGMA table_info(books)")).fetchall()
+    _has_author_id = any(c["name"] == "author_id" for c in _bcols)
+    _author_sel = "b.author_id" if _has_author_id else "NULL AS author_id"
+    cursor = await db.execute(
+        f"SELECT b.id, {_author_sel}, c.authors_json AS calibre_json, "
+        "       a.authors_json AS abs_json "
+        "FROM books b "
+        "LEFT JOIN books_calibre_snapshot c ON c.book_id = b.id "
+        "LEFT JOIN books_abs_snapshot a ON a.book_id = b.id"
+    )
+    rows = await cursor.fetchall()
+    added = 0
+    for r in rows:
+        book_id = r["id"]
+        author_ids: list[int] = []
+        raw_json = r["calibre_json"] or r["abs_json"]
+        if raw_json:
+            try:
+                entries = json.loads(raw_json) or []
+            except (json.JSONDecodeError, TypeError):
+                entries = []
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                name = (entry.get("name") or "").strip()
+                if not name:
+                    continue
+                aid = name_to_id.get(name)
+                if aid is None:
+                    norm = normalize_author_name(name)
+                    if norm:
+                        aid = normalized_to_id.get(norm)
+                if aid is not None and aid not in author_ids:
+                    author_ids.append(aid)
+        if not author_ids and r["author_id"] is not None:
+            # Legacy single-author fallback — no snapshot or no
+            # snapshot names resolved against this library's authors.
+            # This is the "backfill-all" arm: it links EVERY book with
+            # an author_id (owned without a resolvable snapshot AND
+            # discovered books, which never have a snapshot) to its
+            # primary at position 0. As of v3.0.0 Phase 4 this arm is
+            # load-bearing, not just a nicety — read paths now join
+            # book_authors authoritatively (ADR-0008), so a book left
+            # without a link here would be invisible to author detail /
+            # counts / the scan prefilter until the next restart. The
+            # runtime equivalent is `_link_discovered_contributors`
+            # always-linking the scanned author on insert (Phase 4).
+            author_ids = [r["author_id"]]
+        for pos, aid in enumerate(author_ids):
+            ins = await db.execute(
+                "INSERT OR IGNORE INTO book_authors "
+                "(book_id, author_id, position, role) "
+                "VALUES (?, ?, ?, NULL)",
+                (book_id, aid, pos),
+            )
+            added += ins.rowcount
+    if added:
+        await db.commit()
+    return added
+
+
+async def _backfill_series_author_mode(db) -> int:
+    """v3.0.0 Phase 6 (ADR-0010) — compute `series.author_mode` for every
+    series row from current membership.
+
+    Runs at startup AFTER `_backfill_book_authors` + the series dedup
+    steps: the recompute reads `book_authors` and book→series
+    membership, so both must already be settled. Idempotent — the
+    recompute is deterministic. Returns the number of series touched.
+
+    Lazy-imports `_recompute_series_author` (defined in the series
+    router) so authority logic stays single-sourced; the function-level
+    import avoids the database↔router module import cycle at load time.
+    """
+    from app.discovery.routers.series import _recompute_series_author
+
+    sids = [
+        r[0] for r in await (await db.execute("SELECT id FROM series")).fetchall()
+    ]
+    if not sids:
+        return 0
+    await _recompute_series_author(db, sids)
+    await db.commit()
+    return len(sids)
+
+
+async def load_contributors(
+    db, book_ids: Iterable[int],
+) -> dict[int, list[dict]]:
+    """v3.0.0 Phase 7 — batch-load ordered contributors for a page of books.
+
+    Returns ``{book_id: [{"author_id", "name", "position", "role"}, …]}``
+    ordered by ``position`` (0 = primary). One query for the whole page so
+    a list endpoint that returns N books doesn't fire N per-book lookups
+    (the multi-author byline render needs every contributor, not just the
+    primary that ``books.author_id`` carries).
+
+    Books with no ``book_authors`` rows are simply absent from the map
+    (callers default them to ``[]``); post-ADR-0008 backfill every book
+    carries at least the primary, so that's a defensive case.
+    """
+    ids = [int(b) for b in book_ids if b is not None]
+    if not ids:
+        return {}
+    ph = ",".join("?" * len(ids))
+    rows = await (await db.execute(
+        f"SELECT ba.book_id, ba.author_id, a.name, ba.position, ba.role "
+        f"FROM book_authors ba JOIN authors a ON a.id = ba.author_id "
+        f"WHERE ba.book_id IN ({ph}) "
+        f"ORDER BY ba.book_id, ba.position",
+        ids,
+    )).fetchall()
+    out: dict[int, list[dict]] = {}
+    for r in rows:
+        out.setdefault(r["book_id"], []).append({
+            "author_id": r["author_id"],
+            "name": r["name"],
+            "position": r["position"],
+            "role": r["role"],
+        })
+    return out
+
+
+async def attach_contributors(db, books: list[dict]) -> None:
+    """v3.0.0 Phase 7 — stamp each book dict with a ``contributors`` list.
+
+    Mutates ``books`` in place so every book-list response that feeds the
+    shared book card carries the full ordered contributor set (ADR-0008 /
+    Decision 4 — the byline renders all authors, not just the primary).
+    One batched ``load_contributors`` query covers the whole page.
+    """
+    if not books:
+        return
+    mapping = await load_contributors(db, [b.get("id") for b in books])
+    for b in books:
+        b["contributors"] = mapping.get(b.get("id"), [])
+
+
+async def write_book_authors(
+    db, book_id: int, author_ids_in_order: list[int],
+) -> int:
+    """v3.0.0 Phase 2 — replace this book's ``book_authors`` rows.
+
+    Called from the sync writers (calibre_sync, audiobookshelf_sync)
+    on every INSERT or UPDATE of a ``books`` row so the join table
+    stays in lockstep with the upstream library's author tuple. Order
+    of ``author_ids_in_order`` becomes ``book_authors.position``
+    (0 = primary, 1..N-1 = co-authors).
+
+    Strategy: DELETE existing links for this book, then INSERT the
+    new ordered set. This handles the case where a user dropped a
+    co-author from Calibre between syncs (or fixed a duplicated
+    entry) — the previous Phase 1B "INSERT OR IGNORE" semantics
+    would have left the dropped author stranded.
+
+    No-ops cleanly when ``author_ids_in_order`` is empty (a sync that
+    can't resolve any author leaves the book's links untouched
+    rather than wiping them — defensive against transient resolution
+    failures).
+
+    Caller is responsible for the commit. Returns the count of rows
+    inserted (after dedup), or 0 if no resolution happened.
+    """
+    if not author_ids_in_order:
+        return 0
+    # Deduplicate while preserving order — a single author listed
+    # twice in the source collapses to one row, kept at the earlier
+    # position.
+    seen: set[int] = set()
+    ordered: list[int] = []
+    for aid in author_ids_in_order:
+        if aid is None or aid in seen:
+            continue
+        seen.add(aid)
+        ordered.append(aid)
+    if not ordered:
+        return 0
+    await db.execute(
+        "DELETE FROM book_authors WHERE book_id = ?", (book_id,)
+    )
+    for pos, aid in enumerate(ordered):
+        await db.execute(
+            "INSERT INTO book_authors "
+            "(book_id, author_id, position, role) "
+            "VALUES (?, ?, ?, NULL)",
+            (book_id, aid, pos),
+        )
+    return len(ordered)
+
+
+async def resolve_or_create_author(
+    db, name: str, *, allow_create: bool,
+) -> Optional[int]:
+    """v3.0.0 Phase 3 — resolve a source-reported contributor name to a
+    per-library ``authors.id`` (the FK target of ``book_authors``).
+
+    Matching mirrors `get_or_create_person`'s staged approach, but on
+    the per-library ``authors`` table rather than the cross-library
+    ``persons`` table:
+
+      1. Exact match on ``name`` (the table's UNIQUE key).
+      2. Exact match on ``normalized_name``.
+      3. Fuzzy match via ``authors_match`` (SequenceMatcher ≥ 0.92)
+         over existing rows — catches punctuation / initials drift
+         ("A K DuBoff" vs "A. K. DuBoff").
+
+    On a miss, the source's trust level decides:
+      - ``allow_create=True`` (trusted-create source) → INSERT a
+        name-only author row (``sort_name`` defaults to the display
+        name, mirroring author_mirror's stub pattern) and return its id.
+      - ``allow_create=False`` (link-only source) → return None; the
+        contributor is dropped rather than minting an unvetted row.
+
+    Caller owns the commit — the discovery INSERT path commits the
+    whole scan batch at once, and an uncommitted author row is already
+    visible to the subsequent ``book_authors`` INSERT on the same
+    connection (so the FK is satisfied without an interim commit).
+
+    Returns the author_id, or None on an empty name / link-only miss.
+    """
+    from app.metadata.author_names import normalize_author_name, authors_match
+    name = (name or "").strip()
+    if not name:
+        return None
+    # 1. Exact display name.
+    row = await (await db.execute(
+        "SELECT id FROM authors WHERE name = ?", (name,),
+    )).fetchone()
+    if row:
+        return row["id"]
+    normalized = normalize_author_name(name)
+    if normalized:
+        # 2. Exact normalized name.
+        row = await (await db.execute(
+            "SELECT id FROM authors WHERE normalized_name = ?", (normalized,),
+        )).fetchone()
+        if row:
+            return row["id"]
+        # 3. Fuzzy over existing rows. Only runs on a miss (a genuinely
+        # new contributor), so the full-table scan is bounded in
+        # practice — same cost rationale as get_or_create_person.
+        rows = await (await db.execute(
+            "SELECT id, name FROM authors"
+        )).fetchall()
+        for r in rows:
+            if authors_match(name, r["name"] or ""):
+                return r["id"]
+    if not allow_create:
+        return None
+    cur = await db.execute(
+        "INSERT INTO authors (name, sort_name, normalized_name) "
+        "VALUES (?, ?, ?)",
+        (name, name, normalized or name),
+    )
+    return cur.lastrowid
+
+
 async def _dedupe_author_rows(db) -> int:
     """Collapse author rows whose `normalized_name` matches.
 
@@ -949,7 +1318,7 @@ async def _dedupe_author_rows(db) -> int:
       3. Final tiebreak on lowest id (stable / deterministic).
 
     Reparents every FK that references `authors.id`:
-      - books.author_id
+      - book_authors.author_id (was books.author_id pre-Phase 9)
       - series.author_id
       - pen_name_links.canonical_author_id
       - pen_name_links.alias_author_id
@@ -983,7 +1352,8 @@ async def _dedupe_author_rows(db) -> int:
         scored = []
         for m in members:
             cnt_row = await (await db.execute(
-                "SELECT COUNT(*) FROM books WHERE author_id = ?", (m["id"],)
+                "SELECT COUNT(*) FROM book_authors WHERE author_id = ?",
+                (m["id"],),
             )).fetchone()
             book_count = cnt_row[0] if cnt_row else 0
             period_count = m["name"].count(".")
@@ -994,9 +1364,20 @@ async def _dedupe_author_rows(db) -> int:
 
         for loser in losers:
             # Reparent every FK reference before deleting the row.
+            # v3.0.0 Phase 9 (ADR-0012): the book→author FK now lives in
+            # book_authors (books.author_id is gone). PK is (book_id,
+            # author_id), so a book linked to BOTH winner and loser would
+            # collide on reparent — UPDATE OR IGNORE keeps the existing
+            # winner link, then the cleanup DELETE drops the stranded
+            # loser link (collapsing the duplicate contributor to one row).
             await db.execute(
-                "UPDATE books SET author_id = ? WHERE author_id = ?",
+                "UPDATE OR IGNORE book_authors SET author_id = ? "
+                "WHERE author_id = ?",
                 (winner["id"], loser["id"]),
+            )
+            await db.execute(
+                "DELETE FROM book_authors WHERE author_id = ?",
+                (loser["id"],),
             )
             await db.execute(
                 "UPDATE series SET author_id = ? WHERE author_id = ?",
@@ -1103,6 +1484,128 @@ async def _migrate_series_author_nullable(db) -> bool:
     return True
 
 
+async def _drop_legacy_books_author_id(db) -> bool:
+    """v3.0.0 Phase 9 (ADR-0012) — drop the legacy ``books.author_id``
+    column. Authorship is now the ``book_authors`` join (position 0 =
+    primary); every read/write was repointed in Phase 9.
+
+    SQLite can't ``ALTER TABLE ... DROP COLUMN`` a column that sits in a
+    table-level FOREIGN KEY (and it was also indexed), so we rebuild the
+    table (the same approach as ``_migrate_series_author_nullable``).
+
+    Safety rails:
+      - **Idempotent**: PRAGMA table_info early-outs once the column is
+        gone (fresh DBs never had it; re-runs no-op).
+      - **Pre-flight assertion**: every book with a non-NULL ``author_id``
+        must already carry a position-0 ``book_authors`` row (the
+        backfill-all + always-link invariant). If ANY book would lose its
+        only author link, ABORT the drop and leave the column in place so
+        the operator can investigate — never destroy the last copy.
+      - **Ordered AFTER** ``_backfill_book_authors`` in ``init_db`` (which
+        still needs the column on the first v3.0.0 boot).
+
+    The rebuild derives the new table + index DDL from ``sqlite_master``
+    (NOT a hardcoded CREATE) because the live ``books`` schema is accreted
+    from the base CREATE plus many historical ``ALTER TABLE ADD COLUMN``
+    migrations; regenerating from the stored DDL preserves every column,
+    default, and AUTOINCREMENT exactly. Returns True if the table was
+    rebuilt, False on no-op/abort.
+    """
+    import re
+
+    cols = await (await db.execute("PRAGMA table_info(books)")).fetchall()
+    col_names = [c["name"] for c in cols]
+    if "author_id" not in col_names:
+        return False  # already dropped (or fresh DB) — idempotent
+
+    # Pre-flight: no book may lose its only author link.
+    orphan_row = await (await db.execute(
+        "SELECT COUNT(*) FROM books WHERE author_id IS NOT NULL "
+        "AND id NOT IN (SELECT book_id FROM book_authors WHERE position = 0)"
+    )).fetchone()
+    orphans = orphan_row[0] if orphan_row else 0
+    if orphans:
+        _db_logger.error(
+            "ABORTING books.author_id drop: %d book(s) have a non-NULL "
+            "author_id but no position-0 book_authors row — dropping the "
+            "column would lose their only author link. Leaving the column "
+            "in place. (Re-run the book_authors backfill / investigate.)",
+            orphans,
+        )
+        return False
+
+    _db_logger.info("Dropping legacy books.author_id (recreating table)")
+
+    table_sql = (await (await db.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='books'"
+    )).fetchone())[0]
+    index_rows = await (await db.execute(
+        "SELECT sql FROM sqlite_master WHERE type='index' "
+        "AND tbl_name='books' AND sql IS NOT NULL"
+    )).fetchall()
+
+    # Derive the new CREATE: rename, strip the author_id column line and
+    # its FOREIGN KEY constraint line.
+    new_sql = re.sub(
+        r'CREATE\s+TABLE\s+"?books"?', "CREATE TABLE books_new", table_sql,
+        count=1, flags=re.IGNORECASE,
+    )
+    new_sql = re.sub(
+        r"[ \t]*author_id\s+INTEGER\s+NOT\s+NULL\s*,\r?\n", "",
+        new_sql, flags=re.IGNORECASE,
+    )
+    # Remove the author_id FK on its own line WITHOUT eating the previous
+    # line's trailing comma (a leading ``,?\\s*`` would), then tidy any
+    # dangling comma left before the closing paren (covers the case where
+    # the FK was the last constraint).
+    new_sql = re.sub(
+        r"\n[ \t]*FOREIGN\s+KEY\s*\(\s*author_id\s*\)\s*"
+        r"REFERENCES\s+authors\s*\(\s*id\s*\)\s*,?", "",
+        new_sql, flags=re.IGNORECASE,
+    )
+    new_sql = re.sub(r",(\s*)\)", r"\1)", new_sql)
+    # Defensive: the transform must have produced a books_new CREATE with
+    # no lingering author_id reference, or we bail rather than corrupt.
+    if "books_new" not in new_sql or re.search(r"\bauthor_id\b", new_sql):
+        _db_logger.error(
+            "ABORTING books.author_id drop: could not safely rewrite the "
+            "books CREATE statement (author_id still present or rename "
+            "failed). Leaving the column in place. DDL was: %s",
+            table_sql,
+        )
+        return False
+
+    keep_cols = [c for c in col_names if c != "author_id"]
+    col_list = ", ".join(keep_cols)
+
+    await db.execute("PRAGMA foreign_keys = OFF")
+    try:
+        await db.execute(new_sql)
+        await db.execute(
+            f"INSERT INTO books_new ({col_list}) "
+            f"SELECT {col_list} FROM books"
+        )
+        await db.execute("DROP TABLE books")
+        await db.execute("ALTER TABLE books_new RENAME TO books")
+        # Recreate every books index EXCEPT the two author_id ones (which
+        # mention author_id in their DDL and are intentionally gone).
+        for r in index_rows:
+            idx_sql = r["sql"]
+            if idx_sql and not re.search(r"\bauthor_id\b", idx_sql):
+                await db.execute(idx_sql)
+        # Sanity: no FK violations introduced by the rebuild.
+        bad = await (await db.execute("PRAGMA foreign_key_check")).fetchall()
+        if bad:
+            _db_logger.warning(
+                "books.author_id drop: foreign_key_check reported %d "
+                "row(s) post-rebuild: %s", len(bad), bad[:5],
+            )
+        await db.commit()
+    finally:
+        await db.execute("PRAGMA foreign_keys = ON")
+    return True
+
+
 async def _backfill_metadata_snapshots(db) -> tuple[int, int]:
     """Seed `books_calibre_snapshot` and `books_abs_snapshot` from the
     current `books` rows on first boot post-v2.3.0.
@@ -1132,7 +1635,8 @@ async def _backfill_metadata_snapshots(db) -> tuple[int, int]:
                a.name AS author_name, a.calibre_id AS author_calibre_id,
                s.name AS series_name
         FROM books b
-        LEFT JOIN authors a ON a.id = b.author_id
+        LEFT JOIN book_authors bpa ON bpa.book_id = b.id AND bpa.position = 0
+        LEFT JOIN authors a ON a.id = bpa.author_id
         LEFT JOIN series s ON s.id = b.series_id
         WHERE b.source = 'calibre' AND b.owned = 1
           AND NOT EXISTS (
@@ -1173,7 +1677,8 @@ async def _backfill_metadata_snapshots(db) -> tuple[int, int]:
                a.name AS author_name,
                s.name AS series_name
         FROM books b
-        LEFT JOIN authors a ON a.id = b.author_id
+        LEFT JOIN book_authors bpa ON bpa.book_id = b.id AND bpa.position = 0
+        LEFT JOIN authors a ON a.id = bpa.author_id
         LEFT JOIN series s ON s.id = b.series_id
         WHERE b.audiobookshelf_id IS NOT NULL
           AND NOT EXISTS (
@@ -1264,7 +1769,9 @@ async def _dedupe_same_series_position(db) -> int:
     await db.commit()
 
     rows = await (await db.execute(
-        "SELECT id, title, author_id, series_id, series_index, owned "
+        "SELECT id, title, "
+        "(SELECT author_id FROM book_authors WHERE book_id=books.id AND position=0) AS author_id, "
+        "series_id, series_index, owned "
         "FROM books WHERE series_id IS NOT NULL AND series_index IS NOT NULL"
     )).fetchall()
 
@@ -1570,6 +2077,17 @@ async def init_db(slug=None):
                 f"Backfilled normalized_name on {touched} author row(s)"
             )
 
+        # ── Step 4.5b: v3.0.0 Phase 1B — book_authors backfill ───
+        # Populate the new join table from the snapshot author arrays
+        # so cross-author queries (Phase 4+) have the full ownership
+        # picture even before Phase 2 rewires the sync writers. See
+        # `_backfill_book_authors` for the resolution + fallback rules.
+        added = await _backfill_book_authors(db)
+        if added:
+            _db_logger.info(
+                f"Backfilled book_authors with {added} new link row(s)"
+            )
+
         # ── Step 4.6: One-time dedup of duplicate author rows ──────
         # Collapses pre-existing duplicates created before the
         # normalized-name upsert was wired up. Runs BEFORE the series
@@ -1660,5 +2178,23 @@ async def init_db(slug=None):
             _db_logger.info(
                 f"Numeric mam_category backfill: fixed {cat_fixed} book row(s)"
             )
+
+        # ── Step 10: v3.0.0 Phase 6 — series author_mode backfill ─────
+        # Compute series.author_mode (per/multi/shared) for every row
+        # from the contributor-set intersection (ADR-0010). MUST run
+        # last: it reads book_authors (Step 4.5b) and the post-dedup
+        # series/book membership (Steps 5-5.5). Idempotent.
+        mode_series = await _backfill_series_author_mode(db)
+        if mode_series:
+            _db_logger.info(
+                f"Series author_mode backfill: recomputed {mode_series} series"
+            )
+
+        # v3.0.0 Phase 9 (ADR-0012) — drop the legacy books.author_id column.
+        # MUST run last: after _backfill_book_authors (which reads author_id
+        # on the first v3.0.0 boot to link every book at position 0) and the
+        # series author_mode backfill. Idempotent + pre-flight-guarded.
+        if await _drop_legacy_books_author_id(db):
+            _db_logger.info("Dropped legacy books.author_id column (Phase 9)")
     finally:
         await db.close()

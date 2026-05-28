@@ -77,7 +77,8 @@ async def send_to_pipeline(data: dict = Body(...)):
             f"b.description, b.page_count, "
             f"a.name as author_name, s.name as series_name "
             f"FROM books b "
-            f"JOIN authors a ON b.author_id = a.id "
+            f"JOIN book_authors bpa ON bpa.book_id = b.id AND bpa.position = 0 "
+            f"JOIN authors a ON a.id = bpa.author_id "
             f"LEFT JOIN series s ON b.series_id = s.id "
             f"WHERE b.id IN ({placeholders})",
             book_ids,

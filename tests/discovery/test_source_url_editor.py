@@ -47,9 +47,13 @@ async def _seed_book(initial_source_url=None) -> int:
             "INSERT INTO authors (id, name, sort_name) VALUES (1, 'A', 'A')"
         )
         await db.execute(
-            "INSERT INTO books (id, title, author_id, source_url) "
-            "VALUES (1, 'Quarks and Qi', 1, ?)",
+            "INSERT INTO books (id, title, source_url) "
+            "VALUES (1, 'Quarks and Qi', ?)",
             (initial_source_url,),
+        )
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+            "VALUES (1, 1, 0)"
         )
         await db.commit()
         return 1

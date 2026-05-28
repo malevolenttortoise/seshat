@@ -21,7 +21,7 @@ import logging
 import time
 from typing import Optional
 
-from app.discovery.database import get_db, _norm_series_name
+from app.discovery.database import get_db, _norm_series_name, write_book_authors
 from app import state
 
 logger = logging.getLogger("seshat.discovery.audiobookshelf_sync")
@@ -394,6 +394,18 @@ async def sync_audiobookshelf(library: dict) -> dict:
                     (book["series_name"].lower(), our_author_id)
                 )
 
+            # v3.0.0 Phase 2 — resolve the full ordered author list
+            # for the join-table write. `author_id_map` is keyed on
+            # author name (built in Pass 1 above). Names that didn't
+            # resolve (rare — a brand-new author that hit a transient
+            # FK collision earlier) are silently skipped; the rest
+            # preserve ABS's ordering so position 0 = primary.
+            resolved_author_ids = [
+                author_id_map[name]
+                for name in book["authors"]
+                if name in author_id_map
+            ]
+
             existing = await (await db.execute(
                 "SELECT id FROM books WHERE audiobookshelf_id = ? AND source = 'audiobookshelf'",
                 (book["abs_id"],),
@@ -403,27 +415,39 @@ async def sync_audiobookshelf(library: dict) -> dict:
                 # v2.3: structural fields write through directly;
                 # user-editable metadata routes per `user_edited_fields`.
                 # Snapshot mirrors ABS's POV regardless.
+                # v3.0.0 Phase 9 (ADR-0012): no books.author_id — authorship
+                # is the book_authors set written below.
                 await db.execute(
-                    "UPDATE books SET author_id=?, series_id=?, owned=1 "
+                    "UPDATE books SET series_id=?, owned=1 "
                     "WHERE id=?",
-                    (our_author_id, our_series_id, existing["id"]),
+                    (our_series_id, existing["id"]),
                 )
                 await _apply_abs_diff(db, existing["id"], book)
                 await _write_abs_snapshot(db, existing["id"], book)
+                # v3.0.0 Phase 2 — dual-write to book_authors so the
+                # join table stays in lockstep with ABS's view (drops
+                # co-narrators... no wait, co-authors that were removed
+                # since the last sync, adds new ones, positions match
+                # ABS's ordering from its bookAuthors table).
+                await write_book_authors(
+                    db, existing["id"], resolved_author_ids,
+                )
                 progress["books_updated"] += 1
             else:
+                # v3.0.0 Phase 9 (ADR-0012): no books.author_id — authorship
+                # is the book_authors set written below.
                 cur = await db.execute(
                     """
                     INSERT INTO books (
-                        title, author_id, series_id, series_index,
+                        title, series_id, series_index,
                         isbn, asin, audiobookshelf_id, source, owned,
                         pub_date, description, language, publisher,
                         narrator, duration_sec, abridged, audio_formats
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 'audiobookshelf', 1, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, 'audiobookshelf', 1, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        book["title"], our_author_id, our_series_id, book["series_index"],
+                        book["title"], our_series_id, book["series_index"],
                         book["isbn"], book["asin"], book["abs_id"],
                         book["pub_date"], book["description"],
                         book["language"], book["publisher"],
@@ -434,6 +458,11 @@ async def sync_audiobookshelf(library: dict) -> dict:
                 )
                 new_book_id = cur.lastrowid
                 await _write_abs_snapshot(db, new_book_id, book)
+                # v3.0.0 Phase 2 — populate book_authors for the newly
+                # inserted row.
+                await write_book_authors(
+                    db, new_book_id, resolved_author_ids,
+                )
                 # v2.3.7 acquisition link-back. If this book came from
                 # a recent IRC grab (tentative or auto-approved), link
                 # mam_url/mam_status='found'/mam_torrent_id directly

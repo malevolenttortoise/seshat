@@ -867,7 +867,7 @@ async def _consolidate_persons(
             cur = await per_lib.execute(
                 f"SELECT a.id, a.name, a.bio, a.image_url, "  # nosec B608
                 f"       ({source_col_count_sql}) AS source_id_count, "
-                f"       (SELECT COUNT(*) FROM books WHERE author_id = a.id) "
+                f"       (SELECT COUNT(*) FROM book_authors WHERE author_id = a.id) "
                 f"           AS book_count "
                 f"FROM authors a"
             )

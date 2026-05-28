@@ -98,12 +98,17 @@ async def _seed_book(
     )).fetchone()
     aid = aid_row["id"]
     cur = await library_db.execute(
-        "INSERT INTO books (title, author_id, source, owned, mam_status) "
-        "VALUES (?, ?, 'audiobookshelf', 1, ?)",
-        (title, aid, mam_status),
+        "INSERT INTO books (title, source, owned, mam_status) "
+        "VALUES (?, 'audiobookshelf', 1, ?)",
+        (title, mam_status),
+    )
+    book_id = cur.lastrowid
+    await library_db.execute(
+        "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+        "VALUES (?, ?, 0)", (book_id, aid),
     )
     await library_db.commit()
-    return cur.lastrowid
+    return book_id
 
 
 async def _read_book(library_db, book_id: int) -> dict:

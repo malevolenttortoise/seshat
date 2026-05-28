@@ -42,14 +42,22 @@ async def _seed_two_authors(name_a: str, name_b: str,
         )
         aid_b = cur.lastrowid
         for i in range(books_a):
+            cur = await db.execute(
+                "INSERT INTO books (title) VALUES (?)",
+                (f"A{i}",),
+            )
             await db.execute(
-                "INSERT INTO books (title, author_id) VALUES (?, ?)",
-                (f"A{i}", aid_a),
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (?, ?, 0)",
+                (cur.lastrowid, aid_a),
             )
         for i in range(books_b):
+            cur = await db.execute(
+                "INSERT INTO books (title) VALUES (?)",
+                (f"B{i}",),
+            )
             await db.execute(
-                "INSERT INTO books (title, author_id) VALUES (?, ?)",
-                (f"B{i}", aid_b),
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (?, ?, 0)",
+                (cur.lastrowid, aid_b),
             )
         await db.commit()
         return aid_a, aid_b
@@ -74,7 +82,7 @@ async def _count_books_by_author(author_id: int) -> int:
     db = await get_db()
     try:
         row = await (await db.execute(
-            "SELECT COUNT(*) c FROM books WHERE author_id = ?",
+            "SELECT COUNT(*) c FROM book_authors WHERE author_id = ?",
             (author_id,),
         )).fetchone()
         return row["c"]

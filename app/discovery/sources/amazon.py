@@ -50,6 +50,7 @@ from app.discovery.sources.base import (
     AuthorResult,
     BaseSource,
     BookResult,
+    Contributor,
     SeriesResult,
 )
 from app.discovery.sources.amazon_juvec_client import (
@@ -698,6 +699,19 @@ class AmazonSource(BaseSource):
             # canonical Amazon shape (`kindle_edition`,
             # `audio_download`, `paperback`, `hardcover`, …).
             format=p.binding_symbol or None,
+            # v3.0.0 Phase 3.4 — ordered byLine contributors (role +
+            # Amazon author ASIN + image captured from the widget; no
+            # detail-page fetch). The lookup-side `contributor_is_author`
+            # allowlist drops non-authors; Amazon is trusted-create.
+            contributors=[
+                Contributor(
+                    name=ci.name,
+                    role=ci.role,
+                    source_author_id=ci.author_id,
+                    image_url=ci.image_url,
+                )
+                for ci in p.contributor_details
+            ],
         )
 
 
