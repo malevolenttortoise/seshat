@@ -19,3 +19,4 @@ New decisions get the next number; supersede rather than rewrite when a decision
 | [0011](0011-owner-incidental-on-read.md) | Owner-vs-incidental computed on read (count-equality), not persisted |
 | [0012](0012-drop-books-author-id-position-0-canonical.md) | Drop `books.author_id`; position 0 is the sole canonical primary author |
 | [0013](0013-claim-for-owned-contributor-aware.md) | Claim-for-owned is contributor-aware (announce-primary × owned-any-contributor) |
+| [0014](0014-heal-contributors-on-scan-convergence.md) | Heal unowned discovered books' contributors on scan-convergence (union, owned-guarded) |
