@@ -178,7 +178,9 @@ function IS({
       <button
         onClick={(e) => {
           e.stopPropagation();
-          onNav("disc-series", series.id);
+          // v3.0.0 Phase 8 — the series detail page (carry the library
+          // slug so it resolves the right per-library series).
+          onNav("disc-series-detail", librarySlug ? `${librarySlug}:${series.id}` : series.id);
         }}
         title="Part of a larger series — view the full series"
         style={{

@@ -16,7 +16,7 @@
 
 import { useEffect, useState } from "react";
 import { useTheme } from "../theme";
-import { api, ApiError } from "../api";
+import { api, ApiError, slugQuery } from "../api";
 import { Btn } from "./Btn";
 import { Spin } from "./Spin";
 
@@ -46,6 +46,10 @@ interface Book {
 interface ManageMembersModalProps {
   seriesId: number;
   seriesName: string;
+  // v3.0.0 Phase 8 — the library slug the manager's tab is scoped to.
+  // Threaded onto every read/mutation so managing an abs-audiobooks series
+  // hits abs-audiobooks, not the active library (ADR-0002). null = active.
+  seriesSlug?: string | null;
   onClose: () => void;
   onChanged: () => void; // parent refresh hook (run after every mutation)
 }
@@ -53,10 +57,12 @@ interface ManageMembersModalProps {
 export function ManageMembersModal({
   seriesId,
   seriesName,
+  seriesSlug,
   onClose,
   onChanged,
 }: ManageMembersModalProps) {
   const t = useTheme();
+  const sq = slugQuery(seriesSlug ?? undefined);
   const [authors, setAuthors] = useState<SeriesAuthor[] | null>(null);
   // v3.0.0 Phase 7 — stored author_mode (ADR-0010) drives the 3-way header label.
   const [authorMode, setAuthorMode] = useState<string | null>(null);
@@ -74,7 +80,7 @@ export function ManageMembersModal({
   const refresh = () => {
     api
       .get<{ series_id: number; author_mode?: string | null; authors: SeriesAuthor[] }>(
-        `/discovery/series/${seriesId}/authors`,
+        `/discovery/series/${seriesId}/authors${sq}`,
       )
       .then((r) => {
         setAuthors(r.authors);
@@ -119,7 +125,8 @@ export function ManageMembersModal({
     }
     api
       .get<{ books: Book[] }>(
-        `/discovery/books?author_id=${pickedAuthor.id}&per_page=500&sort=title&sort_dir=asc`,
+        `/discovery/books?author_id=${pickedAuthor.id}&per_page=500&sort=title&sort_dir=asc` +
+          (seriesSlug ? `&slug=${encodeURIComponent(seriesSlug)}` : ""),
       )
       .then((r) => setPickedBooks(r.books))
       .catch((e) => {
@@ -141,7 +148,7 @@ export function ManageMembersModal({
     setErr("");
     try {
       await api.del(
-        `/discovery/series/${seriesId}/authors/${a.author_id}`,
+        `/discovery/series/${seriesId}/authors/${a.author_id}${sq}`,
       );
       onChanged();
       refresh();
@@ -158,7 +165,7 @@ export function ManageMembersModal({
     setAdding(true);
     setErr("");
     try {
-      await api.post(`/discovery/series/${seriesId}/authors`, {
+      await api.post(`/discovery/series/${seriesId}/authors${sq}`, {
         author_id: pickedAuthor.id,
         book_ids: Array.from(selected),
       });

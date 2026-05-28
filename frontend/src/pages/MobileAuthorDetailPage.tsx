@@ -67,9 +67,11 @@ function MobileSeriesSection({
   onDeselectMany,
   onBooksLoaded,
   authorId,
+  onNav,
 }: {
   series: Series;
   authorId: number | string;
+  onNav: NavFn;
   librarySlug?: string | null;
   onBookClick: (b: Book) => void;
   showMamLink: boolean;
@@ -181,6 +183,31 @@ function MobileSeriesSection({
       defaultOpen={false}
       right={quickPick}
     >
+      {/* v3.0.0 Phase 8 — guest entry point to the full series detail. */}
+      {!isOwner ? (
+        <button
+          onClick={() =>
+            onNav(
+              "disc-series-detail",
+              librarySlug ? `${librarySlug}:${series.id}` : series.id,
+            )
+          }
+          style={{
+            alignSelf: "flex-start",
+            margin: "0 0 8px",
+            fontSize: 12,
+            fontWeight: 600,
+            color: t.cyant,
+            background: t.cyan + "22",
+            border: `1px solid ${t.cyan}44`,
+            borderRadius: 99,
+            padding: "4px 10px",
+            cursor: "pointer",
+          }}
+        >
+          View full series ({series.author_book_count ?? 0} of {series.book_count ?? 0}) →
+        </button>
+      ) : null}
       <div
         style={{
           display: "grid",
@@ -212,7 +239,6 @@ export default function MobileAuthorDetailPage({
   authorId,
   onNav,
 }: MobileAuthorDetailPageProps) {
-  void onNav;
   const t = useTheme();
   const [a, setA] = useState<AuthorDetail | null>(null);
   const [ld, setLd] = useState(true);
@@ -727,6 +753,7 @@ export default function MobileAuthorDetailPage({
               key={`${block.slug}-${s.id}`}
               series={s}
               authorId={block.data?.id ?? authorIdNum}
+              onNav={onNav}
               librarySlug={block.slug}
               onBookClick={setSb}
               showMamLink={mamOn}

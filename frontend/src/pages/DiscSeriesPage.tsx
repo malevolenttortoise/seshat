@@ -21,7 +21,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useTheme } from "../theme";
-import { api, ApiError } from "../api";
+import { api, ApiError, slugQuery } from "../api";
 import { Btn } from "../components/Btn";
 import { Spin } from "../components/Spin";
 import { Load } from "../components/Load";
@@ -62,6 +62,23 @@ export default function SeriesManagerPage() {
   const [data, setData] = useState<SeriesListResponse | null>(null);
   const [busy, setBusy] = useState<Record<number, string>>({});
   const [manageTarget, setManageTarget] = useState<SeriesRow | null>(null);
+  // v3.0.0 Phase 8 — per-library tabs scope reads + writes via ?slug=
+  // (NOT the global active-library switch, which cancels scans). `slug`
+  // null = active library.
+  const [libs, setLibs] = useState<{ slug: string; name: string; display_name?: string; content_type?: string; active?: boolean }[]>([]);
+  const [slug, setSlug] = useState<string | null>(null);
+
+  useEffect(() => {
+    api
+      .get<{ libraries: typeof libs }>("/discovery/libraries")
+      .then((r) => {
+        setLibs(r.libraries || []);
+        const active = (r.libraries || []).find((l) => l.active);
+        if (active) setSlug(active.slug);
+      })
+      .catch(() => setLibs([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const load = () => {
     setData(null);
@@ -69,6 +86,7 @@ export default function SeriesManagerPage() {
     if (search.trim()) params.set("search", search.trim());
     if (filter === "shared") params.set("shared", "true");
     if (filter === "per-author") params.set("shared", "false");
+    if (slug) params.set("slug", slug);
     params.set("limit", String(PAGE_SIZE));
     params.set("offset", String(offset));
     api
@@ -94,7 +112,7 @@ export default function SeriesManagerPage() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter, search, offset]);
+  }, [filter, search, offset, slug]);
 
   // Reset offset when filter changes.
   useEffect(() => {
@@ -131,7 +149,7 @@ export default function SeriesManagerPage() {
     if (!next || next.trim() === s.name) return;
     setBusy((b) => ({ ...b, [s.id]: "rename" }));
     try {
-      await api.patch(`/discovery/series/${s.id}`, { name: next.trim() });
+      await api.patch(`/discovery/series/${s.id}${slugQuery(slug ?? undefined)}`, { name: next.trim() });
       load();
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : String(e);
@@ -154,7 +172,7 @@ export default function SeriesManagerPage() {
       return;
     setBusy((b) => ({ ...b, [s.id]: "delete" }));
     try {
-      await api.del(`/discovery/series/${s.id}`);
+      await api.del(`/discovery/series/${s.id}${slugQuery(slug ?? undefined)}`);
       load();
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : String(e);
@@ -203,6 +221,38 @@ export default function SeriesManagerPage() {
           actions; books fall back to standalone when a series is deleted.
         </p>
       </div>
+
+      {/* v3.0.0 Phase 8 — per-library tabs (scope reads + mutations via
+          ?slug=, not the global active-library switch). Hidden for
+          single-library installs. */}
+      {libs.length > 1 ? (
+        <div style={{ display: "flex", gap: 4, borderBottom: `1px solid ${t.border}` }}>
+          {libs.map((l) => {
+            const active = slug === l.slug;
+            const color = l.content_type === "audiobook" ? t.pur || t.accent : t.accent;
+            return (
+              <button
+                key={l.slug}
+                onClick={() => { setOffset(0); setSlug(l.slug); }}
+                style={{
+                  padding: "8px 16px",
+                  background: active ? color + "22" : "transparent",
+                  color: active ? color : t.td,
+                  border: "none",
+                  borderBottom: active ? `2px solid ${color}` : "2px solid transparent",
+                  cursor: "pointer",
+                  fontSize: 14,
+                  fontWeight: active ? 600 : 500,
+                  marginBottom: -1,
+                }}
+              >
+                {l.content_type === "audiobook" ? "🎧 " : "📖 "}
+                {l.display_name || l.name}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
 
       {/* Filter tabs */}
       <div
@@ -357,6 +407,7 @@ export default function SeriesManagerPage() {
         <ManageMembersModal
           seriesId={manageTarget.id}
           seriesName={manageTarget.name}
+          seriesSlug={slug}
           onClose={() => setManageTarget(null)}
           onChanged={() => load()}
         />

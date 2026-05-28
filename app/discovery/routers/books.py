@@ -164,7 +164,7 @@ async def _query_books_for_lib(db, where_sql: str, where_params: list, sort: str
 
 
 @router.get("/books")
-async def get_books(search: str = Query(None), author_id: int = Query(None), series_id: int = Query(None), owned: bool = Query(None), book_type: str = Query(None), mam_status: str = Query(None), sort: str = Query("title"), sort_dir: str = Query("asc"), page: int = Query(1, ge=1), per_page: int = Query(60, ge=1, le=5000), include_hidden: bool = Query(False), hidden_only: bool = Query(False), content_type: str = Query(None)):
+async def get_books(search: str = Query(None), author_id: int = Query(None), series_id: int = Query(None), owned: bool = Query(None), book_type: str = Query(None), mam_status: str = Query(None), sort: str = Query("title"), sort_dir: str = Query("asc"), page: int = Query(1, ge=1), per_page: int = Query(60, ge=1, le=5000), include_hidden: bool = Query(False), hidden_only: bool = Query(False), content_type: str = Query(None), slug: str | None = Query(None)):
     """
     List books. `content_type` selects among:
       * omitted / "" — active library only (legacy behavior)
@@ -201,7 +201,10 @@ async def get_books(search: str = Query(None), author_id: int = Query(None), ser
         }
 
     # ── Active-library path ───────────────────────────────────
-    db = await get_db()
+    # `slug` scopes to a specific library without changing the global
+    # active library (v3.0.0 Phase 8 — the Series Manager's per-library
+    # tab + its ManageMembers picker pass it). Defaults to active.
+    db = await get_db(slug)
     try:
         w, p = _build_books_where(
             search, author_id, series_id, owned, book_type, mam_status,

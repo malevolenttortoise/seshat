@@ -139,6 +139,34 @@ async def get_series(sid: int, slug: str | None = None):
         # v3.0.0 Phase 7 — multi-author byline on series book cards.
         await attach_contributors(db, rows)
         s["books"] = await _stamp_work_siblings(rows, effective_slug)
+        # v3.0.0 Phase 8 — contributing-authors section for the series
+        # detail page: every author on any visible book of the series,
+        # with their in-series book count + an `is_owner` flag. Same
+        # ADR-0011 count-equality basis as author detail — an author in
+        # EVERY visible linked book is an owner; on only some is incidental.
+        # `linked` = visible books carrying ≥1 contributor link (matches
+        # the Phase 6 intersection basis).
+        linked = (await (await db.execute(
+            "SELECT COUNT(DISTINCT b.id) AS n FROM books b "
+            "WHERE b.series_id=? AND b.hidden=0 "
+            "AND EXISTS (SELECT 1 FROM book_authors ba WHERE ba.book_id=b.id)",
+            (sid,),
+        )).fetchone())["n"]
+        ca_rows = await (await db.execute(
+            "SELECT a.id AS author_id, a.name AS name, "
+            "COUNT(DISTINCT b.id) AS book_count "
+            "FROM book_authors ba "
+            "JOIN books b ON b.id = ba.book_id "
+            "JOIN authors a ON a.id = ba.author_id "
+            "WHERE b.series_id=? AND b.hidden=0 "
+            "GROUP BY a.id, a.name "
+            "ORDER BY book_count DESC, a.name COLLATE NOCASE ASC",
+            (sid,),
+        )).fetchall()
+        s["contributing_authors"] = [
+            {**dict(ca), "is_owner": bool(linked > 0 and ca["book_count"] == linked)}
+            for ca in ca_rows
+        ]
         return s
     finally:
         await db.close()
@@ -184,6 +212,7 @@ async def list_series(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     include_empty: bool = Query(False),
+    slug: str | None = Query(None),  # v3.0.0 Phase 8 — per-library tab scope
 ):
     """List series with author info, owned/missing counts, multi-author
     flag, plus a `cover_book_id` per row for thumbnail rendering.
@@ -210,7 +239,7 @@ async def list_series(
     `total` is the count of series matching all filters before
     pagination; the frontend uses it to render "showing X–Y of N".
     """
-    db = await get_db()
+    db = await get_db(slug)
     try:
         # Per-row cover pick: prefer books with any cover signal, then
         # series_index, then pub_date, then id. Correlated subquery on
@@ -442,7 +471,7 @@ async def _recompute_series_author(db, sids: Iterable[int]) -> None:
 
 
 @router.post("/series/promote")
-async def promote_series(payload: dict = Body(...)):
+async def promote_series(payload: dict = Body(...), slug: str | None = Query(None)):
     """Promote 2+ per-author series rows into a single shared row.
 
     Request body:
@@ -473,7 +502,7 @@ async def promote_series(payload: dict = Body(...)):
     if not isinstance(series_ids, list) or len(series_ids) < 2:
         raise HTTPException(400, "series_ids must be a list of 2+ ids")
 
-    db = await get_db()
+    db = await get_db(slug)
     try:
         # Validate all rows + collect names. Reject if any is already
         # shared (author_id IS NULL) — the user should pick a different
@@ -552,7 +581,7 @@ async def promote_series(payload: dict = Body(...)):
 
 
 @router.post("/series/{sid}/demote")
-async def demote_series(sid: int):
+async def demote_series(sid: int, slug: str | None = Query(None)):
     """Split a shared series row into per-author rows.
 
     For each distinct author whose books currently point at this
@@ -566,7 +595,7 @@ async def demote_series(sid: int):
     400 if the shared row has no books — there's nothing to split,
     just call DELETE instead.
     """
-    db = await get_db()
+    db = await get_db(slug)
     try:
         row = await _series_or_404(db, sid)
         if row["author_id"] is not None:
@@ -627,7 +656,7 @@ async def demote_series(sid: int):
 
 
 @router.patch("/series/{sid}")
-async def rename_series(sid: int, payload: dict = Body(...)):
+async def rename_series(sid: int, payload: dict = Body(...), slug: str | None = Query(None)):
     """Rename a series.
 
     Request body: {"name": "New Name"}
@@ -641,7 +670,7 @@ async def rename_series(sid: int, payload: dict = Body(...)):
     if not new_name:
         raise HTTPException(400, "name must not be empty")
 
-    db = await get_db()
+    db = await get_db(slug)
     try:
         row = await _series_or_404(db, sid)
         if new_name == row["name"]:
@@ -679,7 +708,7 @@ async def rename_series(sid: int, payload: dict = Body(...)):
 
 
 @router.delete("/series/{sid}")
-async def delete_series(sid: int):
+async def delete_series(sid: int, slug: str | None = Query(None)):
     """Delete a series row. Books pointing at it fall back to
     standalone (series_id=NULL, series_index=NULL).
 
@@ -688,7 +717,7 @@ async def delete_series(sid: int):
     of "this series row is wrong, here's the correct one" prefer
     promote/demote/membership-edit instead.
     """
-    db = await get_db()
+    db = await get_db(slug)
     try:
         await _series_or_404(db, sid)
         cur = await db.execute(
@@ -704,7 +733,7 @@ async def delete_series(sid: int):
 
 
 @router.post("/series/{sid}/books")
-async def add_books_to_series(sid: int, payload: dict = Body(...)):
+async def add_books_to_series(sid: int, payload: dict = Body(...), slug: str | None = Query(None)):
     """Bulk-add books to a series.
 
     Request body:
@@ -728,7 +757,7 @@ async def add_books_to_series(sid: int, payload: dict = Body(...)):
         raise HTTPException(400, "book_ids must be a non-empty list")
     indices = payload.get("indices") or {}
 
-    db = await get_db()
+    db = await get_db(slug)
     try:
         await _series_or_404(db, sid)
         # Capture the source series of every moving book BEFORE the
@@ -764,7 +793,7 @@ async def add_books_to_series(sid: int, payload: dict = Body(...)):
 
 
 @router.delete("/series/{sid}/books/{book_id}")
-async def remove_book_from_series(sid: int, book_id: int):
+async def remove_book_from_series(sid: int, book_id: int, slug: str | None = Query(None)):
     """Detach a book from this series. Book becomes standalone
     (series_id=NULL, series_index=NULL). 404 if the book isn't
     actually on this series.
@@ -773,7 +802,7 @@ async def remove_book_from_series(sid: int, book_id: int):
     this book leaves a single distinct author behind, the series
     flips from shared to per-author).
     """
-    db = await get_db()
+    db = await get_db(slug)
     try:
         row = await (await db.execute(
             "SELECT id FROM books WHERE id = ? AND series_id = ?",
@@ -804,7 +833,7 @@ def _authority_label(author_id) -> str:
 
 
 @router.get("/series/{sid}/authors")
-async def list_series_authors(sid: int):
+async def list_series_authors(sid: int, slug: str | None = Query(None)):
     """Distinct author list for a series with per-author book counts.
 
     Drives the v2.3.3 Manage Members modal. Hidden books are excluded
@@ -817,7 +846,7 @@ async def list_series_authors(sid: int):
     Per-author book_count counts visible books only — matches what
     the user sees on the row.
     """
-    db = await get_db()
+    db = await get_db(slug)
     try:
         await _series_or_404(db, sid)
         # v3.0.0 Phase 7 — surface the stored author_mode (ADR-0010) so the
@@ -850,7 +879,7 @@ async def list_series_authors(sid: int):
 
 
 @router.post("/series/{sid}/authors")
-async def add_author_to_series(sid: int, payload: dict = Body(...)):
+async def add_author_to_series(sid: int, payload: dict = Body(...), slug: str | None = Query(None)):
     """Assign one author's books to this series.
 
     Request body:
@@ -885,7 +914,7 @@ async def add_author_to_series(sid: int, payload: dict = Body(...)):
     if not all(isinstance(b, int) for b in book_ids):
         raise HTTPException(400, "book_ids must be a list of ints")
 
-    db = await get_db()
+    db = await get_db(slug)
     try:
         await _series_or_404(db, sid)
         # Validate the author exists. (Authors table is in the same
@@ -959,7 +988,7 @@ async def add_author_to_series(sid: int, payload: dict = Body(...)):
 
 
 @router.delete("/series/{sid}/authors/{author_id}")
-async def remove_author_from_series(sid: int, author_id: int):
+async def remove_author_from_series(sid: int, author_id: int, slug: str | None = Query(None)):
     """Detach every book by `author_id` from `sid`.
 
     Books fall back to standalone (series_id=NULL, series_index=NULL).
@@ -970,7 +999,7 @@ async def remove_author_from_series(sid: int, author_id: int):
     the common one: a 2-author shared series whose Bob is removed
     flips back to per-author Alice.
     """
-    db = await get_db()
+    db = await get_db(slug)
     try:
         await _series_or_404(db, sid)
         # Verify there's something to remove.

@@ -49,6 +49,8 @@ import DiscAuthorDetailPage from "./pages/DiscAuthorDetailPage";
 import DiscMAMPage from "./pages/DiscMAMPage";
 import DiscMetadataPage from "./pages/DiscMetadataPage";
 import DiscSeriesPage from "./pages/DiscSeriesPage";
+import DiscSeriesBrowsePage from "./pages/DiscSeriesBrowsePage";
+import DiscSeriesDetailPage from "./pages/DiscSeriesDetailPage";
 import DiscImportExportPage from "./pages/DiscImportExportPage";
 import WorksPage from "./pages/WorksPage";
 import { NavigationProvider } from "./providers/NavigationProvider";
@@ -72,6 +74,7 @@ type Section = "discovery" | "pipeline";
 const DISCOVERY_NAV = [
   { id: "disc-library",     label: "Library",     icon: "📖" },
   { id: "disc-authors",     label: "Authors",     icon: "◉" },
+  { id: "disc-series-browse", label: "Series",    icon: "🗂️" },
   { id: "disc-missing",     label: "Missing",     icon: "◌" },
   { id: "disc-upcoming",    label: "Upcoming",    icon: "📅" },
   { id: "disc-mam",         label: "MAM Search",  icon: "🔍" },
@@ -83,7 +86,7 @@ const DISCOVERY_NAV = [
     children: [
       { id: "disc-works",    label: "Works",          icon: "🔗" },
       { id: "disc-metadata", label: "Metadata",       icon: "📋" },
-      { id: "disc-series",   label: "Series",         icon: "🗂️" },
+      { id: "disc-series",   label: "Series Manager", icon: "🗂️" },
       { id: "author-triage", label: "Author Triage",  icon: "⚙️" },
       { id: "persons-manager", label: "Persons & IDs", icon: "🪪" },
     ],
@@ -104,7 +107,8 @@ const WIDE_PAGES = new Set([
   "dashboard", "disc-dashboard", "pipe-dashboard",
   "disc-library", "disc-authors", "disc-author-detail",
   "disc-missing", "disc-upcoming", "disc-mam", "disc-metadata",
-  "disc-series", "disc-hidden", "disc-importexport", "disc-works",
+  "disc-series", "disc-series-browse", "disc-series-detail",
+  "disc-hidden", "disc-importexport", "disc-works",
   "author-triage", "persons-manager",
   "pipe-review", "pipe-tentative", "pipe-ignored", "pipe-authors",
   "pipe-delayed", "pipe-migration", "replacement-opportunities",
@@ -160,6 +164,8 @@ function renderPage(
     case "disc-mam":           return <DiscMAMPage onNav={nav} />;
     case "disc-metadata":      return <DiscMetadataPage />;
     case "disc-series":        return <DiscSeriesPage />;
+    case "disc-series-browse": return <DiscSeriesBrowsePage onNav={nav} />;
+    case "disc-series-detail": return <DiscSeriesDetailPage seriesId={pageArg as number} onNav={nav} />;
     case "disc-hidden":        return <DiscBooksPage title="Hidden Books" apiPath="/discovery/books/hidden" showOwnedFilter />;
     case "disc-importexport":  return <DiscImportExportPage />;
     case "disc-works":         return <WorksPage />;
