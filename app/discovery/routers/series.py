@@ -210,7 +210,7 @@ async def list_series(
     sort_dir: str = Query("asc"),
     has_missing: bool = Query(None),
     shared: bool = Query(None),
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(50, ge=1, le=10000),
     offset: int = Query(0, ge=0),
     include_empty: bool = Query(False),
     slug: str | None = Query(None),  # v3.0.0 Phase 8 — per-library tab scope

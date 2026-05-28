@@ -48,6 +48,8 @@ export default function DiscSeriesBrowsePage({ onNav }: { onNav: NavFn }) {
   const [rows, setRows] = useState<SeriesRow[] | null>(null);
   const [q, setQ] = useState("");
   const [mode, setMode] = useState<ModeFilter>("all");
+  const [page, setPage] = useState(1);
+  const perPage = 60;
 
   // Library list → tabs. Default the selected slug to the active library
   // so the first paint matches what the (active-library) endpoints return.
@@ -64,7 +66,9 @@ export default function DiscSeriesBrowsePage({ onNav }: { onNav: NavFn }) {
 
   useEffect(() => {
     setRows(null);
-    const qs = new URLSearchParams({ limit: "200", sort: "name", sort_dir: "asc" });
+    // Load all series for the library (client-side paginates below, like
+    // DiscAuthorsPage) — the old limit=200 capped large libraries.
+    const qs = new URLSearchParams({ limit: "10000", sort: "name", sort_dir: "asc" });
     if (slug) qs.set("slug", slug);
     if (q.trim()) qs.set("search", q.trim());
     const c = new AbortController();
@@ -91,6 +95,14 @@ export default function DiscSeriesBrowsePage({ onNav }: { onNav: NavFn }) {
       return true;
     });
   }, [rows, mode]);
+
+  // Reset to page 1 whenever the library, search, or mode filter changes.
+  useEffect(() => {
+    setPage(1);
+  }, [slug, q, mode]);
+
+  const pageCount = filtered ? Math.max(1, Math.ceil(filtered.length / perPage)) : 1;
+  const shown = filtered ? filtered.slice((page - 1) * perPage, page * perPage) : null;
 
   const navArg = (s: SeriesRow): string | number => (slug ? `${slug}:${s.id}` : s.id);
 
@@ -184,18 +196,51 @@ export default function DiscSeriesBrowsePage({ onNav }: { onNav: NavFn }) {
           No series{q ? " match your search" : ""}.
         </div>
       ) : (
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 280px), 1fr))",
-            gap: 12,
-            alignItems: "start",
-          }}
-        >
-          {filtered.map((s) => (
-            <SeriesBrowseCard key={s.id} s={s} onClick={() => onNav("disc-series-detail", navArg(s))} />
-          ))}
-        </div>
+        <>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 280px), 1fr))",
+              gap: 12,
+              alignItems: "start",
+            }}
+          >
+            {(shown || []).map((s) => (
+              <SeriesBrowseCard key={s.id} s={s} onClick={() => onNav("disc-series-detail", navArg(s))} />
+            ))}
+          </div>
+          {pageCount > 1 ? (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, marginTop: 4 }}>
+              <button
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page <= 1}
+                style={{
+                  padding: "6px 14px", fontSize: 13, borderRadius: 6,
+                  border: `1px solid ${t.border}`, background: t.inp,
+                  color: page <= 1 ? t.tf : t.td,
+                  cursor: page <= 1 ? "default" : "pointer",
+                }}
+              >
+                ‹ Prev
+              </button>
+              <span style={{ fontSize: 13, color: t.td }}>
+                Page {page} of {pageCount} · {filtered.length} series
+              </span>
+              <button
+                onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
+                disabled={page >= pageCount}
+                style={{
+                  padding: "6px 14px", fontSize: 13, borderRadius: 6,
+                  border: `1px solid ${t.border}`, background: t.inp,
+                  color: page >= pageCount ? t.tf : t.td,
+                  cursor: page >= pageCount ? "default" : "pointer",
+                }}
+              >
+                Next ›
+              </button>
+            </div>
+          ) : null}
+        </>
       )}
     </div>
   );

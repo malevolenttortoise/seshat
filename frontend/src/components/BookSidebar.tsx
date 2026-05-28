@@ -980,7 +980,23 @@ export function BookSidebar({
       ) : null}
 
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        <SBRow label="Author" value={book.author_name} />
+        {/* v3.0.0: show the full contributor set (position order), not
+            just the primary. Falls back to author_name on stale payloads
+            with no contributors[]. */}
+        <SBRow
+          label={(book.contributors?.length ?? 0) > 1 ? "Authors" : "Author"}
+          value={
+            book.contributors && book.contributors.length
+              ? book.contributors.map((c, i) => (
+                  <span key={`${c.author_id}-${c.position}`}>
+                    {i > 0 ? ", " : ""}
+                    {c.name}
+                    {c.role ? ` (${c.role})` : ""}
+                  </span>
+                ))
+              : book.author_name
+          }
+        />
 
         {book.series_name ? (
           <div

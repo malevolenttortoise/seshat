@@ -436,11 +436,16 @@ class TestListPagination:
         names2 = [s["name"] for s in body2["series"]]
         assert names2 == ["Series 3", "Series 4"]
 
-    async def test_limit_caps_at_200(self, client):
+    async def test_limit_caps_at_10000(self, client):
         await _seed()
-        # Over-limit gets rejected by FastAPI Query validation (422).
-        r = await client.get("/api/discovery/series?limit=500")
+        # v3.0.0: cap raised to 10000 so the Series browse page can load all
+        # series for a large library (then client-paginates). Over the cap
+        # still gets rejected by FastAPI Query validation (422)...
+        r = await client.get("/api/discovery/series?limit=20000")
         assert r.status_code == 422
+        # ...and a large in-bounds limit is accepted.
+        r2 = await client.get("/api/discovery/series?limit=10000")
+        assert r2.status_code == 200
 
 
 class TestListSearch:

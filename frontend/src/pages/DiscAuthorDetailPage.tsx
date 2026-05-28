@@ -169,36 +169,46 @@ function IS({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Guest "N of M" pill — this author's entry count vs the whole series,
-  // clickable through to the series. (Series detail page is Phase 8; the
-  // whole v3.0.0 arc ships as one PR, so it resolves by release. For now
-  // it routes to the Series Manager list.)
-  const pill =
-    !isOwner ? (
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          // v3.0.0 Phase 8 — the series detail page (carry the library
-          // slug so it resolves the right per-library series).
-          onNav("disc-series-detail", librarySlug ? `${librarySlug}:${series.id}` : series.id);
-        }}
-        title="Part of a larger series — view the full series"
-        style={{
-          fontSize: 11,
-          fontWeight: 600,
-          color: t.cyant,
-          background: t.cyan + "22",
-          border: `1px solid ${t.cyan}44`,
-          padding: "2px 8px",
-          borderRadius: 99,
-          marginLeft: 8,
-          cursor: "pointer",
-          textTransform: "none",
-        }}
-      >
-        {series.author_book_count ?? 0} of {series.book_count ?? 0} →
-      </button>
-    ) : null;
+  // Series-detail nav (carry the library slug so it resolves the right
+  // per-library series).
+  const seriesNav = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onNav("disc-series-detail", librarySlug ? `${librarySlug}:${series.id}` : series.id);
+  };
+  // Two header affordances, both linking to the Series detail page:
+  //  - incidental guest (!isOwner): an "N of M →" count pill.
+  //  - co-author who co-OWNS the series (isOwner && isCoauthored, e.g.
+  //    Anspach on a Chaney+Anspach series): a "Co-authored →" badge so the
+  //    co-authorship is visible + the full series is reachable. Without
+  //    this, an owner of a multi_author series saw no indicator at all.
+  //  - sole-author owned series: nothing (redundant).
+  const pill = !isOwner ? (
+    <button
+      onClick={seriesNav}
+      title="Part of a larger series — view the full series"
+      style={{
+        fontSize: 11, fontWeight: 600, color: t.cyant,
+        background: t.cyan + "22", border: `1px solid ${t.cyan}44`,
+        padding: "2px 8px", borderRadius: 99, marginLeft: 8,
+        cursor: "pointer", textTransform: "none",
+      }}
+    >
+      {series.author_book_count ?? 0} of {series.book_count ?? 0} →
+    </button>
+  ) : isCoauthored ? (
+    <button
+      onClick={seriesNav}
+      title="Co-authored series — view all contributing authors"
+      style={{
+        fontSize: 11, fontWeight: 600, color: t.purt,
+        background: t.pur + "22", border: `1px solid ${t.pur}44`,
+        padding: "2px 8px", borderRadius: 99, marginLeft: 8,
+        cursor: "pointer", textTransform: "none",
+      }}
+    >
+      Co-authored →
+    </button>
+  ) : null;
   const header = (
     <span>
       {series.name}
