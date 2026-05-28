@@ -104,11 +104,12 @@ async def search(
         # "Lone Wolf in the Snow".
         cur = await db.execute(
             """
-            SELECT b.id, b.title, b.author_id, b.owned, b.series_id,
+            SELECT b.id, b.title, bpa.author_id, b.owned, b.series_id,
                    a.name AS author_name,
                    s.name AS series_name
             FROM books b
-            JOIN authors a ON b.author_id = a.id
+            JOIN book_authors bpa ON bpa.book_id = b.id AND bpa.position = 0
+            JOIN authors a ON a.id = bpa.author_id
             LEFT JOIN series s ON b.series_id = s.id
             WHERE b.title LIKE ? COLLATE NOCASE
               AND b.hidden = 0

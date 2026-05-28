@@ -104,9 +104,9 @@ async def cross_lib_http_env(tmp_path, monkeypatch):
         try:
             cur = await db.execute(
                 "INSERT INTO books "
-                "(title, author_id, hidden, owned) "
-                "VALUES (?, ?, ?, ?)",
-                (title, author_id, hidden, owned),
+                "(title, hidden, owned) "
+                "VALUES (?, ?, ?)",
+                (title, hidden, owned),
             )
             # v3.0.0 Phase 4 (ADR-0008): author/person detail reads via
             # book_authors — link the seeded book to its author at pos 0.

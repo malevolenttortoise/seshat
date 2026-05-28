@@ -54,9 +54,15 @@ async def _seed():
             "(900, 'Halo', 101), (901, 'Halo', 102)"
         )
         await db.execute(
-            "INSERT INTO books (id, title, author_id, series_id, series_index) "
-            "VALUES (1, 'Reach', 101, 900, 1.0), "
-            "(2, 'Cole Protocol', 102, 901, 6.0)"
+            "INSERT INTO books (id, title, series_id, series_index) "
+            "VALUES (1, 'Reach', 900, 1.0), "
+            "(2, 'Cole Protocol', 901, 6.0)"
+        )
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (1, 101, 0)"
+        )
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (2, 102, 0)"
         )
         await db.commit()
         return 101, 102, 900, 901
@@ -180,9 +186,15 @@ class TestDemote:
                 "(900, 'Halo', NULL)"
             )
             await db.execute(
-                "INSERT INTO books (id, title, author_id, series_id) "
-                "VALUES (1, 'Reach', 101, 900), "
-                "(2, 'Cole Protocol', 102, 900)"
+                "INSERT INTO books (id, title, series_id) "
+                "VALUES (1, 'Reach', 900), "
+                "(2, 'Cole Protocol', 900)"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (1, 101, 0)"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (2, 102, 0)"
             )
             await db.commit()
         finally:
@@ -278,8 +290,11 @@ class TestMembership:
         db = await get_db()
         try:
             await db.execute(
-                "INSERT INTO books (id, title, author_id) "
-                "VALUES (3, 'Standalone', 101)"
+                "INSERT INTO books (id, title) "
+                "VALUES (3, 'Standalone')"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (3, 101, 0)"
             )
             await db.commit()
         finally:
@@ -322,8 +337,11 @@ class TestSharedFilter:
                 "VALUES (902, 'Halo Universe', NULL)"
             )
             await db.execute(
-                "INSERT INTO books (id, title, author_id, series_id) "
-                "VALUES (3, 'Universe Book', 101, 902)"
+                "INSERT INTO books (id, title, series_id) "
+                "VALUES (3, 'Universe Book', 902)"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (3, 101, 0)"
             )
             await db.commit()
         finally:
@@ -343,8 +361,11 @@ class TestSharedFilter:
                 "VALUES (902, 'Halo Universe', NULL)"
             )
             await db.execute(
-                "INSERT INTO books (id, title, author_id, series_id) "
-                "VALUES (3, 'Universe Book', 101, 902)"
+                "INSERT INTO books (id, title, series_id) "
+                "VALUES (3, 'Universe Book', 902)"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (3, 101, 0)"
             )
             await db.commit()
         finally:
@@ -386,9 +407,13 @@ class TestListPagination:
                     "VALUES (?, ?, 101)", (900 + i, f"Series {i}"),
                 )
                 await db.execute(
-                    "INSERT INTO books (id, title, author_id, series_id) "
-                    "VALUES (?, ?, 101, ?)",
+                    "INSERT INTO books (id, title, series_id) "
+                    "VALUES (?, ?, ?)",
                     (i, f"Book {i}", 900 + i),
+                )
+                await db.execute(
+                    "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (?, 101, 0)",
+                    (i,),
                 )
             await db.commit()
         finally:
@@ -447,9 +472,15 @@ class TestListSearch:
                 "VALUES (900, 'Saga', 101)"
             )
             await db.execute(
-                "INSERT INTO books (id, title, author_id, series_id) "
-                "VALUES (1, 'Reach', 101, 900), "
-                "(2, 'Cole', 101, 900)"
+                "INSERT INTO books (id, title, series_id) "
+                "VALUES (1, 'Reach', 900), "
+                "(2, 'Cole', 900)"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (1, 101, 0)"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (2, 101, 0)"
             )
             await db.commit()
         finally:
@@ -480,9 +511,15 @@ class TestListSearch:
                 "(901, 'Other', 101)"
             )
             await db.execute(
-                "INSERT INTO books (id, title, author_id, series_id) VALUES "
-                "(1, 'Reach', 101, 900), "
-                "(2, 'Different', 101, 901)"
+                "INSERT INTO books (id, title, series_id) VALUES "
+                "(1, 'Reach', 900), "
+                "(2, 'Different', 901)"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (1, 101, 0)"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (2, 101, 0)"
             )
             await db.commit()
         finally:
@@ -509,10 +546,16 @@ class TestListCoverBookId:
                 "VALUES (900, 'Halo', 101)"
             )
             await db.execute(
-                "INSERT INTO books (id, title, author_id, series_id, "
+                "INSERT INTO books (id, title, series_id, "
                 "series_index, cover_path) VALUES "
-                "(1, 'First', 101, 900, 1.0, '/covers/1.jpg'), "
-                "(2, 'Second', 101, 900, 2.0, '/covers/2.jpg')"
+                "(1, 'First', 900, 1.0, '/covers/1.jpg'), "
+                "(2, 'Second', 900, 2.0, '/covers/2.jpg')"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (1, 101, 0)"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (2, 101, 0)"
             )
             await db.commit()
         finally:
@@ -537,10 +580,16 @@ class TestListCoverBookId:
                 "VALUES (900, 'Halo', 101)"
             )
             await db.execute(
-                "INSERT INTO books (id, title, author_id, series_id, "
+                "INSERT INTO books (id, title, series_id, "
                 "series_index, cover_path, cover_url) VALUES "
-                "(1, 'NoCover', 101, 900, 1.0, NULL, NULL), "
-                "(2, 'WithCover', 101, 900, 2.0, '/c/2.jpg', NULL)"
+                "(1, 'NoCover', 900, 1.0, NULL, NULL), "
+                "(2, 'WithCover', 900, 2.0, '/c/2.jpg', NULL)"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (1, 101, 0)"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (2, 101, 0)"
             )
             await db.commit()
         finally:
@@ -589,10 +638,19 @@ class TestEmptySeriesFilter:
                 "VALUES (900, '2B Trilogy', 101)"
             )
             await db.execute(
-                "INSERT INTO books (id, title, author_id, series_id, hidden) VALUES "
-                "(1, 'b1', 101, 900, 1), "
-                "(2, 'b2', 101, 900, 1), "
-                "(3, 'b3', 101, 900, 1)"
+                "INSERT INTO books (id, title, series_id, hidden) VALUES "
+                "(1, 'b1', 900, 1), "
+                "(2, 'b2', 900, 1), "
+                "(3, 'b3', 900, 1)"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (1, 101, 0)"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (2, 101, 0)"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (3, 101, 0)"
             )
             await db.commit()
         finally:
@@ -639,8 +697,11 @@ class TestEmptySeriesFilter:
                 "VALUES (900, 'Real', 101)"
             )
             await db.execute(
-                "INSERT INTO books (id, title, author_id, series_id) "
-                "VALUES (1, 'Book', 101, 900)"
+                "INSERT INTO books (id, title, series_id) "
+                "VALUES (1, 'Book', 900)"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (1, 101, 0)"
             )
             await db.commit()
         finally:
@@ -666,9 +727,15 @@ class TestEmptySeriesFilter:
                 "(900, 'AllOwned', 101), (901, 'HasMissing', 101)"
             )
             await db.execute(
-                "INSERT INTO books (id, title, author_id, series_id, owned) VALUES "
-                "(1, 'a', 101, 900, 1), "
-                "(2, 'b', 101, 901, 0)"
+                "INSERT INTO books (id, title, series_id, owned) VALUES "
+                "(1, 'a', 900, 1), "
+                "(2, 'b', 901, 0)"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (1, 101, 0)"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (2, 101, 0)"
             )
             await db.commit()
         finally:

@@ -666,10 +666,17 @@ async def _insert_owned_book(
                 (author, author),
             )
             author_id = cur.lastrowid
+        # v3.0.0: books.author_id dropped; seed book_authors instead.
+        cur = await db.execute(
+            "INSERT INTO books (title, source, owned, formats, hidden) "
+            "VALUES (?, 'calibre', 1, ?, 0)",
+            (title, formats),
+        )
+        book_id = cur.lastrowid
         await db.execute(
-            "INSERT INTO books (title, author_id, source, owned, formats, hidden) "
-            "VALUES (?, ?, 'calibre', 1, ?, 0)",
-            (title, author_id, formats),
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+            "VALUES (?, ?, 0)",
+            (book_id, author_id),
         )
         await db.commit()
     finally:

@@ -81,7 +81,7 @@ async def test_duplicate_link_rejected(discovery_db):
             "INSERT INTO authors (id, name, sort_name) VALUES (1, 'Alice', 'Alice')"
         )
         await db.execute(
-            "INSERT INTO books (id, title, author_id) VALUES (10, 'B', 1)"
+            "INSERT INTO books (id, title) VALUES (10, 'B')"
         )
         await db.execute(
             "INSERT INTO book_authors (book_id, author_id, position) "
@@ -110,8 +110,7 @@ async def test_book_delete_cascades_links(discovery_db):
             "(1, 'Alice', 'Alice'), (2, 'Bob', 'Bob')"
         )
         await db.execute(
-            "INSERT INTO books (id, title, author_id) "
-            "VALUES (10, 'B', 1)"
+            "INSERT INTO books (id, title) VALUES (10, 'B')"
         )
         await db.execute(
             "INSERT INTO book_authors (book_id, author_id, position) "
@@ -147,8 +146,7 @@ async def test_role_accepts_null_and_strings(discovery_db):
             "(1, 'A', 'A'), (2, 'B', 'B'), (3, 'C', 'C')"
         )
         await db.execute(
-            "INSERT INTO books (id, title, author_id) "
-            "VALUES (10, 'B', 1)"
+            "INSERT INTO books (id, title) VALUES (10, 'B')"
         )
         await db.execute(
             "INSERT INTO book_authors (book_id, author_id, position, role) "

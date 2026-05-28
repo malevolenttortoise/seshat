@@ -203,11 +203,15 @@ async def _seed_book(db, *, author_id=1, author_name="J.N. Chaney"):
         (author_id, author_name, author_name, author_name.lower().replace(".", "")),
     )
     cur = await db.execute(
-        "INSERT INTO books (title, author_id, source, owned, is_new) "
-        "VALUES ('Discovered Book', ?, 'goodreads', 0, 1)",
-        (author_id,),
+        "INSERT INTO books (title, source, owned, is_new) "
+        "VALUES ('Discovered Book', 'goodreads', 0, 1)",
     )
-    return cur.lastrowid
+    book_id = cur.lastrowid
+    await db.execute(
+        "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (?, ?, 0)",
+        (book_id, author_id),
+    )
+    return book_id
 
 
 async def test_link_empty_contributors_links_scanned_author(discovery_db):

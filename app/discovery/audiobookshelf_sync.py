@@ -415,10 +415,12 @@ async def sync_audiobookshelf(library: dict) -> dict:
                 # v2.3: structural fields write through directly;
                 # user-editable metadata routes per `user_edited_fields`.
                 # Snapshot mirrors ABS's POV regardless.
+                # v3.0.0 Phase 9 (ADR-0012): no books.author_id — authorship
+                # is the book_authors set written below.
                 await db.execute(
-                    "UPDATE books SET author_id=?, series_id=?, owned=1 "
+                    "UPDATE books SET series_id=?, owned=1 "
                     "WHERE id=?",
-                    (our_author_id, our_series_id, existing["id"]),
+                    (our_series_id, existing["id"]),
                 )
                 await _apply_abs_diff(db, existing["id"], book)
                 await _write_abs_snapshot(db, existing["id"], book)
@@ -432,18 +434,20 @@ async def sync_audiobookshelf(library: dict) -> dict:
                 )
                 progress["books_updated"] += 1
             else:
+                # v3.0.0 Phase 9 (ADR-0012): no books.author_id — authorship
+                # is the book_authors set written below.
                 cur = await db.execute(
                     """
                     INSERT INTO books (
-                        title, author_id, series_id, series_index,
+                        title, series_id, series_index,
                         isbn, asin, audiobookshelf_id, source, owned,
                         pub_date, description, language, publisher,
                         narrator, duration_sec, abridged, audio_formats
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 'audiobookshelf', 1, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, 'audiobookshelf', 1, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        book["title"], our_author_id, our_series_id, book["series_index"],
+                        book["title"], our_series_id, book["series_index"],
                         book["isbn"], book["asin"], book["abs_id"],
                         book["pub_date"], book["description"],
                         book["language"], book["publisher"],

@@ -94,9 +94,11 @@ CREATE TABLE IF NOT EXISTS series (
 );
 
 CREATE TABLE IF NOT EXISTS books (
+    -- v3.0.0 Phase 9 (ADR-0012): no `author_id` column — authorship is the
+    -- `book_authors` join (position 0 = primary). Existing DBs drop the
+    -- legacy column via `_drop_legacy_books_author_id` at startup.
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     title TEXT NOT NULL,
-    author_id INTEGER NOT NULL,
     series_id INTEGER,
     series_index REAL,
     isbn TEXT,
@@ -171,7 +173,6 @@ CREATE TABLE IF NOT EXISTS books (
     source_url TEXT,
     first_seen_at REAL NOT NULL DEFAULT (strftime('%s','now')),
     created_at REAL NOT NULL DEFAULT (strftime('%s','now')),
-    FOREIGN KEY (author_id) REFERENCES authors(id),
     FOREIGN KEY (series_id) REFERENCES series(id)
 );
 
@@ -304,28 +305,24 @@ CREATE TABLE IF NOT EXISTS metadata_review_queue (
     FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_books_author ON books(author_id);
+-- v3.0.0 Phase 9 (ADR-0012): author→books lookups go through
+-- idx_book_authors_author joined to books. The legacy idx_books_author
+-- and idx_books_author_owned indexes are gone with the author_id column.
 CREATE INDEX IF NOT EXISTS idx_books_series ON books(series_id);
 CREATE INDEX IF NOT EXISTS idx_books_owned ON books(owned);
 CREATE INDEX IF NOT EXISTS idx_books_new ON books(is_new);
 CREATE INDEX IF NOT EXISTS idx_books_hidden ON books(hidden);
 CREATE INDEX IF NOT EXISTS idx_authors_name ON authors(name);
 CREATE INDEX IF NOT EXISTS idx_books_mam_status ON books(mam_status);
--- Composite index for the most common combined filter across the app:
--- "all owned (or missing) books for a given author". Used heavily by
--- the author-detail page and the lookup-merge pass that runs once per
--- author during source scans.
-CREATE INDEX IF NOT EXISTS idx_books_author_owned ON books(author_id, owned);
 CREATE INDEX IF NOT EXISTS idx_suggestions_status ON book_series_suggestions(status);
 CREATE INDEX IF NOT EXISTS idx_suggestions_book ON book_series_suggestions(book_id);
 CREATE INDEX IF NOT EXISTS idx_review_queue_book ON metadata_review_queue(book_id);
 CREATE INDEX IF NOT EXISTS idx_review_queue_source ON metadata_review_queue(source);
 
--- v3.0.0 Phase 1 — multi-author rework. One row per (book, author)
--- link, replacing the single `books.author_id` denormalization. The
--- `books.author_id` column stays in place across Phase 1; this table
--- runs alongside it. Phase 9 drops the column once every read path
--- has been migrated to join through here.
+-- v3.0.0 multi-author rework. One row per (book, author) link; position 0
+-- is the primary author. This REPLACED the single `books.author_id`
+-- denormalization, which Phase 9 (ADR-0012) dropped once every read path
+-- was migrated to join through here. Authorship now lives only here.
 --
 --   position  Stable display order; 0 = primary. Two-author books
 --             have positions 0 and 1; co-author chains preserve the
@@ -657,10 +654,9 @@ MIGRATIONS = [
     "ALTER TABLE books ADD COLUMN kobo_slug TEXT",
     # ── v3.0.0 Phase 1: multi-author rework ──────────────────────
     # `book_authors` replaces the single-author `books.author_id`
-    # denormalization with a proper join table. See SCHEMA above
-    # for the column-level doc. Phase 1 ships the schema + backfill
-    # only; `books.author_id` stays in place across phases 2-8 and
-    # is dropped in Phase 9 once every read path joins through here.
+    # denormalization with a proper join table. See SCHEMA above for the
+    # column-level doc. `books.author_id` was dropped in Phase 9 (ADR-0012)
+    # once every read path joined through here; authorship lives only here.
     """CREATE TABLE IF NOT EXISTS book_authors (
         book_id     INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
         author_id   INTEGER NOT NULL REFERENCES authors(id),
@@ -803,7 +799,9 @@ async def _backfill_series_index_from_title(db) -> tuple[int, int]:
             sid_by_author_name.setdefault((s["author_id"], norm), s["id"])
 
     targets = await (await db.execute(
-        "SELECT id, title, author_id, series_id, owned "
+        "SELECT id, title, "
+        "(SELECT author_id FROM book_authors WHERE book_id=books.id AND position=0) AS author_id, "
+        "series_id, owned "
         "FROM books "
         "WHERE series_id IS NOT NULL AND series_index IS NULL "
         "AND title IS NOT NULL"
@@ -842,9 +840,11 @@ async def _backfill_series_index_from_title(db) -> tuple[int, int]:
             continue
 
         # Check whether another row already holds (author_id, series_id, idx).
+        # v3.0.0 Phase 9 (ADR-0012): primary = book_authors position 0.
         existing = await (await db.execute(
             "SELECT id, title, owned FROM books "
-            "WHERE author_id = ? AND series_id = ? "
+            "WHERE id IN (SELECT book_id FROM book_authors WHERE author_id = ? AND position = 0) "
+            "AND series_id = ? "
             "AND series_index = ? AND id != ?",
             (t["author_id"], t["series_id"], idx, t["id"]),
         )).fetchone()
@@ -1008,12 +1008,13 @@ async def _backfill_book_authors(db) -> int:
         Phase 2 ships will write the full set through the normal
         author upsert path.
       - book row with NO author_id and no snapshot resolution: no
-        rows inserted for that book. ``book_authors`` left empty for
-        it; downstream reads keep using ``books.author_id`` (NULL)
-        during phases 2-8.
+        rows inserted for that book. ``book_authors`` left empty for it
+        (rare; pre-Phase-9 such a book had a NULL primary anyway).
 
-    Phase 9 drops ``books.author_id`` once every read path joins
-    through here; until then, both denormalizations co-exist.
+    On the first v3.0.0 boot this still reads ``books.author_id`` (the
+    legacy fallback arm) because it runs BEFORE Phase 9's column drop;
+    on later boots the column is gone and the fallback is column-presence-
+    gated (selects NULL), so only snapshot resolution contributes.
     """
     import json
 
@@ -1035,8 +1036,17 @@ async def _backfill_book_authors(db) -> int:
         if norm and norm not in normalized_to_id:
             normalized_to_id[norm] = row["id"]
 
+    # v3.0.0 Phase 9 (ADR-0012): `books.author_id` is dropped once every
+    # read path joins book_authors. On the FIRST v3.0.0 boot the column
+    # still exists (this backfill's legacy fallback arm needs it, and runs
+    # BEFORE the drop migration); on every later boot it's gone, so select
+    # NULL in its place — the fallback arm then no-ops (every book already
+    # carries its position-0 link from the earlier backfill + always-link).
+    _bcols = await (await db.execute("PRAGMA table_info(books)")).fetchall()
+    _has_author_id = any(c["name"] == "author_id" for c in _bcols)
+    _author_sel = "b.author_id" if _has_author_id else "NULL AS author_id"
     cursor = await db.execute(
-        "SELECT b.id, b.author_id, c.authors_json AS calibre_json, "
+        f"SELECT b.id, {_author_sel}, c.authors_json AS calibre_json, "
         "       a.authors_json AS abs_json "
         "FROM books b "
         "LEFT JOIN books_calibre_snapshot c ON c.book_id = b.id "
@@ -1308,7 +1318,7 @@ async def _dedupe_author_rows(db) -> int:
       3. Final tiebreak on lowest id (stable / deterministic).
 
     Reparents every FK that references `authors.id`:
-      - books.author_id
+      - book_authors.author_id (was books.author_id pre-Phase 9)
       - series.author_id
       - pen_name_links.canonical_author_id
       - pen_name_links.alias_author_id
@@ -1342,7 +1352,8 @@ async def _dedupe_author_rows(db) -> int:
         scored = []
         for m in members:
             cnt_row = await (await db.execute(
-                "SELECT COUNT(*) FROM books WHERE author_id = ?", (m["id"],)
+                "SELECT COUNT(*) FROM book_authors WHERE author_id = ?",
+                (m["id"],),
             )).fetchone()
             book_count = cnt_row[0] if cnt_row else 0
             period_count = m["name"].count(".")
@@ -1353,9 +1364,20 @@ async def _dedupe_author_rows(db) -> int:
 
         for loser in losers:
             # Reparent every FK reference before deleting the row.
+            # v3.0.0 Phase 9 (ADR-0012): the book→author FK now lives in
+            # book_authors (books.author_id is gone). PK is (book_id,
+            # author_id), so a book linked to BOTH winner and loser would
+            # collide on reparent — UPDATE OR IGNORE keeps the existing
+            # winner link, then the cleanup DELETE drops the stranded
+            # loser link (collapsing the duplicate contributor to one row).
             await db.execute(
-                "UPDATE books SET author_id = ? WHERE author_id = ?",
+                "UPDATE OR IGNORE book_authors SET author_id = ? "
+                "WHERE author_id = ?",
                 (winner["id"], loser["id"]),
+            )
+            await db.execute(
+                "DELETE FROM book_authors WHERE author_id = ?",
+                (loser["id"],),
             )
             await db.execute(
                 "UPDATE series SET author_id = ? WHERE author_id = ?",
@@ -1462,6 +1484,128 @@ async def _migrate_series_author_nullable(db) -> bool:
     return True
 
 
+async def _drop_legacy_books_author_id(db) -> bool:
+    """v3.0.0 Phase 9 (ADR-0012) — drop the legacy ``books.author_id``
+    column. Authorship is now the ``book_authors`` join (position 0 =
+    primary); every read/write was repointed in Phase 9.
+
+    SQLite can't ``ALTER TABLE ... DROP COLUMN`` a column that sits in a
+    table-level FOREIGN KEY (and it was also indexed), so we rebuild the
+    table (the same approach as ``_migrate_series_author_nullable``).
+
+    Safety rails:
+      - **Idempotent**: PRAGMA table_info early-outs once the column is
+        gone (fresh DBs never had it; re-runs no-op).
+      - **Pre-flight assertion**: every book with a non-NULL ``author_id``
+        must already carry a position-0 ``book_authors`` row (the
+        backfill-all + always-link invariant). If ANY book would lose its
+        only author link, ABORT the drop and leave the column in place so
+        the operator can investigate — never destroy the last copy.
+      - **Ordered AFTER** ``_backfill_book_authors`` in ``init_db`` (which
+        still needs the column on the first v3.0.0 boot).
+
+    The rebuild derives the new table + index DDL from ``sqlite_master``
+    (NOT a hardcoded CREATE) because the live ``books`` schema is accreted
+    from the base CREATE plus many historical ``ALTER TABLE ADD COLUMN``
+    migrations; regenerating from the stored DDL preserves every column,
+    default, and AUTOINCREMENT exactly. Returns True if the table was
+    rebuilt, False on no-op/abort.
+    """
+    import re
+
+    cols = await (await db.execute("PRAGMA table_info(books)")).fetchall()
+    col_names = [c["name"] for c in cols]
+    if "author_id" not in col_names:
+        return False  # already dropped (or fresh DB) — idempotent
+
+    # Pre-flight: no book may lose its only author link.
+    orphan_row = await (await db.execute(
+        "SELECT COUNT(*) FROM books WHERE author_id IS NOT NULL "
+        "AND id NOT IN (SELECT book_id FROM book_authors WHERE position = 0)"
+    )).fetchone()
+    orphans = orphan_row[0] if orphan_row else 0
+    if orphans:
+        _db_logger.error(
+            "ABORTING books.author_id drop: %d book(s) have a non-NULL "
+            "author_id but no position-0 book_authors row — dropping the "
+            "column would lose their only author link. Leaving the column "
+            "in place. (Re-run the book_authors backfill / investigate.)",
+            orphans,
+        )
+        return False
+
+    _db_logger.info("Dropping legacy books.author_id (recreating table)")
+
+    table_sql = (await (await db.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='books'"
+    )).fetchone())[0]
+    index_rows = await (await db.execute(
+        "SELECT sql FROM sqlite_master WHERE type='index' "
+        "AND tbl_name='books' AND sql IS NOT NULL"
+    )).fetchall()
+
+    # Derive the new CREATE: rename, strip the author_id column line and
+    # its FOREIGN KEY constraint line.
+    new_sql = re.sub(
+        r'CREATE\s+TABLE\s+"?books"?', "CREATE TABLE books_new", table_sql,
+        count=1, flags=re.IGNORECASE,
+    )
+    new_sql = re.sub(
+        r"[ \t]*author_id\s+INTEGER\s+NOT\s+NULL\s*,\r?\n", "",
+        new_sql, flags=re.IGNORECASE,
+    )
+    # Remove the author_id FK on its own line WITHOUT eating the previous
+    # line's trailing comma (a leading ``,?\\s*`` would), then tidy any
+    # dangling comma left before the closing paren (covers the case where
+    # the FK was the last constraint).
+    new_sql = re.sub(
+        r"\n[ \t]*FOREIGN\s+KEY\s*\(\s*author_id\s*\)\s*"
+        r"REFERENCES\s+authors\s*\(\s*id\s*\)\s*,?", "",
+        new_sql, flags=re.IGNORECASE,
+    )
+    new_sql = re.sub(r",(\s*)\)", r"\1)", new_sql)
+    # Defensive: the transform must have produced a books_new CREATE with
+    # no lingering author_id reference, or we bail rather than corrupt.
+    if "books_new" not in new_sql or re.search(r"\bauthor_id\b", new_sql):
+        _db_logger.error(
+            "ABORTING books.author_id drop: could not safely rewrite the "
+            "books CREATE statement (author_id still present or rename "
+            "failed). Leaving the column in place. DDL was: %s",
+            table_sql,
+        )
+        return False
+
+    keep_cols = [c for c in col_names if c != "author_id"]
+    col_list = ", ".join(keep_cols)
+
+    await db.execute("PRAGMA foreign_keys = OFF")
+    try:
+        await db.execute(new_sql)
+        await db.execute(
+            f"INSERT INTO books_new ({col_list}) "
+            f"SELECT {col_list} FROM books"
+        )
+        await db.execute("DROP TABLE books")
+        await db.execute("ALTER TABLE books_new RENAME TO books")
+        # Recreate every books index EXCEPT the two author_id ones (which
+        # mention author_id in their DDL and are intentionally gone).
+        for r in index_rows:
+            idx_sql = r["sql"]
+            if idx_sql and not re.search(r"\bauthor_id\b", idx_sql):
+                await db.execute(idx_sql)
+        # Sanity: no FK violations introduced by the rebuild.
+        bad = await (await db.execute("PRAGMA foreign_key_check")).fetchall()
+        if bad:
+            _db_logger.warning(
+                "books.author_id drop: foreign_key_check reported %d "
+                "row(s) post-rebuild: %s", len(bad), bad[:5],
+            )
+        await db.commit()
+    finally:
+        await db.execute("PRAGMA foreign_keys = ON")
+    return True
+
+
 async def _backfill_metadata_snapshots(db) -> tuple[int, int]:
     """Seed `books_calibre_snapshot` and `books_abs_snapshot` from the
     current `books` rows on first boot post-v2.3.0.
@@ -1491,7 +1635,8 @@ async def _backfill_metadata_snapshots(db) -> tuple[int, int]:
                a.name AS author_name, a.calibre_id AS author_calibre_id,
                s.name AS series_name
         FROM books b
-        LEFT JOIN authors a ON a.id = b.author_id
+        LEFT JOIN book_authors bpa ON bpa.book_id = b.id AND bpa.position = 0
+        LEFT JOIN authors a ON a.id = bpa.author_id
         LEFT JOIN series s ON s.id = b.series_id
         WHERE b.source = 'calibre' AND b.owned = 1
           AND NOT EXISTS (
@@ -1532,7 +1677,8 @@ async def _backfill_metadata_snapshots(db) -> tuple[int, int]:
                a.name AS author_name,
                s.name AS series_name
         FROM books b
-        LEFT JOIN authors a ON a.id = b.author_id
+        LEFT JOIN book_authors bpa ON bpa.book_id = b.id AND bpa.position = 0
+        LEFT JOIN authors a ON a.id = bpa.author_id
         LEFT JOIN series s ON s.id = b.series_id
         WHERE b.audiobookshelf_id IS NOT NULL
           AND NOT EXISTS (
@@ -1623,7 +1769,9 @@ async def _dedupe_same_series_position(db) -> int:
     await db.commit()
 
     rows = await (await db.execute(
-        "SELECT id, title, author_id, series_id, series_index, owned "
+        "SELECT id, title, "
+        "(SELECT author_id FROM book_authors WHERE book_id=books.id AND position=0) AS author_id, "
+        "series_id, series_index, owned "
         "FROM books WHERE series_id IS NOT NULL AND series_index IS NOT NULL"
     )).fetchall()
 
@@ -2041,5 +2189,12 @@ async def init_db(slug=None):
             _db_logger.info(
                 f"Series author_mode backfill: recomputed {mode_series} series"
             )
+
+        # v3.0.0 Phase 9 (ADR-0012) — drop the legacy books.author_id column.
+        # MUST run last: after _backfill_book_authors (which reads author_id
+        # on the first v3.0.0 boot to link every book at position 0) and the
+        # series author_mode backfill. Idempotent + pre-flight-guarded.
+        if await _drop_legacy_books_author_id(db):
+            _db_logger.info("Dropped legacy books.author_id column (Phase 9)")
     finally:
         await db.close()

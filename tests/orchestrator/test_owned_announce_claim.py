@@ -92,14 +92,21 @@ async def _seed_owned(
             "SELECT id FROM authors WHERE name = ?", (author,),
         )).fetchone()
         aid = row["id"]
+        # v3.0.0: books.author_id dropped; seed book_authors instead.
         cur = await db.execute(
-            "INSERT INTO books (title, author_id, source, owned, hidden, "
+            "INSERT INTO books (title, source, owned, hidden, "
             "                   mam_status) "
-            "VALUES (?, ?, ?, 1, 0, ?)",
-            (title, aid, source, mam_status),
+            "VALUES (?, ?, 1, 0, ?)",
+            (title, source, mam_status),
+        )
+        book_id = cur.lastrowid
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+            "VALUES (?, ?, 0)",
+            (book_id, aid),
         )
         await db.commit()
-        return cur.lastrowid
+        return book_id
     finally:
         await db.close()
 
@@ -143,14 +150,20 @@ class TestFindOwnedMatches:
         from app.metadata.author_names import normalize_author_name
         db = await disco_db.get_db(ebook_library["slug"])
         try:
-            await db.execute(
+            cur_a = await db.execute(
                 "INSERT INTO authors (name, sort_name, normalized_name) "
                 "VALUES (?, ?, ?)",
                 ("A", "A", normalize_author_name("A")),
             )
+            author_id = cur_a.lastrowid
+            # v3.0.0: books.author_id dropped; seed book_authors instead.
+            cur_b = await db.execute(
+                "INSERT INTO books (title, source, owned, hidden) "
+                "VALUES ('X', 'goodreads', 0, 0)",
+            )
             await db.execute(
-                "INSERT INTO books (title, author_id, source, owned, hidden) "
-                "VALUES ('X', 1, 'goodreads', 0, 0)",
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+                "VALUES (?, ?, 0)", (cur_b.lastrowid, author_id),
             )
             await db.commit()
         finally:

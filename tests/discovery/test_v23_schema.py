@@ -82,7 +82,12 @@ class TestFreshSchema:
         db = await get_db()
         try:
             await db.execute("INSERT INTO authors (name, sort_name) VALUES (?, ?)", ("A", "A"))
-            await db.execute("INSERT INTO books (title, author_id) VALUES (?, ?)", ("B", 1))
+            cur = await db.execute("INSERT INTO books (title) VALUES (?)", ("B",))
+            book_id = cur.lastrowid
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (?, ?, 0)",
+                (book_id, 1),
+            )
             await db.commit()
             row = await (await db.execute(
                 "SELECT metadata_source_pref, user_edited_fields FROM books"
@@ -203,13 +208,16 @@ class TestSnapshotBackfill:
             )
             await db.execute("""
                 INSERT INTO books
-                (id, title, author_id, series_id, series_index, isbn,
+                (id, title, series_id, series_index, isbn,
                  cover_path, description, tags, rating, language,
                  publisher, formats, pub_date, source, owned, calibre_id)
-                VALUES (1, 'BookA', 1, 10, 1.0, '978-X', '/c/a.jpg',
+                VALUES (1, 'BookA', 10, 1.0, '978-X', '/c/a.jpg',
                         'desc', 'tag1,tag2', 8, 'eng', 'Pub', 'epub',
                         '2024-01-01', 'calibre', 1, 100)
             """)
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (1, 1, 0)"
+            )
             await db.commit()
 
             cal, abs_count = await _backfill_metadata_snapshots(db)
@@ -242,11 +250,14 @@ class TestSnapshotBackfill:
             )
             await db.execute("""
                 INSERT INTO books
-                (id, title, author_id, audiobookshelf_id, narrator,
+                (id, title, audiobookshelf_id, narrator,
                  duration_sec, abridged, asin, audio_formats, source, owned)
-                VALUES (1, 'AudioBook', 1, 'abs-uuid-1', 'Reader X',
+                VALUES (1, 'AudioBook', 'abs-uuid-1', 'Reader X',
                         43200.5, 0, 'B0XYZ', 'm4b', 'audiobookshelf', 1)
             """)
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (1, 1, 0)"
+            )
             await db.commit()
 
             cal, abs_count = await _backfill_metadata_snapshots(db)
@@ -273,8 +284,11 @@ class TestSnapshotBackfill:
                 "INSERT INTO authors (id, name, sort_name) VALUES (1, 'A', 'A')"
             )
             await db.execute(
-                "INSERT INTO books (id, title, author_id, source, owned, calibre_id) "
-                "VALUES (1, 'B', 1, 'calibre', 1, 100)"
+                "INSERT INTO books (id, title, source, owned, calibre_id) "
+                "VALUES (1, 'B', 'calibre', 1, 100)"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (1, 1, 0)"
             )
             await db.commit()
 
@@ -303,8 +317,11 @@ class TestSnapshotBackfill:
                 "INSERT INTO authors (id, name, sort_name) VALUES (1, 'A', 'A')"
             )
             await db.execute(
-                "INSERT INTO books (id, title, author_id, source, owned) "
-                "VALUES (1, 'B', 1, 'calibre', 0)"
+                "INSERT INTO books (id, title, source, owned) "
+                "VALUES (1, 'B', 'calibre', 0)"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (1, 1, 0)"
             )
             await db.commit()
 

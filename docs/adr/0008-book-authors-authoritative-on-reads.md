@@ -36,3 +36,4 @@ Adopt **B**. `book_authors` is the authoritative author–book relation for all 
 
 - [0002](0002-multi-library-slug-routing.md) — `book_authors` is per-library, like `books`; the same slug discipline applies.
 - [0006](0006-mam-not-found-is-permanent.md) — same "write a row rather than leave a gap that misbehaves on read" instinct.
+- [0012](0012-drop-books-author-id-position-0-canonical.md) — the Phase 9 drop; corrects this ADR's "no-op on reads" prediction (~40 display joins remained on the legacy column) and makes position 0 the sole primary-author source.

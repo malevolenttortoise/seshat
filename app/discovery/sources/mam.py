@@ -3578,7 +3578,8 @@ async def scan_books_batch(
             SELECT b.id, b.title, a.name as author_name, b.owned, b.is_unreleased,
                    s.name as series_name
             FROM books b
-            JOIN authors a ON b.author_id = a.id
+            JOIN book_authors bpa ON bpa.book_id = b.id AND bpa.position = 0
+            JOIN authors a ON a.id = bpa.author_id
             LEFT JOIN series s ON b.series_id = s.id
             WHERE b.id IN ({placeholders})
             ORDER BY {_recent_scan_order_clause('b.')}
@@ -3592,7 +3593,8 @@ async def scan_books_batch(
             SELECT b.id, b.title, a.name as author_name, b.owned, b.is_unreleased,
                    s.name as series_name
             FROM books b
-            JOIN authors a ON b.author_id = a.id
+            JOIN book_authors bpa ON bpa.book_id = b.id AND bpa.position = 0
+            JOIN authors a ON a.id = bpa.author_id
             LEFT JOIN series s ON b.series_id = s.id
             WHERE {_NEEDS_SCAN_BASIC_ALIASED}{skip_clause}
             ORDER BY {_recent_scan_order_clause('b.')}
@@ -3862,7 +3864,8 @@ async def run_full_scan_batch(
         book_rows = await db.execute_fetchall(f"""
             SELECT b.id, b.title, a.name as author_name
             FROM books b
-            JOIN authors a ON b.author_id = a.id
+            JOIN book_authors bpa ON bpa.book_id = b.id AND bpa.position = 0
+            JOIN authors a ON a.id = bpa.author_id
             WHERE b.id IN ({placeholders})
             ORDER BY {_recent_scan_order_clause('b.')}
         """, tuple(batch_ids))
@@ -3875,7 +3878,8 @@ async def run_full_scan_batch(
         book_rows = await db.execute_fetchall(f"""
             SELECT b.id, b.title, a.name as author_name
             FROM books b
-            JOIN authors a ON b.author_id = a.id
+            JOIN book_authors bpa ON bpa.book_id = b.id AND bpa.position = 0
+            JOIN authors a ON a.id = bpa.author_id
             WHERE {_NEEDS_SCAN_STRICT_ALIASED}{skip_clause}
             ORDER BY {_recent_scan_order_clause('b.')}
             LIMIT ?

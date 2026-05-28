@@ -662,17 +662,17 @@ async def mam_books_endpoint(section: str = "upload", search: str = "",
                     "date": "b.pub_date DESC", "series": "s.name ASC, b.series_index ASC"}
         order = sort_map.get(sort, "b.title ASC")
 
-        count_sql = f"SELECT COUNT(*) FROM books b JOIN authors a ON b.author_id=a.id LEFT JOIN series s ON b.series_id=s.id WHERE {where}"
+        count_sql = f"SELECT COUNT(*) FROM books b JOIN book_authors bpa ON bpa.book_id=b.id AND bpa.position=0 JOIN authors a ON a.id=bpa.author_id LEFT JOIN series s ON b.series_id=s.id WHERE {where}"
         count_row = await db.execute_fetchall(count_sql, params)
         total = count_row[0][0] if count_row else 0
 
         offset = (page - 1) * per_page
         # Pre-aggregated series_total (same refactor as routers/books.py) —
         # replaces a correlated COUNT(*) that fired once per returned row.
-        data_sql = f"""SELECT b.*, a.name as author_name, s.name as series_name,
+        data_sql = f"""SELECT b.*, bpa.author_id AS author_id, a.name as author_name, s.name as series_name,
             COALESCE(st.series_total, 0) as series_total,
             COALESCE(st.mainline_total, 0) as mainline_total
-            FROM books b JOIN authors a ON b.author_id=a.id
+            FROM books b JOIN book_authors bpa ON bpa.book_id=b.id AND bpa.position=0 JOIN authors a ON a.id=bpa.author_id
             LEFT JOIN series s ON b.series_id=s.id
             LEFT JOIN (
                 SELECT series_id,
@@ -743,7 +743,7 @@ async def mam_scan_single_book(book_id: int, slug: str | None = Query(None)):
         # rationale.
         rows = await db.execute_fetchall(
             "SELECT b.id, b.title, a.name, s.name AS series_name "
-            "FROM books b JOIN authors a ON b.author_id=a.id "
+            "FROM books b JOIN book_authors bpa ON bpa.book_id=b.id AND bpa.position=0 JOIN authors a ON a.id=bpa.author_id "
             "LEFT JOIN series s ON b.series_id = s.id "
             "WHERE b.id=?",
             (book_id,),
@@ -856,10 +856,13 @@ async def mam_scan_single_author(author_id: int, slug: str | None = None):
         # Fix E (series-bundle promote) can fire. UAT 2026-05-11
         # round 4 — see books.py:scan_books_mam comment.
         from app.discovery.sources.mam import _NEEDS_SCAN_BASIC_ALIASED
+        # v3.0.0 Phase 9 (ADR-0012): contributor-aware — co-authored owned
+        # books are collected under each co-author for the MAM scan.
         book_rows = await db.execute_fetchall(
             f"SELECT b.id, b.title, s.name AS series_name "
             f"FROM books b LEFT JOIN series s ON b.series_id = s.id "
-            f"WHERE b.author_id=? AND {_NEEDS_SCAN_BASIC_ALIASED} "
+            f"WHERE b.id IN (SELECT book_id FROM book_authors WHERE author_id=?) "
+            f"AND {_NEEDS_SCAN_BASIC_ALIASED} "
             "ORDER BY b.title",
             (author_id,),
         )

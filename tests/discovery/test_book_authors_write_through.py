@@ -61,7 +61,7 @@ async def test_write_replaces_existing_links(discovery_db):
             "(1, 'Alice', 'Alice'), (2, 'Bob', 'Bob'), (3, 'Carol', 'Carol')"
         )
         await db.execute(
-            "INSERT INTO books (id, title, author_id) VALUES (10, 'B', 1)"
+            "INSERT INTO books (id, title) VALUES (10, 'B')"
         )
         # First pass: Alice + Bob.
         await write_book_authors(db, 10, [1, 2])
@@ -88,7 +88,7 @@ async def test_write_empty_list_is_noop(discovery_db):
             "INSERT INTO authors (id, name, sort_name) VALUES (1, 'Alice', 'Alice')"
         )
         await db.execute(
-            "INSERT INTO books (id, title, author_id) VALUES (10, 'B', 1)"
+            "INSERT INTO books (id, title) VALUES (10, 'B')"
         )
         await write_book_authors(db, 10, [1])
         await db.commit()
@@ -114,7 +114,7 @@ async def test_write_dedupes_preserving_first_position(discovery_db):
             "(1, 'Alice', 'Alice'), (2, 'Bob', 'Bob')"
         )
         await db.execute(
-            "INSERT INTO books (id, title, author_id) VALUES (10, 'B', 1)"
+            "INSERT INTO books (id, title) VALUES (10, 'B')"
         )
         n = await write_book_authors(db, 10, [1, 2, 1, 2])
         await db.commit()
@@ -137,7 +137,7 @@ async def test_write_drops_none_entries(discovery_db):
             "(1, 'Alice', 'Alice'), (2, 'Bob', 'Bob')"
         )
         await db.execute(
-            "INSERT INTO books (id, title, author_id) VALUES (10, 'B', 1)"
+            "INSERT INTO books (id, title) VALUES (10, 'B')"
         )
         n = await write_book_authors(db, 10, [1, None, 2])  # type: ignore
         await db.commit()

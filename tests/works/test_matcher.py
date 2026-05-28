@@ -39,9 +39,13 @@ async def _seed_book(
             )
             author_id = cur.lastrowid
         await db.execute(
-            "INSERT INTO books (id, title, author_id, source, owned) "
-            "VALUES (?, ?, ?, 'calibre', 1)",
-            (book_id, title, author_id),
+            "INSERT INTO books (id, title, source, owned) "
+            "VALUES (?, ?, 'calibre', 1)",
+            (book_id, title),
+        )
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+            "VALUES (?, ?, 0)", (book_id, author_id),
         )
         await db.commit()
     finally:

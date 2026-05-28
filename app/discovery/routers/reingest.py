@@ -117,7 +117,8 @@ async def _load_book_or_404(slug: Optional[str], book_id: int) -> dict[str, Any]
             "b.mam_my_snatched, b.owned, b.mam_category, "
             "a.name AS author_name "
             "FROM books b "
-            "JOIN authors a ON b.author_id = a.id "
+            "JOIN book_authors bpa ON bpa.book_id = b.id AND bpa.position = 0 "
+            "JOIN authors a ON a.id = bpa.author_id "
             "WHERE b.id = ?",
             (book_id,),
         )).fetchone()

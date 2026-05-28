@@ -49,8 +49,8 @@ async def seeded(discovery_db):
 
         async def book(title, idx, primary):
             return (await db.execute(
-                "INSERT INTO books (title, author_id, series_id, series_index, owned, hidden) "
-                "VALUES (?,?,?,?,1,0)", (title, primary, sid, idx),
+                "INSERT INTO books (title, series_id, series_index, owned, hidden) "
+                "VALUES (?,?,?,1,0)", (title, sid, idx),
             )).lastrowid
 
         b1 = await book("S Book 1", 1, a)

@@ -75,17 +75,19 @@ async def _insert_book(discovery, **fields) -> int:
         "hidden": 0,
     }
     defaults.update(fields)
+    # v3.0.0: books.author_id dropped — extract it before INSERT.
+    aid = defaults.pop("author_id", None)
     cols = list(defaults.keys())
     placeholders = ", ".join("?" * len(cols))
     cur = await discovery.execute(
         f"INSERT INTO books ({', '.join(cols)}) VALUES ({placeholders})",
         list(defaults.values()),
     )
+    book_id = cur.lastrowid
     # v3.0.0 Phase 5 (ADR-0009): merge union + prune-overlap read
     # book_authors. Seed a position-0 link when the author row exists
     # (mirrors backfill/sync in prod); skip silently otherwise so tests
     # using the default author_id without an authors row don't FK-fail.
-    aid = defaults.get("author_id")
     if aid is not None:
         has_author = await (await discovery.execute(
             "SELECT 1 FROM authors WHERE id = ?", (aid,),
@@ -94,10 +96,10 @@ async def _insert_book(discovery, **fields) -> int:
             await discovery.execute(
                 "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
                 "VALUES (?, ?, 0)",
-                (cur.lastrowid, aid),
+                (book_id, aid),
             )
     await discovery.commit()
-    return cur.lastrowid
+    return book_id
 
 
 async def _insert_grab_link(pipeline, *, grab_id, slug, book_id):

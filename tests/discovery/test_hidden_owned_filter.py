@@ -53,21 +53,33 @@ async def _seed_books():
         # Owned + hidden
         for i, t in enumerate(["Owned1", "Owned2", "Owned3"], start=1):
             await db.execute(
-                "INSERT INTO books (id, title, author_id, owned, hidden, source) "
-                "VALUES (?, ?, 101, 1, 1, 'calibre')",
+                "INSERT INTO books (id, title, owned, hidden, source) "
+                "VALUES (?, ?, 1, 1, 'calibre')",
                 (i, t),
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+                "VALUES (?, 101, 0)", (i,),
             )
         # Discovered + hidden
         for i, t in enumerate(["Disc1", "Disc2"], start=10):
             await db.execute(
-                "INSERT INTO books (id, title, author_id, owned, hidden, source) "
-                "VALUES (?, ?, 101, 0, 1, 'goodreads')",
+                "INSERT INTO books (id, title, owned, hidden, source) "
+                "VALUES (?, ?, 0, 1, 'goodreads')",
                 (i, t),
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+                "VALUES (?, 101, 0)", (i,),
             )
         # Owned + visible (should never appear on /books/hidden)
         await db.execute(
-            "INSERT INTO books (id, title, author_id, owned, hidden, source) "
-            "VALUES (99, 'OwnedVisible', 101, 1, 0, 'calibre')"
+            "INSERT INTO books (id, title, owned, hidden, source) "
+            "VALUES (99, 'OwnedVisible', 1, 0, 'calibre')"
+        )
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+            "VALUES (99, 101, 0)"
         )
         await db.commit()
     finally:

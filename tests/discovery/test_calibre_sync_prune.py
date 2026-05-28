@@ -120,9 +120,14 @@ async def test_prune_leaves_non_calibre_rows_alone(discovery_db, monkeypatch):
         await db.execute(
             "INSERT INTO authors (name, sort_name) VALUES ('Discovery Author', 'Discovery Author')"
         )
+        cur = await db.execute(
+            "INSERT INTO books (title, calibre_id, source, owned) "
+            "VALUES ('Missing Book', 999, 'mam', 0)"
+        )
         await db.execute(
-            "INSERT INTO books (title, author_id, calibre_id, source, owned) "
-            "VALUES ('Missing Book', 1, 999, 'mam', 0)"
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+            "VALUES (?, 1, 0)",
+            (cur.lastrowid,),
         )
         await db.commit()
     finally:

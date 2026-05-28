@@ -58,8 +58,11 @@ class TestEnsureCoverPhash:
     @pytest.mark.asyncio
     async def test_returns_existing_phash_without_io(self, disc_db):
         await disc_db.execute(
-            "INSERT INTO books (id, title, author_id, source, owned, cover_phash) "
-            "VALUES (1, 'X', 1, 'calibre', 1, 'abcd1234abcd1234')"
+            "INSERT INTO books (id, title, source, owned, cover_phash) "
+            "VALUES (1, 'X', 'calibre', 1, 'abcd1234abcd1234')"
+        )
+        await disc_db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (1, 1, 0)"
         )
         await disc_db.commit()
         h = await cph.ensure_cover_phash(disc_db, 1)
@@ -72,9 +75,12 @@ class TestEnsureCoverPhash:
         cover = tmp_path / "cover.jpg"
         cover.write_bytes(_make_jpeg_bytes(color=(123, 45, 67)))
         await disc_db.execute(
-            "INSERT INTO books (id, title, author_id, source, owned, cover_path) "
-            "VALUES (2, 'X', 1, 'calibre', 1, ?)",
+            "INSERT INTO books (id, title, source, owned, cover_path) "
+            "VALUES (2, 'X', 'calibre', 1, ?)",
             (str(cover),),
+        )
+        await disc_db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (2, 1, 0)"
         )
         await disc_db.commit()
         h = await cph.ensure_cover_phash(disc_db, 2)
@@ -88,8 +94,11 @@ class TestEnsureCoverPhash:
     @pytest.mark.asyncio
     async def test_returns_none_when_no_cover_info(self, disc_db):
         await disc_db.execute(
-            "INSERT INTO books (id, title, author_id, source, owned) "
-            "VALUES (3, 'X', 1, 'calibre', 1)"
+            "INSERT INTO books (id, title, source, owned) "
+            "VALUES (3, 'X', 'calibre', 1)"
+        )
+        await disc_db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (3, 1, 0)"
         )
         await disc_db.commit()
         assert await cph.ensure_cover_phash(disc_db, 3) is None
@@ -105,9 +114,12 @@ class TestEnsureCoverPhash:
         cover = tmp_path / "broken.jpg"
         cover.write_bytes(b"definitely not an image" * 100)
         await disc_db.execute(
-            "INSERT INTO books (id, title, author_id, source, owned, cover_path) "
-            "VALUES (4, 'X', 1, 'calibre', 1, ?)",
+            "INSERT INTO books (id, title, source, owned, cover_path) "
+            "VALUES (4, 'X', 'calibre', 1, ?)",
             (str(cover),),
+        )
+        await disc_db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (4, 1, 0)"
         )
         await disc_db.commit()
         h = await cph.ensure_cover_phash(disc_db, 4)
@@ -130,12 +142,17 @@ class TestBackfill:
         bad = tmp_path / "bad.jpg"
         bad.write_bytes(b"not an image" * 50)
         await disc_db.execute(
-            "INSERT INTO books (id, title, author_id, source, owned, cover_path) "
-            "VALUES (10, 'A', 1, 'calibre', 1, ?), "
-            "       (11, 'B', 1, 'calibre', 1, ?), "
-            "       (12, 'C', 1, 'calibre', 1, NULL)",
+            "INSERT INTO books (id, title, source, owned, cover_path) "
+            "VALUES (10, 'A', 'calibre', 1, ?), "
+            "       (11, 'B', 'calibre', 1, ?), "
+            "       (12, 'C', 'calibre', 1, NULL)",
             (str(good), str(bad)),
         )
+        for bid in (10, 11, 12):
+            await disc_db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+                "VALUES (?, 1, 0)", (bid,),
+            )
         await disc_db.commit()
         updated, skipped = await cph.backfill_cover_phashes_from_paths(disc_db)
         assert updated == 1   # only `good` succeeds
@@ -153,9 +170,13 @@ class TestBackfill:
         cover = tmp_path / "cover.jpg"
         cover.write_bytes(_make_jpeg_bytes())
         await disc_db.execute(
-            "INSERT INTO books (id, title, author_id, source, owned, cover_path) "
-            "VALUES (20, 'X', 1, 'calibre', 1, ?)",
+            "INSERT INTO books (id, title, source, owned, cover_path) "
+            "VALUES (20, 'X', 'calibre', 1, ?)",
             (str(cover),),
+        )
+        await disc_db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+            "VALUES (20, 1, 0)"
         )
         await disc_db.commit()
         u1, _ = await cph.backfill_cover_phashes_from_paths(disc_db)

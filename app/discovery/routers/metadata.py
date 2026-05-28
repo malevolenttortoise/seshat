@@ -229,7 +229,9 @@ async def book_pull(bid: int, payload: dict = Body(...), slug: str | None = Quer
     db = await get_db(slug)
     try:
         b_row = await (await db.execute(
-            "SELECT id, author_id, user_edited_fields FROM books WHERE id = ?",
+            "SELECT id, "
+            "(SELECT author_id FROM book_authors WHERE book_id=books.id AND position=0) AS author_id, "
+            "user_edited_fields FROM books WHERE id = ?",
             (bid,),
         )).fetchone()
         if not b_row:
@@ -468,12 +470,13 @@ async def list_pending_edits(
     async def _q(db) -> list[dict]:
         rows = await (await db.execute("""
             SELECT b.id AS book_id, b.title, b.user_edited_fields,
-                   b.author_id, a.name AS author_name,
+                   bpa.author_id, a.name AS author_name,
                    b.calibre_id, b.audiobookshelf_id,
                    cs.synced_at AS calibre_synced_at,
                    abs_s.synced_at AS abs_synced_at
             FROM books b
-            JOIN authors a ON a.id = b.author_id
+            JOIN book_authors bpa ON bpa.book_id = b.id AND bpa.position = 0
+            JOIN authors a ON a.id = bpa.author_id
             LEFT JOIN books_calibre_snapshot cs ON cs.book_id = b.id
             LEFT JOIN books_abs_snapshot abs_s ON abs_s.book_id = b.id
             WHERE b.user_edited_fields IS NOT NULL
@@ -566,7 +569,8 @@ async def list_queue(
             "b.title as book_title, a.name as author_name "
             "FROM metadata_review_queue q "
             "JOIN books b ON b.id = q.book_id "
-            "JOIN authors a ON a.id = b.author_id"
+            "JOIN book_authors bpa ON bpa.book_id = b.id AND bpa.position = 0 "
+            "JOIN authors a ON a.id = bpa.author_id"
         )
         params: list = []
         clauses = []

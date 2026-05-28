@@ -1009,7 +1009,9 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
         # isn't even a contributor.)
         rows = await (await db.execute(
             f"SELECT id, title, source_url, series_id, series_index, source, "
-            f"pub_date, expected_date, description, isbn, author_id, is_omnibus, hidden "
+            f"pub_date, expected_date, description, isbn, "
+            f"(SELECT author_id FROM book_authors WHERE book_id=books.id AND position=0) AS author_id, "
+            f"is_omnibus, hidden "
             f"FROM books WHERE id IN "
             f"(SELECT book_id FROM book_authors WHERE author_id IN ({id_ph}))",
             all_author_ids,
@@ -1057,9 +1059,14 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
         # anthology the scanned author didn't contribute to at all.
         prefilter_book_ids = {r["id"] for r in rows}
         cross_isbn_owners: dict[str, int] = {}
+        # v3.0.0 Phase 9 (ADR-0012): primary owner = book_authors position 0
+        # (books.author_id is gone). Owned books always carry a position-0
+        # row (backfill-all + always-link), so the inner join is safe.
         for r in await (await db.execute(
-            "SELECT id, author_id, isbn FROM books "
-            "WHERE owned = 1 AND isbn IS NOT NULL AND isbn != ''"
+            "SELECT b.id AS id, ba.author_id AS author_id, b.isbn AS isbn "
+            "FROM books b "
+            "JOIN book_authors ba ON ba.book_id = b.id AND ba.position = 0 "
+            "WHERE b.owned = 1 AND b.isbn IS NOT NULL AND b.isbn != ''"
         )).fetchall():
             isbn = (r["isbn"] or "").strip().replace("-", "")
             if not isbn or len(isbn) < 10:
@@ -1725,8 +1732,12 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                 _xcols, _xvals = _cross_source_id_inserts(bk)
                 _x_col_sql = ("," + ",".join(_xcols)) if _xcols else ""
                 _x_q_sql = ("," + ",".join(["?"] * len(_xcols))) if _xcols else ""
-                _ins_cur = await db.execute(f"INSERT OR IGNORE INTO books (title,author_id,series_id,series_index,isbn,cover_url,pub_date,expected_date,is_unreleased,description,page_count,source,source_url,owned,is_new,is_omnibus,{source_name}_id,amazon_format_asins{_x_col_sql}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,1,?,?,?{_x_q_sql})",
-                    (bk.title, author_id, sid_use, s_idx, bk.isbn, bk.cover_url, bk.pub_date, bk.expected_date, 1 if bk.is_unreleased else 0, bk.description, bk.page_count, source_name, initial_urls, 1 if omnibus else 0, bk.external_id, bk.amazon_format_asins, *_xvals))
+                # v3.0.0 Phase 9 (ADR-0012): books.author_id is gone — the
+                # scanned author + co-authors are written to book_authors by
+                # _link_discovered_contributors below (always-links the
+                # scanned author at position 0).
+                _ins_cur = await db.execute(f"INSERT OR IGNORE INTO books (title,series_id,series_index,isbn,cover_url,pub_date,expected_date,is_unreleased,description,page_count,source,source_url,owned,is_new,is_omnibus,{source_name}_id,amazon_format_asins{_x_col_sql}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,1,?,?,?{_x_q_sql})",
+                    (bk.title, sid_use, s_idx, bk.isbn, bk.cover_url, bk.pub_date, bk.expected_date, 1 if bk.is_unreleased else 0, bk.description, bk.page_count, source_name, initial_urls, 1 if omnibus else 0, bk.external_id, bk.amazon_format_asins, *_xvals))
                 if _ins_cur.rowcount and _ins_cur.lastrowid:
                     await _link_discovered_contributors(db, _ins_cur.lastrowid, author_id, bk, source_name)
                 existing.add(norm); new_books += 1
@@ -1860,8 +1871,10 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
             _xcols, _xvals = _cross_source_id_inserts(bk)
             _x_col_sql = ("," + ",".join(_xcols)) if _xcols else ""
             _x_q_sql = ("," + ",".join(["?"] * len(_xcols))) if _xcols else ""
-            _ins_cur = await db.execute(f"INSERT OR IGNORE INTO books (title,author_id,isbn,cover_url,pub_date,expected_date,is_unreleased,description,page_count,source,source_url,owned,is_new,is_omnibus,{source_name}_id,amazon_format_asins{_x_col_sql}) VALUES (?,?,?,?,?,?,?,?,?,?,?,0,1,?,?,?{_x_q_sql})",
-                (bk.title, author_id, bk.isbn, bk.cover_url, bk.pub_date, bk.expected_date, 1 if bk.is_unreleased else 0, bk.description, bk.page_count, source_name, initial_urls, 1 if omnibus else 0, bk.external_id, bk.amazon_format_asins, *_xvals))
+            # v3.0.0 Phase 9 (ADR-0012): no books.author_id — contributors
+            # written to book_authors by _link_discovered_contributors below.
+            _ins_cur = await db.execute(f"INSERT OR IGNORE INTO books (title,isbn,cover_url,pub_date,expected_date,is_unreleased,description,page_count,source,source_url,owned,is_new,is_omnibus,{source_name}_id,amazon_format_asins{_x_col_sql}) VALUES (?,?,?,?,?,?,?,?,?,?,0,1,?,?,?{_x_q_sql})",
+                (bk.title, bk.isbn, bk.cover_url, bk.pub_date, bk.expected_date, 1 if bk.is_unreleased else 0, bk.description, bk.page_count, source_name, initial_urls, 1 if omnibus else 0, bk.external_id, bk.amazon_format_asins, *_xvals))
             if _ins_cur.rowcount and _ins_cur.lastrowid:
                 await _link_discovered_contributors(db, _ins_cur.lastrowid, author_id, bk, source_name)
             existing.add(norm); new_books += 1
@@ -2014,7 +2027,8 @@ async def _title_to_series_pass(author_id: int):
         series_rows = await (await db.execute(
             "SELECT id, name FROM series WHERE id IN ("
             "  SELECT DISTINCT series_id FROM books "
-            "  WHERE author_id = ? AND series_id IS NOT NULL"
+            "  WHERE id IN (SELECT book_id FROM book_authors WHERE author_id = ?) "
+            "  AND series_id IS NOT NULL"
             ")",
             (author_id,),
         )).fetchall()
@@ -2025,8 +2039,12 @@ async def _title_to_series_pass(author_id: int):
         # books are excluded — once a row is hidden it's a garbage-bin
         # entry and shouldn't be re-linked into a series by a later
         # source-driven pass.
+        # v3.0.0 Phase 9 (ADR-0012): contributor-aware — standalone books
+        # where this author is any contributor (books.author_id is gone).
         standalone = await (await db.execute(
-            "SELECT id, title, owned FROM books WHERE author_id = ? AND series_id IS NULL AND hidden = 0",
+            "SELECT id, title, owned FROM books "
+            "WHERE id IN (SELECT book_id FROM book_authors WHERE author_id = ?) "
+            "AND series_id IS NULL AND hidden = 0",
             (author_id,),
         )).fetchall()
         if not standalone:
@@ -2335,9 +2353,12 @@ async def _resolve_position_collision(
     """
     from app.discovery.book_merge import MergeError, merge_books
 
+    # v3.0.0 Phase 9 (ADR-0012): position-0 primary (behavior-preserving) —
+    # this is a merge trigger, kept narrow rather than any-contributor.
     existing = await (await db.execute(
         "SELECT id, title, owned FROM books "
-        "WHERE author_id = ? AND series_id = ? "
+        "WHERE id IN (SELECT book_id FROM book_authors WHERE author_id = ? AND position = 0) "
+        "AND series_id = ? "
         "AND series_index = ? AND id != ?",
         (author_id, sid, idx, incoming_id),
     )).fetchone()
@@ -2457,9 +2478,11 @@ async def _orphan_series_promotion_pass(author_id: int) -> int:
     pipeline_db = await _get_pipeline_db()
     library_slug = _get_slug() or ""
     try:
+        # v3.0.0 Phase 9 (ADR-0012): contributor-aware orphan promotion.
         rows = await (await db.execute(
             "SELECT id, title FROM books "
-            "WHERE author_id = ? AND series_id IS NULL "
+            "WHERE id IN (SELECT book_id FROM book_authors WHERE author_id = ?) "
+            "AND series_id IS NULL "
             "AND hidden = 0 AND owned = 0 "
             "AND COALESCE(is_omnibus, 0) = 0",
             (author_id,),
@@ -3263,13 +3286,18 @@ async def _lookup_author_inner(author_id: int, author_name: str, full_scan: bool
         ]
 
         id_placeholders = ",".join("?" * len(linked_ids))
+        # v3.0.0 Phase 9 (ADR-0012): contributor-aware — a co-authored
+        # owned/known book counts for each of the linked authors.
         rows = await (await db.execute(
-            f"SELECT title FROM books WHERE author_id IN ({id_placeholders}) AND owned = 1",
+            f"SELECT title FROM books WHERE id IN "
+            f"(SELECT book_id FROM book_authors WHERE author_id IN ({id_placeholders})) "
+            f"AND owned = 1",
             linked_ids,
         )).fetchall()
         our_titles = [r["title"] for r in rows]
         all_rows = await (await db.execute(
-            f"SELECT title, hidden, source_url FROM books WHERE author_id IN ({id_placeholders})",
+            f"SELECT title, hidden, source_url FROM books WHERE id IN "
+            f"(SELECT book_id FROM book_authors WHERE author_id IN ({id_placeholders}))",
             linked_ids,
         )).fetchall()
         # `existing_titles` holds EVERY known book (hidden included) so a
@@ -3326,7 +3354,8 @@ async def _lookup_author_inner(author_id: int, author_name: str, full_scan: bool
         series_rows = await (await db.execute(
             f"SELECT DISTINCT s.name FROM series s "
             f"JOIN books b ON b.series_id = s.id "
-            f"WHERE b.author_id IN ({id_placeholders}) AND b.owned = 1 AND s.name IS NOT NULL",
+            f"WHERE b.id IN (SELECT book_id FROM book_authors WHERE author_id IN ({id_placeholders})) "
+            f"AND b.owned = 1 AND s.name IS NOT NULL",
             linked_ids,
         )).fetchall()
         our_series_names = [r["name"] for r in series_rows]
@@ -3788,7 +3817,7 @@ async def run_full_lookup(on_progress=None):
         # secondary co-authors of multi-author Calibre entries — see
         # routers/authors.py:get_authors() docstring. Scanning them
         # wastes time on a lookup that has no books to merge into.
-        rows = await (await db.execute("SELECT id, name FROM authors WHERE COALESCE(last_lookup_at,0) < ? AND id IN (SELECT DISTINCT author_id FROM books) ORDER BY COALESCE(last_lookup_at,0) ASC", (time.time() - cache_sec,))).fetchall()
+        rows = await (await db.execute("SELECT id, name FROM authors WHERE COALESCE(last_lookup_at,0) < ? AND id IN (SELECT DISTINCT author_id FROM book_authors) ORDER BY COALESCE(last_lookup_at,0) ASC", (time.time() - cache_sec,))).fetchall()
         authors = list(rows)
         total = 0; checked = 0
         timeouts: dict[str, list[str]] = {}
@@ -3849,7 +3878,7 @@ async def run_full_rescan(on_progress=None):
         cur = await db.execute("INSERT INTO sync_log (sync_type, started_at) VALUES (?, ?)", ("full_rescan", start))
         sid = cur.lastrowid; await db.commit()
         # Skip orphan authors — same reasoning as run_full_lookup above.
-        rows = await (await db.execute("SELECT id, name FROM authors WHERE id IN (SELECT DISTINCT author_id FROM books) ORDER BY sort_name ASC")).fetchall()
+        rows = await (await db.execute("SELECT id, name FROM authors WHERE id IN (SELECT DISTINCT author_id FROM book_authors) ORDER BY sort_name ASC")).fetchall()
         authors = list(rows)
         total = 0; checked = 0
         timeouts: dict[str, list[str]] = {}

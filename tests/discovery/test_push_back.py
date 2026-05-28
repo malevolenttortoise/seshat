@@ -78,10 +78,10 @@ async def _seed_book(
                 (series_id, series_name),
             )
         await db.execute(
-            "INSERT INTO books (id, title, author_id, description, "
+            "INSERT INTO books (id, title, description, "
             "audiobookshelf_id, calibre_id, series_id, source, owned, "
             "user_edited_fields) "
-            "VALUES (?, ?, 101, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 book_id, title, description, audiobookshelf_id, calibre_id,
                 series_id,
@@ -90,6 +90,10 @@ async def _seed_book(
                 1 if (audiobookshelf_id or calibre_id) else 0,
                 json.dumps(user_edited or []),
             ),
+        )
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+            "VALUES (?, 101, 0)", (book_id,),
         )
         await db.commit()
     finally:

@@ -143,8 +143,10 @@ async def test_distinct_authors_remain_separate(discovery_db, monkeypatch):
 
 
 async def test_books_by_both_variants_link_to_merged_author(discovery_db, monkeypatch):
-    # After two Calibre authors collapse into one Seshat row, both
-    # books must point at that row via books.author_id.
+    # After two Calibre authors collapse into one Seshat row, both books
+    # must point at that row. v3.0.0 Phase 9 (ADR-0012): authorship is the
+    # book_authors join (position 0 = primary), not the dropped
+    # books.author_id column.
     from app.discovery import calibre_sync
     from app.discovery.database import get_db
 
@@ -160,7 +162,9 @@ async def test_books_by_both_variants_link_to_merged_author(discovery_db, monkey
     db = await get_db()
     try:
         rows = await (await db.execute(
-            "SELECT title, author_id FROM books ORDER BY title"
+            "SELECT b.title, ba.author_id FROM books b "
+            "JOIN book_authors ba ON ba.book_id = b.id AND ba.position = 0 "
+            "ORDER BY b.title"
         )).fetchall()
         author_ids = {r["author_id"] for r in rows}
         assert len(author_ids) == 1

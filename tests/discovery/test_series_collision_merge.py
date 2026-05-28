@@ -103,26 +103,34 @@ class TestSeriesPositionCollisionCarriesIdentity:
         # "owned" anchor with no Goodreads ID.
         db = await get_db()
         try:
+            # v3.0.0: books.author_id dropped; seed book_authors instead.
             cur = await db.execute(
-                "INSERT INTO books (title, author_id, series_id, "
+                "INSERT INTO books (title, series_id, "
                 "series_index, source, owned) VALUES "
-                "('Fantasy World Farm 4', ?, ?, 4, 'calibre', 1)",
-                (author_id, sid),
+                "('Fantasy World Farm 4', ?, 4, 'calibre', 1)",
+                (sid,),
             )
             calibre_id = cur.lastrowid
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+                "VALUES (?, ?, 0)", (calibre_id, author_id),
+            )
             # Discovery standalone — same author, no series link
             # yet, title that the title→series pass parses as
             # (series='Fantasy World Farm', idx=4). Carries a
             # unique goodreads_id + mam_torrent_id + isbn the
             # calibre side doesn't have.
             cur = await db.execute(
-                "INSERT INTO books (title, author_id, source, owned, "
+                "INSERT INTO books (title, source, owned, "
                 "mam_torrent_id, goodreads_id, isbn) VALUES "
                 "('Fantasy World Farm 4 (Fantasy World Farm #4)', "
-                "?, 'goodreads', 0, 'mam_42', 'gr_42', 'isbn_42')",
-                (author_id,),
+                "'goodreads', 0, 'mam_42', 'gr_42', 'isbn_42')",
             )
             discovery_id = cur.lastrowid
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+                "VALUES (?, ?, 0)", (discovery_id, author_id),
+            )
             await db.commit()
         finally:
             await db.close()
@@ -188,29 +196,40 @@ class TestSeriesPositionCollisionCarriesIdentity:
         # different index too.
         db = await get_db()
         try:
+            # v3.0.0: books.author_id dropped; seed book_authors instead.
             cur = await db.execute(
-                "INSERT INTO books (title, author_id, source, owned, "
+                "INSERT INTO books (title, source, owned, "
                 "goodreads_id) VALUES "
-                "('Phantom Pack 1 (Phantom Pack #1)', ?, 'goodreads', "
+                "('Phantom Pack 1 (Phantom Pack #1)', 'goodreads', "
                 "0, 'gr_first')",
-                (author_id,),
             )
             first_id = cur.lastrowid
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+                "VALUES (?, ?, 0)", (first_id, author_id),
+            )
             cur = await db.execute(
-                "INSERT INTO books (title, author_id, source, owned, "
+                "INSERT INTO books (title, source, owned, "
                 "mam_torrent_id) VALUES "
-                "('Phantom Pack 1 (Phantom Pack #1)', ?, 'hardcover', "
+                "('Phantom Pack 1 (Phantom Pack #1)', 'hardcover', "
                 "0, 'mam_unique')",
-                (author_id,),
             )
             second_id = cur.lastrowid
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+                "VALUES (?, ?, 0)", (second_id, author_id),
+            )
             # Companion at idx=2 so the promotion's
             # `with_idx ≥ 2` gate passes.
-            await db.execute(
-                "INSERT INTO books (title, author_id, source, owned) "
+            cur = await db.execute(
+                "INSERT INTO books (title, source, owned) "
                 "VALUES "
-                "('Phantom Pack 2 (Phantom Pack #2)', ?, 'goodreads', 0)",
-                (author_id,),
+                "('Phantom Pack 2 (Phantom Pack #2)', 'goodreads', 0)",
+            )
+            companion_id = cur.lastrowid
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+                "VALUES (?, ?, 0)", (companion_id, author_id),
             )
             await db.commit()
         finally:

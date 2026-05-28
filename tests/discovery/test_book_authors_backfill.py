@@ -76,8 +76,8 @@ async def _seed(rows: list[tuple]) -> None:
         # Books + snapshots.
         for bid, title, aid, snap, kind in rows:
             await db.execute(
-                "INSERT INTO books (id, title, author_id) VALUES (?, ?, ?)",
-                (bid, title, aid),
+                "INSERT INTO books (id, title) VALUES (?, ?)",
+                (bid, title),
             )
             if snap and kind == "calibre":
                 await db.execute(
@@ -220,7 +220,7 @@ async def test_name_drift_unresolvable_skipped(discovery_db):
             "INSERT INTO authors (id, name, sort_name) VALUES (2, 'Carol', 'Carol')"
         )
         await db.execute(
-            "INSERT INTO books (id, title, author_id) VALUES (1, 'T', 1)"
+            "INSERT INTO books (id, title) VALUES (1, 'T')"
         )
         # Snapshot mentions Alice (resolves to id=1), Bob (NO authors
         # row), Carol (resolves to id=2). Bob silently dropped.
@@ -247,9 +247,8 @@ async def test_name_drift_unresolvable_skipped(discovery_db):
 
 
 async def test_no_snapshot_falls_back_to_legacy_author_id(discovery_db):
-    """Book with no snapshot row (sync hasn't run for this library
-    flavor) falls back to inserting one row at position 0 from
-    `books.author_id`."""
+    """Book with no snapshot row — seed book_authors directly at position 0
+    since books.author_id was dropped in v3.0.0 Phase 9."""
     from app.discovery.database import get_db
     db = await get_db()
     try:
@@ -257,13 +256,16 @@ async def test_no_snapshot_falls_back_to_legacy_author_id(discovery_db):
             "INSERT INTO authors (id, name, sort_name) VALUES (5, 'Solo', 'Solo')"
         )
         await db.execute(
-            "INSERT INTO books (id, title, author_id) VALUES (1, 'T', 5)"
+            "INSERT INTO books (id, title) VALUES (1, 'T')"
+        )
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (1, 5, 0)"
         )
         await db.commit()
     finally:
         await db.close()
     added = await _run_backfill()
-    assert added == 1
+    assert added == 0  # already seeded — backfill is idempotent via INSERT OR IGNORE
     rows = await _book_authors()
     assert rows == [{
         "book_id": 1, "author_id": 5, "position": 0,
@@ -272,10 +274,10 @@ async def test_no_snapshot_falls_back_to_legacy_author_id(discovery_db):
 
 
 async def test_empty_snapshot_falls_back_to_legacy_author_id(discovery_db):
-    """Snapshot exists but is `[]` (degenerate Calibre row — possible
-    if Calibre's authors table lost the link before sync). Backfill
-    still produces a position-0 row from `books.author_id` so the
-    book isn't author-less in the join table."""
+    """Snapshot exists but is `[]` (degenerate Calibre row). Seed
+    book_authors directly since books.author_id was dropped in Phase 9;
+    the backfill sees an empty snapshot and no prior book_authors row,
+    and the fallback arm now yields nothing (column-presence-aware)."""
     from app.discovery.database import get_db
     db = await get_db()
     try:
@@ -283,7 +285,10 @@ async def test_empty_snapshot_falls_back_to_legacy_author_id(discovery_db):
             "INSERT INTO authors (id, name, sort_name) VALUES (5, 'Solo', 'Solo')"
         )
         await db.execute(
-            "INSERT INTO books (id, title, author_id) VALUES (1, 'T', 5)"
+            "INSERT INTO books (id, title) VALUES (1, 'T')"
+        )
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (1, 5, 0)"
         )
         await db.execute(
             "INSERT INTO books_calibre_snapshot "
@@ -293,7 +298,7 @@ async def test_empty_snapshot_falls_back_to_legacy_author_id(discovery_db):
     finally:
         await db.close()
     added = await _run_backfill()
-    assert added == 1
+    assert added == 0  # already seeded; empty snapshot + no fallback = 0 new rows
     rows = await _book_authors()
     assert rows == [{
         "book_id": 1, "author_id": 5, "position": 0,
@@ -324,7 +329,7 @@ async def test_normalized_name_match_resolves_punctuation_drift(discovery_db):
             "VALUES (4, 'Rick Partlow', 'Partlow, Rick', 'rick partlow')"
         )
         await db.execute(
-            "INSERT INTO books (id, title, author_id) VALUES (1, 'AA3', 3)"
+            "INSERT INTO books (id, title) VALUES (1, 'AA3')"
         )
         await db.execute(
             "INSERT INTO books_abs_snapshot "

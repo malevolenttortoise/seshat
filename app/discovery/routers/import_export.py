@@ -50,7 +50,7 @@ async def export_books(filter: str = Query("missing"), format: str = Query("csv"
         w = " AND ".join(c)
         rows = await (await db.execute(
             f"SELECT b.title, a.name as author_name, b.pub_date, b.expected_date, b.source, b.source_url, b.is_unreleased, b.mam_status, b.mam_url, b.mam_formats "
-            f"FROM books b JOIN authors a ON b.author_id=a.id WHERE {w} ORDER BY a.sort_name, b.title", p
+            f"FROM books b JOIN book_authors bpa ON bpa.book_id=b.id AND bpa.position=0 JOIN authors a ON a.id=bpa.author_id WHERE {w} ORDER BY a.sort_name, b.title", p
         )).fetchall()
 
         # Priority order for "best" URL
@@ -356,8 +356,8 @@ async def import_preview(data: dict = Body(...)):
     try:
         # Pre-load all books for fuzzy matching
         all_books = await (await db.execute(
-            f"SELECT b.id, b.title, b.owned, b.source_url, b.author_id, a.name as author_name "
-            f"FROM books b JOIN authors a ON b.author_id=a.id WHERE {HF}"
+            f"SELECT b.id, b.title, b.owned, b.source_url, bpa.author_id, a.name as author_name "
+            f"FROM books b JOIN book_authors bpa ON bpa.book_id=b.id AND bpa.position=0 JOIN authors a ON a.id=bpa.author_id WHERE {HF}"
         )).fetchall()
 
         # v2.11.0 Stage 4.5: dispatch via the universal URL parser.
@@ -442,8 +442,9 @@ async def import_add_books(data: dict = Body(...)):
                     )
                     aid = cur.lastrowid
 
-                # Fuzzy-match existing book
-                existing_books = await (await db.execute("SELECT id, title, source_url FROM books WHERE author_id=?", (aid,))).fetchall()
+                # Fuzzy-match existing book. v3.0.0 Phase 9 (ADR-0012):
+                # contributor-aware — a book this author co-wrote counts.
+                existing_books = await (await db.execute("SELECT id, title, source_url FROM books WHERE id IN (SELECT book_id FROM book_authors WHERE author_id=?)", (aid,))).fetchall()
                 existing = None
                 for eb in existing_books:
                     if _fuzzy(eb["title"], title):
@@ -470,13 +471,17 @@ async def import_add_books(data: dict = Body(...)):
 
                     is_unreleased = 1 if book_data.get("is_unreleased") else 0
                     src = book_data.get("source", "import")
-                    await db.execute(
-                        "INSERT INTO books (title, author_id, series_id, series_index, pub_date, expected_date, is_unreleased, description, isbn, cover_url, source, source_url, owned, is_new) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,1)",
-                        (title, aid, sid, book_data.get("series_index"), book_data.get("pub_date"),
+                    # v3.0.0 Phase 9 (ADR-0012): no books.author_id — write
+                    # authorship to book_authors (imported author at pos 0).
+                    cur = await db.execute(
+                        "INSERT INTO books (title, series_id, series_index, pub_date, expected_date, is_unreleased, description, isbn, cover_url, source, source_url, owned, is_new) VALUES (?,?,?,?,?,?,?,?,?,?,?,0,1)",
+                        (title, sid, book_data.get("series_index"), book_data.get("pub_date"),
                          book_data.get("expected_date"), is_unreleased, book_data.get("description"),
                          book_data.get("isbn"), book_data.get("cover_url"), src,
                          book_data.get("source_url", "{}"))
                     )
+                    from app.discovery.database import write_book_authors
+                    await write_book_authors(db, cur.lastrowid, [aid])
                     added += 1
                 await db.commit()
             finally:

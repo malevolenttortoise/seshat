@@ -335,7 +335,9 @@ async def _collect_all_books(libraries: list[dict]) -> list[_BookRow]:
         try:
             cur = await db.execute(
                 "SELECT b.id AS book_id, b.title, a.name AS author_name "
-                "FROM books b JOIN authors a ON a.id = b.author_id "
+                "FROM books b "
+                "JOIN book_authors bpa ON bpa.book_id = b.id AND bpa.position = 0 "
+                "JOIN authors a ON a.id = bpa.author_id "
                 "WHERE b.hidden = 0 AND b.owned = 1"
             )
             for r in await cur.fetchall():

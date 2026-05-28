@@ -103,7 +103,9 @@ async def _owned_match_for_library(
         cursor = await lib_db.execute(
             "SELECT b.id AS book_id, b.title, b.formats, "
             "       a.name AS author_name, b.mam_torrent_id "
-            "FROM books b JOIN authors a ON a.id = b.author_id "
+            "FROM books b "
+            "JOIN book_authors bpa ON bpa.book_id = b.id AND bpa.position = 0 "
+            "JOIN authors a ON a.id = bpa.author_id "
             "WHERE b.hidden = 0 AND b.owned = 1"
         )
         rows = await cursor.fetchall()

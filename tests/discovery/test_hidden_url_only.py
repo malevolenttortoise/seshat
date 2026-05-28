@@ -65,10 +65,10 @@ async def _insert_book(
     db = await get_db()
     try:
         cur = await db.execute(
-            "INSERT INTO books (title, author_id, hidden, description, "
+            "INSERT INTO books (title, hidden, description, "
             "source_url, series_id, series_index, source, owned) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, 'goodreads', 0)",
-            (title, author_id, hidden, description, source_url,
+            "VALUES (?, ?, ?, ?, ?, ?, 'goodreads', 0)",
+            (title, hidden, description, source_url,
              series_id, series_index),
         )
         # v3.0.0 Phase 4 (ADR-0008): scan prefilter reads existing books

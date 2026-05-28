@@ -90,17 +90,8 @@ async def _book_series(book_id: int):
 
 
 async def _link_book_authors(db) -> None:
-    """v3.0.0 Phase 6 (ADR-0010): _recompute_series_author reads
-    book_authors (the contributor-set intersection). Mirror the prod
-    backfill — link every seeded book to its author_id at position 0 —
-    so the recompute sees contributor data. Idempotent.
-    """
-    await db.execute(
-        "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
-        "SELECT id, author_id, 0 FROM books WHERE author_id IS NOT NULL "
-        "AND id NOT IN (SELECT book_id FROM book_authors)"
-    )
-    await db.commit()
+    """No-op placeholder — book_authors rows are now seeded at insert time."""
+    pass
 
 
 async def _seed_two_per_author_series():
@@ -119,12 +110,17 @@ async def _seed_two_per_author_series():
             "(900, 'Halo', 101), (901, 'Halo', 102)"
         )
         await db.execute(
-            "INSERT INTO books (id, title, author_id, series_id, series_index) "
-            "VALUES (1, 'Reach', 101, 900, 1.0), "
-            "(2, 'Cole Protocol', 102, 901, 6.0)"
+            "INSERT INTO books (id, title, series_id, series_index) "
+            "VALUES (1, 'Reach', 900, 1.0), "
+            "(2, 'Cole Protocol', 901, 6.0)"
+        )
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (1, 101, 0)"
+        )
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (2, 102, 0)"
         )
         await db.commit()
-        await _link_book_authors(db)
     finally:
         await db.close()
 
@@ -145,12 +141,17 @@ async def _seed_shared_two_author():
             "(900, 'Halo', NULL)"
         )
         await db.execute(
-            "INSERT INTO books (id, title, author_id, series_id) "
-            "VALUES (1, 'Reach', 101, 900), "
-            "(2, 'Cole Protocol', 102, 900)"
+            "INSERT INTO books (id, title, series_id) "
+            "VALUES (1, 'Reach', 900), "
+            "(2, 'Cole Protocol', 900)"
+        )
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (1, 101, 0)"
+        )
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (2, 102, 0)"
         )
         await db.commit()
-        await _link_book_authors(db)
     finally:
         await db.close()
 
@@ -430,8 +431,11 @@ class TestHiddenBooksRespected:
         try:
             # Insert a hidden Bob book on series 900.
             await db.execute(
-                "INSERT INTO books (id, title, author_id, series_id, hidden) "
-                "VALUES (3, 'Hidden Bob Book', 102, 900, 1)"
+                "INSERT INTO books (id, title, series_id, hidden) "
+                "VALUES (3, 'Hidden Bob Book', 900, 1)"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (3, 102, 0)"
             )
             await db.commit()
         finally:
@@ -488,11 +492,13 @@ class TestHideUnhideRecomputeAuthority:
         db = await get_db()
         try:
             await db.execute(
-                "INSERT INTO books (id, title, author_id, series_id, hidden) "
-                "VALUES (3, 'Hidden Bob Book', 102, 900, 1)"
+                "INSERT INTO books (id, title, series_id, hidden) "
+                "VALUES (3, 'Hidden Bob Book', 900, 1)"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (3, 102, 0)"
             )
             await db.commit()
-            await _link_book_authors(db)
         finally:
             await db.close()
         # Pre-condition: still per-author 101.
@@ -519,13 +525,21 @@ class TestHideUnhideRecomputeAuthority:
                 "VALUES (900, 'Halo', NULL)"
             )
             await db.execute(
-                "INSERT INTO books (id, title, author_id, series_id) "
-                "VALUES (1, 'A1', 101, 900), "
-                "(2, 'B1', 102, 900), "
-                "(3, 'B2', 102, 900)"
+                "INSERT INTO books (id, title, series_id) "
+                "VALUES (1, 'A1', 900), "
+                "(2, 'B1', 900), "
+                "(3, 'B2', 900)"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (1, 101, 0)"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (2, 102, 0)"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (3, 102, 0)"
             )
             await db.commit()
-            await _link_book_authors(db)
         finally:
             await db.close()
 
@@ -551,12 +565,17 @@ class TestHideUnhideRecomputeAuthority:
                 "VALUES (900, 'Halo', NULL)"
             )
             await db.execute(
-                "INSERT INTO books (id, title, author_id, series_id, source) "
-                "VALUES (1, 'A1', 101, 900, 'goodreads'), "
-                "(2, 'B1', 102, 900, 'goodreads')"
+                "INSERT INTO books (id, title, series_id, source) "
+                "VALUES (1, 'A1', 900, 'goodreads'), "
+                "(2, 'B1', 900, 'goodreads')"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (1, 101, 0)"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (2, 102, 0)"
             )
             await db.commit()
-            await _link_book_authors(db)
         finally:
             await db.close()
 
@@ -575,8 +594,11 @@ class TestHideUnhideRecomputeAuthority:
                 "(101, 'Alice', 'Alice')"
             )
             await db.execute(
-                "INSERT INTO books (id, title, author_id) "
-                "VALUES (1, 'Standalone', 101)"
+                "INSERT INTO books (id, title) "
+                "VALUES (1, 'Standalone')"
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (1, 101, 0)"
             )
             await db.commit()
         finally:
@@ -604,8 +626,8 @@ async def _seed_series_with_contributors(series_books):
             "INSERT INTO series (id, name, author_id) VALUES (900, 'S', NULL)")
         for bid, primary, cs in series_books:
             await db.execute(
-                "INSERT INTO books (id, title, author_id, series_id) "
-                "VALUES (?, ?, ?, 900)", (bid, f"B{bid}", primary))
+                "INSERT INTO books (id, title, series_id) "
+                "VALUES (?, ?, 900)", (bid, f"B{bid}"))
             for pos, a in enumerate(cs):
                 await db.execute(
                     "INSERT INTO book_authors (book_id, author_id, position) "
@@ -685,7 +707,7 @@ class TestAddCoAuthorToSeries:
             # A co-authored book (primary Chaney, co-author Anspach), not
             # yet in the series.
             await db.execute(
-                "INSERT INTO books (id, title, author_id) VALUES (1, 'GE1', 101)")
+                "INSERT INTO books (id, title) VALUES (1, 'GE1')")
             for pos, a in enumerate((101, 102)):
                 await db.execute(
                     "INSERT INTO book_authors (book_id, author_id, position) "

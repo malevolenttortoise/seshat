@@ -139,12 +139,17 @@ async def _insert_book(author_id: int, title: str, **kwargs) -> int:
         is_omni = kwargs.get("is_omnibus", 0)
         hidden = kwargs.get("hidden", 0)
         cur = await db.execute(
-            "INSERT INTO books (title, author_id, source, owned, "
-            "is_omnibus, hidden) VALUES (?, ?, 'goodreads', ?, ?, ?)",
-            (title, author_id, owned, is_omni, hidden),
+            "INSERT INTO books (title, source, owned, "
+            "is_omnibus, hidden) VALUES (?, 'goodreads', ?, ?, ?)",
+            (title, owned, is_omni, hidden),
+        )
+        book_id = cur.lastrowid
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (?, ?, 0)",
+            (book_id, author_id),
         )
         await db.commit()
-        return cur.lastrowid
+        return book_id
     finally:
         await db.close()
 
@@ -170,8 +175,10 @@ async def _author_books(author_id: int):
     try:
         rows = await (await db.execute(
             "SELECT b.id, b.title, b.series_index, s.name AS series_name "
-            "FROM books b LEFT JOIN series s ON b.series_id = s.id "
-            "WHERE b.author_id = ? ORDER BY b.id",
+            "FROM books b "
+            "JOIN book_authors ba ON ba.book_id = b.id AND ba.author_id = ? "
+            "LEFT JOIN series s ON b.series_id = s.id "
+            "ORDER BY b.id",
             (author_id,),
         )).fetchall()
         return [dict(r) for r in rows]

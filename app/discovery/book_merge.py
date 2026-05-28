@@ -287,10 +287,12 @@ def _resolve_fields(winner, loser) -> dict[str, Any]:
     l = dict(loser)
     out: dict[str, Any] = {}
 
-    # Title + author_id stay anchored to the winner (the merge is
-    # the user's assertion that the loser IS the winner).
+    # Title stays anchored to the winner (the merge is the user's
+    # assertion that the loser IS the winner). v3.0.0 Phase 9 (ADR-0012):
+    # books.author_id is gone — authorship is the unioned book_authors set
+    # written by merge_books (winner's contributor positions preserved,
+    # loser-only co-authors appended); there is no author_id column to set.
     out["title"] = w["title"]
-    out["author_id"] = w["author_id"]
 
     # Boolean / counter aggregates.
     out["owned"] = 1 if (w.get("owned") or l.get("owned")) else 0

@@ -327,7 +327,8 @@ async def _hydrate_links(links: list[WorkLink]) -> list[WorkLinkOut]:
                 f"a.name AS author_name, "
                 f"s.name AS series_name, b.series_index "
                 f"FROM books b "
-                f"JOIN authors a ON a.id = b.author_id "
+                f"JOIN book_authors bpa ON bpa.book_id = b.id AND bpa.position = 0 "
+                f"JOIN authors a ON a.id = bpa.author_id "
                 f"LEFT JOIN series s ON s.id = b.series_id "
                 f"WHERE b.id IN ({placeholders})",
                 ids,

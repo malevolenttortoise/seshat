@@ -115,11 +115,12 @@ async def get_series(sid: int, slug: str | None = None):
         rows = [
             {**dict(b), "library_slug": effective_slug, "content_type": content_type}
             for b in await (await db.execute(f"""
-                SELECT b.*, a.name as author_name, sr.name as series_name,
+                SELECT b.*, bpa.author_id AS author_id, a.name as author_name, sr.name as series_name,
                     COALESCE(st.series_total, 0) as series_total,
                     COALESCE(st.mainline_total, 0) as mainline_total
                 FROM books b
-                JOIN authors a ON b.author_id=a.id
+                JOIN book_authors bpa ON bpa.book_id=b.id AND bpa.position=0
+                JOIN authors a ON a.id=bpa.author_id
                 LEFT JOIN series sr ON b.series_id=sr.id
                 LEFT JOIN (
                     SELECT series_id,
@@ -397,9 +398,14 @@ async def _recompute_series_author(db, sids: Iterable[int]) -> None:
             continue
         seen.add(sid)
         # Visible books + their book_authors contributor sets, plus each
-        # book's legacy primary (for the multi_author anchor tiebreak).
+        # book's primary (position 0) for the multi_author anchor tiebreak.
+        # v3.0.0 Phase 9 (ADR-0012): the primary is book_authors position 0
+        # (books.author_id is gone) — a correlated subquery rather than the
+        # all-positions `ba` join, which fans out across contributors.
         rows = await (await db.execute(
-            "SELECT b.id AS book_id, b.author_id AS primary_author_id, "
+            "SELECT b.id AS book_id, "
+            "       (SELECT author_id FROM book_authors "
+            "          WHERE book_id = b.id AND position = 0) AS primary_author_id, "
             "       ba.author_id AS contributor_id "
             "FROM books b "
             "LEFT JOIN book_authors ba ON ba.book_id = b.id "
@@ -603,9 +609,13 @@ async def demote_series(sid: int, slug: str | None = Query(None)):
                 400, "series is not shared (author_id is not NULL)"
             )
 
+        # v3.0.0 Phase 9 (ADR-0012): contributor-aware — every author who
+        # appears on any book in the series (book_authors, not the dropped
+        # books.author_id primary).
         author_rows = await (await db.execute(
-            "SELECT DISTINCT author_id FROM books "
-            "WHERE series_id = ? AND author_id IS NOT NULL",
+            "SELECT DISTINCT ba.author_id AS author_id FROM book_authors ba "
+            "JOIN books b ON b.id = ba.book_id "
+            "WHERE b.series_id = ?",
             (sid,),
         )).fetchall()
         author_ids = [r["author_id"] for r in author_rows]
@@ -635,9 +645,11 @@ async def demote_series(sid: int, slug: str | None = Query(None)):
                     (row["name"], aid),
                 )
                 new_id = cur.lastrowid
+            # v3.0.0 Phase 9 (ADR-0012): split by primary (position 0).
             cur = await db.execute(
                 "UPDATE books SET series_id = ? "
-                "WHERE series_id = ? AND author_id = ?",
+                "WHERE series_id = ? AND id IN "
+                "(SELECT book_id FROM book_authors WHERE author_id = ? AND position = 0)",
                 (new_id, sid, aid),
             )
             books_moved_total += cur.rowcount or 0
@@ -863,7 +875,9 @@ async def list_series_authors(sid: int, slug: str | None = Query(None)):
         rows = await (await db.execute(
             "SELECT a.id AS author_id, a.name AS name, "
             "COUNT(b.id) AS book_count "
-            "FROM books b JOIN authors a ON a.id = b.author_id "
+            "FROM books b "
+            "JOIN book_authors bpa ON bpa.book_id = b.id AND bpa.position = 0 "
+            "JOIN authors a ON a.id = bpa.author_id "
             "WHERE b.series_id = ? AND b.hidden = 0 "
             "GROUP BY a.id, a.name "
             "ORDER BY a.name COLLATE NOCASE ASC",
@@ -931,7 +945,7 @@ async def add_author_to_series(sid: int, payload: dict = Body(...), slug: str | 
         # confusing state.
         ph = ",".join("?" * len(book_ids))
         rows = await (await db.execute(
-            f"SELECT id, author_id, series_id FROM books "
+            f"SELECT id, series_id FROM books "
             f"WHERE id IN ({ph})",
             book_ids,
         )).fetchall()
@@ -1003,9 +1017,13 @@ async def remove_author_from_series(sid: int, author_id: int, slug: str | None =
     try:
         await _series_or_404(db, sid)
         # Verify there's something to remove.
+        # v3.0.0 Phase 9 (ADR-0012): detach by PRIMARY (position 0) —
+        # matches the documented "Remove detaches by primary" semantics;
+        # contributor-aware here would wrongly detach co-authored books.
         cur = await db.execute(
             "SELECT COUNT(*) AS n FROM books "
-            "WHERE series_id = ? AND author_id = ?",
+            "WHERE series_id = ? AND id IN "
+            "(SELECT book_id FROM book_authors WHERE author_id = ? AND position = 0)",
             (sid, author_id),
         )
         n = (await cur.fetchone())["n"]
@@ -1017,7 +1035,8 @@ async def remove_author_from_series(sid: int, author_id: int, slug: str | None =
 
         await db.execute(
             "UPDATE books SET series_id = NULL, series_index = NULL "
-            "WHERE series_id = ? AND author_id = ?",
+            "WHERE series_id = ? AND id IN "
+            "(SELECT book_id FROM book_authors WHERE author_id = ? AND position = 0)",
             (sid, author_id),
         )
         await _recompute_series_author(db, [sid])

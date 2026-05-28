@@ -333,10 +333,10 @@ async def test_coauthored_owned_book_not_duplicated_on_coauthor_scan(discovery_d
     # (what backfill / sync produce in prod).
     db = await get_db()
     try:
+        # v3.0.0: books.author_id dropped; book_authors is seeded directly.
         cur = await db.execute(
-            "INSERT INTO books (title, author_id, source, owned) "
-            "VALUES ('Able Bodied Soldier', ?, 'calibre', 1)",
-            (chaney_id,),
+            "INSERT INTO books (title, source, owned) "
+            "VALUES ('Able Bodied Soldier', 'calibre', 1)",
         )
         bid = cur.lastrowid
         for pos, aid in enumerate((chaney_id, anspach_id)):

@@ -60,8 +60,8 @@ async def _seed_book(**fields) -> int:
             "VALUES (101, 'A', 'A', ?)",
             (normalize_author_name("A"),),
         )
-        cols = ["title", "author_id", "source"]
-        vals_ = ["Original Title", 101, "goodreads"]
+        cols = ["title", "source"]
+        vals_ = ["Original Title", "goodreads"]
         for k, v in fields.items():
             cols.append(k)
             vals_.append(v)
@@ -70,8 +70,13 @@ async def _seed_book(**fields) -> int:
             f"INSERT INTO books ({','.join(cols)}) VALUES ({ph})",
             vals_,
         )
+        book_id = cur.lastrowid
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+            "VALUES (?, 101, 0)", (book_id,),
+        )
         await db.commit()
-        return cur.lastrowid
+        return book_id
     finally:
         await db.close()
 
@@ -250,13 +255,18 @@ class TestApproveMamFlow:
                 (normalize_author_name("Ambiguous Author"),),
             )
             cur = await db.execute(
-                "INSERT INTO books (title, author_id, source, mam_url, "
+                "INSERT INTO books (title, source, mam_url, "
                 "mam_status, mam_torrent_id) VALUES "
-                "('Possibly Theirs', 501, 'goodreads', ?, 'possible', 123)",
+                "('Possibly Theirs', 'goodreads', ?, 'possible', 123)",
                 (mam_url,),
             )
+            book_id = cur.lastrowid
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+                "VALUES (?, 501, 0)", (book_id,),
+            )
             await db.commit()
-            return cur.lastrowid
+            return book_id
         finally:
             await db.close()
 

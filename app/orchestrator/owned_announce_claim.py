@@ -143,7 +143,8 @@ async def find_owned_matches(
                 SELECT b.id, b.title, b.mam_status, b.calibre_id,
                        a.name AS author_name
                 FROM books b
-                JOIN authors a ON a.id = b.author_id
+                JOIN book_authors bpa ON bpa.book_id = b.id AND bpa.position = 0
+                JOIN authors a ON a.id = bpa.author_id
                 WHERE b.owned = 1
                   AND b.hidden = 0
                   AND (b.mam_status IS NULL OR b.mam_status != 'found')

@@ -60,13 +60,14 @@ async def list_series_suggestions(status: str = "pending", content_type: str = N
                 sug.current_series_name AS snapshot_series_name,
                 sug.current_series_index AS snapshot_series_index,
                 sug.status, sug.created_at, sug.updated_at,
-                b.title AS book_title, b.author_id, b.owned,
+                b.title AS book_title, bpa.author_id, b.owned,
                 b.series_index AS live_series_index,
                 a.name AS author_name,
                 s.name AS live_series_name
             FROM book_series_suggestions sug
             JOIN books b ON b.id = sug.book_id
-            JOIN authors a ON a.id = b.author_id
+            JOIN book_authors bpa ON bpa.book_id = b.id AND bpa.position = 0
+            JOIN authors a ON a.id = bpa.author_id
             LEFT JOIN series s ON s.id = b.series_id
             WHERE {where}
             ORDER BY sug.updated_at DESC NULLS LAST, sug.created_at DESC
@@ -181,7 +182,9 @@ async def apply_series_suggestion(sid: int):
     db = await get_db()
     try:
         sug = await (await db.execute(
-            "SELECT sug.*, b.author_id FROM book_series_suggestions sug "
+            "SELECT sug.*, "
+            "(SELECT author_id FROM book_authors WHERE book_id=b.id AND position=0) AS author_id "
+            "FROM book_series_suggestions sug "
             "JOIN books b ON b.id = sug.book_id WHERE sug.id = ?",
             (sid,),
         )).fetchone()

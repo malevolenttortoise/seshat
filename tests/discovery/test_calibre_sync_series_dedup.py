@@ -70,7 +70,10 @@ async def _book_rows():
     db = await get_db()
     try:
         rows = await (await db.execute(
-            "SELECT title, author_id, series_id FROM books ORDER BY title"
+            "SELECT b.title, ba.author_id, b.series_id "
+            "FROM books b "
+            "LEFT JOIN book_authors ba ON ba.book_id = b.id AND ba.position = 0 "
+            "ORDER BY b.title"
         )).fetchall()
         return [dict(r) for r in rows]
     finally:
@@ -244,9 +247,13 @@ async def test_legacy_per_author_rows_collapsed_into_shared(
             "(900, 'Halo', 101), (901, 'Halo', 28)"
         )
         await db.execute(
-            "INSERT INTO books (id, title, author_id, series_id, source, owned, calibre_id) "
-            "VALUES (1, 'Reach', 101, 900, 'calibre', 1, 1), "
-            "(2, 'Cole Protocol', 28, 901, 'calibre', 1, 2)"
+            "INSERT INTO books (id, title, series_id, source, owned, calibre_id) "
+            "VALUES (1, 'Reach', 900, 'calibre', 1, 1), "
+            "(2, 'Cole Protocol', 901, 'calibre', 1, 2)"
+        )
+        await db.execute(
+            "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+            "VALUES (1, 101, 0), (2, 28, 0)"
         )
         await db.commit()
     finally:

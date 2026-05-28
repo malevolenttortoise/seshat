@@ -51,10 +51,14 @@ async def two_libraries(tmp_path, monkeypatch):
                 "SELECT last_insert_rowid()"
             )).fetchone())[0]
             for i in range(3):
+                cur = await db.execute(
+                    "INSERT INTO books (title, owned, hidden, "
+                    "is_unreleased) VALUES (?, 0, 0, 0)",
+                    (f"{lib['slug']}-book-{i}",),
+                )
                 await db.execute(
-                    "INSERT INTO books (title, author_id, owned, hidden, "
-                    "is_unreleased) VALUES (?, ?, 0, 0, 0)",
-                    (f"{lib['slug']}-book-{i}", aid),
+                    "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+                    "VALUES (?, ?, 0)", (cur.lastrowid, aid),
                 )
             await db.commit()
         finally:

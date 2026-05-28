@@ -343,15 +343,17 @@ async def _author_detail_for_slug(slug: str, aid: int) -> Optional[dict]:
             series_list.append(sd)
         a["series"] = series_list
         # v3.0.0 Phase 4 — standalone list joins book_authors scoped to
-        # aid (INNER → only books where aid is a contributor). The
-        # `author_name` display still resolves the primary via
-        # b.author_id; per-book multi-author display is Phase 7.
+        # aid (INNER → only books where aid is a contributor).
+        # v3.0.0 Phase 9 (ADR-0012) — the `author_name` display now
+        # resolves the primary via book_authors position 0 (books.author_id
+        # is gone); per-book multi-author byline is attached below (Phase 7).
         standalone = [
             {**dict(b), "library_slug": slug, "content_type": content_type}
             for b in await (await db.execute(
-                f"SELECT b.*, a2.name as author_name FROM books b "
+                f"SELECT b.*, bpa.author_id AS author_id, a2.name as author_name FROM books b "
                 f"JOIN book_authors bca ON bca.book_id=b.id AND bca.author_id=? "
-                f"JOIN authors a2 ON b.author_id=a2.id "
+                f"JOIN book_authors bpa ON bpa.book_id=b.id AND bpa.position=0 "
+                f"JOIN authors a2 ON a2.id=bpa.author_id "
                 f"WHERE b.series_id IS NULL AND {HF} ORDER BY b.pub_date ASC, b.title ASC",
                 (aid,)
             )).fetchall()
@@ -1789,22 +1791,27 @@ async def _clear_authors_in_library(
     Caller owns commit + connection lifecycle.
     """
     placeholders = ",".join(["?" for _ in author_ids])
+    # v3.0.0 Phase 9 (ADR-0012): author-scoped book ops are contributor-
+    # aware (books.author_id is gone) — a co-authored book is "by" each of
+    # its contributors, so resetting any of them touches it.
+    _by_author = (
+        f"id IN (SELECT book_id FROM book_authors WHERE author_id IN ({placeholders}))"
+    )
     affected = 0
     if clear_source:
         count_row = await db.execute_fetchall(
-            f"SELECT COUNT(*) FROM books WHERE author_id IN ({placeholders}) "
+            f"SELECT COUNT(*) FROM books WHERE {_by_author} "
             f"AND owned=0 AND calibre_id IS NULL",
             author_ids,
         )
         affected = count_row[0][0] if count_row else 0
         await db.execute(
-            f"DELETE FROM books WHERE author_id IN ({placeholders}) "
+            f"DELETE FROM books WHERE {_by_author} "
             f"AND owned=0 AND calibre_id IS NULL",
             author_ids,
         )
         await db.execute(
-            f"UPDATE books SET source_url=NULL WHERE author_id IN "
-            f"({placeholders}) AND owned=1",
+            f"UPDATE books SET source_url=NULL WHERE {_by_author} AND owned=1",
             author_ids,
         )
         await db.execute(
@@ -1816,7 +1823,7 @@ async def _clear_authors_in_library(
             f"UPDATE books SET mam_url=NULL, mam_status=NULL, mam_formats=NULL, "
             f"mam_torrent_id=NULL, mam_has_multiple=0, mam_my_snatched=0, "
             f"mam_is_bundle=0 "
-            f"WHERE author_id IN ({placeholders})",
+            f"WHERE {_by_author}",
             author_ids,
         )
     return affected
@@ -1971,9 +1978,10 @@ async def bulk_hide_authors_books(data: dict = Body(...)):
             # Affected series — we'll recompute authority after the
             # hide so a now-empty per-author series doesn't keep
             # claiming a shared author tag.
+            # v3.0.0 Phase 9 (ADR-0012): contributor-aware book selection.
             sid_rows = await (await db.execute(
                 f"SELECT DISTINCT series_id FROM books "
-                f"WHERE author_id IN ({id_ph}) "
+                f"WHERE id IN (SELECT book_id FROM book_authors WHERE author_id IN ({id_ph})) "
                 f"AND series_id IS NOT NULL AND hidden = 0",
                 lib_ids,
             )).fetchall()
@@ -1981,13 +1989,14 @@ async def bulk_hide_authors_books(data: dict = Body(...)):
 
             cur = await db.execute(
                 f"UPDATE books SET hidden = 1 "
-                f"WHERE author_id IN ({id_ph}) AND hidden = 0",
+                f"WHERE id IN (SELECT book_id FROM book_authors WHERE author_id IN ({id_ph})) "
+                f"AND hidden = 0",
                 lib_ids,
             )
             n = cur.rowcount or 0
             await db.execute(
                 f"DELETE FROM book_series_suggestions "
-                f"WHERE book_id IN (SELECT id FROM books "
+                f"WHERE book_id IN (SELECT book_id FROM book_authors "
                 f"WHERE author_id IN ({id_ph}))",
                 lib_ids,
             )
@@ -2045,9 +2054,10 @@ async def bulk_delete_authors_books(data: dict = Body(...)):
                 continue
             id_ph = ",".join(["?" for _ in lib_ids])
             # Count what we'd skip (Calibre-synced + ABS-synced).
+            # v3.0.0 Phase 9 (ADR-0012): contributor-aware book selection.
             skipped_row = await (await db.execute(
                 f"SELECT COUNT(*) AS c FROM books "
-                f"WHERE author_id IN ({id_ph}) "
+                f"WHERE id IN (SELECT book_id FROM book_authors WHERE author_id IN ({id_ph})) "
                 f"AND (calibre_id IS NOT NULL OR audiobookshelf_id IS NOT NULL)",
                 lib_ids,
             )).fetchone()
@@ -2055,7 +2065,7 @@ async def bulk_delete_authors_books(data: dict = Body(...)):
             # Capture series for post-delete authority recomputation.
             sid_rows = await (await db.execute(
                 f"SELECT DISTINCT series_id FROM books "
-                f"WHERE author_id IN ({id_ph}) "
+                f"WHERE id IN (SELECT book_id FROM book_authors WHERE author_id IN ({id_ph})) "
                 f"AND series_id IS NOT NULL "
                 f"AND calibre_id IS NULL AND audiobookshelf_id IS NULL",
                 lib_ids,
@@ -2064,7 +2074,7 @@ async def bulk_delete_authors_books(data: dict = Body(...)):
 
             cur = await db.execute(
                 f"DELETE FROM books "
-                f"WHERE author_id IN ({id_ph}) "
+                f"WHERE id IN (SELECT book_id FROM book_authors WHERE author_id IN ({id_ph})) "
                 f"AND calibre_id IS NULL AND audiobookshelf_id IS NULL",
                 lib_ids,
             )
@@ -2386,7 +2396,8 @@ async def _skip_mam_for_author_ids_in_library(
     cur = await db.execute(
         f"UPDATE books SET mam_url=NULL, mam_status='not_applicable', "
         f"mam_formats=NULL, mam_torrent_id=NULL, mam_has_multiple=0, "
-        f"mam_my_snatched=0, mam_is_bundle=0 WHERE author_id IN ({placeholders})",
+        f"mam_my_snatched=0, mam_is_bundle=0 "
+        f"WHERE id IN (SELECT book_id FROM book_authors WHERE author_id IN ({placeholders}))",
         author_ids,
     )
     return cur.rowcount or 0
@@ -2579,12 +2590,16 @@ async def scan_authors_mam(data: dict = Body(...)):
             # series JOIN required so series_name reaches check_book →
             # Fix E (series-bundle promote) can fire. UAT 2026-05-11
             # round 4 — see books.py:scan_books_mam comment.
+            # v3.0.0 Phase 9 (ADR-0012): a.name is the primary (position 0)
+            # for the MAM search string; the WHERE is contributor-aware so a
+            # co-authored owned book is collected under each co-author.
             rows = await lib_db.execute_fetchall(
                 f"SELECT b.id, b.title, a.name, s.name AS series_name "
                 f"FROM books b "
-                f"JOIN authors a ON b.author_id=a.id "
+                f"JOIN book_authors bpa ON bpa.book_id=b.id AND bpa.position=0 "
+                f"JOIN authors a ON a.id=bpa.author_id "
                 f"LEFT JOIN series s ON b.series_id = s.id "
-                f"WHERE b.author_id IN ({placeholders}) "
+                f"WHERE b.id IN (SELECT book_id FROM book_authors WHERE author_id IN ({placeholders})) "
                 f"AND {_NEEDS_SCAN_BASIC_ALIASED} "
                 f"ORDER BY a.sort_name, b.title",
                 lib_aids,
