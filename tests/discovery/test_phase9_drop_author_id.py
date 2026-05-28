@@ -8,7 +8,10 @@ shape check via the real `init_db()`.
 import aiosqlite
 import pytest
 
-from app.discovery.database import _drop_legacy_books_author_id
+from app.discovery.database import (
+    _backfill_book_authors,
+    _drop_legacy_books_author_id,
+)
 
 
 # Minimal pre-Phase-9 ("legacy") shape: books WITH author_id + its FK +
@@ -17,8 +20,11 @@ _LEGACY_DDL = """
 CREATE TABLE authors (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
-    sort_name TEXT
+    sort_name TEXT,
+    normalized_name TEXT
 );
+CREATE TABLE books_calibre_snapshot (book_id INTEGER PRIMARY KEY, authors_json TEXT);
+CREATE TABLE books_abs_snapshot (book_id INTEGER PRIMARY KEY, authors_json TEXT);
 CREATE TABLE series (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -131,5 +137,52 @@ async def test_preflight_aborts_when_a_book_would_lose_its_only_link(tmp_path):
         # Column is left in place so nothing is lost.
         cols = [c["name"] for c in await (await db.execute("PRAGMA table_info(books)")).fetchall()]
         assert "author_id" in cols
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_backfill_self_heals_author_id_only_book_before_drop(tmp_path):
+    """Upgrade-path self-heal (regression for the prod orphan case):
+    a discovered book with a non-NULL author_id but NO book_authors row
+    (e.g. scanned in after the last backfill) gets a position-0 row from
+    `_backfill_book_authors`'s fallback arm — which runs BEFORE the drop in
+    init_db — so the drop's pre-flight then passes and the column drops
+    cleanly without the book losing its author.
+
+    Guards the load-bearing upgrade path: fresh-DB fixtures can't exercise
+    the author_id fallback arm (no column), so this legacy-shaped test is
+    the only coverage of it.
+    """
+    db = await _legacy_db(tmp_path)
+    try:
+        # Discovered book (owned=0), author_id set, NO book_authors row,
+        # NO snapshot row — exactly the prod orphan shape.
+        await db.execute(
+            "INSERT INTO books (id, title, author_id, owned) "
+            "VALUES (99, 'New Life of a Retired Adventurer', 2, 0)"
+        )
+        await db.commit()
+        pre = await (await db.execute(
+            "SELECT COUNT(*) FROM book_authors WHERE book_id=99"
+        )).fetchone()
+        assert pre[0] == 0  # orphan: would block the drop
+
+        # The backfill (runs before the drop every boot) self-heals it.
+        await _backfill_book_authors(db)
+        healed = await (await db.execute(
+            "SELECT author_id, position FROM book_authors WHERE book_id=99"
+        )).fetchone()
+        assert healed is not None
+        assert (healed["author_id"], healed["position"]) == (2, 0)
+
+        # Pre-flight now passes → drop proceeds; the book keeps its author.
+        assert await _drop_legacy_books_author_id(db) is True
+        cols = [c["name"] for c in await (await db.execute("PRAGMA table_info(books)")).fetchall()]
+        assert "author_id" not in cols
+        still = await (await db.execute(
+            "SELECT author_id FROM book_authors WHERE book_id=99 AND position=0"
+        )).fetchone()
+        assert still["author_id"] == 2
     finally:
         await db.close()
