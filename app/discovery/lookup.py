@@ -910,6 +910,48 @@ async def _link_discovered_contributors(db, book_id: int, scanned_author_id: int
     await write_book_authors(db, book_id, ordered)
 
 
+async def _heal_contributors(db, book_id: int, bk, source_name: str) -> bool:
+    """v3.0.1 (ADR-0014) — heal an UNOWNED discovered book's contributor
+    set on scan-convergence (the MATCH path), UNIONING the source's
+    role-filtered authors into the existing ``book_authors``, existing-first.
+
+    Returns ``True`` iff a genuinely new author was added (a real delta),
+    so the caller can flag the book's series for an ``author_mode``
+    recompute. The **owned-guard is the caller's responsibility** — this
+    never runs for ``owned=1`` rows (those stay Calibre/ABS-authoritative;
+    see ADR-0009 prune-side asymmetry).
+
+    Append-only: existing positions are preserved (position 0 stays the
+    scanned author, which keeps the row re-healable), new co-authors are
+    appended. Delta-only: if the union equals the existing set, nothing is
+    written — preserving Phase 3.6's "convergence doesn't churn links"
+    guarantee for the multi-source re-encounter case.
+    """
+    # Cheap pre-gate (no DB work): the MATCH only fires when position 0 is
+    # already the scanned author, so a heal can only ADD a co-author. A
+    # source naming ≤1 author-role contributor has nothing to add.
+    author_contribs = [c for c in bk.contributors if contributor_is_author(c.role)]
+    if len(author_contribs) < 2:
+        return False
+    existing_ids = [
+        r["author_id"] for r in await (await db.execute(
+            "SELECT author_id FROM book_authors WHERE book_id=? ORDER BY position",
+            (book_id,),
+        )).fetchall()
+    ]
+    existing_set = set(existing_ids)
+    allow_create = source_name in TRUSTED_CREATE_SOURCES
+    added: list[int] = []
+    for c in author_contribs:
+        aid = await resolve_or_create_author(db, c.name, allow_create=allow_create)
+        if aid is not None and aid not in existing_set and aid not in added:
+            added.append(aid)
+    if not added:
+        return False
+    await write_book_authors(db, book_id, existing_ids + added)
+    return True
+
+
 async def _merge_result(author_id: int, result: AuthorResult, source_name: str, languages: list[str], full_scan: bool = False, owned_only: bool = False, series_collector: dict | None = None, on_new_book=None, exclude_audiobooks: bool = True, linked_author_ids: list[int] = None, link_type_by_id: dict[int, str] | None = None):
     """Merge an AuthorResult, filtering by language. In full_scan mode, updates metadata on existing books.
 
@@ -934,6 +976,10 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
     db = await get_db()
     try:
         new_books = 0; updated_books = 0
+        # v3.0.1 (ADR-0014) — series ids whose UNOWNED member books had a
+        # co-author healed in on convergence this scan; recomputed once at
+        # end-of-scan (the heal is inert for the series taxonomy without it).
+        healed_series_ids: set[int] = set()
         # Update author metadata
         up = []; pr = []
         if result.image_url: up.append("image_url = COALESCE(image_url, ?)"); pr.append(result.image_url)
@@ -1011,7 +1057,7 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
             f"SELECT id, title, source_url, series_id, series_index, source, "
             f"pub_date, expected_date, description, isbn, "
             f"(SELECT author_id FROM book_authors WHERE book_id=books.id AND position=0) AS author_id, "
-            f"is_omnibus, hidden "
+            f"is_omnibus, hidden, owned "
             f"FROM books WHERE id IN "
             f"(SELECT book_id FROM book_authors WHERE author_id IN ({id_ph}))",
             all_author_ids,
@@ -1678,6 +1724,13 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                     sql, vals, queue_rows = _update_existing(matched_row, bk, series_id=sid_use)
                     await db.execute(sql, vals)
                     await _flush_queue_rows(queue_rows)
+                    # v3.0.1 (ADR-0014) — heal an UNOWNED discovered book's
+                    # contributors on convergence (owned rows stay
+                    # Calibre/ABS-authoritative). Flag the series for a
+                    # one-shot author_mode recompute only on a real delta.
+                    if not matched_row["owned"]:
+                        if await _heal_contributors(db, matched_row["id"], bk, source_name) and sid_use is not None:
+                            healed_series_ids.add(sid_use)
                     # Record this source's series claim for the matched
                     # book so consensus can be computed at the end of
                     # lookup_author. We store the SOURCE's reported
@@ -1841,6 +1894,13 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                 sql, vals, queue_rows = _update_existing(matched_row, bk)
                 await db.execute(sql, vals)
                 await _flush_queue_rows(queue_rows)
+                # v3.0.1 (ADR-0014) — heal an UNOWNED discovered book's
+                # contributors on convergence (standalone path: this source
+                # reports no series, but the existing row may already be in
+                # one — recompute that series if so).
+                if not matched_row["owned"]:
+                    if await _heal_contributors(db, matched_row["id"], bk, source_name) and matched_row["series_id"] is not None:
+                        healed_series_ids.add(matched_row["series_id"])
                 # Record `(None, None)` — this source thinks the book
                 # is a standalone. Surfacing "Source A says series X,
                 # Source B says standalone" disagreements is just as
@@ -1906,6 +1966,13 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                 f"  Orphan series cleanup: dropped {cleanup_cur.rowcount} "
                 f"unlinked series rows for author_id={author_id}"
             )
+        # v3.0.1 (ADR-0014) — recompute author_mode once for every series
+        # that gained a healed co-author this scan. Lazy import keeps the
+        # authority logic single-sourced in the series router and avoids the
+        # discovery↔router import cycle (mirrors _backfill_series_author_mode).
+        if healed_series_ids:
+            from app.discovery.routers.series import _recompute_series_author
+            await _recompute_series_author(db, healed_series_ids)
         await db.commit()
         return new_books, updated_books
     finally:
