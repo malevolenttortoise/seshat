@@ -110,3 +110,46 @@ async def train_authors_from_blob(
         if await train_author(db, author, source):
             added += 1
     return added
+
+
+async def train_authors_from_torrent_info(
+    db: aiosqlite.Connection,
+    torrent_id,
+    *,
+    token: str | None,
+    fallback_blob: str = "",
+    source: str = "author_info",
+) -> int:
+    """v3.0.0 Phase 10 — train the AUTHORITATIVE MAM authorlist for a grab.
+
+    Fetches `torrent_info` (cached, ttl=300) and trains every author in its
+    `author_info` map into the allow list — the complete co-author set,
+    unlike the announce blob which may name only the primary. Falls back to
+    `fallback_blob` (the announce author string, split into authors) when the
+    fetch fails or yields nothing, so a torrent_info outage never loses the
+    baseline announce-derived train.
+
+    MAM economy: at most one cached-or-fetched `torrent_info` call per GRAB
+    (grabs are rare + deliberate; the snatch dwarfs it). Do NOT call this on
+    the per-announce path. Returns the count of newly-added authors.
+    """
+    names: list[str] = []
+    if torrent_id and token:
+        from app.mam.torrent_info import TorrentInfoError, get_torrent_info
+        try:
+            info = await get_torrent_info(str(torrent_id), token=token)
+            names = [
+                n for n in (info.authors or {}).values()
+                if n and n.strip()
+            ]
+        except TorrentInfoError:
+            names = []
+    if not names and fallback_blob:
+        from app.filter.gate import split_authors
+        names = split_authors(fallback_blob)
+
+    added = 0
+    for name in names:
+        if await train_author(db, name, source):
+            added += 1
+    return added

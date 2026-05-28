@@ -22,10 +22,13 @@ Match rules — conservative on purpose, bail rather than guess:
     announce's media-type (ebook announces → ebook libraries only;
     audiobook ↔ audiobook). Stops an audiobook announce from being
     claimed for an ebook-only owned row.
-  - Author: `authors.normalized_name` exact match against
-    `normalize_author_name(announce.author_blob primary)`. Same
-    normalizer the rest of the codebase trusts (handles "St
-    Arkham" vs "St. Arkham", etc).
+  - Author: contributor-aware (v3.0.0 / ADR-0013). The announce's
+    PRIMARY author (`normalize_author_name(author_blob primary)`)
+    must be ANY contributor of the owned book (`book_authors`, any
+    position) — not just the owned row's primary. Closes the
+    co-author-ordering gap (announce primary differs from the owned
+    stored primary). Same normalizer the rest of the codebase trusts
+    ("St Arkham" vs "St. Arkham", etc).
   - Title: canonical `match_key` (apostrophe/diacritic/article
     folding) from `app.works.normalize` against
     `normalize_dedup_key(announce.title or torrent_name,
@@ -138,17 +141,23 @@ async def find_owned_matches(
             _log.debug("owned-match: open %s failed; skipping", slug)
             continue
         try:
+            # v3.0.0 Phase 10 (ADR-0013): contributor-aware — match owned
+            # books where the announce's PRIMARY author is ANY contributor
+            # (book_authors, any position), not just the owned primary. The
+            # title gate below (row_key vs dedup_key, both keyed on the
+            # announce primary) keeps it from over-matching.
             cur = await db.execute(
                 """
-                SELECT b.id, b.title, b.mam_status, b.calibre_id,
-                       a.name AS author_name
+                SELECT b.id, b.title, b.mam_status, b.calibre_id
                 FROM books b
-                JOIN book_authors bpa ON bpa.book_id = b.id AND bpa.position = 0
-                JOIN authors a ON a.id = bpa.author_id
                 WHERE b.owned = 1
                   AND b.hidden = 0
                   AND (b.mam_status IS NULL OR b.mam_status != 'found')
-                  AND a.normalized_name = ?
+                  AND b.id IN (
+                      SELECT ba.book_id FROM book_authors ba
+                      JOIN authors a ON a.id = ba.author_id
+                      WHERE a.normalized_name = ?
+                  )
                 """,
                 (norm_author,),
             )
@@ -157,9 +166,11 @@ async def find_owned_matches(
             await db.close()
 
         for r in rows:
-            row_key = normalize_dedup_key(
-                r["title"] or "", r["author_name"] or "",
-            )
+            # Recompute the owned-side key against the announce PRIMARY (the
+            # confirmed-contributor), NOT the owned row's stored primary, so
+            # the comparison reduces to a canonical title match once author
+            # membership is established (ADR-0013).
+            row_key = normalize_dedup_key(r["title"] or "", primary_author)
             if row_key and row_key == dedup_key:
                 matches.append(OwnedMatch(
                     library_slug=slug,

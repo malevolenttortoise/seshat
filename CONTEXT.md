@@ -11,6 +11,8 @@ This glossary is **seeded, not complete** — only the most stable, load-bearing
 - **Snatch** — acquiring a torrent from MAM. MAM tracks snatches; re-acquiring the same torrent has economy/ratio consequences, so the pipeline avoids redundant snatches.
 - **Dispatch** — the orchestrator step that takes an allowed announce through the dedup/hold gates and submits it to qBittorrent (`app/orchestrator/dispatch.py`).
 - **Filter** — the per-announce gate (media type, allowed formats, author allow-list) that decides whether an announce is even considered.
+- **Auto-train** — adding an author to the `authors_allowed` filter allow-list so future announces by that author pass the **Filter**. Happens when the user approves a tentative author, and automatically for the co-authors of a grabbed book — trusted from MAM's authoritative `author_info` authorlist. Trains author *names* only; never creates discovery/owned book rows (MAM is enrichment-only, never a discovery source).
+- **Claim-for-owned** — at announce time, when a new torrent matches a book the user already owns whose owned row has no confirmed MAM linkage (`mam_status != 'found'`), write the MAM linkage onto the owned row in place and skip the grab — avoiding a redundant **Snatch**. From v3.0.0 the match is **contributor-aware**: the announce's primary author may match *any* contributor of the owned book (not primary-against-primary), still gated by a canonical title match and a bail-on-ambiguity rule (see [ADR-0013](docs/adr/0013-claim-for-owned-contributor-aware.md)).
 
 ## Discovery (review surface)
 

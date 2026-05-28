@@ -111,6 +111,42 @@ async def _seed_owned(
         await db.close()
 
 
+async def _seed_coauthored(
+    slug: str, *, title: str, authors: list[str],
+    mam_status: str | None = None, source: str = "calibre",
+) -> int:
+    """Insert an owned book co-authored by `authors` (position order),
+    seeding a book_authors row per author. Returns book_id."""
+    from app.metadata.author_names import normalize_author_name
+
+    db = await disco_db.get_db(slug)
+    try:
+        cur = await db.execute(
+            "INSERT INTO books (title, source, owned, hidden, mam_status) "
+            "VALUES (?, ?, 1, 0, ?)",
+            (title, source, mam_status),
+        )
+        book_id = cur.lastrowid
+        for pos, author in enumerate(authors):
+            await db.execute(
+                "INSERT OR IGNORE INTO authors (name, sort_name, normalized_name) "
+                "VALUES (?, ?, ?)",
+                (author, author, normalize_author_name(author)),
+            )
+            aid = (await (await db.execute(
+                "SELECT id FROM authors WHERE name = ?", (author,),
+            )).fetchone())["id"]
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+                "VALUES (?, ?, ?)",
+                (book_id, aid, pos),
+            )
+        await db.commit()
+        return book_id
+    finally:
+        await db.close()
+
+
 async def _read_book(slug: str, book_id: int) -> dict:
     db = await disco_db.get_db(slug)
     try:
@@ -306,6 +342,72 @@ class TestTryClaim:
             announce=_announce(
                 title="X", author="A",
                 category="Audiobooks - Fantasy", filetype="m4b",
+            ),
+        )
+        assert result.claimed is False
+        assert result.reason == "no_owned_match"
+
+
+# ─── contributor-aware claim (v3.0.0 Phase 10, ADR-0013) ───────
+
+
+class TestContributorAwareClaim:
+    async def test_announce_primary_is_owned_coauthor_claims(self, ebook_library):
+        # Owned book primary = Chaney, co-author = Anspach. A new announce
+        # lists Anspach FIRST (co-author ordering differs). Primary-only
+        # match would miss it; contributor-aware claims it.
+        book_id = await _seed_coauthored(
+            ebook_library["slug"],
+            title="Galaxy's Edge: Legionnaire",
+            authors=["J.N. Chaney", "Jason Anspach"],
+            mam_status="not_found",
+        )
+        result = await try_claim_announce_for_owned(
+            announce=_announce(
+                title="Galaxy's Edge: Legionnaire",
+                author="Jason Anspach",   # announce primary = owned co-author
+                torrent_id="55501",
+            ),
+        )
+        assert result.claimed is True
+        assert result.book_id == book_id
+        row = await _read_book(ebook_library["slug"], book_id)
+        assert row["mam_status"] == "found"
+        assert row["mam_torrent_id"] == "55501"
+
+    async def test_non_contributor_primary_does_not_claim(self, ebook_library):
+        # Announce primary is NOT a contributor of the owned book → no claim
+        # even though the title matches (guards against over-matching).
+        await _seed_coauthored(
+            ebook_library["slug"],
+            title="Galaxy's Edge: Legionnaire",
+            authors=["J.N. Chaney", "Jason Anspach"],
+            mam_status="not_found",
+        )
+        result = await try_claim_announce_for_owned(
+            announce=_announce(
+                title="Galaxy's Edge: Legionnaire",
+                author="Someone Else",
+                torrent_id="55502",
+            ),
+        )
+        assert result.claimed is False
+        assert result.reason == "no_owned_match"
+
+    async def test_same_author_different_title_does_not_claim(self, ebook_library):
+        # Contributor matches but the title doesn't — the title gate must
+        # still reject (no spurious claim across an author's catalogue).
+        await _seed_coauthored(
+            ebook_library["slug"],
+            title="Galaxy's Edge: Legionnaire",
+            authors=["J.N. Chaney", "Jason Anspach"],
+            mam_status="not_found",
+        )
+        result = await try_claim_announce_for_owned(
+            announce=_announce(
+                title="Galaxy's Edge: Galactic Outlaws",
+                author="Jason Anspach",
+                torrent_id="55503",
             ),
         )
         assert result.claimed is False
