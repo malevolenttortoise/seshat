@@ -364,6 +364,31 @@ CREATE TABLE IF NOT EXISTS author_id_audit_log (
 CREATE INDEX IF NOT EXISTS idx_author_id_audit_person ON author_id_audit_log(person_id);
 CREATE INDEX IF NOT EXISTS idx_author_id_audit_changed ON author_id_audit_log(changed_at);
 
+-- v3.x (ADR-0015) — author source-ID conflicts. Recorded when discovery
+-- resolves a co-author by name to a row whose `{source}_id` is already
+-- populated with a different id than the incoming `source_author_id`
+-- (case 4 — fill-if-empty NEVER overwrites a populated column; the
+-- conflict is recorded for operator review rather than silently
+-- swallowed). UNIQUE key dedups repeat scans onto upserts. `status`
+-- starts `open`; the Persons & IDs page surfaces open rows and offers
+-- dismiss (resolution itself uses the existing manual person-merge /
+-- source-ID edit tools — this table is visibility-only).
+CREATE TABLE IF NOT EXISTS author_source_id_conflicts (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    library_slug    TEXT NOT NULL,
+    author_id       INTEGER NOT NULL,
+    source          TEXT NOT NULL,
+    existing_id     TEXT NOT NULL,
+    incoming_id     TEXT NOT NULL,
+    incoming_name   TEXT,
+    first_seen_at   REAL NOT NULL DEFAULT (strftime('%s', 'now')),
+    last_seen_at    REAL NOT NULL DEFAULT (strftime('%s', 'now')),
+    status          TEXT NOT NULL DEFAULT 'open',
+    UNIQUE(library_slug, author_id, source, incoming_id)
+);
+CREATE INDEX IF NOT EXISTS idx_author_source_id_conflicts_status
+    ON author_source_id_conflicts(status, last_seen_at DESC);
+
 -- ── Per-author format preference ────────────────────────────
 -- Keyed by normalized author name (lowercased, whitespace-collapsed)
 -- so a preference set on "Brandon Sanderson" in a Calibre library
@@ -896,6 +921,23 @@ MIGRATIONS: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_replacement_enactments_active "
     "ON replacement_enactments(library_slug, restored_at) "
     "WHERE failed_at IS NULL",
+    # v3.x (ADR-0015) — author source-ID conflicts. Mirrors the SCHEMA
+    # block above so older DBs pick it up on next startup.
+    """CREATE TABLE IF NOT EXISTS author_source_id_conflicts (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        library_slug    TEXT NOT NULL,
+        author_id       INTEGER NOT NULL,
+        source          TEXT NOT NULL,
+        existing_id     TEXT NOT NULL,
+        incoming_id     TEXT NOT NULL,
+        incoming_name   TEXT,
+        first_seen_at   REAL NOT NULL DEFAULT (strftime('%s', 'now')),
+        last_seen_at    REAL NOT NULL DEFAULT (strftime('%s', 'now')),
+        status          TEXT NOT NULL DEFAULT 'open',
+        UNIQUE(library_slug, author_id, source, incoming_id)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_author_source_id_conflicts_status "
+    "ON author_source_id_conflicts(status, last_seen_at DESC)",
 ]
 
 

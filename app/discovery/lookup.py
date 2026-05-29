@@ -902,7 +902,15 @@ async def _link_discovered_contributors(db, book_id: int, scanned_author_id: int
     for c in bk.contributors:
         if not contributor_is_author(c.role):
             continue
-        aid = await resolve_or_create_author(db, c.name, allow_create=allow_create)
+        # v3.x (ADR-0015 slice 01) — thread the captured per-contributor
+        # source_author_id so resolve_or_create_author can persist it
+        # (fill-if-empty on match; written on mint; case-4 conflict
+        # recorded). Sources without a known {source}_id column (mam)
+        # skip persistence inside the resolver.
+        aid = await resolve_or_create_author(
+            db, c.name, allow_create=allow_create,
+            source=source_name, source_id=c.source_author_id,
+        )
         if aid is not None:
             ordered.append(aid)
     if scanned_author_id not in ordered:
@@ -943,7 +951,15 @@ async def _heal_contributors(db, book_id: int, bk, source_name: str) -> bool:
     allow_create = source_name in TRUSTED_CREATE_SOURCES
     added: list[int] = []
     for c in author_contribs:
-        aid = await resolve_or_create_author(db, c.name, allow_create=allow_create)
+        # v3.x (ADR-0015 slice 01) — same persistence threading as the
+        # _link_discovered_contributors path: a heal that mints a new
+        # co-author should carry that author's source_author_id too,
+        # and a name-match against an existing row gets the fill-if-
+        # empty / conflict-record treatment.
+        aid = await resolve_or_create_author(
+            db, c.name, allow_create=allow_create,
+            source=source_name, source_id=c.source_author_id,
+        )
         if aid is not None and aid not in existing_set and aid not in added:
             added.append(aid)
     if not added:

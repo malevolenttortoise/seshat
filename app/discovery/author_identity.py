@@ -110,6 +110,19 @@ MIRRORABLE_SOURCE_ID_COLUMNS: frozenset[str] = frozenset({
 })
 
 
+def source_id_column(source: Optional[str]) -> Optional[str]:
+    """Per-library `authors` column for a discovery source's captured
+    `source_author_id`, or None if the source isn't an ID carrier
+    (MAM is intentionally absent — no `mam_id` column per ADR-0015
+    "Out of scope")."""
+    if not source:
+        return None
+    col = f"{source}_id"
+    if col in KNOWN_SOURCE_ID_COLUMNS:
+        return col
+    return None
+
+
 @dataclass(frozen=True)
 class Person:
     """Canonical author identity. One row in `persons`."""
@@ -487,6 +500,64 @@ async def mirror_source_id(
             await gdb.close()
 
     return touched
+
+
+# ─── Source-ID conflict recording (v3.x — ADR-0015) ────────────
+
+
+async def record_source_id_conflict(
+    library_slug: str,
+    author_id: int,
+    source: str,
+    existing_id: str,
+    incoming_id: str,
+    incoming_name: Optional[str] = None,
+) -> None:
+    """Upsert a row into ``author_source_id_conflicts`` (ADR-0015 case 4).
+
+    Called from the per-library write path when a name-matched author
+    row's ``{source}_id`` is already populated with a value that differs
+    from the incoming ``Contributor.source_author_id``. Fill-if-empty
+    NEVER overwrites a populated column; the conflict is recorded for
+    operator review in the Persons & IDs page (slice 04).
+
+    The UPSERT key is ``(library_slug, author_id, source, incoming_id)``
+    so repeat scans bump ``last_seen_at`` instead of spamming a row per
+    encounter. ``status`` defaults to ``'open'`` and is flipped to
+    ``'dismissed'`` by the operator via the slice-04 endpoint.
+
+    Best-effort — failures are logged + swallowed so the scan never
+    breaks on this side channel. No-op when ``library_slug`` is falsy
+    (callers in scan-less contexts).
+    """
+    if not library_slug or not source or not existing_id or not incoming_id:
+        return
+    if existing_id == incoming_id:
+        return  # defensive — caller already checks
+    try:
+        db = await get_global_db()
+        try:
+            await db.execute(
+                "INSERT INTO author_source_id_conflicts "
+                "(library_slug, author_id, source, existing_id, "
+                " incoming_id, incoming_name) "
+                "VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(library_slug, author_id, source, incoming_id) "
+                "DO UPDATE SET "
+                "  last_seen_at = strftime('%s','now'), "
+                "  incoming_name = COALESCE(excluded.incoming_name, incoming_name)",
+                (library_slug, author_id, source, existing_id,
+                 incoming_id, incoming_name),
+            )
+            await db.commit()
+        finally:
+            await db.close()
+    except Exception as exc:
+        _log.debug(
+            "record_source_id_conflict failed for %s/%d/%s "
+            "existing=%s incoming=%s: %s",
+            library_slug, author_id, source, existing_id, incoming_id, exc,
+        )
 
 
 # ─── Mirror bio (v2.22.0) ──────────────────────────────────────
