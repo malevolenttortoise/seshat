@@ -84,6 +84,31 @@ interface SeriesSuggestion {
 
 const PAGE_SIZE = 50;
 
+// v3.3.0 slice 03 (ADR-0017 §7) — field-type filter chip taxonomy for
+// the 3 queue-shaped tabs (Calibre / Audiobookshelf / Source scans).
+// Order = display order; "Authors" first because it's the newest +
+// highest-semantic-weight category, "Description" next as typically
+// the largest pile. Series moves + Pending manual edits tabs use
+// different data shapes and don't carry these chips.
+const FIELD_ORDER = [
+  "authors",
+  "description",
+  "isbn",
+  "cover_url",
+  "pub_date",
+  "expected_date",
+  "page_count",
+] as const;
+const FIELD_LABEL: Record<string, string> = {
+  authors: "Authors",
+  description: "Description",
+  isbn: "ISBN",
+  cover_url: "Cover",
+  pub_date: "Pub date",
+  expected_date: "Expected date",
+  page_count: "Page count",
+};
+
 export default function DiscMetadataPage() {
   const t = useTheme();
   const [tab, setTab] = usePersist<TabId>("md_tab", "calibre");
@@ -201,6 +226,12 @@ function QueuePanel({ tabId, sources }: { tabId: TabId; sources: string[] }) {
   const [busy, setBusy] = useState<number | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
+  // v3.3.0 slice 03 (ADR-0017 §7) — field-type filter chip state.
+  // Empty set = show all (same effect as all-active). OR-within-the-set
+  // multi-select: clicking a chip toggles it; visible rows = union of
+  // selected field-types. Local useState (not usePersist) — momentary
+  // review focus, not a sticky preference. Resets on tab change below.
+  const [activeFields, setActiveFields] = useState<Set<string>>(new Set());
 
   const load = () => {
     setData(null);
@@ -235,6 +266,7 @@ function QueuePanel({ tabId, sources }: { tabId: TabId; sources: string[] }) {
   useEffect(() => {
     setOffset(0);
     setSelected(new Set());
+    setActiveFields(new Set());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tabId]);
   useEffect(() => {
@@ -278,22 +310,51 @@ function QueuePanel({ tabId, sources }: { tabId: TabId; sources: string[] }) {
     }
   };
 
+  // v3.3.0 slice 03 — per-chip counts derive from the FULL fetched list
+  // (not filtered), so chip counts stay stable as the operator filters.
+  // Disabled chips (count=0) are still rendered so the chip set is
+  // predictable across loads.
+  const fieldCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    if (!data) return counts;
+    for (const r of data.rows) {
+      counts[r.field] = (counts[r.field] ?? 0) + 1;
+    }
+    return counts;
+  }, [data]);
+
+  // Filtered rows = data.rows if no chip active, else OR-within the
+  // active field-types.
+  const filteredRows = useMemo(() => {
+    if (!data) return [] as QueueRow[];
+    if (activeFields.size === 0) return data.rows;
+    return data.rows.filter((r) => activeFields.has(r.field));
+  }, [data, activeFields]);
+
   // Group rows by book — one card per book with each diffing field
   // beneath. Matches the user mental model better than a flat list.
   const groupedByBook = useMemo(() => {
-    if (!data) return [];
     const groups = new Map<number, { book: QueueRow; rows: QueueRow[] }>();
-    for (const r of data.rows) {
+    for (const r of filteredRows) {
       if (!groups.has(r.book_id)) {
         groups.set(r.book_id, { book: r, rows: [] });
       }
       groups.get(r.book_id)!.rows.push(r);
     }
     return Array.from(groups.values());
-  }, [data]);
+  }, [filteredRows]);
+
+  const toggleField = (f: string) =>
+    setActiveFields((s) => {
+      const n = new Set(s);
+      if (n.has(f)) n.delete(f);
+      else n.add(f);
+      return n;
+    });
 
   if (data === null) return <Load />;
 
+  // No rows from the backend at all (nothing to review on this tab).
   if (data.rows.length === 0) {
     return (
       <div
@@ -316,6 +377,15 @@ function QueuePanel({ tabId, sources }: { tabId: TabId; sources: string[] }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      {/* v3.3.0 slice 03 — field-type chip filter row. */}
+      <FieldChipRow
+        t={t}
+        counts={fieldCounts}
+        active={activeFields}
+        onToggle={toggleField}
+        onClear={() => setActiveFields(new Set())}
+      />
+
       {selected.size > 0 ? (
         <div
           style={{
@@ -357,6 +427,38 @@ function QueuePanel({ tabId, sources }: { tabId: TabId; sources: string[] }) {
         </div>
       ) : null}
 
+      {/* Filter-aware empty state: distinguishes "no rows at all" (handled
+          above) from "no rows match the active filter" so the operator
+          isn't stuck wondering why the list is empty after they filtered
+          themselves into a corner. */}
+      {groupedByBook.length === 0 && activeFields.size > 0 ? (
+        <div
+          style={{
+            background: t.bg2,
+            border: `1px solid ${t.border}`,
+            borderRadius: 12,
+            padding: 30,
+            textAlign: "center",
+            color: t.tg,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 12,
+          }}
+        >
+          <div style={{ fontSize: 14 }}>
+            No rows match the active filter.
+          </div>
+          <Btn
+            variant="ghost"
+            size="sm"
+            onClick={() => setActiveFields(new Set())}
+          >
+            Clear filter
+          </Btn>
+        </div>
+      ) : null}
+
       {groupedByBook.map(({ book, rows }) => (
         <BookCard
           key={book.book_id}
@@ -375,6 +477,76 @@ function QueuePanel({ tabId, sources }: { tabId: TabId; sources: string[] }) {
           busy={busy}
         />
       ))}
+    </div>
+  );
+}
+
+
+// ── Field-type chip filter row (v3.3.0 / ADR-0017 §7) ────────────────
+
+
+function FieldChipRow({
+  t, counts, active, onToggle, onClear,
+}: {
+  t: ReturnType<typeof useTheme>;
+  counts: Record<string, number>;
+  active: Set<string>;
+  onToggle: (f: string) => void;
+  onClear: () => void;
+}) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexWrap: "wrap",
+        gap: 6,
+        alignItems: "center",
+      }}
+    >
+      {FIELD_ORDER.map((f) => {
+        const count = counts[f] ?? 0;
+        const isActive = active.has(f);
+        const disabled = count === 0;
+        return (
+          <button
+            key={f}
+            onClick={() => !disabled && onToggle(f)}
+            disabled={disabled}
+            style={{
+              padding: "4px 10px",
+              borderRadius: 14,
+              fontSize: 12,
+              fontWeight: isActive ? 600 : 400,
+              cursor: disabled ? "default" : "pointer",
+              opacity: disabled ? 0.45 : 1,
+              background: isActive ? t.grnb : t.bg,
+              border: `1px solid ${isActive ? t.grnt : t.border}`,
+              color: t.text,
+            }}
+          >
+            {FIELD_LABEL[f] ?? f}{" "}
+            <span style={{ color: t.tg, marginLeft: 2 }}>({count})</span>
+          </button>
+        );
+      })}
+      {active.size > 0 ? (
+        <button
+          onClick={onClear}
+          style={{
+            padding: "4px 10px",
+            borderRadius: 14,
+            fontSize: 12,
+            fontWeight: 500,
+            cursor: "pointer",
+            background: t.bg,
+            border: `1px solid ${t.border}`,
+            color: t.tf,
+            marginLeft: 6,
+          }}
+        >
+          Clear ({active.size})
+        </button>
+      ) : null}
     </div>
   );
 }
