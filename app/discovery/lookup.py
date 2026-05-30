@@ -992,6 +992,109 @@ async def _heal_contributors(db, book_id: int, bk, source_name: str) -> bool:
     return True
 
 
+# v3.3.0 (ADR-0017) — sources whose owned-book contributor disagreements
+# enqueue an authors proposed-change. Link-only sources (google_books,
+# openlibrary) are excluded — weak author data. MAM is excluded because
+# it doesn't reach _merge_result for owned books (separate trigger
+# point, deferred follow-up).
+_PROPOSE_AUTHOR_SOURCES = frozenset({"goodreads", "amazon", "hardcover", "audible"})
+
+
+def _norm_author_name(name: str) -> str:
+    """Case-insensitive whitespace-trim for name set membership in
+    `_propose_owned_author_change`. Distinct from `resolve_or_create_author`'s
+    own normalization (which the v3.1.0 ID-first matching uses at approval
+    time); set membership here is a cheap pre-gate, not identity resolution.
+    """
+    return (name or "").strip().casefold()
+
+
+async def _propose_owned_author_change(db, book_id: int, bk, source_name: str) -> None:
+    """v3.3.0 (ADR-0017) — enqueue an owned-book authors proposed-change
+    when a scan-converged source's contributor set differs meaningfully
+    from the book's current `book_authors`. **Owned-guard is the caller's
+    responsibility** — this fires only inside the ``owned=1`` MATCH branch.
+
+    Threshold (ADR-0017 §2): ``source_set ⊄ current_set`` OR
+    ``source[position 0] ≠ current[position 0]``. Pure-subset
+    (source ⊆ current) and cosmetic reorderings are skipped — Calibre is
+    authoritative on removals; operator prunes by hand.
+
+    Payload (ADR-0017 §1, α): JSON array of ``{name, source_id}`` records;
+    ``new_value`` ordered source-primary-first, then source's remaining,
+    then current's exclusives appended (union, additive-only). UPSERT on
+    ``(book_id, field='authors', source)`` so a fresh scan replaces the
+    prior pending proposal rather than piling up. Source IDs are namespaced
+    to ``source_name``; ``old_value`` snapshots ``book_authors`` at proposal
+    time in the same shape (source_id always None there — names are how
+    the operator identifies them, IDs come from sources).
+    """
+    # Source-quality filter — keeps link-only sources (google_books,
+    # openlibrary) out of the proposal stream.
+    if source_name not in _PROPOSE_AUTHOR_SOURCES:
+        return
+    # Role-filter the source's contributors (drop translators / illustrators
+    # / narrators); empty after filter = nothing to propose.
+    author_contribs = [
+        c for c in bk.contributors if contributor_is_author(c.role)
+    ]
+    author_contribs = [c for c in author_contribs if (c.name or "").strip()]
+    if not author_contribs:
+        return
+    # Current book_authors with names, position-ordered. JOIN through
+    # authors to read the canonical name (book_authors only stores ids).
+    current_rows = await (await db.execute(
+        "SELECT a.name FROM book_authors ba "
+        "JOIN authors a ON a.id = ba.author_id "
+        "WHERE ba.book_id = ? ORDER BY ba.position",
+        (book_id,),
+    )).fetchall()
+    current_names = [r["name"] for r in current_rows if (r["name"] or "").strip()]
+    if not current_names:
+        # No current authors for an owned book is degenerate (Phase 1B/2
+        # should have populated). Skip defensively — no diff to compute.
+        return
+    current_norm = [_norm_author_name(n) for n in current_names]
+    current_norm_set = set(current_norm)
+    source_norm = [_norm_author_name(c.name) for c in author_contribs]
+    source_norm_set = set(source_norm)
+    # Threshold: source not a subset (proposes ≥1 new) OR primary differs.
+    is_subset = source_norm_set.issubset(current_norm_set)
+    primary_differs = source_norm[0] != current_norm[0]
+    if is_subset and not primary_differs:
+        return
+    # Union, source-primary-first ordering. Source first (preserves the
+    # source's primary at position 0 + relative order); then current's
+    # exclusives appended in their position order. Dedup by normalized
+    # name so a co-author the source spells slightly differently doesn't
+    # double-list.
+    seen_norm: set[str] = set()
+    union_records: list[dict] = []
+    for c, n_norm in zip(author_contribs, source_norm):
+        if n_norm in seen_norm:
+            continue
+        seen_norm.add(n_norm)
+        union_records.append({"name": c.name, "source_id": c.source_author_id})
+    for name, n_norm in zip(current_names, current_norm):
+        if n_norm in seen_norm:
+            continue
+        seen_norm.add(n_norm)
+        union_records.append({"name": name, "source_id": None})
+    old_records = [{"name": n, "source_id": None} for n in current_names]
+    await db.execute(
+        "INSERT OR REPLACE INTO metadata_review_queue "
+        "(book_id, field, old_value, new_value, source, proposed_at) "
+        "VALUES (?, 'authors', ?, ?, ?, ?)",
+        (
+            book_id,
+            json.dumps(old_records),
+            json.dumps(union_records),
+            source_name,
+            time.time(),
+        ),
+    )
+
+
 async def _merge_result(author_id: int, result: AuthorResult, source_name: str, languages: list[str], full_scan: bool = False, owned_only: bool = False, series_collector: dict | None = None, on_new_book=None, exclude_audiobooks: bool = True, linked_author_ids: list[int] = None, link_type_by_id: dict[int, str] | None = None):
     """Merge an AuthorResult, filtering by language. In full_scan mode, updates metadata on existing books.
 
@@ -1810,6 +1913,17 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                     if not matched_row["owned"]:
                         if await _heal_contributors(db, matched_row["id"], bk, source_name) and sid_use is not None:
                             healed_series_ids.add(sid_use)
+                    else:
+                        # v3.3.0 (ADR-0017) — the OWNED counterpart: instead
+                        # of silently overwriting library data, enqueue an
+                        # authors proposed-change in metadata_review_queue
+                        # if the source disagrees. Operator approves it in
+                        # Metadata Manager and the union is pushed back to
+                        # Calibre/ABS, which then refreshes book_authors via
+                        # the inline re-sync (slice 02).
+                        await _propose_owned_author_change(
+                            db, matched_row["id"], bk, source_name,
+                        )
                     # Record this source's series claim for the matched
                     # book so consensus can be computed at the end of
                     # lookup_author. We store the SOURCE's reported
@@ -1977,6 +2091,14 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                 # contributors on convergence (standalone path: this source
                 # reports no series, but the existing row may already be in
                 # one — recompute that series if so).
+                if matched_row["owned"]:
+                    # v3.3.0 (ADR-0017) — owned standalone MATCH counterpart;
+                    # same enqueue-proposed-change branch as the series path
+                    # above. Standalone books don't carry a series_id so
+                    # there's no series taxonomy recompute to schedule here.
+                    await _propose_owned_author_change(
+                        db, matched_row["id"], bk, source_name,
+                    )
                 if not matched_row["owned"]:
                     if await _heal_contributors(db, matched_row["id"], bk, source_name) and matched_row["series_id"] is not None:
                         healed_series_ids.add(matched_row["series_id"])
