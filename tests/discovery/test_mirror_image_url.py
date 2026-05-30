@@ -310,15 +310,15 @@ async def test_scanned_null_source_anchor_is_lowest_rank(single_lib):
     await _insert_author("calibre", 1, "Legacy Author",
                          "https://old/photo.jpg", None)
     n = await mirror_image_url(
-        "calibre", 1, "audnexus", "https://audnex/photo.jpg",
+        "calibre", 1, "audible", "https://audnex/photo.jpg",
         trust="scanned",
     )
-    # audnexus is rank 4 (lowest of the 4 named sources) but still
+    # audible is rank 4 (lowest of the 4 named sources) but still
     # beats a NULL anchor. Write proceeds.
     assert n == 1
     assert await _read_author("calibre", 1) == {
         "image_url": "https://audnex/photo.jpg",
-        "image_url_source": "audnexus",
+        "image_url_source": "audible",
     }
 
 

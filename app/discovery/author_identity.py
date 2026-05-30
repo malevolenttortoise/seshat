@@ -762,7 +762,10 @@ IMAGE_SOURCE_RANK: dict[str, int] = {
     "amazon": 1,
     "goodreads": 2,
     "hardcover": 3,
-    "audnexus": 4,
+    # Key aligns with `app/discovery/sources/audible.py:name = "audible"` —
+    # that's the value flowing through `source_name` in lookup.py. The
+    # underlying API is Audnexus; the source slug is "audible".
+    "audible": 4,
 }
 
 # Lowest sentinel — used for NULL/unknown `image_url_source`. Treats
