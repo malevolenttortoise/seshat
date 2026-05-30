@@ -460,6 +460,10 @@ function FieldDiff({
     if (v === null || v === undefined || !v.trim()) return "—";
     return v;
   };
+  // v3.3.0 (ADR-0017 §4) — authors proposed-changes carry a JSON
+  // payload of `{name, source_id?}` records; render as a list-diff
+  // (added markers, primary-position markers) instead of scalar text.
+  const isAuthors = row.field === "authors";
   return (
     <div
       style={{
@@ -482,20 +486,24 @@ function FieldDiff({
         <div style={{ fontSize: 11, color: t.tg, textTransform: "uppercase", letterSpacing: "0.04em" }}>
           {row.field} <span style={{ color: t.tf, marginLeft: 6 }}>via {row.source}</span>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, fontSize: 13 }}>
-          <div>
-            <div style={{ fontSize: 10, color: t.tg }}>current</div>
-            <div style={{ color: t.text2, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-              {fmt(row.old_value)}
+        {isAuthors ? (
+          <AuthorsDiff t={t} oldValue={row.old_value} newValue={row.new_value} />
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, fontSize: 13 }}>
+            <div>
+              <div style={{ fontSize: 10, color: t.tg }}>current</div>
+              <div style={{ color: t.text2, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                {fmt(row.old_value)}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 10, color: t.tg }}>proposed</div>
+              <div style={{ color: t.text, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                {fmt(row.new_value)}
+              </div>
             </div>
           </div>
-          <div>
-            <div style={{ fontSize: 10, color: t.tg }}>proposed</div>
-            <div style={{ color: t.text, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-              {fmt(row.new_value)}
-            </div>
-          </div>
-        </div>
+        )}
       </div>
       <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
         <Btn variant="accent" size="sm" onClick={onApply} disabled={busy}>
@@ -504,6 +512,104 @@ function FieldDiff({
         <Btn variant="ghost" size="sm" onClick={onDismiss} disabled={busy}>
           Reject
         </Btn>
+      </div>
+    </div>
+  );
+}
+
+
+// ── Authors list-diff variant (v3.3.0 / ADR-0017 §4) ─────────────────
+
+
+type AuthorRec = { name: string; source_id?: string | null };
+
+function _parseAuthors(raw: string | null): AuthorRec[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((r) => r && typeof r === "object" && typeof r.name === "string")
+      .map((r) => ({ name: r.name, source_id: r.source_id ?? null }));
+  } catch {
+    return [];
+  }
+}
+
+function AuthorsDiff({
+  t, oldValue, newValue,
+}: { t: ReturnType<typeof useTheme>; oldValue: string | null; newValue: string | null }) {
+  const oldRecs = _parseAuthors(oldValue);
+  const newRecs = _parseAuthors(newValue);
+  // Normalized-name set membership (matches the backend's
+  // `_norm_author_name` in lookup.py) so "Smith" vs " smith " stays
+  // one entry visually.
+  const norm = (n: string) => (n || "").trim().toLowerCase();
+  const oldSet = new Set(oldRecs.map((r) => norm(r.name)));
+  const oldPrimary = oldRecs[0]?.name ?? null;
+  const newPrimary = newRecs[0]?.name ?? null;
+  const primaryChanged =
+    !!newPrimary && !!oldPrimary && norm(newPrimary) !== norm(oldPrimary);
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, fontSize: 13 }}>
+      <div>
+        <div style={{ fontSize: 10, color: t.tg }}>current</div>
+        <div style={{ color: t.text2, display: "flex", flexDirection: "column", gap: 2 }}>
+          {oldRecs.length === 0 ? (
+            <span>—</span>
+          ) : (
+            oldRecs.map((r, i) => (
+              <span key={`old-${i}-${r.name}`}>
+                {r.name}
+                {primaryChanged && i === 0 ? (
+                  <span style={{ color: t.tg, marginLeft: 6, fontSize: 11 }}>
+                    ← was primary
+                  </span>
+                ) : null}
+              </span>
+            ))
+          )}
+        </div>
+      </div>
+      <div>
+        <div style={{ fontSize: 10, color: t.tg }}>proposed</div>
+        <div style={{ color: t.text, display: "flex", flexDirection: "column", gap: 2 }}>
+          {newRecs.length === 0 ? (
+            <span>—</span>
+          ) : (
+            newRecs.map((r, i) => {
+              const isNew = !oldSet.has(norm(r.name));
+              return (
+                <span key={`new-${i}-${r.name}`}>
+                  <span
+                    style={
+                      isNew
+                        ? {
+                            background: t.grnb,
+                            border: `1px solid ${t.grnt}`,
+                            borderRadius: 3,
+                            padding: "1px 5px",
+                          }
+                        : undefined
+                    }
+                  >
+                    {r.name}
+                  </span>
+                  {isNew ? (
+                    <span style={{ color: t.grnt, marginLeft: 6, fontSize: 11 }}>
+                      (new)
+                    </span>
+                  ) : null}
+                  {primaryChanged && i === 0 ? (
+                    <span style={{ color: t.tg, marginLeft: 6, fontSize: 11 }}>
+                      ← primary
+                    </span>
+                  ) : null}
+                </span>
+              );
+            })
+          )}
+        </div>
       </div>
     </div>
   );

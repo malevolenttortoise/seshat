@@ -604,15 +604,177 @@ async def list_queue(
         await db.close()
 
 
+async def _queue_apply_authors(db, qid: int, qrow: dict) -> dict:
+    """v3.3.0 (ADR-0017) — accept an authors proposed-change.
+
+    The full chain in one step:
+      1. Parse the JSON proposal payload (`new_value`).
+      2. Push the position-ordered names to the appropriate sink(s):
+         calibre route (calibredb → fall back to CWA) when the book has
+         a `calibre_id`; ABS when the book has an `audiobookshelf_id`.
+         Both fire if both ids are present (dual-library co-owned book).
+      3. Inline re-sync: resolve each `(name, source_id)` via
+         `resolve_or_create_author` (mints missing, captures source IDs
+         so v3.1.0's ID-first matching applies on subsequent scans);
+         `write_book_authors` overwrites position-ordered links.
+      4. Recompute `series.author_mode` for the affected series.
+      5. Delete the queue row.
+
+    Failure modes:
+      - 502 if ALL configured sinks rejected the push (PushFailed) — the
+        local state is untouched, operator can retry.
+      - 409 if NO sinks are configured / unavailable for this book.
+      - 502 if the re-sync resolves to an empty author set (Calibre and
+        ABS both require ≥1).
+    """
+    from app.discovery.push_back import (
+        PushFailed, PushUnavailable,
+        push_abs, push_calibre_full, push_cwa,
+    )
+    from app.discovery.database import (
+        resolve_or_create_author, write_book_authors,
+    )
+
+    bid = qrow["book_id"]
+    source_name = qrow["source"]
+    try:
+        payload = json.loads(qrow["new_value"] or "[]")
+    except (TypeError, ValueError):
+        raise HTTPException(400, "authors proposal has malformed JSON payload")
+    if not isinstance(payload, list) or not payload:
+        raise HTTPException(400, "authors proposal payload is empty or non-list")
+
+    # Read the book so we know which sinks to push to.
+    b_row = await (await db.execute(
+        "SELECT b.*, s.name AS series_name FROM books b "
+        "LEFT JOIN series s ON b.series_id = s.id WHERE b.id = ?",
+        (bid,),
+    )).fetchone()
+    if not b_row:
+        # Book deleted out from under us — drop the queue row to stop
+        # surfacing a now-orphaned proposal.
+        await db.execute(
+            "DELETE FROM metadata_review_queue WHERE id = ?", (qid,),
+        )
+        await db.commit()
+        raise HTTPException(404, f"book {bid} not found")
+    book_dict = dict(b_row)
+
+    # ── Push to sinks ────────────────────────────────────────────
+    push_errors: list[str] = []
+    push_attempted: list[str] = []
+    push_succeeded: list[str] = []
+
+    if book_dict.get("calibre_id"):
+        push_attempted.append("calibre")
+        try:
+            try:
+                await push_calibre_full(
+                    db, book_dict, ["authors"], authors=payload,
+                )
+                push_succeeded.append("calibredb")
+            except PushUnavailable:
+                await push_cwa(
+                    db, book_dict, ["authors"], authors=payload,
+                )
+                push_succeeded.append("cwa")
+        except PushUnavailable as e:
+            push_errors.append(f"calibre: {e}")
+        except PushFailed as e:
+            push_errors.append(f"calibre: {e}")
+
+    if book_dict.get("audiobookshelf_id"):
+        push_attempted.append("abs")
+        try:
+            await push_abs(db, book_dict, ["authors"], authors=payload)
+            push_succeeded.append("abs")
+        except PushUnavailable as e:
+            push_errors.append(f"abs: {e}")
+        except PushFailed as e:
+            push_errors.append(f"abs: {e}")
+
+    if not push_attempted:
+        raise HTTPException(
+            409,
+            f"book {bid} has neither calibre_id nor audiobookshelf_id; "
+            "no sink to push authors to",
+        )
+    if not push_succeeded:
+        raise HTTPException(
+            502,
+            "all push attempts failed: " + "; ".join(push_errors),
+        )
+
+    # ── Inline re-sync — book_authors + series author_mode ───────
+    # Resolve each (name, source_id) from the proposal payload. Names
+    # come from the operator-approved source; source IDs are namespaced
+    # to `source_name` (the proposal's source column). Mints missing
+    # author rows; v3.1.0's ID-first matching on resolve_or_create_author
+    # consolidates persons across libraries when a source ID is present.
+    ordered_ids: list[int] = []
+    for rec in payload:
+        name = (rec.get("name") or "").strip()
+        if not name:
+            continue
+        aid = await resolve_or_create_author(
+            db, name, allow_create=True,
+            source=source_name, source_id=rec.get("source_id"),
+        )
+        if aid is not None and aid not in ordered_ids:
+            ordered_ids.append(aid)
+
+    if not ordered_ids:
+        raise HTTPException(
+            502,
+            "authors re-sync resolved to empty set; book_authors left untouched",
+        )
+
+    await write_book_authors(db, bid, ordered_ids)
+
+    # Recompute series author_mode for the affected series (ADR-0010).
+    sid = book_dict.get("series_id")
+    if sid is not None:
+        try:
+            from app.discovery.routers.series import _recompute_series_author
+            await _recompute_series_author(db, {sid})
+        except Exception as e:
+            # Non-fatal: push succeeded + book_authors landed; series
+            # taxonomy will catch up on next scan-converged recompute.
+            logger.warning(
+                "series author_mode recompute after authors approve failed "
+                "for book_id=%s series_id=%s: %s", bid, sid, e,
+            )
+
+    await db.execute(
+        "DELETE FROM metadata_review_queue WHERE id = ?", (qid,),
+    )
+    await db.commit()
+
+    return {
+        "applied": qid,
+        "book_id": bid,
+        "field": "authors",
+        "push_succeeded": push_succeeded,
+        "push_errors": push_errors,
+    }
+
+
 @router.post("/queue/{qid}/apply")
 async def queue_apply(qid: int):
-    """Accept a queue row: write `new_value` to the corresponding
-    books column, add the field to `user_edited_fields`, and delete
-    the queue row.
+    """Accept a queue row.
 
-    Coerces TEXT-stored values back to the column's expected type
-    where needed (REAL series_index, INTEGER page_count, etc.).
-    Returns 400 on type-coerce failure rather than writing garbage.
+    Scalar fields (the historical path): write `new_value` to the
+    corresponding books column, add the field to `user_edited_fields`,
+    and delete the queue row. Type coercion mirrors the column types.
+
+    `field='authors'` (v3.3.0 / ADR-0017): the proposal carries a
+    JSON `new_value` payload of contributor records. Approving runs
+    the **full chain in one step** (push to upstream sinks → inline
+    re-sync `book_authors` → recompute series `author_mode`) — see
+    `_queue_apply_authors`. This is a different shape from scalar-field
+    apply (which writes locally + waits for a separate push); for
+    authors there's no useful "approve locally but don't push" state
+    because `book_authors` is downstream of the upstream sync anyway.
     """
     db = await get_db()
     try:
@@ -624,6 +786,8 @@ async def queue_apply(qid: int):
             raise HTTPException(404, f"queue row {qid} not found")
         field = row["field"]
         new_val_raw = row["new_value"]
+        if field == "authors":
+            return await _queue_apply_authors(db, qid, dict(row))
 
         # Type coercion — mirrors the books column types.
         new_val: object = new_val_raw
