@@ -389,6 +389,29 @@ CREATE TABLE IF NOT EXISTS author_source_id_conflicts (
 CREATE INDEX IF NOT EXISTS idx_author_source_id_conflicts_status
     ON author_source_id_conflicts(status, last_seen_at DESC);
 
+-- v3.x (ADR-0015 slice 05) — audit log for person merges performed by
+-- the "Consolidate persons by shared source ID" hygiene job.
+-- Mirrors the `book_merges` shape — one row per (winner_person_id,
+-- loser_person_id, source, source_id) merge so the operator can
+-- audit which person got folded into which and by what evidence.
+-- Loser persons are deleted in the merge; this table is the only
+-- record of their prior existence.
+CREATE TABLE IF NOT EXISTS person_merges (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    winner_person_id  INTEGER NOT NULL,
+    loser_person_id   INTEGER NOT NULL,
+    reason            TEXT NOT NULL,
+    source            TEXT,
+    source_id         TEXT,
+    moved_links       INTEGER NOT NULL DEFAULT 0,
+    loser_canonical_name TEXT,
+    merged_at         REAL NOT NULL DEFAULT (strftime('%s', 'now'))
+);
+CREATE INDEX IF NOT EXISTS idx_person_merges_winner
+    ON person_merges(winner_person_id);
+CREATE INDEX IF NOT EXISTS idx_person_merges_merged_at
+    ON person_merges(merged_at DESC);
+
 -- ── Per-author format preference ────────────────────────────
 -- Keyed by normalized author name (lowercased, whitespace-collapsed)
 -- so a preference set on "Brandon Sanderson" in a Calibre library
@@ -938,6 +961,23 @@ MIGRATIONS: list[str] = [
     )""",
     "CREATE INDEX IF NOT EXISTS idx_author_source_id_conflicts_status "
     "ON author_source_id_conflicts(status, last_seen_at DESC)",
+    # v3.x (ADR-0015 slice 05) — person-merge audit. Mirrors the SCHEMA
+    # block above so older DBs pick it up on next startup.
+    """CREATE TABLE IF NOT EXISTS person_merges (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        winner_person_id  INTEGER NOT NULL,
+        loser_person_id   INTEGER NOT NULL,
+        reason            TEXT NOT NULL,
+        source            TEXT,
+        source_id         TEXT,
+        moved_links       INTEGER NOT NULL DEFAULT 0,
+        loser_canonical_name TEXT,
+        merged_at         REAL NOT NULL DEFAULT (strftime('%s', 'now'))
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_person_merges_winner "
+    "ON person_merges(winner_person_id)",
+    "CREATE INDEX IF NOT EXISTS idx_person_merges_merged_at "
+    "ON person_merges(merged_at DESC)",
 ]
 
 

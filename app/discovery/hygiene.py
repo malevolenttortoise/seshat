@@ -76,6 +76,7 @@ JOB_NAMES = (
     "ABS author cross-stamp",
     "Orphan author retrolink",
     "Cross-library person backfill",
+    "Consolidate persons by shared source ID",
     "Prune orphan author links",
     "Soft-delete retention sweep",
 )
@@ -99,6 +100,9 @@ def _zero_stats() -> dict[str, Any]:
         "broken_image_urls_cleared": 0,
         "low_confidence_flagged": 0,
         "orphan_links_pruned": 0,
+        # v3.x (ADR-0015 slice 05) — consolidate persons by shared source ID.
+        "persons_merged_by_source_id": 0,
+        "persons_merge_ambiguous": 0,
         # v2.27.0 Phase 5b Phase 6 — soft-delete retention sweeper.
         "soft_deletes_purged": 0,
         "soft_deletes_kept": 0,
@@ -1251,6 +1255,194 @@ async def job_orphan_author_retrolink(stats: dict[str, Any]) -> None:
 # Safety net for the rare case where an author row gets deleted via
 # a path that bypassed Job 1's cascade.
 
+async def job_consolidate_persons_by_source_id(
+    stats: dict[str, Any],
+) -> None:
+    """v3.x (ADR-0015 slice 05) — Find groups of distinct persons that
+    share a ``(source, source_id)`` via their linked per-library
+    author rows, and merge them into one.
+
+    Closes the v2.20.0 split-person gap on prod day-one. Slice 03's
+    ID-rung consolidates persons *as new scans run*; this job
+    back-applies the same logic across existing data, so persons that
+    were anchored to the same source ID before slice 03 landed get
+    merged immediately rather than waiting for a future scan.
+
+    Distinct from Job 8 (``job_cross_library_person_backfill``), which
+    only *mirrors* a source-ID value across rows already linked to
+    the same person; that path never merges separate persons. This
+    job does the merging.
+
+    Algorithm:
+      1. Walk every library; read every per-library author row's
+         populated source-ID columns.
+      2. Map (source, value) → set of person_ids (via author_links).
+      3. For each (source, value) where the set has 2+ persons, merge
+         them into the lowest person_id (deterministic, stable
+         re-runs).
+      4. Merge mechanic: ``UPDATE author_links SET person_id=winner``
+         for all losing-person links, then ``DELETE FROM persons
+         WHERE id=loser``. Audit-log via the ``person_merges`` table
+         (one row per merged pair, with the source/source_id that
+         anchored the merge).
+      5. Idempotent: once every group has collapsed onto one person,
+         re-running finds no 2+ groups → zero merges.
+
+    Greedy merging by source ID is the simple, defensible policy for
+    a backfill. The slice-03 ambiguity case (one row's IDs anchoring
+    two persons) materializes naturally here: the FIRST source/value
+    we hit picks the merge winner; subsequent source/values that
+    would have anchored a different winner now see all participants
+    on the same person and are no-ops. The result converges to the
+    same consistent state as slice 03's runtime behavior.
+
+    Stats:
+      - ``persons_merged_by_source_id`` — count of merges performed.
+    """
+    from app.database import get_db as get_global_db
+    from app.discovery.author_identity import (
+        MIRRORABLE_SOURCE_ID_COLUMNS, _open_per_library,
+    )
+
+    merged_count = 0
+    libs = cross_library.libraries_for("all")
+    slugs = [l["slug"] for l in libs if l.get("slug")]
+
+    try:
+        gdb = await get_global_db()
+        try:
+            # Build a (slug, author_id) → person_id map once.
+            cur = await gdb.execute(
+                "SELECT library_slug, author_id, person_id FROM author_links"
+            )
+            link_map: dict[tuple[str, int], int] = {
+                (r["library_slug"], r["author_id"]): r["person_id"]
+                for r in await cur.fetchall()
+            }
+        finally:
+            await gdb.close()
+
+        # Build (source, value) → set of person_ids across all libraries.
+        id_cols = sorted(MIRRORABLE_SOURCE_ID_COLUMNS)
+        cols_sql = ", ".join(["id"] + id_cols)
+        groups: dict[tuple[str, str], set[int]] = {}
+        for slug in slugs:
+            try:
+                per_lib = await _open_per_library(slug)
+            except Exception:
+                continue
+            try:
+                has_authors = await (await per_lib.execute(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type='table' AND name='authors' LIMIT 1"
+                )).fetchone()
+                if not has_authors:
+                    continue
+                cur = await per_lib.execute(
+                    f"SELECT {cols_sql} FROM authors"  # nosec B608
+                )
+                for r in await cur.fetchall():
+                    pid = link_map.get((slug, r["id"]))
+                    if pid is None:
+                        continue
+                    for col in id_cols:
+                        v = r[col]
+                        if v and str(v).strip():
+                            groups.setdefault(
+                                (col[:-3], str(v).strip()),
+                                set(),
+                            ).add(pid)
+            finally:
+                await per_lib.close()
+
+        # For each multi-person group, merge into the lowest person_id.
+        if not any(len(s) > 1 for s in groups.values()):
+            logger.info(
+                "hygiene: consolidate-persons-by-source-id: no "
+                "multi-person groups; nothing to merge (idempotent no-op)"
+            )
+            stats["persons_merged_by_source_id"] = (
+                stats.get("persons_merged_by_source_id", 0)
+            )
+            return
+
+        # Redirect map: a person that's been folded into another
+        # records loser→winner here. When processing a later group,
+        # translate every pid through the redirect (transitively) so
+        # we never try to point an author_link at a deleted person
+        # (FK violation) or merge a person into itself.
+        redirect: dict[int, int] = {}
+
+        def resolve(pid: int) -> int:
+            while pid in redirect:
+                pid = redirect[pid]
+            return pid
+
+        gdb = await get_global_db()
+        try:
+            for (source, value), pids in groups.items():
+                # Translate through earlier merges in this run.
+                live = {resolve(p) for p in pids}
+                if len(live) < 2:
+                    continue
+                winner = min(live)
+                losers = sorted(live - {winner})
+                for loser in losers:
+                    # Capture the loser's canonical_name for audit.
+                    row = await (await gdb.execute(
+                        "SELECT canonical_name FROM persons WHERE id = ?",
+                        (loser,),
+                    )).fetchone()
+                    if not row:
+                        # Defensive: should be unreachable given the
+                        # redirect map above, but if the persons row
+                        # vanished some other way, skip rather than
+                        # FK-violate.
+                        continue
+                    loser_name = row["canonical_name"]
+                    cur = await gdb.execute(
+                        "UPDATE author_links SET person_id = ? "
+                        "WHERE person_id = ?",
+                        (winner, loser),
+                    )
+                    moved = cur.rowcount
+                    await gdb.execute(
+                        "DELETE FROM persons WHERE id = ?",
+                        (loser,),
+                    )
+                    await gdb.execute(
+                        "INSERT INTO person_merges "
+                        "(winner_person_id, loser_person_id, reason, "
+                        " source, source_id, moved_links, "
+                        " loser_canonical_name) "
+                        "VALUES (?, ?, 'consolidate_by_source_id', "
+                        "        ?, ?, ?, ?)",
+                        (winner, loser, source, value, moved,
+                         loser_name),
+                    )
+                    redirect[loser] = winner
+                    merged_count += 1
+                    logger.info(
+                        "hygiene: consolidate-persons-by-source-id: "
+                        "merged loser_person_id=%d (%r) into "
+                        "winner_person_id=%d via %s=%s (moved %d link(s))",
+                        loser, loser_name, winner, source, value, moved,
+                    )
+            await gdb.commit()
+        finally:
+            await gdb.close()
+
+        stats["persons_merged_by_source_id"] = (
+            stats.get("persons_merged_by_source_id", 0) + merged_count
+        )
+    except Exception as e:
+        msg = (
+            f"consolidate-persons-by-source-id: {type(e).__name__}: {e}"
+        )
+        logger.exception(msg)
+        stats["errors"].append(msg)
+
+
 async def job_prune_orphan_links(stats: dict[str, Any]) -> None:
     from app.discovery import author_identity
     try:
@@ -1401,23 +1593,34 @@ async def run_all() -> dict[str, Any]:
             "broken_image_urls_cleared": stats["broken_image_urls_cleared"],
         })
 
-        # Job 9 — Prune orphan author_links (safety net for the rare
-        # case where an author row gets deleted via a path that
-        # bypassed Job 1's cascade).
+        # Job 9 — Consolidate persons by shared source ID
+        # (v3.x ADR-0015 slice 05). Runs after Job 8's mirror so the
+        # population of {source}_id columns is at its most complete;
+        # then this job merges persons sharing a (source, source_id).
         _set_phase(8, library="(cross-library)")
-        await job_prune_orphan_links(stats)
+        await job_consolidate_persons_by_source_id(stats)
         state._hygiene_progress["jobs"].append({
             "name": JOB_NAMES[8],
+            "persons_merged_by_source_id": stats["persons_merged_by_source_id"],
+        })
+
+        # Job 10 — Prune orphan author_links (safety net for the rare
+        # case where an author row gets deleted via a path that
+        # bypassed Job 1's cascade).
+        _set_phase(9, library="(cross-library)")
+        await job_prune_orphan_links(stats)
+        state._hygiene_progress["jobs"].append({
+            "name": JOB_NAMES[9],
             "orphan_links_pruned": stats["orphan_links_pruned"],
         })
 
-        # Job 10 — Soft-delete retention sweep (v2.27.0 Phase 5b
+        # Job 11 — Soft-delete retention sweep (v2.27.0 Phase 5b
         # Phase 6). Filesystem-only; walks every library's
         # .seshat-replaced/<ts>/ subdirs and purges anything older
         # than `active_replacement_soft_delete_retention_days`
         # (default 30). Idempotent — once steady state is reached,
         # this is a near-no-op on every subsequent run.
-        _set_phase(9, library="(cross-library)")
+        _set_phase(10, library="(cross-library)")
         try:
             from app.orchestrator.active_replacement import (
                 purge_expired_soft_deletes,
@@ -1433,7 +1636,7 @@ async def run_all() -> dict[str, Any]:
                 f"soft_delete_sweep: {type(e).__name__}: {e}"
             )
         state._hygiene_progress["jobs"].append({
-            "name": JOB_NAMES[9],
+            "name": JOB_NAMES[10],
             "soft_deletes_purged":    stats["soft_deletes_purged"],
             "soft_deletes_kept":      stats["soft_deletes_kept"],
             "soft_deletes_malformed": stats["soft_deletes_malformed"],
