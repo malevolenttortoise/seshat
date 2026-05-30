@@ -1277,14 +1277,23 @@ async def resolve_or_create_author(
         ``author_source_id_conflicts`` via ``record_source_id_conflict``
         for operator review (best-effort, async, side-channel).
 
-    Matching itself stays name-only in this slice — ID-first matching
-    lands in slice 02 (resolver) + slice 03 (person). Sources without
-    a known ID column (e.g. ``mam``) skip the persistence path
-    entirely. The conflict-record helper reads ``library_slug`` from
-    ``get_active_library()`` — when unset (unit tests, scan-less
-    contexts), the conflict is dropped silently. This mirrors the
-    best-effort posture of the v2.20.0 ``mirror_source_id`` write at
-    the author-level path in ``_merge_result``.
+    v3.x (ADR-0015 slice 02) — when ``source`` + ``source_id`` are
+    supplied and any existing row in this library already carries
+    ``{source}_id == source_id``, that row is returned **before** any
+    name comparison runs. The canonical ID anchors the row, closing
+    the silent name-collision risk where two real authors share a
+    normalized name (the second-encountered byline would have matched
+    the first row by name). On an ID miss, the name ladder runs
+    unchanged and slice 01's fill-if-empty + conflict-record path
+    persists the captured id on the matched/minted row.
+
+    Sources without a known ID column (e.g. ``mam``) skip both the
+    ID rung and the persistence path entirely. The conflict-record
+    helper reads ``library_slug`` from ``get_active_library()`` — when
+    unset (unit tests, scan-less contexts), the conflict is dropped
+    silently. This mirrors the best-effort posture of the v2.20.0
+    ``mirror_source_id`` write at the author-level path in
+    ``_merge_result``.
     """
     from app.metadata.author_names import normalize_author_name, authors_match
     name = (name or "").strip()
@@ -1331,6 +1340,20 @@ async def resolve_or_create_author(
         except Exception:
             # Side-channel; never break the scan on this path.
             pass
+
+    # 0. (ADR-0015 slice 02) ID-first match. When the source carries
+    #    a known ID column and any existing row records this id, that
+    #    row is returned without consulting names. Anchors the row by
+    #    its canonical id and closes the silent name-collision risk.
+    #    No persistence call needed — the column already equals
+    #    source_id by construction of the WHERE clause.
+    if col and source_id:
+        row = await (await db.execute(
+            f"SELECT id FROM authors WHERE {col} = ?",  # nosec B608
+            (source_id,),
+        )).fetchone()
+        if row:
+            return row["id"]
 
     # 1. Exact display name.
     row = await (await db.execute(
