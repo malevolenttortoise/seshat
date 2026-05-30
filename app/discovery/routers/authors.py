@@ -1072,7 +1072,8 @@ async def list_persons_source_ids():
     try:
         cur = await gdb.execute(
             "SELECT al.person_id, p.canonical_name, p.display_name_override, "
-            "       p.normalized_name, al.library_slug, al.author_id "
+            "       p.normalized_name, p.image_url, "
+            "       al.library_slug, al.author_id "
             "FROM author_links al "
             "JOIN persons p ON p.id = al.person_id "
             "WHERE al.person_id IN ("
@@ -1098,6 +1099,10 @@ async def list_persons_source_ids():
                     r["display_name_override"] or r["canonical_name"]
                 ),
                 "normalized_name": r["normalized_name"],
+                # v3.x (ADR-0016 slice 06) — canonical author image
+                # (lockstep-mirrored with linked siblings' `authors.image_url`
+                # via `mirror_image_url`). Read straight from persons.
+                "image_url": r["image_url"],
                 "links": [],
             }
         by_person[pid]["links"].append({
@@ -1212,7 +1217,11 @@ async def list_source_id_conflicts():
     wanted_by_slug: dict[str, set[int]] = {}
     for r in rows:
         wanted_by_slug.setdefault(r["library_slug"], set()).add(r["author_id"])
-    on_file_names: dict[tuple[str, int], str] = {}
+    # v3.x (ADR-0016 slice 06) — also fetch image_url so the panel
+    # can render an avatar next to each disputed row (face-aware
+    # triage matters more here than anywhere else on the page since
+    # the operator is judging "is this the same person?").
+    per_row_meta: dict[tuple[str, int], dict] = {}
     for slug, aids in wanted_by_slug.items():
         if not aids:
             continue
@@ -1224,12 +1233,15 @@ async def list_source_id_conflicts():
             ph = ",".join("?" * len(aids))
             aid_list = sorted(aids)
             cur = await per_lib.execute(
-                f"SELECT id, name FROM authors "  # nosec B608
+                f"SELECT id, name, image_url FROM authors "  # nosec B608
                 f"WHERE id IN ({ph})",
                 aid_list,
             )
             for ar in await cur.fetchall():
-                on_file_names[(slug, ar["id"])] = ar["name"]
+                per_row_meta[(slug, ar["id"])] = {
+                    "name": ar["name"],
+                    "image_url": ar["image_url"],
+                }
         finally:
             await per_lib.close()
 
@@ -1238,9 +1250,12 @@ async def list_source_id_conflicts():
             "id": r["id"],
             "library_slug": r["library_slug"],
             "author_id": r["author_id"],
-            "on_file_name": on_file_names.get(
-                (r["library_slug"], r["author_id"]),
-            ),
+            "on_file_name": (per_row_meta.get(
+                (r["library_slug"], r["author_id"]), {},
+            )).get("name"),
+            "on_file_image_url": (per_row_meta.get(
+                (r["library_slug"], r["author_id"]), {},
+            )).get("image_url"),
             "source": r["source"],
             "existing_id": r["existing_id"],
             "incoming_id": r["incoming_id"],
