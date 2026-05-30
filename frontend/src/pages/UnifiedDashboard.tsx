@@ -2078,6 +2078,10 @@ const HYGIENE_JOBS: { name: string; blurb: string }[] = [
     name: "Prune orphan author_links",
     blurb: "Drops global `author_links` rows whose per-library author no longer exists (cross-file FK can't cascade automatically). Also removes any `persons` rows that become unreferenced.",
   },
+  {
+    name: "Image URL health check",
+    blurb: "Substring-clears author images under `/books/` (book-cover-as-photo regression — historically the John-Birmingham row) or containing `nophoto` (Goodreads placeholders), then HEAD-verifies remaining populated rows and clears any non-200. Local-clear-only — the next discovery scan refills the slot via the rank-aware mirror.",
+  },
 ];
 
 function HygieneConfirmModal({
@@ -2116,7 +2120,7 @@ function HygieneConfirmModal({
           Run Data Hygiene?
         </div>
         <div style={{ fontSize: 13, color: t.text2, marginBottom: 14 }}>
-          This will fan the following 10 jobs across every configured library,
+          This will fan the following 11 jobs across every configured library,
           in order. Re-running is idempotent — re-runs are near-no-ops once
           everything is clean.
         </div>

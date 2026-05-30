@@ -364,4 +364,6 @@ def test_job_listed_in_catalogue():
     # Inserted at index 8 (between Cross-library person backfill and
     # Prune orphan author links).
     assert hygiene.JOB_NAMES[8] == "Consolidate persons by shared source ID"
-    assert hygiene.TOTAL_JOBS == 11
+    # TOTAL_JOBS bumped to 12 in ADR-0016 slice 05 (new "Image URL
+    # health check" at index 10; soft-delete sweep pushed to 11).
+    assert hygiene.TOTAL_JOBS == 12
