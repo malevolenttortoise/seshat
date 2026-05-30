@@ -63,6 +63,10 @@ CREATE TABLE IF NOT EXISTS authors (
     openlibrary_id TEXT,
     audible_id TEXT,
     image_url TEXT,
+    -- v3.x (ADR-0016) — provenance for `image_url`. Lockstep-mirrored
+    -- with `persons.image_url_source` by `mirror_image_url`. NULL on
+    -- pre-ADR-0016 rows is treated as lowest rank.
+    image_url_source TEXT,
     bio TEXT,
     verified INTEGER NOT NULL DEFAULT 0,
     last_lookup_at REAL,
@@ -674,6 +678,12 @@ MIGRATIONS = [
     # the startup backfill computes it for every existing row (after
     # the book_authors backfill, which it reads).
     "ALTER TABLE series ADD COLUMN author_mode TEXT",
+    # ── v3.x (ADR-0016 slice 01): image source provenance ────────
+    # Per-library mirror of `persons.image_url_source`. Lockstep with
+    # `authors.image_url` via `mirror_image_url`. Pre-ADR-0016 rows
+    # have NULL source treated as lowest rank (any new source can
+    # upgrade them).
+    "ALTER TABLE authors ADD COLUMN image_url_source TEXT",
 ]
 
 
