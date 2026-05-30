@@ -20,3 +20,4 @@ New decisions get the next number; supersede rather than rewrite when a decision
 | [0012](0012-drop-books-author-id-position-0-canonical.md) | Drop `books.author_id`; position 0 is the sole canonical primary author |
 | [0013](0013-claim-for-owned-contributor-aware.md) | Claim-for-owned is contributor-aware (announce-primary × owned-any-contributor) |
 | [0014](0014-heal-contributors-on-scan-convergence.md) | Heal unowned discovered books' contributors on scan-convergence (union, owned-guarded) |
+| [0015](0015-source-id-aware-author-identity.md) | Source-ID-aware author identity: persist co-author IDs fill-if-empty, match ID-first, surface conflicts, consolidate-by-ID |

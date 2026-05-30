@@ -1234,6 +1234,8 @@ async def write_book_authors(
 
 async def resolve_or_create_author(
     db, name: str, *, allow_create: bool,
+    source: Optional[str] = None,
+    source_id: Optional[str] = None,
 ) -> Optional[int]:
     """v3.0.0 Phase 3 — resolve a source-reported contributor name to a
     per-library ``authors.id`` (the FK target of ``book_authors``).
@@ -1261,16 +1263,104 @@ async def resolve_or_create_author(
     connection (so the FK is satisfied without an interim commit).
 
     Returns the author_id, or None on an empty name / link-only miss.
+
+    v3.x (ADR-0015 slice 01) — when ``source`` + ``source_id`` are
+    supplied, the captured per-contributor ``source_author_id`` is
+    persisted onto the resolved row's ``{source}_id`` column with
+    **fill-if-empty** semantics:
+
+      - On mint, the new row carries ``{source}_id = source_id``.
+      - On match where the column is NULL → UPDATE fills it.
+      - On match where the column equals the incoming id → no-op.
+      - On match where the column is populated and differs → existing
+        value is left untouched and the conflict is upserted into
+        ``author_source_id_conflicts`` via ``record_source_id_conflict``
+        for operator review (best-effort, async, side-channel).
+
+    v3.x (ADR-0015 slice 02) — when ``source`` + ``source_id`` are
+    supplied and any existing row in this library already carries
+    ``{source}_id == source_id``, that row is returned **before** any
+    name comparison runs. The canonical ID anchors the row, closing
+    the silent name-collision risk where two real authors share a
+    normalized name (the second-encountered byline would have matched
+    the first row by name). On an ID miss, the name ladder runs
+    unchanged and slice 01's fill-if-empty + conflict-record path
+    persists the captured id on the matched/minted row.
+
+    Sources without a known ID column (e.g. ``mam``) skip both the
+    ID rung and the persistence path entirely. The conflict-record
+    helper reads ``library_slug`` from ``get_active_library()`` — when
+    unset (unit tests, scan-less contexts), the conflict is dropped
+    silently. This mirrors the best-effort posture of the v2.20.0
+    ``mirror_source_id`` write at the author-level path in
+    ``_merge_result``.
     """
     from app.metadata.author_names import normalize_author_name, authors_match
     name = (name or "").strip()
     if not name:
         return None
+    col = None
+    if source and source_id:
+        # Lazy import — author_identity has its own DATA_DIR imports
+        # we don't want to pay on every resolver call when persistence
+        # isn't requested.
+        from app.discovery.author_identity import source_id_column
+        col = source_id_column(source)
+
+    async def _persist_on_match(matched_id: int) -> None:
+        """Fill-if-empty + conflict-record for a name-matched row."""
+        if not col or not source_id:
+            return
+        cur_row = await (await db.execute(
+            f"SELECT {col} FROM authors WHERE id = ?",
+            (matched_id,),
+        )).fetchone()
+        current = cur_row[col] if cur_row else None
+        if current is None:
+            await db.execute(
+                f"UPDATE authors SET {col} = ? WHERE id = ?",
+                (source_id, matched_id),
+            )
+            return
+        if current == source_id:
+            return
+        # Case 4 — populated and different. Record conflict;
+        # leave the on-file id alone.
+        try:
+            from app.discovery.author_identity import (
+                record_source_id_conflict,
+            )
+            from app.discovery.database import get_active_library
+            active_slug = get_active_library()
+            if active_slug:
+                await record_source_id_conflict(
+                    active_slug, matched_id, source,
+                    str(current), str(source_id), name,
+                )
+        except Exception:
+            # Side-channel; never break the scan on this path.
+            pass
+
+    # 0. (ADR-0015 slice 02) ID-first match. When the source carries
+    #    a known ID column and any existing row records this id, that
+    #    row is returned without consulting names. Anchors the row by
+    #    its canonical id and closes the silent name-collision risk.
+    #    No persistence call needed — the column already equals
+    #    source_id by construction of the WHERE clause.
+    if col and source_id:
+        row = await (await db.execute(
+            f"SELECT id FROM authors WHERE {col} = ?",  # nosec B608
+            (source_id,),
+        )).fetchone()
+        if row:
+            return row["id"]
+
     # 1. Exact display name.
     row = await (await db.execute(
         "SELECT id FROM authors WHERE name = ?", (name,),
     )).fetchone()
     if row:
+        await _persist_on_match(row["id"])
         return row["id"]
     normalized = normalize_author_name(name)
     if normalized:
@@ -1279,6 +1369,7 @@ async def resolve_or_create_author(
             "SELECT id FROM authors WHERE normalized_name = ?", (normalized,),
         )).fetchone()
         if row:
+            await _persist_on_match(row["id"])
             return row["id"]
         # 3. Fuzzy over existing rows. Only runs on a miss (a genuinely
         # new contributor), so the full-table scan is bounded in
@@ -1288,14 +1379,22 @@ async def resolve_or_create_author(
         )).fetchall()
         for r in rows:
             if authors_match(name, r["name"] or ""):
+                await _persist_on_match(r["id"])
                 return r["id"]
     if not allow_create:
         return None
-    cur = await db.execute(
-        "INSERT INTO authors (name, sort_name, normalized_name) "
-        "VALUES (?, ?, ?)",
-        (name, name, normalized or name),
-    )
+    if col and source_id:
+        cur = await db.execute(
+            f"INSERT INTO authors (name, sort_name, normalized_name, {col}) "
+            f"VALUES (?, ?, ?, ?)",
+            (name, name, normalized or name, source_id),
+        )
+    else:
+        cur = await db.execute(
+            "INSERT INTO authors (name, sort_name, normalized_name) "
+            "VALUES (?, ?, ?)",
+            (name, name, normalized or name),
+        )
     return cur.lastrowid
 
 

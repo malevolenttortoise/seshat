@@ -1166,6 +1166,128 @@ async def list_persons_source_ids():
     return {"persons": out}
 
 
+@router.get("/persons/source-id-conflicts")
+async def list_source_id_conflicts():
+    """v3.x (ADR-0015 slice 04) — list open Case-4 source-ID conflicts.
+
+    Slice 01's ``_persist_on_match`` records a row in
+    ``author_source_id_conflicts`` whenever a name-matched author
+    row's ``{source}_id`` is already populated with a value that
+    differs from an incoming ``Contributor.source_author_id``. The
+    on-file canonical id is preserved; this endpoint surfaces the
+    deferred decision for operator review on the Persons & IDs page.
+
+    Resolution is via the existing manual tools (person merge,
+    direct source-ID edit) — there is no "pick a winner" mutation
+    here; the dismiss endpoint flips ``status`` only.
+
+    Each row carries the per-library author's display name from the
+    per-library DB so the operator can identify the author without
+    a second roundtrip.
+
+    Route ORDER: registered before ``GET /persons/{person_id}`` per
+    the v2.22.4 fix (parameterized path would greedy-match
+    ``source-id-conflicts`` as a person_id string).
+    """
+    from app.discovery.author_identity import _open_per_library
+
+    gdb = await get_global_db()
+    try:
+        rows = await (await gdb.execute(
+            "SELECT id, library_slug, author_id, source, "
+            "       existing_id, incoming_id, incoming_name, "
+            "       first_seen_at, last_seen_at "
+            "FROM author_source_id_conflicts "
+            "WHERE status = 'open' "
+            "ORDER BY last_seen_at DESC, id DESC"
+        )).fetchall()
+    finally:
+        await gdb.close()
+
+    # Resolve each (slug, author_id) to its current per-library author
+    # display name, in one query per touched library. The name on the
+    # row may not match the on-file name (the conflict's name is what
+    # the scan *reported*); the on-file name is what shows on the
+    # Persons & IDs row, which is what the operator clicks.
+    wanted_by_slug: dict[str, set[int]] = {}
+    for r in rows:
+        wanted_by_slug.setdefault(r["library_slug"], set()).add(r["author_id"])
+    on_file_names: dict[tuple[str, int], str] = {}
+    for slug, aids in wanted_by_slug.items():
+        if not aids:
+            continue
+        try:
+            per_lib = await _open_per_library(slug)
+        except Exception:
+            continue
+        try:
+            ph = ",".join("?" * len(aids))
+            aid_list = sorted(aids)
+            cur = await per_lib.execute(
+                f"SELECT id, name FROM authors "  # nosec B608
+                f"WHERE id IN ({ph})",
+                aid_list,
+            )
+            for ar in await cur.fetchall():
+                on_file_names[(slug, ar["id"])] = ar["name"]
+        finally:
+            await per_lib.close()
+
+    out = [
+        {
+            "id": r["id"],
+            "library_slug": r["library_slug"],
+            "author_id": r["author_id"],
+            "on_file_name": on_file_names.get(
+                (r["library_slug"], r["author_id"]),
+            ),
+            "source": r["source"],
+            "existing_id": r["existing_id"],
+            "incoming_id": r["incoming_id"],
+            "incoming_name": r["incoming_name"],
+            "first_seen_at": r["first_seen_at"],
+            "last_seen_at": r["last_seen_at"],
+        }
+        for r in rows
+    ]
+    return {"conflicts": out}
+
+
+@router.post("/persons/source-id-conflicts/{conflict_id}/dismiss")
+async def dismiss_source_id_conflict(conflict_id: int):
+    """v3.x (ADR-0015 slice 04) — mark a conflict row dismissed.
+
+    Idempotent: re-dismissing a dismissed row is a no-op. The row is
+    NOT deleted — historical conflicts stay queryable for a future
+    "show dismissed" filter or audit. The underlying author row's
+    ``{source}_id`` is NOT touched; the operator resolves the
+    underlying ambiguity via the existing manual tools (person merge,
+    direct source-ID edit) and then dismisses this row to clear it
+    from the open list.
+
+    Returns 404 only when the conflict id doesn't exist at all.
+    """
+    gdb = await get_global_db()
+    try:
+        row = await (await gdb.execute(
+            "SELECT status FROM author_source_id_conflicts WHERE id = ?",
+            (conflict_id,),
+        )).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="conflict not found")
+        if row["status"] == "dismissed":
+            return {"status": "ok", "already_dismissed": True}
+        await gdb.execute(
+            "UPDATE author_source_id_conflicts "
+            "SET status = 'dismissed' WHERE id = ?",
+            (conflict_id,),
+        )
+        await gdb.commit()
+        return {"status": "ok", "already_dismissed": False}
+    finally:
+        await gdb.close()
+
+
 @router.get("/persons/{person_id}")
 async def get_person_detail(person_id: int):
     """Unified cross-library author detail (v2.20.0 Phase 2).

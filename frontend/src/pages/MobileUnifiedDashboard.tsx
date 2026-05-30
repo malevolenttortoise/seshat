@@ -678,6 +678,7 @@ const MOBILE_HYGIENE_JOBS = [
   "ABS author cross-stamp",
   "Orphan author retrolink",
   "Cross-library person backfill",
+  "Consolidate persons by shared source ID",
   "Prune orphan author_links",
 ];
 

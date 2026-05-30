@@ -31,6 +31,23 @@ interface PersonRow {
   divergent: string[];
 }
 
+interface SourceIdConflict {
+  id: number;
+  library_slug: string;
+  author_id: number;
+  on_file_name: string | null;
+  source: string;
+  existing_id: string;
+  incoming_id: string;
+  incoming_name: string | null;
+  first_seen_at: number | null;
+  last_seen_at: number | null;
+}
+
+interface ConflictsResponse {
+  conflicts: SourceIdConflict[];
+}
+
 interface ListResponse {
   persons: PersonRow[];
 }
@@ -79,11 +96,13 @@ interface PersonsManagerPageProps {
 export default function PersonsManagerPage({ onNav }: PersonsManagerPageProps) {
   const t = useTheme();
   const [data, setData] = useState<ListResponse | null>(null);
+  const [conflicts, setConflicts] = useState<SourceIdConflict[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
   const [onlyDivergent, setOnlyDivergent] = useState(false);
   const [sourceFilters, setSourceFilters] = useState<Record<string, SourceFilterMode>>(emptySourceFilters);
   const [busy, setBusy] = useState<string | null>(null);
+  const [dismissBusy, setDismissBusy] = useState<number | null>(null);
 
   const cycleSourceFilter = useCallback((col: string) => {
     setSourceFilters((prev) => ({
@@ -105,7 +124,35 @@ export default function PersonsManagerPage({ onNav }: PersonsManagerPageProps) {
     } catch (e) {
       toast.error((e as Error).message || "Failed to load persons");
     }
+    // v3.x (ADR-0015 slice 04) — source-ID conflict surface. Pull in
+    // parallel with the persons list so the panel renders on the same
+    // frame; failures here are non-fatal (the page still works).
+    try {
+      const c = await api.get<ConflictsResponse>(
+        "/discovery/persons/source-id-conflicts",
+      );
+      setConflicts(c.conflicts);
+    } catch {
+      // Silent — slice 01's conflict table is best-effort; if the
+      // global DB is mid-migration the persons list still works.
+    }
     setLoading(false);
+  }, []);
+
+  const dismissConflict = useCallback(async (conflictId: number) => {
+    setDismissBusy(conflictId);
+    try {
+      await api.post(
+        `/discovery/persons/source-id-conflicts/${conflictId}/dismiss`,
+        {},
+      );
+      // Optimistic local removal so the row vanishes immediately.
+      setConflicts((prev) => prev.filter((c) => c.id !== conflictId));
+      toast.success("Conflict dismissed");
+    } catch (e) {
+      toast.error((e as Error).message || "Dismiss failed");
+    }
+    setDismissBusy(null);
   }, []);
 
   useEffect(() => {
@@ -184,6 +231,96 @@ export default function PersonsManagerPage({ onNav }: PersonsManagerPageProps) {
         by Hygiene Job 8 (ebook wins), but a manual edit here lets
         you override the policy.
       </p>
+
+      {/* v3.x (ADR-0015 slice 04) — source-ID conflict surface. Each
+          conflict is a Case-4 disagreement recorded by slice 01: a
+          scan reported a different `{source}_id` for an author whose
+          row already carried a canonical value. Slice 01 preserves
+          the on-file id; this panel surfaces the deferred decision.
+          Resolution is via the existing manual person-merge /
+          source-ID-edit tools; Dismiss clears the row from the open
+          list (audit row remains, recoverable). */}
+      {conflicts.length > 0 && (
+        <div
+          style={{
+            border: `1px solid ${t.redt}`,
+            borderRadius: 6,
+            padding: 12,
+            background: t.redb,
+            marginBottom: 14,
+          }}
+        >
+          <div style={{
+            display: "flex", alignItems: "baseline", gap: 8,
+            marginBottom: 6,
+          }}>
+            <strong style={{ color: t.text }}>
+              Source-ID conflicts
+            </strong>
+            <span style={{ fontSize: 11, color: t.tg }}>
+              ({conflicts.length} open)
+            </span>
+          </div>
+          <div style={{ fontSize: 11, color: t.tg, marginBottom: 8 }}>
+            A scan reported a different ID for these authors. The
+            on-file value is preserved. Resolve via the row below
+            (edit the field) or via person-merge, then Dismiss.
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {conflicts.map((c) => (
+              <div
+                key={c.id}
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr auto",
+                  gap: 8,
+                  padding: "6px 8px",
+                  background: t.bg,
+                  border: `1px solid ${t.border}`,
+                  borderRadius: 4,
+                }}
+              >
+                <div style={{ fontSize: 12, color: t.td }}>
+                  <span style={{ fontWeight: 600, color: t.text }}>
+                    {c.on_file_name ?? `#${c.author_id}`}
+                  </span>
+                  <span style={{ color: t.tg }}>
+                    {" "}· <code>{c.library_slug}</code>
+                    {" "}· <code>{c.source}</code>
+                  </span>
+                  <div style={{ marginTop: 2, fontSize: 11 }}>
+                    on file: <code>{c.existing_id}</code>
+                    {" "}↔ incoming: <code>{c.incoming_id}</code>
+                    {c.incoming_name
+                      ? <span style={{ color: t.tg }}>
+                          {" "}(as "{c.incoming_name}")
+                        </span>
+                      : null}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  disabled={dismissBusy === c.id}
+                  onClick={() => dismissConflict(c.id)}
+                  style={{
+                    alignSelf: "center",
+                    fontSize: 11,
+                    padding: "3px 10px",
+                    background: t.bg2,
+                    color: t.td,
+                    border: `1px solid ${t.border}`,
+                    borderRadius: 3,
+                    cursor: dismissBusy === c.id ? "wait" : "pointer",
+                    opacity: dismissBusy === c.id ? 0.6 : 1,
+                  }}
+                >
+                  {dismissBusy === c.id ? "…" : "Dismiss"}
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div style={{ display: "flex", gap: 10, margin: "12px 0", alignItems: "center" }}>
         <input

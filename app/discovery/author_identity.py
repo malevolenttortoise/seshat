@@ -110,6 +110,19 @@ MIRRORABLE_SOURCE_ID_COLUMNS: frozenset[str] = frozenset({
 })
 
 
+def source_id_column(source: Optional[str]) -> Optional[str]:
+    """Per-library `authors` column for a discovery source's captured
+    `source_author_id`, or None if the source isn't an ID carrier
+    (MAM is intentionally absent — no `mam_id` column per ADR-0015
+    "Out of scope")."""
+    if not source:
+        return None
+    col = f"{source}_id"
+    if col in KNOWN_SOURCE_ID_COLUMNS:
+        return col
+    return None
+
+
 @dataclass(frozen=True)
 class Person:
     """Canonical author identity. One row in `persons`."""
@@ -263,16 +276,38 @@ async def get_or_create_person(
 
     Strategy:
       1. If `author_links` already has a row → return its person_id.
-      2. Else read the author's display_name + normalized_name from
-         the per-library DB (or use the `name`/`bio`/`image_url`
-         override args if provided — sync-insert paths pass these
-         to avoid a roundtrip to the row that was just inserted).
+      2. Read the author's full row from the per-library DB (name,
+         bio, image_url, and every mirrorable source-ID column).
+         Caller overrides for name/bio/image_url take precedence.
+      2.5 (slice 03, ADR-0015) **ID-aware rung.** If any populated
+         ``{source}_id`` on this row already anchors another linked
+         author (any library, including this one), reuse that
+         person and link with ``link_confidence='high'``. Multi-ID
+         ambiguity (counts tie across different persons) drops to
+         the name rung — see "Ambiguity policy" below.
       3. Look up `persons` by normalized_name. If found, link to it.
       4. Else create a new `persons` row, then link.
 
-    The `name` override is for hot-path callers that ALREADY have the
-    author's name in hand (e.g., immediately after INSERT). All other
-    callers leave it as None and we read from the per-library DB.
+    The `name`/`bio`/`image_url` overrides remain available for
+    hot-path callers that already have the values in hand; slice 03
+    pays one per-library row read either way because the ID rung
+    needs the source-ID columns.
+
+    **Ambiguity policy (slice 03):** when ID matches point to two or
+    more distinct persons with the same top count, the ID rung
+    declines to decide and falls through to the name rung. We
+    deliberately do NOT record an ``author_source_id_conflicts``
+    row for this class of event — the table's
+    ``(library_slug, author_id, source, incoming_id)`` semantic
+    captures per-row "incoming-vs-on-file" disagreement (slice 01
+    Case 4), which is a different shape from cross-row "this person
+    vs that person" ambiguity. Forcing the data through would mix
+    two distinct conflict classes under slice 04's UI and degrade
+    operator triage. Ambiguity is exceptionally rare (requires
+    pre-existing persons each anchored to one source ID that THIS
+    row carries multiple of), and the name-rung fallback's existing
+    fuzzy/low-confidence path already surfaces the symptom via
+    Author Triage. The full design rationale lives in ADR-0015.
     """
     db = await get_global_db()
     try:
@@ -285,26 +320,111 @@ async def get_or_create_person(
         if row:
             return row["person_id"]
 
-        # Step 2: fetch author info if not supplied.
+        # Step 2: read this author's row — name/bio/image_url AND every
+        # mirrorable source-ID column. The ID rung needs the IDs, so
+        # we pay the per-library roundtrip even when name overrides
+        # are supplied (one cheap PK lookup per call).
+        id_cols = sorted(MIRRORABLE_SOURCE_ID_COLUMNS)
+        select_cols = ", ".join(id_cols + ["name", "bio", "image_url"])
+        per_lib = await _open_per_library(library_slug)
+        try:
+            arow = await (await per_lib.execute(
+                f"SELECT {select_cols} "  # nosec B608
+                f"FROM authors WHERE id = ?",
+                (author_id,),
+            )).fetchone()
+        finally:
+            await per_lib.close()
+        if not arow:
+            raise ValueError(
+                f"author_id={author_id} not found in "
+                f"seshat_{library_slug}.db — cannot link"
+            )
+
         if name is None:
-            per_lib = await _open_per_library(library_slug)
-            try:
-                arow = await (await per_lib.execute(
-                    "SELECT name, bio, image_url FROM authors WHERE id = ?",
-                    (author_id,),
-                )).fetchone()
-            finally:
-                await per_lib.close()
-            if not arow:
-                raise ValueError(
-                    f"author_id={author_id} not found in "
-                    f"seshat_{library_slug}.db — cannot link"
-                )
             name = arow["name"]
-            if bio is None:
-                bio = arow["bio"]
-            if image_url is None:
-                image_url = arow["image_url"]
+        if bio is None:
+            bio = arow["bio"]
+        if image_url is None:
+            image_url = arow["image_url"]
+
+        # Step 2.5 (slice 03, ADR-0015): ID-aware rung. Walk every
+        # library that hosts a linked author, look up rows carrying
+        # any of this row's source IDs, map matches back to persons
+        # via author_links, and pick the winner.
+        populated_ids: list[tuple[str, str]] = [
+            (col, str(arow[col]).strip())
+            for col in id_cols
+            if arow[col] and str(arow[col]).strip()
+        ]
+        if populated_ids:
+            person_match_counts: dict[int, int] = {}
+            cur = await db.execute(
+                "SELECT DISTINCT library_slug FROM author_links"
+            )
+            all_slugs = [r["library_slug"] for r in await cur.fetchall()]
+            for slug in all_slugs:
+                try:
+                    per_lib_walk = await _open_per_library(slug)
+                except Exception:
+                    continue
+                try:
+                    for col, val in populated_ids:
+                        if slug == library_slug:
+                            sql = (
+                                f"SELECT id FROM authors "  # nosec B608
+                                f"WHERE {col} = ? AND id != ?"
+                            )
+                            params = (val, author_id)
+                        else:
+                            sql = (
+                                f"SELECT id FROM authors "  # nosec B608
+                                f"WHERE {col} = ?"
+                            )
+                            params = (val,)
+                        rows = await (
+                            await per_lib_walk.execute(sql, params)
+                        ).fetchall()
+                        for hit in rows:
+                            prow = await (await db.execute(
+                                "SELECT person_id FROM author_links "
+                                "WHERE library_slug = ? AND author_id = ?",
+                                (slug, hit["id"]),
+                            )).fetchone()
+                            if prow:
+                                pid = prow["person_id"]
+                                person_match_counts[pid] = (
+                                    person_match_counts.get(pid, 0) + 1
+                                )
+                finally:
+                    await per_lib_walk.close()
+            if person_match_counts:
+                max_count = max(person_match_counts.values())
+                winners = [
+                    p for p, c in person_match_counts.items()
+                    if c == max_count
+                ]
+                if len(winners) == 1:
+                    person_id = winners[0]
+                    await db.execute(
+                        "INSERT INTO author_links "
+                        "(person_id, library_slug, author_id, "
+                        " link_source, link_confidence) "
+                        "VALUES (?, ?, ?, 'auto', 'high')",
+                        (person_id, library_slug, author_id),
+                    )
+                    await db.commit()
+                    return person_id
+                # Ambiguity → drop to name rung. See "Ambiguity policy"
+                # in the docstring for why we do not record a
+                # `author_source_id_conflicts` row here.
+                _log.info(
+                    "get_or_create_person: ID-rung ambiguity for "
+                    "%s/%d — %d persons tied at %d matches "
+                    "(counts=%s); falling through to name rung",
+                    library_slug, author_id, len(winners), max_count,
+                    dict(person_match_counts),
+                )
 
         normalized = normalize_author_name(name)
         if not normalized:
@@ -487,6 +607,64 @@ async def mirror_source_id(
             await gdb.close()
 
     return touched
+
+
+# ─── Source-ID conflict recording (v3.x — ADR-0015) ────────────
+
+
+async def record_source_id_conflict(
+    library_slug: str,
+    author_id: int,
+    source: str,
+    existing_id: str,
+    incoming_id: str,
+    incoming_name: Optional[str] = None,
+) -> None:
+    """Upsert a row into ``author_source_id_conflicts`` (ADR-0015 case 4).
+
+    Called from the per-library write path when a name-matched author
+    row's ``{source}_id`` is already populated with a value that differs
+    from the incoming ``Contributor.source_author_id``. Fill-if-empty
+    NEVER overwrites a populated column; the conflict is recorded for
+    operator review in the Persons & IDs page (slice 04).
+
+    The UPSERT key is ``(library_slug, author_id, source, incoming_id)``
+    so repeat scans bump ``last_seen_at`` instead of spamming a row per
+    encounter. ``status`` defaults to ``'open'`` and is flipped to
+    ``'dismissed'`` by the operator via the slice-04 endpoint.
+
+    Best-effort — failures are logged + swallowed so the scan never
+    breaks on this side channel. No-op when ``library_slug`` is falsy
+    (callers in scan-less contexts).
+    """
+    if not library_slug or not source or not existing_id or not incoming_id:
+        return
+    if existing_id == incoming_id:
+        return  # defensive — caller already checks
+    try:
+        db = await get_global_db()
+        try:
+            await db.execute(
+                "INSERT INTO author_source_id_conflicts "
+                "(library_slug, author_id, source, existing_id, "
+                " incoming_id, incoming_name) "
+                "VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(library_slug, author_id, source, incoming_id) "
+                "DO UPDATE SET "
+                "  last_seen_at = strftime('%s','now'), "
+                "  incoming_name = COALESCE(excluded.incoming_name, incoming_name)",
+                (library_slug, author_id, source, existing_id,
+                 incoming_id, incoming_name),
+            )
+            await db.commit()
+        finally:
+            await db.close()
+    except Exception as exc:
+        _log.debug(
+            "record_source_id_conflict failed for %s/%d/%s "
+            "existing=%s incoming=%s: %s",
+            library_slug, author_id, source, existing_id, incoming_id, exc,
+        )
 
 
 # ─── Mirror bio (v2.22.0) ──────────────────────────────────────

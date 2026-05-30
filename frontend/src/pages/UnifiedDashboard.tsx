@@ -2071,6 +2071,10 @@ const HYGIENE_JOBS: { name: string; blurb: string }[] = [
     blurb: "Walks every multi-link person; mirrors NULL source IDs across linked siblings (Amazon/Goodreads/Hardcover/etc.), audit-logs ebook-wins conflict resolution, backfills `persons.bio` from any non-null sibling, clears broken book-cover-as-author-photo URLs, and recomputes link_confidence flags so Author Triage stays accurate.",
   },
   {
+    name: "Consolidate persons by shared source ID",
+    blurb: "Finds distinct `persons` rows that share a (source, source_id) via their linked author rows and merges them into one (winner = lowest person_id). Backfills slice 03's runtime ID-consolidation across pre-existing data so the split-person gap (Heinlein vs Heinlein, A.) closes in one pass. Audit-logged to `person_merges`; idempotent.",
+  },
+  {
     name: "Prune orphan author_links",
     blurb: "Drops global `author_links` rows whose per-library author no longer exists (cross-file FK can't cascade automatically). Also removes any `persons` rows that become unreferenced.",
   },
@@ -2112,7 +2116,7 @@ function HygieneConfirmModal({
           Run Data Hygiene?
         </div>
         <div style={{ fontSize: 13, color: t.text2, marginBottom: 14 }}>
-          This will fan the following 9 jobs across every configured library,
+          This will fan the following 10 jobs across every configured library,
           in order. Re-running is idempotent — re-runs are near-no-ops once
           everything is clean.
         </div>
