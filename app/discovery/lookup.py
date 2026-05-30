@@ -898,6 +898,12 @@ async def _link_discovered_contributors(db, book_id: int, scanned_author_id: int
     at position 0.
     """
     allow_create = source_name in TRUSTED_CREATE_SOURCES
+    # v3.x (ADR-0016 slice 03) — resolve once for the contributor loop's
+    # co-author image fill-if-empty path; passed as `db=db` to the helper
+    # so it writes the caller's own per-library row through the same
+    # connection (same deadlock-avoidance pattern as slice 02).
+    from app.discovery.database import get_active_library
+    active_slug = get_active_library()
     ordered: list[int] = []
     for c in bk.contributors:
         if not contributor_is_author(c.role):
@@ -913,6 +919,24 @@ async def _link_discovered_contributors(db, book_id: int, scanned_author_id: int
         )
         if aid is not None:
             ordered.append(aid)
+            # v3.x (ADR-0016 slice 03) — captured co-author image fills
+            # NULL slots via the strict fill-if-empty co_author path (the
+            # silent-drop fix for the v3.0.0 Phase 3.4 Amazon byline
+            # widget captures that nothing was consuming). LC byline
+            # never upgrades cross-source regardless of source rank.
+            if c.image_url and active_slug:
+                try:
+                    from app.discovery.author_identity import mirror_image_url
+                    await mirror_image_url(
+                        active_slug, aid, source_name, c.image_url,
+                        trust="co_author", db=db,
+                    )
+                except Exception as exc:
+                    logger.debug(
+                        "mirror_image_url(co_author) failed for "
+                        "author_id=%d source=%s: %s",
+                        aid, source_name, exc,
+                    )
     if scanned_author_id not in ordered:
         ordered.append(scanned_author_id)
     await write_book_authors(db, book_id, ordered)
