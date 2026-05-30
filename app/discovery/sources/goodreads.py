@@ -109,6 +109,35 @@ def _parse_book_contributors(soup) -> list[Contributor]:
     return out
 
 
+def _extract_author_photo(soup) -> Optional[str]:
+    """v3.x (ADR-0016 slice 04) — extract the author photo URL from a
+    Goodreads `/author/list/{id}` page, or ``None`` if absent.
+
+    Selector ``img[src*='/authors/']`` targets the canonical Goodreads
+    author-photo URL pattern (``images.gr-assets.com/authors/{ts}p2/{id}.jpg``)
+    rather than the long-gone ``.authorPhoto`` class or the ambiguous
+    ``alt*='author'`` substring (both matched ZERO images on the 2026-05-30
+    live recon across Sanderson/King/Heinlein/Rothfuss/RJ pages; see
+    ``files/slice04-gr-selector-recon.py``). Book-cover URLs under
+    ``i.gr-assets.com/images/S/.../books/...`` are excluded by construction —
+    the substring is host-independent and disambiguates author vs book
+    image without depending on classes, alt text, or DOM position.
+
+    The ``nophoto`` defense preserves the historical filter: Goodreads
+    serves placeholder URLs containing ``nophoto`` (e.g.,
+    ``nophoto/user/u_50x66-...``) for authors without a photo. Treat
+    those as "no photo available" rather than write a placeholder into
+    the DB.
+    """
+    photo_el = soup.select_one("img[src*='/authors/']")
+    if not photo_el:
+        return None
+    src = photo_el.get("src")
+    if not src or "nophoto" in src:
+        return None
+    return src
+
+
 def _is_future(d: str) -> bool:
     try:
         return datetime.strptime(d[:10], "%Y-%m-%d") > datetime.now()
@@ -576,13 +605,9 @@ class GoodreadsSource(BaseSource):
                         author_name = hm.group(1).strip()
             author_name = author_name or "Unknown"
 
-            # Get author image
-            author_img = None
-            photo_el = soup.select_one("img.authorPhoto, img[alt*='author']")
-            if photo_el:
-                author_img = photo_el.get("src")
-                if author_img and "nophoto" in author_img:
-                    author_img = None
+            # Get author image (selector rebuilt in v3.x ADR-0016 slice 04;
+            # see `_extract_author_photo` for selector rationale + recon).
+            author_img = _extract_author_photo(soup)
 
             # Pass 1: collect every book entry from the author list
             # pages (paginating through `?page=N` until exhausted).
