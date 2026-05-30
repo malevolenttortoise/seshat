@@ -78,6 +78,12 @@ JOB_NAMES = (
     "Cross-library person backfill",
     "Consolidate persons by shared source ID",
     "Prune orphan author links",
+    # v3.x (ADR-0016 slice 05) — image-URL health check. Retires Job 8's
+    # `/books/`-path substring workaround in favor of an honest HEAD
+    # verify + substring blacklist. Local-clear-only (does not fan
+    # NULLs through siblings; the next scan re-establishes coherence
+    # via mirror_image_url's rank-aware overwrite).
+    "Image URL health check",
     "Soft-delete retention sweep",
 )
 TOTAL_JOBS = len(JOB_NAMES)
@@ -97,7 +103,13 @@ def _zero_stats() -> dict[str, Any]:
         "person_ids_mirrored": 0,
         "person_id_conflicts_resolved": 0,
         "person_bios_backfilled": 0,
-        "broken_image_urls_cleared": 0,
+        # v3.x (ADR-0016 slice 05) — image-URL health check stats.
+        # Replaces the v2.22.0 `broken_image_urls_cleared` Job 8 stat,
+        # which was the John-Birmingham `/books/`-path substring
+        # workaround. Job 11 splits the cause into two buckets so the
+        # operator can see HEAD-verified-dead vs substring-blacklisted.
+        "image_urls_head_failed": 0,
+        "image_urls_blacklisted_path": 0,
         "low_confidence_flagged": 0,
         "orphan_links_pruned": 0,
         # v3.x (ADR-0015 slice 05) — consolidate persons by shared source ID.
@@ -1087,44 +1099,18 @@ async def job_cross_library_person_backfill(stats: dict[str, Any]) -> None:
         finally:
             await gdb.close()
 
-    # John Birmingham image_url cleanup. The Goodreads selector
-    # `img.authorPhoto, img[alt*='author']` matched a book cover
-    # image; the resulting URL contains "/books/" in its path. Clear
-    # any matching row across all libraries. The proper rebuild lives
-    # in the v3.x backlog item [author_image_rework].
-    jb_cleared = 0
-    for lib in cross_library.libraries_for("all"):
-        slug = lib.get("slug")
-        if not slug:
-            continue
-        try:
-            per_lib = await _open_per_library(slug)
-        except Exception:
-            continue
-        try:
-            has_authors = await (await per_lib.execute(
-                "SELECT 1 FROM sqlite_master "
-                "WHERE type='table' AND name='authors' LIMIT 1"
-            )).fetchone()
-            if not has_authors:
-                continue
-            cur = await per_lib.execute(
-                "UPDATE authors SET image_url = NULL "
-                "WHERE image_url LIKE '%/books/%'"
-            )
-            await per_lib.commit()
-            jb_cleared += cur.rowcount or 0
-        finally:
-            await per_lib.close()
+    # v3.x (ADR-0016 slice 05) — the John-Birmingham `/books/`-path
+    # image-clear workaround that used to live here has been retired
+    # in favor of an honest HEAD-verify in the new Job 11 "Image URL
+    # health check". Job 8 keeps its named purpose (cross-library
+    # source-ID mirror + bio backfill + link_confidence recompute);
+    # image-URL hygiene is no longer a side-job here.
 
     stats["person_ids_mirrored"] = (
         stats.get("person_ids_mirrored", 0) + mirrored
     )
     stats["person_id_conflicts_resolved"] = (
         stats.get("person_id_conflicts_resolved", 0) + conflicts_resolved
-    )
-    stats["broken_image_urls_cleared"] = (
-        stats.get("broken_image_urls_cleared", 0) + jb_cleared
     )
     stats["person_bios_backfilled"] = (
         stats.get("person_bios_backfilled", 0) + bios_backfilled
@@ -1164,10 +1150,8 @@ async def job_cross_library_person_backfill(stats: dict[str, Any]) -> None:
 
     logger.info(
         "hygiene: person-backfill: mirrored=%d conflicts_resolved=%d "
-        "broken_image_urls_cleared=%d person_bios_backfilled=%d "
-        "low_confidence_flagged=%d",
-        mirrored, conflicts_resolved, jb_cleared, bios_backfilled,
-        flagged_low,
+        "person_bios_backfilled=%d low_confidence_flagged=%d",
+        mirrored, conflicts_resolved, bios_backfilled, flagged_low,
     )
 
 
@@ -1457,14 +1441,158 @@ async def job_prune_orphan_links(stats: dict[str, Any]) -> None:
         stats["errors"].append(msg)
 
 
+# ─── Job 11 — Image URL health check (v3.x ADR-0016 slice 05) ─────
+
+
+# Substring blacklist of URL patterns that are NEVER author photos.
+# `/books/` — Goodreads book-cover-as-author-photo (the long-standing
+#   John-Birmingham failure mode that Job 8 used to substring-clear).
+# `nophoto` — Goodreads placeholder URLs for authors without a photo
+#   (e.g. `nophoto/user/u_50x66-...`). The discovery-side
+#   `_extract_author_photo` filter would have caught these at write
+#   time post-slice-04, but legacy rows + future drift make defense-
+#   in-depth cheap.
+_IMAGE_URL_BLACKLIST_PATTERNS = ("/books/", "nophoto")
+
+
+async def job_image_url_health_check(stats: dict[str, Any]) -> None:
+    """v3.x (ADR-0016 slice 05) — verify every populated `authors.image_url`
+    across every per-library DB. Two clears:
+
+      1. Substring blacklist (`/books/`, `nophoto`) — clears the
+         historical book-cover-as-author-photo URLs (the failure mode
+         retired from Job 8 here) + any nophoto placeholders that
+         slipped past upstream filters.
+      2. HEAD-verify the remainder. Non-200 → NULL the row's image
+         (ADR-0016 §6).
+
+    **Local-clear-only** (ADR-0016 §6 D8(i)): clears the per-library
+    row in place; does NOT fan a NULL through linked siblings + the
+    persons row. The next scan re-establishes coherence via
+    `mirror_image_url`'s rank-aware overwrite. Forcing a NULL fan-out
+    would also clear siblings whose row might still return a 200 on
+    its own URL (different per-library rows can carry different
+    captures pre-mirror lockstep, and an operator-edited per-library
+    override would also live here).
+
+    HTTP cost: ~1500 authors × HEAD against CDNs (Goodreads `images.gr-
+    assets.com`, Amazon `m.media-amazon.com`, etc.) per run. Only
+    fires on operator Hygiene click; concurrent ceiling kept modest
+    (8) so a hygiene run completes in seconds, not minutes.
+
+    Errors during the HEAD itself (timeout, connection refused, etc.)
+    are treated as non-200 per the locked design — they NULL the row.
+    A subsequent scan repopulates the URL from any source so this is
+    self-correcting; the cost of leaving a definitely-broken URL
+    visible is higher than the cost of a brief placeholder while the
+    next scan refills.
+    """
+    import asyncio
+    import httpx
+    from app.discovery.author_identity import _open_per_library
+
+    head_failed = 0
+    blacklisted = 0
+    libraries = cross_library.libraries_for("all")
+
+    # One AsyncClient covers all libraries; HTTP/2 + connection pooling
+    # cuts HEAD overhead substantially vs per-request clients.
+    timeout = httpx.Timeout(connect=5.0, read=5.0, write=5.0, pool=5.0)
+    limits = httpx.Limits(max_connections=8, max_keepalive_connections=8)
+
+    async with httpx.AsyncClient(
+        timeout=timeout, limits=limits, follow_redirects=True,
+    ) as client:
+        for lib in libraries:
+            slug = lib.get("slug")
+            if not slug:
+                continue
+            try:
+                per_lib = await _open_per_library(slug)
+            except Exception:
+                continue
+            try:
+                # Guard against pre-v2.20.0 DBs that lack the table.
+                has_authors = await (await per_lib.execute(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type='table' AND name='authors' LIMIT 1"
+                )).fetchone()
+                if not has_authors:
+                    continue
+
+                # 1) Substring blacklist clear (one SQL pass per pattern;
+                # rowcount sums for stats).
+                lib_blacklisted = 0
+                for pattern in _IMAGE_URL_BLACKLIST_PATTERNS:
+                    cur = await per_lib.execute(
+                        "UPDATE authors SET image_url = NULL, "
+                        "                   image_url_source = NULL "
+                        "WHERE image_url LIKE ?",
+                        (f"%{pattern}%",),
+                    )
+                    lib_blacklisted += cur.rowcount or 0
+                if lib_blacklisted:
+                    await per_lib.commit()
+                blacklisted += lib_blacklisted
+
+                # 2) HEAD-verify the remaining populated rows.
+                rows = await (await per_lib.execute(
+                    "SELECT id, image_url FROM authors "
+                    "WHERE image_url IS NOT NULL"
+                )).fetchall()
+
+                async def _verify(row):
+                    url = row["image_url"]
+                    try:
+                        r = await client.head(url)
+                        return row["id"], r.status_code == 200
+                    except Exception:
+                        return row["id"], False
+
+                # Parallelize within the per-library batch under the
+                # client's max_connections ceiling. Each HEAD is small
+                # + the connection pool reuses sockets.
+                if rows:
+                    results = await asyncio.gather(
+                        *[_verify(r) for r in rows],
+                        return_exceptions=False,
+                    )
+                    lib_failed = 0
+                    for aid, ok in results:
+                        if not ok:
+                            await per_lib.execute(
+                                "UPDATE authors SET image_url = NULL, "
+                                "                   image_url_source = NULL "
+                                "WHERE id = ?",
+                                (aid,),
+                            )
+                            lib_failed += 1
+                    if lib_failed:
+                        await per_lib.commit()
+                    head_failed += lib_failed
+            finally:
+                await per_lib.close()
+
+    stats["image_urls_blacklisted_path"] = (
+        stats.get("image_urls_blacklisted_path", 0) + blacklisted
+    )
+    stats["image_urls_head_failed"] = (
+        stats.get("image_urls_head_failed", 0) + head_failed
+    )
+    logger.info(
+        "hygiene: image-url-health: blacklisted=%d head_failed=%d",
+        blacklisted, head_failed,
+    )
+
+
 # ─── Coordinator ────────────────────────────────────────────────────
 
 async def run_all() -> dict[str, Any]:
-    """Run the full 6-job Hygiene chain across every configured
-    library. Returns the rollup stats dict.
+    """Run the full Hygiene chain (12 jobs at v3.x ADR-0016 slice 05)
+    across every configured library. Returns the rollup stats dict.
 
     Drives `state._hygiene_progress` per-step so the dashboard
-    banner has a `1 of 6: <job name> — <library>` display path.
+    banner has a `N of TOTAL_JOBS: <job name> — <library>` path.
 
     Hygiene_progress mutations are point-in-time only — the
     coordinator does NOT block on a flag (other than its own task
@@ -1590,7 +1718,6 @@ async def run_all() -> dict[str, Any]:
             "name": JOB_NAMES[7],
             "person_ids_mirrored": stats["person_ids_mirrored"],
             "person_id_conflicts_resolved": stats["person_id_conflicts_resolved"],
-            "broken_image_urls_cleared": stats["broken_image_urls_cleared"],
         })
 
         # Job 9 — Consolidate persons by shared source ID
@@ -1614,13 +1741,26 @@ async def run_all() -> dict[str, Any]:
             "orphan_links_pruned": stats["orphan_links_pruned"],
         })
 
-        # Job 11 — Soft-delete retention sweep (v2.27.0 Phase 5b
+        # Job 11 — Image URL health check (v3.x ADR-0016 slice 05).
+        # Substring blacklist (`/books/`, `nophoto`) clears the legacy
+        # John-Birmingham-shape rows that used to live in Job 8's
+        # workaround; HEAD-verifies remaining populated rows; clears
+        # non-200 responses. Local-clear-only (ADR-0016 §6 D8(i)).
+        _set_phase(10, library="(cross-library)")
+        await job_image_url_health_check(stats)
+        state._hygiene_progress["jobs"].append({
+            "name": JOB_NAMES[10],
+            "image_urls_blacklisted_path": stats["image_urls_blacklisted_path"],
+            "image_urls_head_failed":      stats["image_urls_head_failed"],
+        })
+
+        # Job 12 — Soft-delete retention sweep (v2.27.0 Phase 5b
         # Phase 6). Filesystem-only; walks every library's
         # .seshat-replaced/<ts>/ subdirs and purges anything older
         # than `active_replacement_soft_delete_retention_days`
         # (default 30). Idempotent — once steady state is reached,
         # this is a near-no-op on every subsequent run.
-        _set_phase(10, library="(cross-library)")
+        _set_phase(11, library="(cross-library)")
         try:
             from app.orchestrator.active_replacement import (
                 purge_expired_soft_deletes,
@@ -1636,7 +1776,7 @@ async def run_all() -> dict[str, Any]:
                 f"soft_delete_sweep: {type(e).__name__}: {e}"
             )
         state._hygiene_progress["jobs"].append({
-            "name": JOB_NAMES[10],
+            "name": JOB_NAMES[11],
             "soft_deletes_purged":    stats["soft_deletes_purged"],
             "soft_deletes_kept":      stats["soft_deletes_kept"],
             "soft_deletes_malformed": stats["soft_deletes_malformed"],

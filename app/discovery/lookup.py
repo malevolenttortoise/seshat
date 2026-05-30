@@ -898,6 +898,12 @@ async def _link_discovered_contributors(db, book_id: int, scanned_author_id: int
     at position 0.
     """
     allow_create = source_name in TRUSTED_CREATE_SOURCES
+    # v3.x (ADR-0016 slice 03) — resolve once for the contributor loop's
+    # co-author image fill-if-empty path; passed as `db=db` to the helper
+    # so it writes the caller's own per-library row through the same
+    # connection (same deadlock-avoidance pattern as slice 02).
+    from app.discovery.database import get_active_library
+    active_slug = get_active_library()
     ordered: list[int] = []
     for c in bk.contributors:
         if not contributor_is_author(c.role):
@@ -913,6 +919,24 @@ async def _link_discovered_contributors(db, book_id: int, scanned_author_id: int
         )
         if aid is not None:
             ordered.append(aid)
+            # v3.x (ADR-0016 slice 03) — captured co-author image fills
+            # NULL slots via the strict fill-if-empty co_author path (the
+            # silent-drop fix for the v3.0.0 Phase 3.4 Amazon byline
+            # widget captures that nothing was consuming). LC byline
+            # never upgrades cross-source regardless of source rank.
+            if c.image_url and active_slug:
+                try:
+                    from app.discovery.author_identity import mirror_image_url
+                    await mirror_image_url(
+                        active_slug, aid, source_name, c.image_url,
+                        trust="co_author", db=db,
+                    )
+                except Exception as exc:
+                    logger.debug(
+                        "mirror_image_url(co_author) failed for "
+                        "author_id=%d source=%s: %s",
+                        aid, source_name, exc,
+                    )
     if scanned_author_id not in ordered:
         ordered.append(scanned_author_id)
     await write_book_authors(db, book_id, ordered)
@@ -996,9 +1020,14 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
         # co-author healed in on convergence this scan; recomputed once at
         # end-of-scan (the heal is inert for the series taxonomy without it).
         healed_series_ids: set[int] = set()
-        # Update author metadata
+        # Update author metadata. `image_url` is now the sole responsibility
+        # of `mirror_image_url` below (ADR-0016 slice 02); the legacy
+        # COALESCE-fill here was removed because it wrote `image_url`
+        # without populating `image_url_source` for sources the helper
+        # doesn't recognize, leaving rows in an ambiguous NULL-source state.
+        # `bio` keeps the COALESCE-fill — mirror_bio deliberately skips the
+        # caller's own slug so the caller's row is its responsibility.
         up = []; pr = []
-        if result.image_url: up.append("image_url = COALESCE(image_url, ?)"); pr.append(result.image_url)
         if result.bio: up.append("bio = COALESCE(bio, ?)"); pr.append(result.bio)
         if result.external_id: up.append(f"{source_name}_id = ?"); pr.append(result.external_id)
         up.append("last_lookup_at = ?"); pr.append(time.time()); pr.append(author_id)
@@ -1042,6 +1071,40 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                 logger.debug(
                     "mirror_bio failed for author_id=%d: %s",
                     author_id, exc,
+                )
+
+        # v3.x (ADR-0016 slice 02) — mirror the author image across
+        # linked siblings AND update `persons.image_url` canonically
+        # under the scanned-author trust rule (rank-aware overwrite).
+        # The helper handles rank comparison + canonical-overwrite-all
+        # fanout; unrecognized `source_name` (not in IMAGE_SOURCE_RANK)
+        # short-circuits to a warning + no-op. Best-effort.
+        #
+        # Pass `db=db` so the helper writes the caller's own per-library
+        # row through the SAME connection — line 1005's UPDATE hasn't
+        # committed yet, and a fresh connection to the same row would
+        # deadlock against the open write transaction until busy_timeout
+        # fires (30s). This is the exact path the helper's `db=` param
+        # was designed for; mirror_bio/mirror_source_id work around the
+        # same issue by skipping the caller's slug entirely, but
+        # mirror_image_url's canonical-overwrite-all writes the caller's
+        # slug too (per ADR-0016 §4).
+        if result.image_url:
+            try:
+                from app.discovery.author_identity import mirror_image_url
+                from app.discovery.database import get_active_library
+                active_slug = get_active_library()
+                if active_slug:
+                    await mirror_image_url(
+                        active_slug, author_id,
+                        source_name, result.image_url,
+                        trust="scanned", db=db,
+                    )
+            except Exception as exc:
+                logger.debug(
+                    "mirror_image_url(scanned) failed for author_id=%d "
+                    "source=%s: %s",
+                    author_id, source_name, exc,
                 )
 
         # SELECT includes pub_date, description, expected_date so the

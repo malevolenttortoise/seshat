@@ -26,6 +26,9 @@ interface PersonRow {
   canonical_name: string;
   display_name: string;
   normalized_name: string;
+  // v3.x (ADR-0016 slice 06) — canonical author image from persons.image_url
+  // (lockstep with linked siblings' authors.image_url via mirror_image_url).
+  image_url?: string | null;
   links: PersonLink[];
   source_ids: Record<string, string | null>;
   divergent: string[];
@@ -36,6 +39,9 @@ interface SourceIdConflict {
   library_slug: string;
   author_id: number;
   on_file_name: string | null;
+  // v3.x (ADR-0016 slice 06) — per-library authors.image_url for the
+  // disputed row; helps the operator face-disambiguate identity.
+  on_file_image_url?: string | null;
   source: string;
   existing_id: string;
   incoming_id: string;
@@ -88,6 +94,66 @@ function emptySourceFilters(): Record<string, SourceFilterMode> {
     SOURCE_ORDER.map((s) => [s, "all" as SourceFilterMode]),
   );
 }
+
+// v3.x (ADR-0016 slice 06) — small round author avatar. Renders the
+// real image when populated, an initial-letter placeholder otherwise.
+// Image-failed-to-load also falls back to the placeholder via onError
+// (no broken-image icon if the URL goes 404 between hygiene runs).
+function AuthorAvatar({
+  src,
+  name,
+  size = 32,
+  borderColor,
+  bgColor,
+  textColor,
+}: {
+  src?: string | null;
+  name: string;
+  size?: number;
+  borderColor: string;
+  bgColor: string;
+  textColor: string;
+}) {
+  const [failed, setFailed] = useState(false);
+  const initial = (name?.trim().charAt(0) || "?").toUpperCase();
+  const showImg = src && !failed;
+  return (
+    <div
+      style={{
+        width: size,
+        height: size,
+        borderRadius: "50%",
+        background: bgColor,
+        border: `1px solid ${borderColor}`,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        overflow: "hidden",
+        flexShrink: 0,
+        color: textColor,
+        fontSize: Math.round(size * 0.45),
+        fontWeight: 600,
+      }}
+      title={name}
+    >
+      {showImg ? (
+        <img
+          src={src!}
+          alt={name}
+          onError={() => setFailed(true)}
+          style={{
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
+          }}
+        />
+      ) : (
+        initial
+      )}
+    </div>
+  );
+}
+
 
 interface PersonsManagerPageProps {
   onNav?: NavFn;
@@ -272,14 +338,23 @@ export default function PersonsManagerPage({ onNav }: PersonsManagerPageProps) {
                 key={c.id}
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "1fr auto",
+                  gridTemplateColumns: "auto 1fr auto",
                   gap: 8,
+                  alignItems: "center",
                   padding: "6px 8px",
                   background: t.bg,
                   border: `1px solid ${t.border}`,
                   borderRadius: 4,
                 }}
               >
+                <AuthorAvatar
+                  src={c.on_file_image_url}
+                  name={c.on_file_name ?? `#${c.author_id}`}
+                  size={28}
+                  borderColor={t.border}
+                  bgColor={t.bg2}
+                  textColor={t.tg}
+                />
                 <div style={{ fontSize: 12, color: t.td }}>
                   <span style={{ fontWeight: 600, color: t.text }}>
                     {c.on_file_name ?? `#${c.author_id}`}
@@ -423,7 +498,15 @@ export default function PersonsManagerPage({ onNav }: PersonsManagerPageProps) {
               borderRadius: 6, padding: 12, background: t.bg,
             }}
           >
-            <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <AuthorAvatar
+                src={p.image_url}
+                name={p.display_name}
+                size={36}
+                borderColor={t.border}
+                bgColor={t.bg2}
+                textColor={t.tg}
+              />
               <span style={{ fontWeight: 600, color: t.text }}>
                 {p.display_name}
               </span>

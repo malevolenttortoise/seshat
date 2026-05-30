@@ -750,6 +750,202 @@ async def mirror_bio(
     return touched
 
 
+# ─── Mirror image_url (v3.x ADR-0016) ─────────────────────────
+
+
+# Image source rank for cross-source contention on the single
+# `authors.image_url` column. Lower number = higher priority.
+# Hardcover and audnexus are listed forward-looking; their parsers
+# don't emit `Contributor.image_url` yet (ADR-0016 §3 "reserved-but-
+# inert"). Adding a source later is purely additive.
+IMAGE_SOURCE_RANK: dict[str, int] = {
+    "amazon": 1,
+    "goodreads": 2,
+    "hardcover": 3,
+    # Key aligns with `app/discovery/sources/audible.py:name = "audible"` —
+    # that's the value flowing through `source_name` in lookup.py. The
+    # underlying API is Audnexus; the source slug is "audible".
+    "audible": 4,
+}
+
+# Lowest sentinel — used for NULL/unknown `image_url_source`. Treats
+# pre-ADR-0016 populated `image_url` rows (which carry no provenance)
+# as upgradeable by any recognized source.
+_IMAGE_RANK_LOWEST = 999
+
+
+def _image_rank(source: Optional[str]) -> int:
+    """Image source rank with NULL/unknown coerced to lowest priority."""
+    if source is None:
+        return _IMAGE_RANK_LOWEST
+    return IMAGE_SOURCE_RANK.get(source, _IMAGE_RANK_LOWEST)
+
+
+async def mirror_image_url(
+    library_slug: str,
+    author_id: int,
+    source: str,
+    value: Optional[str],
+    trust: str,
+    *,
+    db: Optional[aiosqlite.Connection] = None,
+) -> int:
+    """v3.x (ADR-0016) — propagate an author image with source-rank-aware
+    write semantics and canonical-overwrite-all fanout.
+
+    Two trust modes (locked in ADR-0016 §2):
+      - 'scanned'   — high-confidence (the search subject). Overwrites
+                      when `incoming_rank <= on_file_rank` (lower number
+                      = higher priority) or the on-file source is NULL.
+      - 'co_author' — byline-derived, lower-confidence. Strict fill-if-
+                      empty: writes only when the on-file slot is NULL,
+                      regardless of source rank (a low-confidence byline
+                      never upgrades cross-source).
+
+    Rank anchor:
+      - Linked authors → `persons.image_url_source` (the canonical row).
+      - Unlinked authors (no `author_links` row yet) → the per-library
+        `authors.image_url_source` itself. The per-library row carries
+        the capture-time state until the link is later created.
+
+    On write, **canonical-overwrite-all** (ADR-0016 §4): the same
+    `(image_url, image_url_source)` tuple is written to every linked
+    sibling AND the persons row in lockstep — face is invariant across
+    libraries. Diverges deliberately from `mirror_bio`'s COALESCE-fill
+    (bio plausibly differs by library/source; image does not).
+
+    Defensive:
+      - Empty / whitespace-only `value` is treated as None (no write):
+        a misbehaving scraper that yields "" can't blank an existing image.
+      - NULL `value` preserves the existing image — a scanned source
+        returning None just means "no image this run," not "clear it."
+      - Unknown `source` (not in IMAGE_SOURCE_RANK) is a no-op + warning;
+        the caller is ahead of the rank table. Adding a source is
+        intentionally additive in this module.
+      - Unknown `trust` raises ValueError (typo guard).
+
+    `db`: caller's already-open per-library connection. If passed, used
+    for the unlinked-anchor read and the caller's own-row write (avoids
+    deadlock with a still-open caller transaction). Other linked siblings
+    are always opened on demand. If absent, a fresh connection is opened
+    for the caller's slug too.
+
+    Returns the count of rows touched on a write (caller's row +
+    siblings + persons row, bounded by `1 + n_linked + (1 if linked else 0)`),
+    or 0 when no write proceeds (rank skip, fill-if-empty skip, NULL value,
+    unknown source).
+    """
+    # Normalize blank/whitespace to None; NULL incoming preserves existing.
+    if value is not None and not value.strip():
+        value = None
+    if value is None:
+        return 0
+
+    if trust not in ("scanned", "co_author"):
+        raise ValueError(f"mirror_image_url: invalid trust={trust!r}")
+
+    if source not in IMAGE_SOURCE_RANK:
+        _log.warning(
+            "mirror_image_url: unknown source %r — skipping write", source,
+        )
+        return 0
+
+    incoming_rank = IMAGE_SOURCE_RANK[source]
+    person_id = await person_id_for(library_slug, author_id)
+
+    # Caller's per-library connection — used for both the unlinked-
+    # anchor read and the own-row write. Reuse the caller's `db` if
+    # provided to avoid deadlocking against a still-open transaction.
+    own_db_close = db is None
+    if db is None:
+        db = await _open_per_library(library_slug)
+
+    try:
+        # Determine on-file anchor source.
+        if person_id is not None:
+            gdb = await get_global_db()
+            try:
+                cur = await gdb.execute(
+                    "SELECT image_url_source FROM persons WHERE id = ?",
+                    (person_id,),
+                )
+                row = await cur.fetchone()
+                anchor_source = row["image_url_source"] if row else None
+            finally:
+                await gdb.close()
+        else:
+            cur = await db.execute(
+                "SELECT image_url_source FROM authors WHERE id = ?",
+                (author_id,),
+            )
+            row = await cur.fetchone()
+            anchor_source = row["image_url_source"] if row else None
+
+        # Apply trust rule.
+        if trust == "scanned":
+            # Overwrite when incoming wins OR anchor is NULL.
+            if anchor_source is not None and incoming_rank > _image_rank(anchor_source):
+                return 0
+        else:  # co_author — strict fill-if-empty.
+            if anchor_source is not None:
+                return 0
+
+        touched = 0
+
+        # 1) Caller's own per-library row.
+        await db.execute(
+            "UPDATE authors SET image_url = ?, image_url_source = ? "
+            "WHERE id = ?",
+            (value, source, author_id),
+        )
+        await db.commit()
+        touched += 1
+
+        # 2) Linked siblings + persons row (only if linked).
+        if person_id is not None:
+            links = await linked_authors(person_id)
+            for slug, aid in links:
+                if slug == library_slug:
+                    continue
+                try:
+                    per_lib = await _open_per_library(slug)
+                except Exception as exc:
+                    _log.warning(
+                        "mirror_image_url: cannot open seshat_%s.db: %s — skipping",
+                        slug, exc,
+                    )
+                    continue
+                try:
+                    await per_lib.execute(
+                        "UPDATE authors SET image_url = ?, image_url_source = ? "
+                        "WHERE id = ?",
+                        (value, source, aid),
+                    )
+                    await per_lib.commit()
+                    touched += 1
+                finally:
+                    await per_lib.close()
+
+            gdb = await get_global_db()
+            try:
+                await gdb.execute(
+                    "UPDATE persons "
+                    "SET image_url = ?, image_url_source = ?, "
+                    "    last_updated_at = strftime('%s', 'now') "
+                    "WHERE id = ?",
+                    (value, source, person_id),
+                )
+                await gdb.commit()
+                touched += 1
+            finally:
+                await gdb.close()
+
+        return touched
+    finally:
+        if own_db_close:
+            await db.close()
+
+
 # ─── Orphan-link cleanup ───────────────────────────────────────
 
 

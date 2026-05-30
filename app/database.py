@@ -320,6 +320,11 @@ CREATE TABLE IF NOT EXISTS persons (
     display_name_override    TEXT,
     bio                      TEXT,
     image_url                TEXT,
+    -- v3.x (ADR-0016) — provenance for `image_url`. Lockstep-mirrored
+    -- with the per-library `authors.image_url_source` columns by
+    -- `mirror_image_url`. NULL on pre-ADR-0016 rows is treated as
+    -- lowest rank so any new source can upgrade them.
+    image_url_source         TEXT,
     last_updated_at          REAL NOT NULL DEFAULT (strftime('%s', 'now')),
     created_at               REAL NOT NULL DEFAULT (strftime('%s', 'now')),
     UNIQUE(normalized_name)
@@ -978,6 +983,11 @@ MIGRATIONS: list[str] = [
     "ON person_merges(winner_person_id)",
     "CREATE INDEX IF NOT EXISTS idx_person_merges_merged_at "
     "ON person_merges(merged_at DESC)",
+    # v3.x (ADR-0016 slice 01) — image source provenance on the canonical
+    # `persons` row. Lockstep-mirrored with per-library `authors.image_url_source`
+    # by `mirror_image_url`. Nullable; pre-ADR-0016 rows have NULL source
+    # treated as lowest rank (any new source can upgrade them).
+    "ALTER TABLE persons ADD COLUMN image_url_source TEXT",
 ]
 
 
