@@ -6,13 +6,13 @@ This is post-v2.27.0 behavior. Pre-v2.27.0 installs had no replacement path at a
 
 ## What replacement is, and why it's opt-in
 
-Replacement only fires when both sides exist: an owned book in a library Seshat manages, and an incoming grab that the [quality scorer](#how-quality-is-scored) ranks strictly better. The work of "is this the same book?" uses the same [dedup key](../../CONTEXT.md#bundles-and-dedup) the rest of the pipeline uses, scoped to the library's content type. The scorer's tuple comparison is strict — ties don't qualify — so a candidate has to actually beat the owned edition on a real axis (better tier on format, higher bitrate band, more channels) before an opportunity is even logged.
+Replacement only fires when both sides exist: an owned book in a library Seshat manages, and an incoming grab that the [quality scorer](#how-quality-is-scored) ranks strictly better. The work of "is this the same book?" uses the same [dedup key](../../CONTEXT.md#bundles--dedup) the rest of the pipeline uses, scoped to the library's content type. The scorer's tuple comparison is strict — ties don't qualify — so a candidate has to actually beat the owned edition on a real axis (better tier on format, higher bitrate band, more channels) before an opportunity is even logged.
 
 The feature is opt-in because the destructive step touches the on-disk file the library reads. Even though the move is reversible during the retention window, the library app (Calibre, CWA, or Audiobookshelf) sees the row disappear and the new row arrive — there is no in-place edit. Operators choose to enable that per library because the right answer depends on workflow: a library where a human curates edition choices in Calibre should not be replaced automatically; an archival audiobook library where "newest highest-bitrate copy wins" is the policy benefits from auto-enact.
 
 ## How quality is scored
 
-Replacement decisions sit on top of Seshat's quality model, which generalizes the v2.9.0 format-priority rule into a tuple-comparison over an ordered list of axes. The rule is "lower tuple wins, lexicographic." The [format-priority](../../CONTEXT.md#quality-and-replacement) axis is always primary; numeric axes act as tiebreakers when format ties.
+Replacement decisions sit on top of Seshat's quality model, which generalizes the v2.9.0 format-priority rule into a tuple-comparison over an ordered list of axes. The rule is "lower tuple wins, lexicographic." The [format-priority](../../CONTEXT.md#quality--replacement) axis is always primary; numeric axes act as tiebreakers when format ties.
 
 For audiobooks the default axis stack is:
 

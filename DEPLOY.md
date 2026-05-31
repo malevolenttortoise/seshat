@@ -124,58 +124,49 @@ Go to **Settings** → **Pipeline** section:
   translation pair (e.g. qBit sees `/data`, Seshat sees `/downloads`)
 - **Folder Structure**: Monthly `[YYYY-MM]`, yearly `[YYYY]`, or flat
 
-### 6. Enable the Amazon metadata cache (optional, recommended)
+### 6. Metadata cache (Amazon + Goodreads)
 
-As of v2.21.0, Amazon scans run in a paced background worker that
-writes to `metadata_cache_amazon.db` alongside your other Seshat
-state. Synchronous scans read from this cache instead of hitting
-Akamai live — the rest of the discovery flow no longer pauses when
-Amazon throws a 429 or 202 challenge.
+Amazon and Goodreads both run behind paced background workers that
+write per-source cache DBs (`metadata_cache_amazon.db`,
+`metadata_cache_goodreads.db`) alongside your other Seshat state.
+Synchronous scans read from these caches instead of hitting Akamai or
+Cloudflare live, so a soft-block on either provider no longer pauses
+discovery for the rest of the library. **Both workers are disabled by
+default on a fresh deploy.** Enable them per source from
+**Settings → Sources → Amazon** and **Settings → Sources → Goodreads**.
 
-The worker is **disabled by default** on a fresh deploy. To enable:
+**What to expect on first scan after enable.** The worker starts an
+opportunistic warmup: it pulls authors from the discovery queue at its
+configured pace and gradually fills the cache. Synchronous scans
+return partial data with a "warming" badge until the worker catches
+up. For a 600-author library the Amazon cache typically completes a
+full refresh cycle in 2–4 days at ~200–400 successful scans/day;
+Goodreads is throughput-bound rather than cap-bound and paces itself
+to source-side rate limits. See
+[`docs/guide/metadata-cache.md`](docs/guide/metadata-cache.md) for the
+full first-fill UX, the per-source cooldown model, and the escalation
+curve.
 
-1. Go to **Settings** → **Sources** → **Amazon**
-2. Toggle **"Enable Amazon Cache Worker"** on
-3. (Optional) Adjust **Format** (kindle / paperback / hardcover /
-   mass_market) and **Language** (default English)
-
-What you'll see on the panel:
+What you'll see on each source's cache panel:
 
 - **Status pill** — green when actively scanning, yellow on cooldown,
-  red on error
-- **Queue depth** — authors currently waiting to be scanned
-- **Today's scan count** — resets daily at
-  `metadata_cache_daily_summary_hour` (default 9am local)
-- **Last block** — most recent soft-block timestamp + reason
-- **Reset Cooldown** — emergency override that clears the cooldown
-  state (use sparingly; the cooldown exists for a reason)
+  red on error.
+- **Queue depth** — authors currently waiting to be scanned.
+- **Today's scan count** — resets daily at the configured summary hour.
+- **Reset Cooldown** — emergency override; use sparingly. The
+  cooldown is usually doing real work.
 
-For a 600-author library, the worker typically completes a full
-refresh cycle in 2–4 days at ~200–400 successful scans/day. High-
-priority authors (recent activity) refresh roughly daily.
+Status also surfaces in the navbar status icon (hover for state), on
+author detail pages (per-author badge: "scanned 3d ago, 12 books" /
+"in queue" / "cooldown"), and on the Dashboard's per-source cache
+rail. The full status model, posture differences between the two
+workers, and operator interventions live in
+[`docs/guide/metadata-cache.md`](docs/guide/metadata-cache.md).
 
-Status surfaces in three places besides the cache panel itself:
-
-- **Navbar status icon** (color-coded, hover for brief state)
-- **Author detail pages** — per-author cache badge ("scanned 3d ago,
-  12 books" / "in queue" / "cooldown")
-- **Dashboard** — Amazon Cache rail at the bottom of the Seshat Stats
-  widget with the most-recent discoveries
-
-Optional notifications (require `ntfy_url` + `ntfy_topic` set):
-
-- `notify_on_metadata_cache_error` (default ON) — worker stall,
-  cache-write failure, tick crash
-- `notify_on_metadata_cache_warning` (default ON) — top-tier
-  cooldown escalation, author flipped to `failed_permanent`
-- `notify_on_metadata_cache_daily_summary` (default OFF) — once-per-day
-  digest of today's scans + blocks
-- `notify_on_metadata_cache_new_book` (default OFF) — fires when the
-  worker discovers a new ASIN for an existing author
-
-Optional rotated log file: set `metadata_cache_log_file_enabled` to
-True in `settings.json` to attach a `RotatingFileHandler` writing to
-`/app/data/logs/metadata_cache_worker.log` (1 MB × 3 rotations).
+Notification routing is configurable per event — see
+[`docs/guide/notifications.md`](docs/guide/notifications.md). The
+legacy `notify_on_metadata_cache_*` keys still work as a fallback if
+you'd rather not migrate.
 
 ### 7. Verify
 
@@ -234,9 +225,19 @@ encrypted credentials are safe.
 |---|---|---|
 | Dashboard shows "Dispatcher: Offline" | Startup error | Check container logs |
 | IRC never connects | Missing/wrong IRC credentials | Verify in Settings → MAM |
-| qBit login fails with 403 | IP banned (too many bad attempts) | Restart your qBit container to clear the ban |
+| qBit login fails with 403 | Host header validation rejecting Seshat (qBit 5.1+ default) or IP-banned from prior bad attempts | Disable Host header validation in qBit → Options → Web UI → Security, or set Server domains to `*`. If the 403 persists, restart qBit to clear the ban list. |
+| qBit login fails with `HTTP 204 body=''` | qBit 5.2+ IP-whitelist bypass returning 204 instead of 200 | Update Seshat to the latest image — the 204 response is now handled as success. |
 | Books queue instead of downloading | Snatch budget full | Check the budget widget — wait for releases or increase cap |
 | Pipeline finds wrong file | Single-file torrent name mismatch | Usually resolves on retry; check logs for file matching |
-| Amazon column blank for an author after a scan | Cache miss — worker hasn't reached this author yet | Synchronous scans never touch Amazon as of v2.21.0; they read `metadata_cache_amazon.db`. The miss enqueues the author at priority 1000. Check the Amazon Cache panel for queue depth + worker status. |
-| Amazon Cache Status pill is red | Worker stall or repeated soft-blocks | Check container logs for the `[scan]` summary lines under `seshat.discovery.metadata_cache_worker.amazon`. Use "Reset Cooldown" sparingly; the cooldown is usually justified. |
+| Amazon column blank for an author after a scan | Cache miss — worker hasn't reached this author yet | Synchronous scans read `metadata_cache_amazon.db` rather than calling Akamai live. The miss enqueues the author at priority 1000. Check the Amazon Cache panel for queue depth + worker status. See [`docs/guide/metadata-cache.md`](docs/guide/metadata-cache.md). |
+| Amazon Cache Status pill is red | Worker stall or repeated soft-blocks | Check container logs for the `[scan]` summary lines under `seshat.discovery.metadata_cache_worker.amazon`. Use "Reset Cooldown" sparingly; the cooldown is usually justified. See [`docs/guide/metadata-cache.md` → Operator interventions](docs/guide/metadata-cache.md#operator-interventions). |
+| Series shows as "Shared" instead of "Per-author" after upgrade | Pre-3.0 thin rows in the series only carry a single contributor each, so the cross-book intersection collapses to empty | The next discovery scan that touches one of those rows heals the contributor set (additive union) and the series flips automatically. See [`docs/guide/multi-author-and-series.md` → Heal-on-convergence](docs/guide/multi-author-and-series.md#heal-on-convergence--pre-30-thin-rows-self-correct). |
+| Persons & IDs page shows a duplicate person (same author, two rows) | Pre-v3.2 name-only matching split one person across two rows even though the underlying author rows share a Goodreads/Amazon ID | Run Hygiene Job 9 (Consolidate persons by shared source ID). **Back the metadata DB up first** — person merges are hard to reverse. See [`docs/guide/hygiene-jobs.md` → Job 9](docs/guide/hygiene-jobs.md#job-9--consolidate-persons-by-shared-source-id). |
+| Approved Metadata Manager change didn't push back to Calibre/CWA | Sink-specific push path failed silently, or the sink itself is unreachable. CWA and calibredb diverge on the authors field. | Check the row's status badge and the sink's last reachability check. See [`docs/guide/metadata-manager.md` → Push-back routing](docs/guide/metadata-manager.md#push-back-routing) and [`docs/guide/metadata-manager.md` → Failure modes](docs/guide/metadata-manager.md#failure-modes). |
+| Audiobookshelf library doesn't pull into Seshat | Folder layout is irrelevant — Seshat reads ABS's API, not the filesystem. The library is either typed Podcast (Seshat filters `mediaType=book` only) or the API token isn't saved correctly. | Confirm the ABS library type is **Book**. Click the **Test Connection** button under Settings → Audiobookshelf — it returns a real error message if the token is wrong. |
 | Review queue shows wrong metadata | File scoped to wrong directory | Was fixed in v1.0.0; ensure you're on latest |
+
+## Further reading
+
+- [Operator + power-user guide](docs/guide/README.md) — the chapters that cover multi-author/series, per-source behavior, the metadata cache, the Metadata Manager, hygiene jobs, notification routing, and active replacement.
+- [Architecture Decision Records](docs/adr/README.md) — the durable "why" behind the decisions the guide chapters describe.
