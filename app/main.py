@@ -882,18 +882,37 @@ async def lifespan(app: FastAPI):
         # v3.4.0 slice 01 — Goodreads list-page cache scaffolding.
         # Creates `metadata_cache_goodreads.db` and its four tables
         # (state / list_pages / queue / worker_state) on first run.
-        # No queue backfill yet (slice 04 will populate the queue
-        # via cache-miss enqueues from lookup.py). Disabled by
-        # default — operator opts in via `metadata_cache.goodreads.mode`
-        # once slice 06 ships the UI.
+        # v3.6.0 — Boot-time queue backfill from authors with a stored
+        # `goodreads_id`, gated on mode != "disabled". Closes the
+        # v3.4.0 deferral ("queue starts empty, only fills via lookup-
+        # miss enqueues") which left steady-state installs with an
+        # idle worker forever. Mirrors the Amazon backfill above.
         try:
             from app.discovery import metadata_cache
             await metadata_cache.init_db(metadata_cache.SOURCE_GOODREADS)
+            _gr_mode = (
+                (settings.get("metadata_cache") or {})
+                .get("goodreads") or {}
+            ).get("mode", "disabled")
+            if _gr_mode != "disabled":
+                gr_backfill_counts = (
+                    await metadata_cache.backfill_goodreads_queue_from_authors(
+                        [l["slug"] for l in state._discovered_libraries],
+                    )
+                )
+                gr_total = sum(gr_backfill_counts.values())
+                if gr_total:
+                    _log.info(
+                        "metadata_cache: goodreads queue backfill enqueued "
+                        "%d new author(s) across %d libraries",
+                        gr_total, len(gr_backfill_counts),
+                    )
         except Exception:
             _log.exception(
-                "metadata_cache: goodreads init_db failed (non-fatal — "
-                "the live GoodreadsSource still serves scans; cache "
-                "stays empty until the worker lands in slice 03)"
+                "metadata_cache: goodreads init_db/backfill failed "
+                "(non-fatal — the live GoodreadsSource still serves "
+                "scans; cache stays empty until the worker recovers "
+                "via the lookup-miss enqueue path)"
             )
 
         # v3.4.0 slice 03 — background Goodreads list-page cache

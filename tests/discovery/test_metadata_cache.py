@@ -58,27 +58,32 @@ async def fake_discovery_libraries(tmp_path, monkeypatch):
     for slug in slugs:
         await disco_db.init_db(slug)
 
-    # Seed `authors` rows: two amazon_id authors per library + one
-    # author with no amazon_id (must NOT enqueue).
-    seed: dict[str, list[tuple[str, str | None]]] = {
+    # Seed `authors` rows. Per-author ID combinations exercise both
+    # backfills:
+    #   - both IDs present → enqueued by both Amazon AND Goodreads
+    #   - amazon_id only   → enqueued by Amazon, skipped by Goodreads
+    #   - goodreads_id only → enqueued by Goodreads, skipped by Amazon
+    #   - neither          → skipped by both
+    seed: dict[str, list[tuple[str, str | None, str | None]]] = {
         "books-lib": [
-            ("Books Author One",   "B001AAAAAA"),
-            ("Books Author Two",   "B002BBBBBB"),
-            ("Books Author Three", None),
+            ("Books Author One",   "B001AAAAAA", "1001.OneAuthor"),
+            ("Books Author Two",   "B002BBBBBB", None),
+            ("Books Author Three", None,         "1003.ThreeAuthor"),
         ],
         "audio-lib": [
-            ("Audio Author A", "B100AAAAAA"),
-            ("Audio Author B", "B101BBBBBB"),
+            ("Audio Author A", "B100AAAAAA", "2100.AudioA"),
+            ("Audio Author B", "B101BBBBBB", "2101.AudioB"),
         ],
     }
     for slug, authors in seed.items():
         db = await disco_db.get_db(slug=slug)
         try:
-            for name, amazon_id in authors:
+            for name, amazon_id, goodreads_id in authors:
                 await db.execute(
-                    "INSERT INTO authors (name, sort_name, normalized_name, amazon_id) "
-                    "VALUES (?, ?, ?, ?)",
-                    (name, name, name.lower(), amazon_id),
+                    "INSERT INTO authors (name, sort_name, normalized_name, "
+                    "amazon_id, goodreads_id) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (name, name, name.lower(), amazon_id, goodreads_id),
                 )
             await db.commit()
         finally:
@@ -504,6 +509,157 @@ class TestGoodreadsDbSummary:
         assert rc["metadata_cache_goodreads_list_pages"] == 0
         assert rc["metadata_cache_goodreads_queue"] == 0
         assert rc["metadata_cache_goodreads_worker_state"] == 1
+
+
+class TestGoodreadsBackfillFromAuthors:
+    async def test_backfill_enqueues_goodreads_id_authors(
+        self, cache_under, fake_discovery_libraries,
+    ):
+        await metadata_cache.init_db(metadata_cache.SOURCE_GOODREADS)
+        counts = await metadata_cache.backfill_goodreads_queue_from_authors(
+            fake_discovery_libraries,
+        )
+        # books-lib has 2 goodreads_id authors (One + Three; Two has
+        # None). audio-lib has 2.
+        assert counts == {"books-lib": 2, "audio-lib": 2}
+
+    async def test_backfill_skips_authors_with_null_goodreads_id(
+        self, cache_under, fake_discovery_libraries,
+    ):
+        await metadata_cache.init_db(metadata_cache.SOURCE_GOODREADS)
+        await metadata_cache.backfill_goodreads_queue_from_authors(
+            fake_discovery_libraries,
+        )
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_GOODREADS)
+        try:
+            cur = await db.execute(
+                f"SELECT author_id FROM "
+                f"{metadata_cache.queue_table(metadata_cache.SOURCE_GOODREADS)} "
+                f"ORDER BY author_id"
+            )
+            ids = [r[0] for r in await cur.fetchall()]
+        finally:
+            await db.close()
+        # Only the 4 actual goodreads_id authors landed — "Books
+        # Author Two" had goodreads_id=None and must not appear even
+        # though its amazon_id is populated.
+        assert ids == [
+            "1001.OneAuthor", "1003.ThreeAuthor",
+            "2100.AudioA", "2101.AudioB",
+        ]
+
+    async def test_backfill_is_idempotent(
+        self, cache_under, fake_discovery_libraries,
+    ):
+        await metadata_cache.init_db(metadata_cache.SOURCE_GOODREADS)
+        first = await metadata_cache.backfill_goodreads_queue_from_authors(
+            fake_discovery_libraries,
+        )
+        second = await metadata_cache.backfill_goodreads_queue_from_authors(
+            fake_discovery_libraries,
+        )
+        assert first == {"books-lib": 2, "audio-lib": 2}
+        assert second == {"books-lib": 0, "audio-lib": 0}
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_GOODREADS)
+        try:
+            cur = await db.execute(
+                f"SELECT COUNT(*) FROM "
+                f"{metadata_cache.queue_table(metadata_cache.SOURCE_GOODREADS)}"
+            )
+            row = await cur.fetchone()
+        finally:
+            await db.close()
+        assert row[0] == 4
+
+    async def test_backfill_records_queue_metadata(
+        self, cache_under, fake_discovery_libraries,
+    ):
+        """Backfill records priority + status + enqueued_reason on
+        each unique goodreads_id. Reason tag identifies the v3.6.0
+        seed wave for future operator diagnostics."""
+        await metadata_cache.init_db(metadata_cache.SOURCE_GOODREADS)
+        await metadata_cache.backfill_goodreads_queue_from_authors(
+            fake_discovery_libraries,
+        )
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_GOODREADS)
+        try:
+            cur = await db.execute(
+                f"SELECT author_id, priority, status, enqueued_reason "
+                f"FROM {metadata_cache.queue_table(metadata_cache.SOURCE_GOODREADS)} "
+                f"ORDER BY author_id"
+            )
+            rows = await cur.fetchall()
+        finally:
+            await db.close()
+        assert len(rows) == 4
+        for r in rows:
+            assert r[1] == 100.0
+            assert r[2] == "pending"
+            assert r[3] == "v360_backfill"
+
+    async def test_backfill_dedupes_same_goodreads_id_across_libraries(
+        self, cache_under, tmp_path, monkeypatch,
+    ):
+        """Queue PK is `author_id` only (ADR-0018 §2 — GR matches the
+        Amazon shape here), so the same goodreads_id present in both
+        calibre + abs collapses to ONE queue row."""
+        from app.discovery import database as disco_db
+        monkeypatch.setattr(disco_db, "DATA_DIR", tmp_path)
+
+        slugs = ["books-lib", "audio-lib"]
+        for slug in slugs:
+            await disco_db.init_db(slug)
+
+        seed: dict[str, list[tuple[str, str]]] = {
+            "books-lib": [
+                ("Shared Author",   "9999.Shared"),
+                ("Books-Only One",  "5001.BooksOnly"),
+            ],
+            "audio-lib": [
+                ("Shared Author Audio", "9999.Shared"),
+                ("Audio-Only One",      "5101.AudioOnly"),
+            ],
+        }
+        for slug, authors in seed.items():
+            db = await disco_db.get_db(slug=slug)
+            try:
+                for name, gr_id in authors:
+                    await db.execute(
+                        "INSERT INTO authors (name, sort_name, "
+                        "normalized_name, goodreads_id) "
+                        "VALUES (?, ?, ?, ?)",
+                        (name, name, name.lower(), gr_id),
+                    )
+                await db.commit()
+            finally:
+                await db.close()
+
+        await metadata_cache.init_db(metadata_cache.SOURCE_GOODREADS)
+        await metadata_cache.backfill_goodreads_queue_from_authors(slugs)
+
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_GOODREADS)
+        try:
+            cur = await db.execute(
+                f"SELECT author_id FROM "
+                f"{metadata_cache.queue_table(metadata_cache.SOURCE_GOODREADS)} "
+                f"ORDER BY author_id"
+            )
+            ids = [r[0] for r in await cur.fetchall()]
+        finally:
+            await db.close()
+        # 3 unique goodreads_ids, not 4 — Shared Author collapsed.
+        assert ids == ["5001.BooksOnly", "5101.AudioOnly", "9999.Shared"]
+
+    async def test_backfill_handles_unknown_library_gracefully(
+        self, cache_under, fake_discovery_libraries,
+    ):
+        await metadata_cache.init_db(metadata_cache.SOURCE_GOODREADS)
+        counts = await metadata_cache.backfill_goodreads_queue_from_authors(
+            list(fake_discovery_libraries) + ["nope-typo"],
+        )
+        assert counts.get("nope-typo") == 0
+        assert counts["books-lib"] == 2
+        assert counts["audio-lib"] == 2
 
 
 class TestSourceShape:
