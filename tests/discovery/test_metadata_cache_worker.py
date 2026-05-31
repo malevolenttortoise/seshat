@@ -1668,3 +1668,439 @@ class TestPhaseIScheduleGate:
         assert stalled is False
         errors = [c for c in fake_ntfy if c["event_key"] == "metadata_cache_error"]
         assert errors == []
+
+
+# ─── v3.4.0 slice 03 — Goodreads worker ────────────────────────
+
+
+@pytest.fixture
+async def gr_worker_under(tmp_path, monkeypatch):
+    """Sibling of `worker_under` configured for the GR worker.
+
+    Inits BOTH source caches under tmp_path. Sets GR worker mode to
+    `continuous` (default DISABLED would short-circuit the tick).
+    Stubs `_perform_goodreads_scan` so tests override per-case to
+    drive specific outcomes without hitting real GR.
+    """
+    from app import config as app_config
+    from app.discovery import database as disco_db
+    monkeypatch.setattr(app_config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(metadata_cache, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(disco_db, "DATA_DIR", tmp_path)
+
+    fake_settings = {
+        "metadata_cache": {
+            "amazon": {"enabled": False, "mode": "disabled"},
+            "goodreads": {
+                "enabled": True, "mode": "continuous",
+                "schedule": {
+                    "active_hours": "10:00-22:00", "timezone": "",
+                },
+            },
+        },
+        "metadata_sources": {
+            "goodreads": {"rate_limit": 0.0},
+        },
+    }
+    monkeypatch.setattr(
+        app_config, "load_settings", lambda: dict(fake_settings),
+    )
+    monkeypatch.setattr(
+        app_config, "save_settings", lambda d: fake_settings.update(d),
+    )
+
+    monkeypatch.setattr(
+        state, "_discovered_libraries",
+        [
+            {"slug": "books-lib", "name": "Books",
+             "content_type": "ebook",
+             "source_db_path": "/x", "library_path": "/x"},
+            {"slug": "audio-lib", "name": "Audio",
+             "content_type": "audiobook",
+             "source_db_path": "/y", "library_path": "/y"},
+        ],
+    )
+
+    await metadata_cache.init_db(metadata_cache.SOURCE_GOODREADS)
+    await disco_db.init_db("books-lib")
+    await disco_db.init_db("audio-lib")
+    prev_lib = disco_db.get_active_library()
+    set_active_library("books-lib")
+
+    yield {
+        "tmp_path": tmp_path,
+        "settings": fake_settings,
+        "monkeypatch": monkeypatch,
+    }
+
+    set_active_library(prev_lib)
+
+
+async def _seed_gr_author_in_libraries(
+    goodreads_id: str, *,
+    libraries: tuple[str, ...] = ("books-lib", "audio-lib"),
+) -> None:
+    """GR analog of `_seed_author_in_libraries`. v3.4.0 slice 04
+    will populate the GR queue via cache-miss enqueues from lookup;
+    here we just need an authors row with a `goodreads_id` so
+    `_libraries_for_author` can find per-library targets.
+
+    Reuses the discovery `authors.amazon_id` lookup helper which is
+    Amazon-specific — but `_libraries_for_author` joins on
+    `seshat_author_id` (or in v2: amazon_id). For GR we just need
+    SOME authors row; the helper falls back to per-library iteration.
+    """
+    from app.discovery import database as disco_db
+    for slug in libraries:
+        db = await disco_db.get_db(slug=slug)
+        try:
+            await db.execute(
+                "INSERT OR IGNORE INTO authors "
+                "(name, sort_name, normalized_name, goodreads_id) "
+                "VALUES (?, ?, ?, ?)",
+                (
+                    f"GR {goodreads_id}", f"GR {goodreads_id}",
+                    f"gr {goodreads_id}".lower(), goodreads_id,
+                ),
+            )
+            await db.commit()
+        finally:
+            await db.close()
+
+
+async def _seed_gr_queue_row(
+    *,
+    author_id: str,
+    priority: float = 100.0,
+    status: str = "pending",
+    next_scan_due_at: float = 0.0,
+    consecutive_failures: int = 0,
+    seed_in_libraries: tuple[str, ...] = ("books-lib", "audio-lib"),
+) -> None:
+    if seed_in_libraries:
+        await _seed_gr_author_in_libraries(
+            author_id, libraries=seed_in_libraries,
+        )
+    db = await metadata_cache.get_db(metadata_cache.SOURCE_GOODREADS)
+    try:
+        await db.execute(
+            f"INSERT OR REPLACE INTO "
+            f"{metadata_cache.queue_table(metadata_cache.SOURCE_GOODREADS)} "
+            f"(author_id, priority, status, next_scan_due_at, "
+            f" consecutive_failures, enqueued_reason) "
+            f"VALUES (?, ?, ?, ?, ?, ?)",
+            (author_id, priority, status, next_scan_due_at,
+             consecutive_failures, "test_seed"),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+class TestReplaceListPageRows:
+    """`_replace_list_page_rows` writes per-page JSON snapshots and
+    replaces on re-scan."""
+
+    async def test_writes_page_rows(self, gr_worker_under):
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_GOODREADS)
+        try:
+            # State row first so the FK in list_pages is satisfied.
+            await db.execute(
+                f"INSERT INTO "
+                f"{metadata_cache.state_table(metadata_cache.SOURCE_GOODREADS)} "
+                f"(author_id, library_slug, last_scanned_at, last_outcome, "
+                f" book_count) VALUES (?, ?, ?, ?, ?)",
+                ("GR-100", "books-lib", time.time(), "ok", 5),
+            )
+            await db.commit()
+            await metadata_cache_worker._replace_list_page_rows(
+                db, metadata_cache.SOURCE_GOODREADS,
+                author_id="GR-100", library_slug="books-lib",
+                pages={1: ["10", "11", "12"], 2: ["20", "21"]},
+            )
+            cur = await db.execute(
+                f"SELECT page_num, book_ids_json FROM "
+                f"{metadata_cache.list_pages_table(metadata_cache.SOURCE_GOODREADS)} "
+                f"WHERE author_id = ? AND library_slug = ? "
+                f"ORDER BY page_num",
+                ("GR-100", "books-lib"),
+            )
+            rows = await cur.fetchall()
+        finally:
+            await db.close()
+        import json
+        assert len(rows) == 2
+        assert rows[0][0] == 1
+        assert json.loads(rows[0][1]) == ["10", "11", "12"]
+        assert rows[1][0] == 2
+        assert json.loads(rows[1][1]) == ["20", "21"]
+
+    async def test_rescan_replaces_pages(self, gr_worker_under):
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_GOODREADS)
+        try:
+            await db.execute(
+                f"INSERT INTO "
+                f"{metadata_cache.state_table(metadata_cache.SOURCE_GOODREADS)} "
+                f"(author_id, library_slug, last_scanned_at, last_outcome, "
+                f" book_count) VALUES (?, ?, ?, ?, ?)",
+                ("GR-101", "books-lib", time.time(), "ok", 3),
+            )
+            await db.commit()
+            await metadata_cache_worker._replace_list_page_rows(
+                db, metadata_cache.SOURCE_GOODREADS,
+                author_id="GR-101", library_slug="books-lib",
+                pages={1: ["a", "b", "c"]},
+            )
+            # Re-scan with a different page set — old rows must be
+            # gone (DELETE-then-INSERT discipline; mirrors Amazon's
+            # `_replace_book_rows`).
+            await metadata_cache_worker._replace_list_page_rows(
+                db, metadata_cache.SOURCE_GOODREADS,
+                author_id="GR-101", library_slug="books-lib",
+                pages={1: ["x", "y"]},
+            )
+            cur = await db.execute(
+                f"SELECT page_num, book_ids_json FROM "
+                f"{metadata_cache.list_pages_table(metadata_cache.SOURCE_GOODREADS)} "
+                f"WHERE author_id = ? AND library_slug = ?",
+                ("GR-101", "books-lib"),
+            )
+            rows = await cur.fetchall()
+        finally:
+            await db.close()
+        import json
+        assert len(rows) == 1
+        assert json.loads(rows[0][1]) == ["x", "y"]
+
+
+class TestGoodreadsTick:
+    async def test_disabled_short_circuits(
+        self, gr_worker_under, monkeypatch,
+    ):
+        gr_worker_under["settings"]["metadata_cache"]["goodreads"]["mode"] = "disabled"
+        called: list[str] = []
+        async def _no_scan(author_id):
+            called.append(author_id)
+            return ({}, None, False)
+        monkeypatch.setattr(
+            metadata_cache_worker, "_perform_goodreads_scan", _no_scan,
+        )
+        result = await metadata_cache_worker.tick_goodreads()
+        assert result.outcome == "disabled"
+        assert called == []  # gate fires before scan
+
+    async def test_queue_empty_returns_queue_empty(
+        self, gr_worker_under,
+    ):
+        result = await metadata_cache_worker.tick_goodreads()
+        assert result.outcome == "queue_empty"
+        assert result.queue_size == 0
+
+    async def test_successful_scan_writes_list_pages_and_state(
+        self, gr_worker_under, monkeypatch,
+    ):
+        await _seed_gr_queue_row(author_id="GR-200")
+        pages = {1: ["b1", "b2", "b3"], 2: ["b4"]}
+        async def _ok_scan(author_id):
+            assert author_id == "GR-200"
+            return (pages, None, False)
+        monkeypatch.setattr(
+            metadata_cache_worker, "_perform_goodreads_scan", _ok_scan,
+        )
+
+        result = await metadata_cache_worker.tick_goodreads()
+        assert result.outcome == "ok"
+        assert result.author_id == "GR-200"
+        assert result.books_cached == 4  # sum of all page lengths
+
+        # State row + list_page rows landed for both libraries.
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_GOODREADS)
+        try:
+            cur = await db.execute(
+                f"SELECT library_slug, last_outcome, book_count FROM "
+                f"{metadata_cache.state_table(metadata_cache.SOURCE_GOODREADS)} "
+                f"WHERE author_id = ? ORDER BY library_slug",
+                ("GR-200",),
+            )
+            states = await cur.fetchall()
+            cur = await db.execute(
+                f"SELECT library_slug, page_num FROM "
+                f"{metadata_cache.list_pages_table(metadata_cache.SOURCE_GOODREADS)} "
+                f"WHERE author_id = ? ORDER BY library_slug, page_num",
+                ("GR-200",),
+            )
+            lp_rows = await cur.fetchall()
+            # Queue row deferred + counter zeroed.
+            cur = await db.execute(
+                f"SELECT status, consecutive_failures, next_scan_due_at "
+                f"FROM {metadata_cache.queue_table(metadata_cache.SOURCE_GOODREADS)} "
+                f"WHERE author_id = ?",
+                ("GR-200",),
+            )
+            q = await cur.fetchone()
+        finally:
+            await db.close()
+
+        assert [(s[0], s[1], s[2]) for s in states] == [
+            ("audio-lib", "ok", 4),
+            ("books-lib", "ok", 4),
+        ]
+        assert [(r[0], r[1]) for r in lp_rows] == [
+            ("audio-lib", 1), ("audio-lib", 2),
+            ("books-lib", 1), ("books-lib", 2),
+        ]
+        assert q[0] == "pending"
+        assert q[1] == 0
+        assert q[2] > time.time() + 86400  # ≥1 day in the future
+
+    async def test_soft_block_defers_without_failure(
+        self, gr_worker_under, monkeypatch,
+    ):
+        await _seed_gr_queue_row(author_id="GR-300", consecutive_failures=2)
+        async def _soft_block(author_id):
+            return (None, "goodreads returned None (202)", True)
+        monkeypatch.setattr(
+            metadata_cache_worker, "_perform_goodreads_scan", _soft_block,
+        )
+
+        result = await metadata_cache_worker.tick_goodreads()
+        assert result.outcome == "soft_block"
+        # GR cooldown is the lighter 300s curve (no escalation).
+        assert result.cooldown_remaining_s == 300.0
+
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_GOODREADS)
+        try:
+            cur = await db.execute(
+                f"SELECT status, consecutive_failures FROM "
+                f"{metadata_cache.queue_table(metadata_cache.SOURCE_GOODREADS)} "
+                f"WHERE author_id = ?",
+                ("GR-300",),
+            )
+            q = await cur.fetchone()
+        finally:
+            await db.close()
+        # Soft-block is NOT a failure; counter reset.
+        assert q[0] == "pending"
+        assert q[1] == 0
+
+    async def test_hard_error_increments_failure_counter(
+        self, gr_worker_under, monkeypatch,
+    ):
+        await _seed_gr_queue_row(author_id="GR-400", consecutive_failures=2)
+        async def _hard_err(author_id):
+            return (None, "ValueError: parser exploded", False)
+        monkeypatch.setattr(
+            metadata_cache_worker, "_perform_goodreads_scan", _hard_err,
+        )
+
+        result = await metadata_cache_worker.tick_goodreads()
+        assert result.outcome == "error"
+        assert result.error == "ValueError: parser exploded"
+
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_GOODREADS)
+        try:
+            cur = await db.execute(
+                f"SELECT consecutive_failures FROM "
+                f"{metadata_cache.queue_table(metadata_cache.SOURCE_GOODREADS)} "
+                f"WHERE author_id = ?",
+                ("GR-400",),
+            )
+            q = await cur.fetchone()
+            # And an error state row landed per library.
+            cur = await db.execute(
+                f"SELECT library_slug, last_outcome, last_error FROM "
+                f"{metadata_cache.state_table(metadata_cache.SOURCE_GOODREADS)} "
+                f"WHERE author_id = ?",
+                ("GR-400",),
+            )
+            states = await cur.fetchall()
+        finally:
+            await db.close()
+        assert q[0] == 3
+        assert {(s[0], s[1]) for s in states} == {
+            ("books-lib", "error"), ("audio-lib", "error"),
+        }
+
+
+class TestGoodreadsListPageInventory:
+    """`GoodreadsSource.list_page_inventory` — list-only fetch with
+    pagination, returns {page_num: [book_id, ...]}."""
+
+    async def test_single_page_parses_book_ids(self, monkeypatch):
+        from app.discovery.sources.goodreads import GoodreadsSource
+        html = """
+            <html>
+              <a class="authorName"><span>Test Author</span></a>
+              <table>
+                <tr itemtype="http://schema.org/Book">
+                  <td><a class="bookTitle" href="/book/show/100.X"><span>X</span></a></td>
+                </tr>
+                <tr itemtype="http://schema.org/Book">
+                  <td><a class="bookTitle" href="/book/show/200.Y"><span>Y</span></a></td>
+                </tr>
+              </table>
+            </html>
+        """
+        class _Resp:
+            text = html
+            url = "https://www.goodreads.com/author/list/12345.Test_Author"
+        gets: list[tuple] = []
+        async def _get_stub(self, url, retries=2, **kwargs):
+            gets.append((url, kwargs.get("params")))
+            return _Resp()
+        monkeypatch.setattr(GoodreadsSource, "_get", _get_stub)
+
+        source = GoodreadsSource(rate_limit=0.0)
+        pages = await source.list_page_inventory("12345")
+        assert pages == {1: ["100", "200"]}
+        # Only the first-page fetch happened — no next_page link in
+        # fixture, so pagination short-circuits.
+        assert len(gets) == 1
+
+    async def test_paginates_until_no_next_link(self, monkeypatch):
+        from app.discovery.sources.goodreads import GoodreadsSource
+        page1_html = """
+            <html>
+              <table>
+                <tr itemtype="http://schema.org/Book">
+                  <td><a class="bookTitle" href="/book/show/1.A"><span>A</span></a></td>
+                </tr>
+              </table>
+              <a class="next_page" href="?page=2">next</a>
+            </html>
+        """
+        page2_html = """
+            <html>
+              <table>
+                <tr itemtype="http://schema.org/Book">
+                  <td><a class="bookTitle" href="/book/show/2.B"><span>B</span></a></td>
+                </tr>
+                <tr itemtype="http://schema.org/Book">
+                  <td><a class="bookTitle" href="/book/show/3.C"><span>C</span></a></td>
+                </tr>
+              </table>
+            </html>
+        """
+        responses = [
+            type("R", (), {"text": page1_html,
+                           "url": "https://www.goodreads.com/author/list/9.X"})(),
+            type("R", (), {"text": page2_html,
+                           "url": "https://www.goodreads.com/author/list/9.X?page=2"})(),
+        ]
+        async def _get_stub(self, url, retries=2, **kwargs):
+            return responses.pop(0)
+        monkeypatch.setattr(GoodreadsSource, "_get", _get_stub)
+
+        source = GoodreadsSource(rate_limit=0.0)
+        pages = await source.list_page_inventory("9")
+        assert pages == {1: ["1"], 2: ["2", "3"]}
+
+    async def test_first_fetch_failure_returns_none(self, monkeypatch):
+        from app.discovery.sources.goodreads import GoodreadsSource
+        async def _raises(self, url, retries=2, **kwargs):
+            raise RuntimeError("transport fail")
+        monkeypatch.setattr(GoodreadsSource, "_get", _raises)
+
+        source = GoodreadsSource(rate_limit=0.0)
+        pages = await source.list_page_inventory("9")
+        assert pages is None

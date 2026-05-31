@@ -536,6 +536,95 @@ class GoodreadsSource(BaseSource):
         )
         return None
 
+    async def list_page_inventory(
+        self, author_id: str, *, max_pages: int = 70,
+    ) -> Optional[dict[int, list[str]]]:
+        """v3.4.0 slice 03 — list-page-only fetch for the GR cache
+        worker (ADR-0018). Paginates through the author list pages
+        and returns ``{page_num: [goodreads_book_id, ...]}`` for
+        the worker to persist. **Never** visits per-book detail
+        pages — that's Path C's scope, deferred to v3.5.0
+        conditional.
+
+        Reuses this source's existing `_get` HTTP path (same rate
+        limit, same cookies, same 202/503/timeout handling) so the
+        worker inherits the GR session semantics without a parallel
+        HTTP client.
+
+        Returns None on the first-fetch failure (so caller can mark
+        an error outcome). Per-page failures during pagination are
+        logged but treated as "end of pagination" — the result
+        carries everything fetched so far.
+        """
+        try:
+            r = await self._get(
+                f"{BASE}/author/list/{author_id}",
+                retries=2, params={"per_page": 100},
+            )
+        except Exception as exc:
+            logger.warning(
+                "  Goodreads list-page inventory: first-fetch failed "
+                "for %s (%s)", author_id, exc,
+            )
+            return None
+        if r is None:
+            return None
+        soup = BeautifulSoup(r.text, "lxml")
+        # Same redirect-capture trick as `get_author_books`: GR
+        # 301s `/author/list/{id}` → `/author/list/{id}.{slug}`,
+        # so reuse the resolved path for pagination.
+        list_path = str(r.url).split("?", 1)[0]
+
+        def _ids_from_soup(page_soup) -> list[str]:
+            ids: list[str] = []
+            page_rows = page_soup.select(
+                "tr[itemtype='http://schema.org/Book']"
+            )
+            if not page_rows:
+                page_rows = page_soup.select("table.tableList tr")
+            for row in page_rows:
+                title_link = row.select_one("a.bookTitle")
+                if not title_link:
+                    continue
+                m = re.search(
+                    r"/book/show/(\d+)", title_link.get("href", ""),
+                )
+                if m:
+                    ids.append(m.group(1))
+            return ids
+
+        pages: dict[int, list[str]] = {}
+        first_ids = _ids_from_soup(soup)
+        pages[1] = first_ids
+
+        page_num = 1
+        while page_num < max_pages:
+            next_link = soup.select_one("a.next_page")
+            if not next_link or not next_link.get("href"):
+                break
+            page_num += 1
+            try:
+                r = await self._get(
+                    list_path, retries=1,
+                    params={"per_page": 100, "page": page_num},
+                )
+            except Exception as exc:
+                logger.warning(
+                    "  Goodreads list-page inventory: pagination "
+                    "failed at page %d for %s (%s) — returning "
+                    "%d pages",
+                    page_num, author_id, exc, len(pages),
+                )
+                break
+            if r is None:
+                break
+            soup = BeautifulSoup(r.text, "lxml")
+            ids = _ids_from_soup(soup)
+            if not ids:
+                break
+            pages[page_num] = ids
+        return pages
+
     async def get_author_books(self, author_id: str, existing_titles: set = None, owned_titles: list = None, owned_only: bool = False, start_at: int = 0) -> Optional[AuthorResult]:
         """Scrape an author's full book list and visit per-book detail pages.
 

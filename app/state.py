@@ -97,6 +97,13 @@ _budget_watcher_task: Optional[asyncio.Task] = None
 # setting once UAT confirms the worker behaves on their network.
 _metadata_cache_amazon_worker_task: Optional[asyncio.Task] = None
 
+# v3.4.0 slice 03 — Goodreads list-page cache worker. Drains
+# `metadata_cache_goodreads_queue` (ADR-0018) at humanized cadence
+# and writes per-page snapshots into `metadata_cache_goodreads_list_pages`.
+# Lighter than the Amazon worker — no curl_cffi session, no warmup,
+# no escalation tiers (GR has no Akamai-class IP-level cooldown).
+_metadata_cache_goodreads_worker_task: Optional[asyncio.Task] = None
+
 
 # ─── Cookie keep-alive state ────────────────────────────────
 # Long-running background loop that hits MAM's search endpoint on a
