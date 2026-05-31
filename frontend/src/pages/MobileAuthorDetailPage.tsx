@@ -18,6 +18,7 @@ import {
 } from "../lib/authorDetail";
 import { SourceBadgeRow } from "../components/SourceBadgeRow";
 import { AuthorCacheStatusBadge } from "../components/AuthorCacheStatusBadge";
+import { GoodreadsAuthorCacheStatusBadge } from "../components/GoodreadsAuthorCacheStatusBadge";
 import {
   MobileBtn,
   MobileChip,
@@ -1018,11 +1019,15 @@ export default function MobileAuthorDetailPage({
             sourceIds={a.source_ids || {}}
             onUpdate={() => loadA()}
           />
-          {/* v2.21.0 Phase F tier 3 — per-author cache state. Lives
+          {/* v2.21.0 Phase F tier 3 + v3.6.0 frontend parity —
+              per-author cache state per metadata source. Lives
               inside the Source IDs section so the toggle hides both
               the badges and the cache lines together on small screens. */}
           <AuthorCacheStatusBadge
             amazonAuthorId={(a.source_ids || {}).amazon as string | undefined}
+          />
+          <GoodreadsAuthorCacheStatusBadge
+            goodreadsAuthorId={(a.source_ids || {}).goodreads as string | undefined}
           />
         </MobileSection>
       ) : null}

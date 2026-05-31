@@ -615,6 +615,103 @@ async def backfill_amazon_queue_from_authors(
     return counts
 
 
+async def backfill_goodreads_queue_from_authors(
+    library_slugs: Iterable[str],
+    *,
+    default_priority: float = 100.0,
+    enqueued_reason: str = "v360_backfill",
+) -> dict[str, int]:
+    """Enqueue every author with a stored ``goodreads_id`` for a future
+    GR cache worker scan.
+
+    Mirror of ``backfill_amazon_queue_from_authors`` for the Goodreads
+    list-page cache (ADR-0018). Closes the v3.4.0 deferral noted at
+    ``main.py:885`` ("No queue backfill yet — slice 04 will populate
+    the queue via cache-miss enqueues from lookup.py"): on a steady-
+    state install the cache-miss path never fires unless discovery
+    scans are actively running, so the queue stays empty forever.
+    This boot-time one-shot fills it from the authors table the same
+    way Amazon does.
+
+    Queue PK is ``author_id`` only (matches the Amazon shape per ADR-
+    0018 §2): the same GR author across multiple libraries collapses
+    to ONE queue row. The worker reads per-library author rows at
+    scan time to partition the single list-page response into per-
+    library state + list_pages rows.
+
+    Returns per-library counts of *NEW* queue rows enqueued.
+    Idempotent — re-running enqueues 0 new rows.
+    """
+    from app.discovery.database import get_db as get_discovery_db
+    cache_db = await get_db(SOURCE_GOODREADS)
+    qt = queue_table(SOURCE_GOODREADS)
+    counts: dict[str, int] = {}
+    try:
+        for slug in library_slugs:
+            try:
+                disc = await get_discovery_db(slug=slug)
+            except Exception as exc:
+                _log.warning(
+                    "metadata_cache backfill: cannot open discovery DB %r (%s)",
+                    slug, exc,
+                )
+                counts[slug] = 0
+                continue
+            try:
+                cursor = await disc.execute(
+                    "SELECT id, goodreads_id FROM authors "
+                    "WHERE goodreads_id IS NOT NULL AND goodreads_id != ''",
+                )
+                rows = await cursor.fetchall()
+            except Exception as exc:
+                _log.warning(
+                    "metadata_cache backfill: read failed for %r (%s)",
+                    slug, exc,
+                )
+                counts[slug] = 0
+                continue
+            finally:
+                try:
+                    await disc.close()
+                except Exception:
+                    pass
+            if not rows:
+                counts[slug] = 0
+                continue
+            before_cur = await cache_db.execute(
+                f"SELECT COUNT(*) FROM {qt}"
+            )
+            before = (await before_cur.fetchone())[0]
+            await cache_db.executemany(
+                f"INSERT OR IGNORE INTO {qt} "
+                f"(author_id, priority, enqueued_reason, next_scan_due_at) "
+                f"VALUES (?, ?, ?, ?)",
+                [
+                    (
+                        str(row[1]),
+                        default_priority, enqueued_reason, 0.0,
+                    )
+                    for row in rows
+                ],
+            )
+            await cache_db.commit()
+            after_cur = await cache_db.execute(
+                f"SELECT COUNT(*) FROM {qt}"
+            )
+            after = (await after_cur.fetchone())[0]
+            counts[slug] = after - before
+            if counts[slug]:
+                _log.info(
+                    "metadata_cache backfill: enqueued %d goodreads authors "
+                    "while iterating library %r (queue %d → %d, deduped "
+                    "across libraries)",
+                    counts[slug], slug, before, after,
+                )
+    finally:
+        await cache_db.close()
+    return counts
+
+
 # ─── Read helpers (used by Database Manager surface + tests) ────
 
 
