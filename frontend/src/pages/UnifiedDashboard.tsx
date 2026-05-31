@@ -1351,6 +1351,21 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
           sectionHdrStyle={{ ...sectionHdr, fontSize: 9, marginBottom: 4 }}
           onNavSettings={() => onNav("settings")}
         />
+
+        {/* v3.6.0 — Goodreads metadata cache section. Parity with the
+           Amazon rail above: 4 worker tiles polling /goodreads/status.
+           No "Recent finds" list — GR caches list pages, not per-book
+           detail (ADR-0018 §1 Path B), so /recent-discoveries returns
+           501 for source=goodreads. The "Pages" tile replaces Amazon's
+           "Blocks" — different operational signal: GR has soft-blocks
+           but no IP-level cooldown; cumulative pages cached is the
+           more useful glance metric. */}
+        <GoodreadsCacheRail
+          mobileMode={mobileMode}
+          wideMode={wideMode}
+          sectionHdrStyle={{ ...sectionHdr, fontSize: 9, marginBottom: 4 }}
+          onNavSettings={() => onNav("settings")}
+        />
       </div>
       {showHygieneConfirm && (
         <HygieneConfirmModal
@@ -1631,19 +1646,18 @@ function Tile({ label, value, color, sub, onClick, compact = false }: TileProps 
   );
 }
 
-// ─── Amazon cache rail (v2.21.0 Phase F.3) ──────────────────────
+// ─── Amazon cache rail (v2.21.0 Phase F.3 / v3.6.0 dual-source) ──
 //
-// Lives at the bottom of the Seshat Stats widget. Two parts:
-//   1. Four compact tiles: enabled state, cached authors fraction,
-//      scans today, blocks today (tone warn when >0).
-//   2. Scrollable "Recent finds" list: up to 6 newest cached books
-//      from the past 24h, newest first. Empty state surfaces the
-//      worker-disabled vs. just-haven't-scanned-anything-yet
-//      distinction explicitly.
+// Lives at the bottom of the Seshat Stats widget. Four compact tiles:
+// enabled state, cached authors fraction, scans today, blocks today
+// (tone warn when >0). The pre-v3.6.0 "Recent finds" list was
+// dropped when the dual-source layout landed — keeping two sources'
+// rails compact + symmetric matters more than the celebratory list,
+// and the worker's progress is observable through Scans Today.
 //
-// Polls /status every 60s and /recent-discoveries every 120s. Both
-// fail silently on auth / network / legacy-image errors so the
-// dashboard doesn't crash for unrelated reasons.
+// Polls /status every 60s, fails silently on auth / network /
+// legacy-image errors so the dashboard doesn't crash for unrelated
+// reasons.
 
 type AmazonCacheStatus = {
   enabled: boolean;
@@ -1665,34 +1679,7 @@ type AmazonCacheStatus = {
   };
 };
 
-type RecentDiscovery = {
-  author_id: string;
-  library_slug: string;
-  book_asin: string;
-  title: string;
-  series_name: string | null;
-  series_pos: number | null;
-  cached_at: number;
-  seconds_ago: number;
-};
-
-type RecentDiscoveriesResponse = {
-  source: string;
-  window_hours: number;
-  discoveries: RecentDiscovery[];
-};
-
 const STATUS_POLL_MS = 60_000;
-const DISCOVERIES_POLL_MS = 120_000;
-const DISCOVERIES_LIMIT = 6;
-const DISCOVERIES_WINDOW_H = 24;
-
-function _ago(s: number): string {
-  if (s < 60) return `${Math.round(s)}s ago`;
-  if (s < 3600) return `${Math.round(s / 60)}m ago`;
-  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
-  return `${Math.round(s / 86400)}d ago`;
-}
 
 function AmazonCacheRail({
   mobileMode,
@@ -1707,12 +1694,10 @@ function AmazonCacheRail({
 }) {
   const t = useTheme();
   const [status, setStatus] = useState<AmazonCacheStatus | null>(null);
-  const [discoveries, setDiscoveries] = useState<RecentDiscovery[] | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     let statusTimer: ReturnType<typeof setInterval> | null = null;
-    let discoveriesTimer: ReturnType<typeof setInterval> | null = null;
     const fetchStatus = async () => {
       try {
         const r = await api.get<AmazonCacheStatus>(
@@ -1723,24 +1708,11 @@ function AmazonCacheRail({
         /* silent — auth, network, legacy image */
       }
     };
-    const fetchDiscoveries = async () => {
-      try {
-        const r = await api.get<RecentDiscoveriesResponse>(
-          `/v1/metadata-cache/amazon/recent-discoveries?limit=${DISCOVERIES_LIMIT}&hours=${DISCOVERIES_WINDOW_H}`,
-        );
-        if (!cancelled) setDiscoveries(r.discoveries);
-      } catch {
-        /* silent */
-      }
-    };
     fetchStatus();
-    fetchDiscoveries();
     statusTimer = setInterval(fetchStatus, STATUS_POLL_MS);
-    discoveriesTimer = setInterval(fetchDiscoveries, DISCOVERIES_POLL_MS);
     return () => {
       cancelled = true;
       if (statusTimer) clearInterval(statusTimer);
-      if (discoveriesTimer) clearInterval(discoveriesTimer);
     };
   }, []);
 
@@ -1825,67 +1797,153 @@ function AmazonCacheRail({
           sub="today"
         />
       </div>
+    </>
+  );
+}
 
-      {/* Recent finds list */}
+
+// ─── Goodreads cache rail (v3.6.0) ──────────────────────────────
+//
+// Parity with the Amazon rail. Same 4-tile layout, different polling
+// endpoint and different 4th-tile metric (Pages instead of Blocks).
+// No "Recent finds" list — GR caches list pages, not per-book detail
+// (ADR-0018 §1 Path B), so the celebratory per-book feed doesn't have
+// a data source on the GR side. The list-page count is a cumulative
+// glance metric: "how much GR data does the worker have cached."
+//
+// Polls /goodreads/status every 60s with the same silent-fail
+// posture as the Amazon rail.
+
+type GoodreadsCacheStatus = {
+  enabled: boolean;
+  mode?: string;
+  cooldown: { blocked: boolean; remaining_s: number };
+  worker: {
+    today_scan_count: number;
+    today_block_count: number;
+    seconds_since_heartbeat: number | null;
+  };
+  queue: { pending: number; due_now?: number };
+  cache: {
+    state_rows: number;
+    ok_authors: number;
+    unique_total_authors?: number;
+    unique_ok_authors?: number;
+    list_pages_rows: number;
+    today_budget_exhaust_count: number;
+  };
+};
+
+function GoodreadsCacheRail({
+  mobileMode,
+  wideMode,
+  sectionHdrStyle,
+  onNavSettings,
+}: {
+  mobileMode: boolean;
+  wideMode: boolean;
+  sectionHdrStyle: React.CSSProperties;
+  onNavSettings: () => void;
+}) {
+  const t = useTheme();
+  const [status, setStatus] = useState<GoodreadsCacheStatus | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const fetchStatus = async () => {
+      try {
+        const r = await api.get<GoodreadsCacheStatus>(
+          "/v1/metadata-cache/goodreads/status",
+        );
+        if (!cancelled) setStatus(r);
+      } catch {
+        /* silent — auth, network, legacy image */
+      }
+    };
+    fetchStatus();
+    timer = setInterval(fetchStatus, STATUS_POLL_MS);
+    return () => {
+      cancelled = true;
+      if (timer) clearInterval(timer);
+    };
+  }, []);
+
+  const cachedTotal = (
+    status?.cache.unique_total_authors ?? status?.cache.state_rows ?? 0
+  );
+  const queuePending = (status?.queue.pending ?? 0);
+  const totalAuthors = Math.max(cachedTotal, queuePending);
+  const okAuthors = (
+    status?.cache.unique_ok_authors ?? status?.cache.ok_authors ?? 0
+  );
+  const listPages = status?.cache.list_pages_rows ?? 0;
+
+  // Worker tile: GR has no IP-level cooldown (ADR-0018 — Goodreads
+  // softly degrades via per-author budget exhaust rather than hard
+  // walls), so the "Cooldown" path that Amazon shows folds into a
+  // generic "Off" when the operator disables the worker via mode.
+  const workerLabel = (
+    status === null ? null
+    : status.mode === "disabled" || !status.enabled ? "Off"
+    : (status.cache.today_budget_exhaust_count ?? 0) > 0 ? "Budget"
+    : "On"
+  );
+  const workerColor = (
+    status === null ? undefined
+    : workerLabel === "On" ? t.ok
+    : workerLabel === "Budget" ? t.warn
+    : t.td
+  );
+
+  return (
+    <>
+      <div style={sectionHdrStyle}>Goodreads Cache</div>
       <div
         style={{
-          background: t.bg3,
-          border: `1px solid ${t.borderL}`,
-          borderRadius: 6,
-          padding: "6px 8px",
-          maxHeight: 140,
-          overflowY: "auto",
+          display: "grid",
+          gridTemplateColumns: mobileMode
+            ? "repeat(2, 1fr)"
+            : wideMode
+            ? "repeat(2, 1fr)"
+            : "repeat(4, 1fr)",
+          gap: 6,
+          marginBottom: 8,
         }}
       >
-        <div
-          style={{
-            fontSize: 9,
-            fontWeight: 700,
-            color: t.td,
-            textTransform: "uppercase",
-            letterSpacing: "0.04em",
-            marginBottom: 4,
-          }}
-        >
-          Recent finds · {DISCOVERIES_WINDOW_H}h
-        </div>
-        {discoveries === null ? (
-          <div style={{ color: t.td, fontSize: 11, padding: "4px 2px" }}>
-            <Spin size={10} />
-          </div>
-        ) : discoveries.length === 0 ? (
-          <div style={{ color: t.td, fontSize: 11, fontStyle: "italic", padding: "4px 2px" }}>
-            {status?.enabled === false
-              ? "Worker disabled — enable to start populating the cache"
-              : "No discoveries yet in this window"}
-          </div>
-        ) : (
-          discoveries.map(d => (
-            <div
-              key={`${d.author_id}-${d.library_slug}-${d.book_asin}`}
-              style={{
-                display: "flex",
-                gap: 6,
-                alignItems: "baseline",
-                padding: "2px 0",
-                fontSize: 11,
-                borderBottom: `1px solid ${t.borderL}66`,
-              }}
-            >
-              <span style={{ flex: 1, minWidth: 0, color: t.text2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={d.title}>
-                {d.title}
-                {d.series_name && (
-                  <span style={{ color: t.td, fontStyle: "italic" }}>
-                    {" "}— {d.series_name}{d.series_pos != null ? ` #${d.series_pos}` : ""}
-                  </span>
-                )}
-              </span>
-              <span style={{ color: t.td, fontSize: 10, flexShrink: 0 }}>
-                {_ago(d.seconds_ago)}
-              </span>
-            </div>
-          ))
-        )}
+        <Tile
+          compact
+          label="Worker"
+          value={workerLabel}
+          color={workerColor}
+          onClick={onNavSettings}
+        />
+        <Tile
+          compact
+          label="Cached"
+          value={
+            status === null
+              ? null
+              : `${fmtNum(okAuthors)} / ${fmtNum(totalAuthors)}`
+          }
+          color={t.accent}
+          sub="authors"
+          onClick={onNavSettings}
+        />
+        <Tile
+          compact
+          label="Scans"
+          value={status === null ? null : fmtNum(status.worker.today_scan_count)}
+          color={t.jade}
+          sub="today"
+        />
+        <Tile
+          compact
+          label="Pages"
+          value={status === null ? null : fmtNum(listPages)}
+          color={t.accent}
+          sub="cached"
+        />
       </div>
     </>
   );
