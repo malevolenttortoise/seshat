@@ -15,17 +15,21 @@ per author:
      a higher-quality cover.
 
 The two-pass design exists because the list page doesn't carry enough
-metadata to confidently filter foreign editions, sets, or translator-
-only credits, but visiting every book page for every author is
-expensive — so the list-page pre-filters cheap exclusions (`(translator)`,
-`(contributor)`, obvious set titles) and the book-page pass only runs
-for survivors.
+metadata to confidently filter foreign editions, sets, or translation
+editions, but visiting every book page for every author is expensive
+— so the list-page pre-filters cheap exclusions (obvious set titles,
+audiobook-format byline tokens) and the book-page pass only runs for
+survivors. Role-based filtering (translator / contributor / illustrator
+co-credits) lives entirely on the book-page side via the v3.0.0
+Phase 3.2 `_parse_book_contributors` parser and `contributor_is_author`
+allowlist — the historical list-page substring skip was strictly weaker
+and dropped legitimate books whose blurb mentioned those words; retired
+in v3.4.0 slice 02, see ADR-0018 §4.
 
 Per-book progress hook: this module calls `self._on_book(title)` (set
 by lookup.py) on every entry that does real work (a DETAIL fetch or a
 URL-backfill emit) but NOT on filter-noise skips, so the unified scan
-widget never flickers through "skipped translator", "skipped foreign",
-etc.
+widget never flickers through "skipped foreign", etc.
 """
 import asyncio, logging, re, json
 from datetime import datetime
@@ -687,11 +691,15 @@ class GoodreadsSource(BaseSource):
                     elif "_SY" in cover:
                         cover = re.sub(r'_SY\d+_', '_SY400_', cover)
 
-                # Quick check from list text for translator, contributor, or audiobook format
+                # v3.4.0 slice 02 — list-page (translator)/(contributor)
+                # substring filter retired. v3.0.0 Phase 3.2's detail-
+                # page `ContributorLink__role` parser is authoritative
+                # for role identification; the substring skip was
+                # strictly weaker and dropped legitimate books whose
+                # title or blurb incidentally mentioned "translator" or
+                # "contributor." See ADR-0018 §4.
                 row_text = row.get_text(" ", strip=True)
                 row_text_lower = row_text.lower()
-                has_translator = "(translator)" in row_text_lower
-                is_contributor = "(contributor)" in row_text_lower
                 is_audio_list = any(kw in row_text_lower for kw in [
                     "audible audio", "audio cd", "(narrator)", "audiobook",
                     "(read by)", "mp3 cd",
@@ -700,8 +708,7 @@ class GoodreadsSource(BaseSource):
                 raw_books.append({
                     "title": full_title, "book_id": book_id,
                     "list_series": sname, "list_series_idx": sidx,
-                    "list_cover": cover, "has_translator": has_translator,
-                    "is_contributor": is_contributor,
+                    "list_cover": cover,
                     "is_audio_list": is_audio_list,
                 })
 
@@ -761,16 +768,11 @@ class GoodreadsSource(BaseSource):
                 if not rb["book_id"]:
                     continue
 
-                # Quick skip: if list page already shows translator or contributor
-                if rb["has_translator"]:
-                    skipped["translation"] += 1
-                    logger.debug(f"    SKIP (translator): '{rb['title']}'")
-                    continue
-                if rb.get("is_contributor"):
-                    skipped.setdefault("contributor", 0)
-                    skipped["contributor"] += 1
-                    logger.debug(f"    SKIP (contributor): '{rb['title']}'")
-                    continue
+                # v3.4.0 slice 02 — translator/contributor list-page
+                # skip retired; the detail-page role parser handles
+                # role filtering authoritatively at merge. Audiobook
+                # list-page skip stays — different concern (format
+                # filter, not role filter).
                 if rb.get("is_audio_list"):
                     skipped.setdefault("audiobook", 0)
                     skipped["audiobook"] += 1
@@ -971,7 +973,6 @@ class GoodreadsSource(BaseSource):
                 if skipped.get("foreign"): parts.append(f"{skipped['foreign']} foreign")
                 if skipped.get("set"): parts.append(f"{skipped['set']} sets")
                 if skipped.get("translation"): parts.append(f"{skipped['translation']} translations")
-                if skipped.get("contributor"): parts.append(f"{skipped['contributor']} contributor-only")
                 if skipped.get("unowned"): parts.append(f"{skipped['unowned']} unowned (library-only)")
                 logger.info(f"  Goodreads: skipped {', '.join(parts)}")
 

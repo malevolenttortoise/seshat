@@ -125,3 +125,35 @@ class TestRoleFilterIntegration:
         cs = _parse_book_contributors(LEGIONNAIRE)
         kept = [c.name for c in cs if contributor_is_author(c.role)]
         assert kept == ["Jason Anspach", "Nick Cole"]
+
+
+class TestListPageSubstringFilterRetired:
+    """v3.4.0 slice 02 — the list-page `(translator)` / `(contributor)`
+    substring skip in `get_author_books` is retired. Detail-page
+    `ContributorLink__role` parsing (above) is authoritative; the
+    substring filter was strictly weaker and dropped legitimate books
+    whose title or blurb incidentally mentioned those words.
+
+    This test pins the regression at the source level — re-introducing
+    the skip flags / their raw-book dict entries would fail here. See
+    ADR-0018 §4."""
+
+    def test_substring_filter_flags_absent_from_source(self):
+        import inspect
+
+        from app.discovery.sources import goodreads
+        src = inspect.getsource(goodreads)
+        # Pre-v3.4.0 flag names. If a regression reintroduces the
+        # filter under a different name this test won't catch it,
+        # but it pins the literal shape that v3.0.0 Phase 3.2 made
+        # obsolete.
+        for forbidden in (
+            "has_translator",
+            "is_contributor =",   # filter flag, not the role-filter helper
+            '"(translator)" in row_text',
+            '"(contributor)" in row_text',
+        ):
+            assert forbidden not in src, (
+                f"v3.4.0 slice 02 retired the list-page substring "
+                f"filter; do not re-introduce {forbidden!r}"
+            )
