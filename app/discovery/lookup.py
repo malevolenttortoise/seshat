@@ -3941,6 +3941,18 @@ async def _lookup_author_inner(author_id: int, author_name: str, full_scan: bool
                     f"after {retry_num} retries; ~{missed} likely unscanned "
                     f"(out of per-author budget {effective_budget:.0f}s)"
                 )
+                # v3.4.0 slice 05 — bump the GR budget-exhaust
+                # counter (best-effort). Daily summary surfaces it
+                # post-v3.4.0 to inform the v3.5.0 Path C decision.
+                if spec.name == "goodreads":
+                    try:
+                        from app.discovery import metadata_cache_worker
+                        await metadata_cache_worker.record_goodreads_budget_exhaust()
+                    except Exception:
+                        logger.debug(
+                            "  [goodreads] budget-exhaust counter "
+                            "bump failed (non-fatal)", exc_info=True,
+                        )
                 break
 
             retry_num += 1

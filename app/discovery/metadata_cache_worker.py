@@ -617,14 +617,24 @@ async def _read_state_for_summary(
     its own connection so the summary path doesn't deadlock against
     the worker tick's transaction."""
     table = metadata_cache.worker_state_table(source_name)
+    is_gr = source_name == metadata_cache.SOURCE_GOODREADS
     db = await metadata_cache.get_db(source_name)
     try:
-        cur = await db.execute(
-            f"SELECT today_scan_count, today_block_count, "
-            f"       last_heartbeat_at, last_scan_completed_at, "
-            f"       last_block_at, consecutive_blocks "
-            f"FROM {table} WHERE id = 1"
-        )
+        if is_gr:
+            cur = await db.execute(
+                f"SELECT today_scan_count, today_block_count, "
+                f"       last_heartbeat_at, last_scan_completed_at, "
+                f"       last_block_at, consecutive_blocks, "
+                f"       today_budget_exhaust_count "
+                f"FROM {table} WHERE id = 1"
+            )
+        else:
+            cur = await db.execute(
+                f"SELECT today_scan_count, today_block_count, "
+                f"       last_heartbeat_at, last_scan_completed_at, "
+                f"       last_block_at, consecutive_blocks "
+                f"FROM {table} WHERE id = 1"
+            )
         row = await cur.fetchone()
         if row is None:
             return {
@@ -632,17 +642,72 @@ async def _read_state_for_summary(
                 "last_heartbeat_at": None,
                 "last_scan_completed_at": None,
                 "last_block_at": 0.0, "consecutive_blocks": 0,
+                "today_budget_exhaust_count": 0,
             }
-        return {
+        snapshot = {
             "today_scan_count": int(row[0] or 0),
             "today_block_count": int(row[1] or 0),
             "last_heartbeat_at": row[2],
             "last_scan_completed_at": row[3],
             "last_block_at": float(row[4] or 0.0),
             "consecutive_blocks": int(row[5] or 0),
+            "today_budget_exhaust_count": 0,
         }
+        if is_gr and len(row) > 6:
+            snapshot["today_budget_exhaust_count"] = int(row[6] or 0)
+        return snapshot
     finally:
         await db.close()
+
+
+async def record_goodreads_budget_exhaust() -> None:
+    """v3.4.0 slice 05 — bump the GR budget-exhaust counter.
+
+    Called from `lookup.py` at the `[goodreads] giving up on …`
+    warning point (the Path A wall-clock budget exhaustion). Persists
+    in `metadata_cache_goodreads_worker_state.today_budget_exhaust_count`;
+    daily-summary rolls it over alongside the other today_* counters.
+
+    Best-effort — a DB hiccup never raises into the caller. The
+    daily summary message body surfaces the count, giving Mark a
+    data signal for the v3.5.0 Path C decision (PRD §6.2 "perceptible
+    wastage on filter-rejected new books that Path B can't eliminate").
+    """
+    try:
+        source_name = metadata_cache.SOURCE_GOODREADS
+        table = metadata_cache.worker_state_table(source_name)
+        db = await metadata_cache.get_db(source_name)
+        try:
+            now = time.time()
+            cur = await db.execute(
+                f"SELECT today_budget_exhaust_count, last_block_at "
+                f"FROM {table} WHERE id = 1"
+            )
+            row = await cur.fetchone()
+            prior_count = int(row[0] or 0) if row else 0
+            prior_last = float(row[1] or 0.0) if row else 0.0
+            # Same day-rollover heuristic as the other today_*
+            # counters: if the singleton hasn't been touched today,
+            # this exhaust is the first of the new day.
+            new_count = (
+                prior_count + 1
+                if _is_same_local_day(prior_last, now)
+                else 1
+            )
+            await db.execute(
+                f"UPDATE {table} "
+                f"SET today_budget_exhaust_count = ? WHERE id = 1",
+                (new_count,),
+            )
+            await db.commit()
+        finally:
+            await db.close()
+    except Exception:
+        logger.debug(
+            "metadata_cache_worker: goodreads budget-exhaust "
+            "counter bump failed (non-fatal)",
+            exc_info=True,
+        )
 
 
 async def send_daily_summary(
@@ -657,23 +722,37 @@ async def send_daily_summary(
     UI numbers reflect the past 24h, not all-time.
     """
     snapshot = await _read_state_for_summary(source_name)
-    prior_scans, prior_blocks = await reset_today_counters(source_name)
+    prior_scans, prior_blocks, prior_exhausts = (
+        await reset_today_counters(source_name)
+    )
     # The day-rollover logic in `_record_scan_completed` may have
     # already partially reset things on the first tick of the new
     # day. Either way, the snapshot above reflects the moment-before
     # state and is what we summarize.
     today_scans = max(snapshot["today_scan_count"], prior_scans)
     today_blocks = max(snapshot["today_block_count"], prior_blocks)
+    today_exhausts = max(
+        snapshot.get("today_budget_exhaust_count", 0), prior_exhausts,
+    )
     logger.info(
         "metadata_cache_worker: daily summary for source=%s — "
-        "scans=%d, blocks=%d",
-        source_name, today_scans, today_blocks,
+        "scans=%d, blocks=%d, budget_exhausts=%d",
+        source_name, today_scans, today_blocks, today_exhausts,
     )
-    title = f"Amazon worker — daily summary ({today_scans} scans)"
+    title = (
+        f"{source_name.title()} worker — daily summary "
+        f"({today_scans} scans)"
+    )
     message_lines = [
         f"Scans: {today_scans}",
         f"Soft-blocks: {today_blocks}",
     ]
+    if source_name == metadata_cache.SOURCE_GOODREADS:
+        # v3.4.0 slice 05 — Path C decision data signal. Operator
+        # sees the budget-exhaust count for the day; non-zero on
+        # prolific authors is the trigger condition for shipping
+        # detail-cache as v3.5.0 (PRD §6.2).
+        message_lines.append(f"Budget exhausts: {today_exhausts}")
     if snapshot["consecutive_blocks"]:
         message_lines.append(
             f"Consecutive blocks in last hour: "
@@ -769,34 +848,58 @@ async def check_stall(
 
 async def reset_today_counters(
     source_name: str = metadata_cache.SOURCE_AMAZON,
-) -> tuple[int, int]:
-    """Zero the `today_scan_count` + `today_block_count` columns and
-    return the pre-reset values so the daily-summary scheduler job
-    can include them in the ntfy message.
+) -> tuple[int, int, int]:
+    """Zero the today_* counters and return the pre-reset values so
+    the daily-summary scheduler job can include them in the ntfy
+    message.
 
-    Idempotent — calling twice in the same day returns (0, 0) the
+    Returns `(today_scan_count, today_block_count,
+    today_budget_exhaust_count)` — the third element is always 0 for
+    sources that don't track budget exhausts (Amazon today; only
+    Goodreads since v3.4.0 slice 05).
+
+    Idempotent — calling twice in the same day returns (0, 0, 0) the
     second time. Doesn't touch `last_scan_completed_at` /
     `last_block_at`, so the day-rollover heuristic in
     `_record_scan_completed` / `_record_block_in_worker_state`
     continues to work.
     """
     table = metadata_cache.worker_state_table(source_name)
+    is_gr = source_name == metadata_cache.SOURCE_GOODREADS
     db = await metadata_cache.get_db(source_name)
     try:
-        cur = await db.execute(
-            f"SELECT today_scan_count, today_block_count "
-            f"FROM {table} WHERE id = 1"
-        )
-        row = await cur.fetchone()
-        prior_scans = int(row[0] or 0) if row else 0
-        prior_blocks = int(row[1] or 0) if row else 0
-        await db.execute(
-            f"UPDATE {table} "
-            f"SET today_scan_count = 0, today_block_count = 0 "
-            f"WHERE id = 1"
-        )
+        if is_gr:
+            cur = await db.execute(
+                f"SELECT today_scan_count, today_block_count, "
+                f"       today_budget_exhaust_count "
+                f"FROM {table} WHERE id = 1"
+            )
+            row = await cur.fetchone()
+            prior_scans = int(row[0] or 0) if row else 0
+            prior_blocks = int(row[1] or 0) if row else 0
+            prior_exhausts = int(row[2] or 0) if row else 0
+            await db.execute(
+                f"UPDATE {table} "
+                f"SET today_scan_count = 0, today_block_count = 0, "
+                f"    today_budget_exhaust_count = 0 "
+                f"WHERE id = 1"
+            )
+        else:
+            cur = await db.execute(
+                f"SELECT today_scan_count, today_block_count "
+                f"FROM {table} WHERE id = 1"
+            )
+            row = await cur.fetchone()
+            prior_scans = int(row[0] or 0) if row else 0
+            prior_blocks = int(row[1] or 0) if row else 0
+            prior_exhausts = 0
+            await db.execute(
+                f"UPDATE {table} "
+                f"SET today_scan_count = 0, today_block_count = 0 "
+                f"WHERE id = 1"
+            )
         await db.commit()
-        return prior_scans, prior_blocks
+        return prior_scans, prior_blocks, prior_exhausts
     finally:
         await db.close()
 

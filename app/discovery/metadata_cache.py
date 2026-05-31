@@ -415,6 +415,15 @@ def _build_goodreads_migrations() -> list[str]:
         )
         """,
         f"INSERT OR IGNORE INTO {worker} (id) VALUES (1)",
+        # v3.4.0 slice 05 (migration v7) — budget-exhaust counter for
+        # the daily-summary ntfy. Path A's wall-clock budget can
+        # silently drop ~37% of a Sanderson-class author's books;
+        # this counter lifts that signal from log-grep into operator-
+        # visible telemetry, giving the v3.5.0 Path C decision a
+        # data point. Idempotent: ADD COLUMN tolerates re-runs via
+        # the `duplicate column` swallowed error in `_apply_migrations`.
+        f"ALTER TABLE {worker} "
+        f"ADD COLUMN today_budget_exhaust_count INTEGER NOT NULL DEFAULT 0",
     ]
 
 
