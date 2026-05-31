@@ -24,3 +24,4 @@ New decisions get the next number; supersede rather than rewrite when a decision
 | [0016](0016-author-image-source-rank-and-mirror.md) | Author image: link-time persist + source-rank ordering + canonical-overwrite mirror; rot via hygiene HEAD-verify, not write-time |
 | [0017](0017-owned-author-discrepancy-review-writeback.md) | Owned-book author discrepancy: enqueue at scan-convergence (union semantics), JSON payload in `metadata_review_queue`, push-back via extended sinks, inline re-sync |
 | [0018](0018-metadata-cache-goodreads-list-page.md) | Metadata cache extended to Goodreads as a list-page cache (v3.4.0); per-source detail-table shape diverges; settings symmetry seeded for both sources; Path C detail cache deferred to UAT decision |
+| [0019](0019-refactor-era-long-lived-branch.md) | Refactor eras use a long-lived scope-bounded branch (`refactor/<version-line>`); explicit exception to ADR-0007 for refactor eras only |

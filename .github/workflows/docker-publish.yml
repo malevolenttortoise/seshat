@@ -9,7 +9,15 @@ on:
     # container in Mark's Unraid points at the `development` tag so
     # UAT happens in-place; only after a `development -> main` PR is
     # merged + tagged does `latest-slim` (and the versioned tag) move.
-    branches: [main, development]
+    #
+    # `refactor/**` is the long-lived branch family for refactor eras
+    # per ADR-0019. Pushes build BOTH `:refactor-v<line>-slim` (auto-
+    # derived from the branch name by `type=ref`) and the always-latest
+    # `:refactor-slim` pointer (emitted by the `type=raw` rule below,
+    # gated on the ref starting with `refs/heads/refactor/`). Lets Mark
+    # UAT the refactor branch in a dedicated container without affecting
+    # `:development-slim` (dev-stack) or `:latest-slim` (prod).
+    branches: [main, development, 'refactor/**']
     tags: ['v*']
   workflow_dispatch:
 
@@ -82,6 +90,7 @@ jobs:
             type=match,pattern=v(\d+\.\d+\.\d+(?:\.\d+)?),group=1
             type=match,pattern=v(\d+\.\d+),group=1
             type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=refactor,enable=${{ startsWith(github.ref, 'refs/heads/refactor/') }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
