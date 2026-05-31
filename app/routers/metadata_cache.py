@@ -218,6 +218,20 @@ def _validate_source(source: str) -> str:
     return source
 
 
+def _require_amazon_shape(source: str) -> None:
+    """Reject GR for endpoints that read Amazon's per-book detail
+    table (`books`). v3.4.0 slice 01 adds GR as a SUPPORTED source for
+    the foundation layer (DB + settings), but the status / recent-
+    discoveries / author-detail endpoints are still Amazon-shape.
+    Slice 06 adds the parallel GR-shape (`list_pages`) endpoints."""
+    if source != metadata_cache.SOURCE_AMAZON:
+        raise HTTPException(
+            501,
+            f"endpoint not yet wired for source={source!r} "
+            f"(v3.4.0 slice 01 foundation only)",
+        )
+
+
 def _cache_settings_get(source: str) -> dict:
     s = load_settings()
     mc = s.get("metadata_cache") or {}
@@ -262,6 +276,7 @@ async def get_status(source: str) -> StatusResponse:
     1289-row queue gives 1289 here, not a rate-limited estimate.
     """
     _validate_source(source)
+    _require_amazon_shape(source)
     enabled = bool(_cache_settings_get(source).get("enabled", False))
     cooldown = _cooldown_state(source)
 
@@ -504,6 +519,7 @@ async def get_recent_discoveries(
     isn't tied to client clock accuracy.
     """
     _validate_source(source)
+    _require_amazon_shape(source)
     now = time.time()
     cutoff = now - (hours * 3600)
     bt = metadata_cache.books_table(source)
@@ -557,6 +573,7 @@ async def get_author_cache_state(
     "never enqueued" from "enqueued but not yet popped."
     """
     _validate_source(source)
+    _require_amazon_shape(source)
     cooldown = _cooldown_state(source)
 
     db = await metadata_cache.get_db(source)

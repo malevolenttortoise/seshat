@@ -1,27 +1,39 @@
 """
-Metadata-source cache layer (v2.21.0 Phase B).
+Metadata-source cache layer (v2.21.0 Phase B; extended to Goodreads in
+v3.4.0 as a list-page cache, see ADR-0018).
 
 Per-source SQLite caches that decouple expensive metadata-source scans
 from the user-facing lookup flow. Initially built for Amazon (whose
-Akamai cooldowns make synchronous scans unreliable), the schema is
-source-templated so a future v2.22.0 Goodreads cache can reuse the
-same shape without a rewrite.
+Akamai cooldowns make synchronous scans unreliable); extended in
+v3.4.0 to Goodreads, which has a different cost shape (no hard wall —
+soft throughput pressure from 5–7s/book detail-fetch pacing) and so
+gets a list-page-only cache rather than a per-book detail cache.
 
 ## Storage layout
 
 One DB file per source, alongside the main library DBs under DATA_DIR:
 
     DATA_DIR / metadata_cache_amazon.db
-    DATA_DIR / metadata_cache_goodreads.db    # future v2.22.0 candidate
+    DATA_DIR / metadata_cache_goodreads.db    # v3.4.0
 
 Each per-source file holds four tables. Table names are prefixed with
 the source name (`metadata_cache_<source>_<suffix>`) so they remain
-self-describing even if a future consolidation lands them in one DB:
+self-describing even if a future consolidation lands them in one DB.
 
-    metadata_cache_<source>_state        — one row per (author, library)
-    metadata_cache_<source>_books        — one row per cached book
-    metadata_cache_<source>_queue        — pending author scans
-    metadata_cache_<source>_worker_state — singleton: cooldown + heartbeat
+The per-table SHAPE differs by source — Amazon caches full per-book
+detail (`_books`), Goodreads caches only the author-list-page book-ID
+inventory (`_list_pages`). Both share `_state`, `_queue`, and
+`_worker_state` shapes one-for-one.
+
+    metadata_cache_amazon_state          — one row per (author, library)
+    metadata_cache_amazon_books          — one row per cached book
+    metadata_cache_amazon_queue          — pending author scans
+    metadata_cache_amazon_worker_state   — singleton: cooldown + heartbeat
+
+    metadata_cache_goodreads_state       — one row per (author, library)
+    metadata_cache_goodreads_list_pages  — one row per (author, library, page)
+    metadata_cache_goodreads_queue       — pending author scans
+    metadata_cache_goodreads_worker_state — singleton: cooldown + heartbeat
 
 ## Read/write split
 
@@ -56,13 +68,14 @@ _log = logging.getLogger("seshat.discovery.metadata_cache")
 # ─── Source registry ────────────────────────────────────────────
 
 
-# Sources for which a cache exists. Today: Amazon. Tomorrow (v2.22.0
-# candidate): Goodreads. Adding a new source =
+# Sources for which a cache exists. v3.4.0 adds Goodreads alongside
+# the original Amazon cache. Adding a new source =
 #   (1) extend SUPPORTED_SOURCES below
 #   (2) add a MIGRATIONS list for it in `_MIGRATIONS`
-#   (3) wire the worker class (Phase D) — out of scope for this module
+#   (3) wire the worker class (separate module) — out of scope here
 SOURCE_AMAZON = "amazon"
-SUPPORTED_SOURCES: frozenset[str] = frozenset({SOURCE_AMAZON})
+SOURCE_GOODREADS = "goodreads"
+SUPPORTED_SOURCES: frozenset[str] = frozenset({SOURCE_AMAZON, SOURCE_GOODREADS})
 
 
 # Static per-source DB filename map. Used instead of an f-string
@@ -73,6 +86,7 @@ SUPPORTED_SOURCES: frozenset[str] = frozenset({SOURCE_AMAZON})
 # property analytically obvious.
 _DB_FILENAMES: dict[str, str] = {
     SOURCE_AMAZON: "metadata_cache_amazon.db",
+    SOURCE_GOODREADS: "metadata_cache_goodreads.db",
 }
 
 
@@ -81,12 +95,22 @@ _DB_FILENAMES: dict[str, str] = {
 # CodeQL pass on the (currently-fine) SQL paths can't surface a
 # false-positive either. Adding a new source = one new dict entry
 # below + an entry in `_DB_FILENAMES` + extending SUPPORTED_SOURCES.
+#
+# Per-source SHAPES diverge intentionally: Amazon caches per-book
+# detail (`books`), Goodreads caches only the author-list-page
+# inventory (`list_pages`). See ADR-0018.
 _TABLE_NAMES: dict[str, dict[str, str]] = {
     SOURCE_AMAZON: {
         "state": "metadata_cache_amazon_state",
         "books": "metadata_cache_amazon_books",
         "queue": "metadata_cache_amazon_queue",
         "worker_state": "metadata_cache_amazon_worker_state",
+    },
+    SOURCE_GOODREADS: {
+        "state": "metadata_cache_goodreads_state",
+        "list_pages": "metadata_cache_goodreads_list_pages",
+        "queue": "metadata_cache_goodreads_queue",
+        "worker_state": "metadata_cache_goodreads_worker_state",
     },
 }
 
@@ -112,7 +136,14 @@ def state_table(source: str = SOURCE_AMAZON) -> str:
 
 
 def books_table(source: str = SOURCE_AMAZON) -> str:
+    """Amazon-only — Goodreads caches list pages, not per-book detail.
+    Calling for `goodreads` raises (see ADR-0018)."""
     return _table_name(source, "books")
+
+
+def list_pages_table(source: str = SOURCE_GOODREADS) -> str:
+    """Goodreads-only — Amazon's per-book detail table is `books`."""
+    return _table_name(source, "list_pages")
 
 
 def queue_table(source: str = SOURCE_AMAZON) -> str:
@@ -121,6 +152,16 @@ def queue_table(source: str = SOURCE_AMAZON) -> str:
 
 def worker_state_table(source: str = SOURCE_AMAZON) -> str:
     return _table_name(source, "worker_state")
+
+
+def per_source_table_suffixes(source: str) -> tuple[str, ...]:
+    """Logical-suffix list this source actually has, in canonical
+    order. Iteration-friendly alternative to a hardcoded tuple for
+    callers like `db_summary` that need to enumerate every table in
+    a source's DB (which differs by shape — see ADR-0018)."""
+    if source not in SUPPORTED_SOURCES:
+        raise ValueError(f"unknown metadata cache source: {source!r}")
+    return tuple(_TABLE_NAMES[source].keys())
 
 
 def get_db_path(source: str = SOURCE_AMAZON) -> Path:
@@ -294,8 +335,92 @@ def _build_amazon_migrations() -> list[str]:
     ]
 
 
+def _build_goodreads_migrations() -> list[str]:
+    """Migration list for the Goodreads list-page cache (v3.4.0).
+
+    Shape mirrors Amazon's v2 schema for `state`/`queue`/`worker_state`
+    (so worker telemetry + queue mechanics stay source-agnostic), but
+    swaps Amazon's per-book `books` table for a list-page-snapshot
+    `list_pages` table — Goodreads caches the author-list-page
+    book-ID inventory only, not per-book detail (ADR-0018).
+
+    Queue PK is `author_id` (not `(author_id, library_slug)`) —
+    matches Amazon's v2 collapse: an author present in both calibre +
+    abs gets scanned once. GR has no cross-library variance to
+    reconcile (list pages are global per Goodreads author), so per-
+    library state rows still capture which libraries enqueued the
+    scan but the scan itself runs once.
+
+    Cooldown defaults diverge from Amazon — GR's soft 202/503 backoff
+    starts at 300s (vs Amazon's 600s Akamai-tuned default). The
+    worker (slice 03) refines this per-tick.
+    """
+    state = state_table(SOURCE_GOODREADS)
+    list_pages = list_pages_table(SOURCE_GOODREADS)
+    queue = queue_table(SOURCE_GOODREADS)
+    worker = worker_state_table(SOURCE_GOODREADS)
+    return [
+        # v1 — core tables.
+        f"""
+        CREATE TABLE IF NOT EXISTS {state} (
+            author_id        TEXT NOT NULL,
+            library_slug     TEXT NOT NULL,
+            seshat_author_id INTEGER,
+            last_scanned_at  REAL,
+            last_outcome     TEXT,
+            last_error       TEXT,
+            book_count       INTEGER,
+            schema_version   INTEGER NOT NULL DEFAULT 1,
+            PRIMARY KEY (author_id, library_slug)
+        )
+        """,
+        f"""
+        CREATE TABLE IF NOT EXISTS {list_pages} (
+            author_id     TEXT NOT NULL,
+            library_slug  TEXT NOT NULL,
+            page_num      INTEGER NOT NULL,
+            fetched_at    REAL NOT NULL,
+            book_ids_json TEXT NOT NULL,
+            PRIMARY KEY (author_id, library_slug, page_num),
+            FOREIGN KEY (author_id, library_slug)
+                REFERENCES {state}(author_id, library_slug)
+                ON DELETE CASCADE
+        )
+        """,
+        f"""
+        CREATE TABLE IF NOT EXISTS {queue} (
+            author_id            TEXT PRIMARY KEY,
+            priority             REAL NOT NULL DEFAULT 100,
+            status               TEXT NOT NULL DEFAULT 'pending',
+            next_scan_due_at     REAL NOT NULL DEFAULT 0,
+            last_attempt_at      REAL,
+            consecutive_failures INTEGER NOT NULL DEFAULT 0,
+            enqueued_reason      TEXT
+        )
+        """,
+        f"""
+        CREATE INDEX IF NOT EXISTS idx_{queue}_priority_due
+            ON {queue} (status, priority DESC, next_scan_due_at ASC)
+        """,
+        f"""
+        CREATE TABLE IF NOT EXISTS {worker} (
+            id                      INTEGER PRIMARY KEY CHECK (id = 1),
+            last_block_at           REAL NOT NULL DEFAULT 0,
+            block_cooldown_s        REAL NOT NULL DEFAULT 300,
+            consecutive_blocks      INTEGER NOT NULL DEFAULT 0,
+            last_heartbeat_at       REAL,
+            last_scan_completed_at  REAL,
+            today_scan_count        INTEGER NOT NULL DEFAULT 0,
+            today_block_count       INTEGER NOT NULL DEFAULT 0
+        )
+        """,
+        f"INSERT OR IGNORE INTO {worker} (id) VALUES (1)",
+    ]
+
+
 _MIGRATIONS: dict[str, list[str]] = {
     SOURCE_AMAZON: _build_amazon_migrations(),
+    SOURCE_GOODREADS: _build_goodreads_migrations(),
 }
 
 
@@ -505,7 +630,10 @@ async def db_summary(source: str = SOURCE_AMAZON) -> dict[str, object]:
     if db_path.exists():
         db = await get_db(source)
         try:
-            for suffix in ("state", "books", "queue", "worker_state"):
+            # Source-shape-aware iteration — amazon has `books`, goodreads
+            # has `list_pages`; per_source_table_suffixes gives each
+            # source's actual table list (see ADR-0018).
+            for suffix in per_source_table_suffixes(source):
                 table = _table_name(source, suffix)
                 try:
                     cur = await db.execute(f"SELECT COUNT(*) FROM {table}")

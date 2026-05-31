@@ -879,6 +879,22 @@ async def lifespan(app: FastAPI):
                 "will rebuild the queue lazily as authors are scanned)"
             )
 
+        # v3.4.0 slice 01 — Goodreads list-page cache scaffolding.
+        # Creates `metadata_cache_goodreads.db` and its four tables
+        # (state / list_pages / queue / worker_state) on first run.
+        # No queue backfill yet (slice 03 wires the GR worker + queue
+        # population). Disabled by default — operator opts in via
+        # `metadata_cache.goodreads.mode` once slice 06 ships the UI.
+        try:
+            from app.discovery import metadata_cache
+            await metadata_cache.init_db(metadata_cache.SOURCE_GOODREADS)
+        except Exception:
+            _log.exception(
+                "metadata_cache: goodreads init_db failed (non-fatal — "
+                "the live GoodreadsSource still serves scans; cache "
+                "stays empty until the worker lands in slice 03)"
+            )
+
         # v2.21.0 Phase D — background metadata cache worker.
         # Runs every ~30-90s (jittered) and pops one queue row per
         # iteration: fresh curl_cffi session, behavioral warmup, scan
