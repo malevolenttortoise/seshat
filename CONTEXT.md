@@ -23,6 +23,7 @@ This glossary is **seeded, not complete** — only the most stable, load-bearing
 - **Enrichment** — fetching and merging metadata from sources onto a book/author.
 - **Convergence** — when a discovery scan re-encounters a book Seshat already has (a *match*, not a newly-inserted candidate). A later source converging on an earlier source's book enriches that book rather than creating a duplicate.
 - **Heal** — correcting a **discovered** book's **contributor set** on convergence by unioning in co-authors it was missing (e.g. older rows that predate contributor parsing and carry only the originally-scanned author). Discovered/unowned books only — owned books stay library-authoritative. Healing repairs a co-authored **series** whose **author mode** was misclassified because a thin member dragged the contributor-set intersection down (see [ADR-0014](docs/adr/0014-heal-contributors-on-scan-convergence.md)).
+- **Authors proposed-change** — the **owned-book counterpart to Heal**: when a discovery scan converges on an owned book and the source's contributor set isn't a subset of the book's `book_authors` (or the primary differs), the diff is enqueued in `metadata_review_queue` with `field='authors'` and a JSON payload carrying source-IDs alongside names. The operator reviews it in Metadata Manager and on **approve** the union (source ∪ current, source's primary first) is **pushed back** to Calibre/ABS, which then flows through re-sync to update `book_authors`. Additive-only — never silently removes a Calibre-asserted contributor (removals are a hand-edit in Calibre). The first **set-shaped** proposed-change in the queue; scalar fields stay scalar (see [ADR-0017](docs/adr/0017-owned-author-discrepancy-review-writeback.md)).
 
 ## Library, identity, and sync
 
@@ -66,7 +67,7 @@ This glossary is **seeded, not complete** — only the most stable, load-bearing
 
 - **Sink** — an output target that delivers or removes a book: `CalibreSink` (calibredb CLI), `CWASink` (Calibre-Web-Automated admin form), `AudiobookshelfSink`. Selection mirrors `metadata.book_push`.
 - **CWA** — Calibre-Web-Automated, the ebook ingest path used by the slim image (Mark's prod).
-- **Push-back** — user-triggered write of metadata changes back to authoritative Calibre, via the dual CWA/calibredb path.
+- **Push-back** — user-triggered write of metadata changes back to authoritative Calibre, via the dual CWA/calibredb path. From v3.3.0, **authors** is also pushable (joins the position-ordered names with each sink's separator: `&` for calibredb, comma-list for ABS PATCH, CWA form's authors field); the post-push snapshot drives an inline re-sync that updates `book_authors` and recomputes series `author_mode` (see [ADR-0017](docs/adr/0017-owned-author-discrepancy-review-writeback.md)).
 - **Reingest** — re-adding an already-snatched book from qBittorrent/disk into a library without re-snatching from MAM.
 
 ## Cross-cutting

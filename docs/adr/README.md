@@ -22,3 +22,4 @@ New decisions get the next number; supersede rather than rewrite when a decision
 | [0014](0014-heal-contributors-on-scan-convergence.md) | Heal unowned discovered books' contributors on scan-convergence (union, owned-guarded) |
 | [0015](0015-source-id-aware-author-identity.md) | Source-ID-aware author identity: persist co-author IDs fill-if-empty, match ID-first, surface conflicts, consolidate-by-ID |
 | [0016](0016-author-image-source-rank-and-mirror.md) | Author image: link-time persist + source-rank ordering + canonical-overwrite mirror; rot via hygiene HEAD-verify, not write-time |
+| [0017](0017-owned-author-discrepancy-review-writeback.md) | Owned-book author discrepancy: enqueue at scan-convergence (union semantics), JSON payload in `metadata_review_queue`, push-back via extended sinks, inline re-sync |
