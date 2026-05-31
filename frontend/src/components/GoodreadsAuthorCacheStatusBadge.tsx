@@ -1,21 +1,24 @@
-// v2.21.0 Phase F tier 3 — per-author cache status badge.
+// v3.6.0 frontend parity — per-author Goodreads cache status badge.
+//
+// Sibling to AuthorCacheStatusBadge (which serves Amazon's per-book
+// detail cache). GR caches list pages instead of per-book detail
+// (ADR-0018 §1, Path B), so this badge surfaces page-count and
+// aggregate-book-count instead of the Amazon per-book number.
 //
 // Renders directly below the SourceBadgeRow on the author detail
-// page. Only mounts when the author has a stored `amazon_id`
-// (otherwise there's nothing to look up). Shows one short line per
-// library the author exists in, with the most actionable cache
-// state:
+// page, alongside the Amazon badge if the author has both source
+// IDs. Only mounts when the author has a stored `goodreads_id`
+// (otherwise there's nothing to look up). Shows one line per
+// library the author exists in:
 //
-//   "Amazon (calibre-library): scanned 3d ago — 60 books cached"
-//   "Amazon (abs-audio-library): in queue (priority 1000)"
-//   "Amazon (calibre-library): never scanned"
-//   "Amazon: scan failed permanently — needs triage"
-//   "Amazon: scanning now"
+//   "Goodreads (calibre-library): scanned 2h ago — 4 pages / 399 books"
+//   "Goodreads (abs-audiobooks): in queue (priority 100)"
+//   "Goodreads (calibre-library): never scanned"
+//   "Goodreads: scan failed permanently — needs triage"
+//   "Goodreads: scanning now"
 //
-// Polls /api/v1/metadata-cache/amazon/author/{amazon_author_id}
-// every 30s while mounted so the line stays fresh during a long
-// session. Silent on 404 (legacy install) / 401 (signed out) /
-// transient failures.
+// Polls /api/v1/metadata-cache/goodreads/author/{goodreads_author_id}
+// every 30s while mounted. Silent on 404 / 401 / network failures.
 
 import { useEffect, useState } from "react";
 import { api } from "../api";
@@ -25,6 +28,12 @@ import {
   cacheChipStyle,
   formatSecondsAgo,
 } from "./cacheBadgeStyles";
+
+type ListPageEntry = {
+  page_num: number;
+  fetched_at: number;
+  book_count: number;
+};
 
 type LibraryRow = {
   library_slug: string;
@@ -39,11 +48,13 @@ type LibraryRow = {
     next_scan_due_at: number;
     consecutive_failures: number;
   } | null;
+  list_pages: ListPageEntry[] | null;
 };
 
 type AuthorCacheResponse = {
   source: string;
-  amazon_author_id: string;
+  author_id: string;
+  amazon_author_id: string;  // empty for GR
   libraries: LibraryRow[];
   cooldown: { blocked: boolean; remaining_s: number };
 };
@@ -52,29 +63,36 @@ type AuthorCacheResponse = {
 const POLL_INTERVAL_MS = 30_000;
 
 
-function _composeStatusLine(row: LibraryRow, cooldownActive: boolean): {
+function _composeStatusLine(row: LibraryRow): {
   text: string; tone: "ok" | "info" | "warn" | "err";
 } {
-  // Active in_progress wins regardless — the worker is actively
-  // touching this author RIGHT NOW.
   if (row.queue?.status === "in_progress") {
     return { text: "scanning now", tone: "info" };
   }
-  // failed_permanent surfaces immediately so operators see triage
-  // candidates without scanning the queue.
   if (row.queue?.status === "failed_permanent") {
     return { text: "scan failed permanently — needs triage", tone: "err" };
   }
-  // State row present → show the most recent scan outcome.
   if (row.state) {
     const outcome = row.state.last_outcome;
     const scanned = row.state.last_scanned_at;
-    const count = row.state.book_count ?? 0;
+    const bookCount = row.state.book_count ?? 0;
+    const pages = row.list_pages ?? [];
     if (outcome === "ok" && scanned !== null) {
       const ago = formatSecondsAgo(Date.now() / 1000 - scanned);
+      if (pages.length > 0) {
+        const totalBookIds = pages.reduce((s, p) => s + p.book_count, 0);
+        return {
+          text:
+            `scanned ${ago} — ${pages.length} page${pages.length === 1 ? "" : "s"}` +
+            ` / ${totalBookIds} book${totalBookIds === 1 ? "" : "s"} cached`,
+          tone: "ok",
+        };
+      }
+      // State row says ok but no list_pages — fall back to book_count
+      // from the state row (older scans may not have populated pages).
       return {
-        text: count > 0
-          ? `scanned ${ago} — ${count} book${count === 1 ? "" : "s"} cached`
+        text: bookCount > 0
+          ? `scanned ${ago} — ${bookCount} book${bookCount === 1 ? "" : "s"} cached`
           : `scanned ${ago} — no books returned`,
         tone: "ok",
       };
@@ -86,34 +104,26 @@ function _composeStatusLine(row: LibraryRow, cooldownActive: boolean): {
       };
     }
   }
-  // No state row but a pending queue row → "in queue."
   if (row.queue?.status === "pending") {
     const priorityNote = row.queue.priority >= 500
       ? " (priority bumped)"
       : "";
-    if (cooldownActive) {
-      return {
-        text: `in queue${priorityNote} — waiting on cooldown`,
-        tone: "warn",
-      };
-    }
     return { text: `in queue${priorityNote}`, tone: "info" };
   }
-  // Neither state nor queue → never enqueued.
   return { text: "never scanned", tone: "info" };
 }
 
 
-export function AuthorCacheStatusBadge({
-  amazonAuthorId,
+export function GoodreadsAuthorCacheStatusBadge({
+  goodreadsAuthorId,
 }: {
-  amazonAuthorId: string | null | undefined;
+  goodreadsAuthorId: string | null | undefined;
 }) {
   const t = useTheme();
   const [data, setData] = useState<AuthorCacheResponse | null>(null);
 
   useEffect(() => {
-    if (!amazonAuthorId) {
+    if (!goodreadsAuthorId) {
       setData(null);
       return;
     }
@@ -122,11 +132,13 @@ export function AuthorCacheStatusBadge({
     const fetchStatus = async () => {
       try {
         const r = await api.get<AuthorCacheResponse>(
-          `/v1/metadata-cache/amazon/author/${encodeURIComponent(amazonAuthorId)}`,
+          `/v1/metadata-cache/goodreads/author/${encodeURIComponent(goodreadsAuthorId)}`,
         );
         if (!cancelled) setData(r);
       } catch {
-        // Silent — could be 401 / 404 / network issue.
+        // Silent — could be 401 / 404 / network issue. GR cache may
+        // also be in mode=disabled (the worker still returns the
+        // status, but with no rows; no special handling needed here).
       }
     };
     fetchStatus();
@@ -135,18 +147,14 @@ export function AuthorCacheStatusBadge({
       cancelled = true;
       if (timer) clearInterval(timer);
     };
-  }, [amazonAuthorId]);
+  }, [goodreadsAuthorId]);
 
-  if (!amazonAuthorId) return null;
+  if (!goodreadsAuthorId) return null;
   if (data === null) return null;
   if (data.libraries.length === 0) {
-    // Author has an amazon_id, but the worker has never enqueued or
-    // scanned them — likely a brand-new resolution that the worker
-    // hasn't observed yet (the cache reader auto-enqueues on miss,
-    // so this state usually resolves itself by the next page poll).
     return (
       <div style={cacheBadgeContainerStyle(t)}>
-        <span style={cacheChipStyle("amazon")}>amazon</span>
+        <span style={cacheChipStyle("goodreads")}>goodreads</span>
         <span style={{ color: t.textDim, fontSize: 12 }}>
           never scanned — will enqueue on next lookup
         </span>
@@ -154,17 +162,15 @@ export function AuthorCacheStatusBadge({
     );
   }
 
-  const cooldownActive = data.cooldown.blocked;
-
   return (
     <div style={cacheBadgeContainerStyle(t)}>
-      <span style={cacheChipStyle("amazon")}>amazon</span>
+      <span style={cacheChipStyle("goodreads")}>goodreads</span>
       <div style={{
         display: "flex", flexDirection: "column", gap: 4,
         fontSize: 12, minWidth: 0,
       }}>
         {data.libraries.map(row => {
-          const status = _composeStatusLine(row, cooldownActive);
+          const status = _composeStatusLine(row);
           const toneColor =
             status.tone === "ok" ? t.ok
             : status.tone === "warn" ? "#cc9933"
@@ -179,11 +185,6 @@ export function AuthorCacheStatusBadge({
             </div>
           );
         })}
-        {cooldownActive && (
-          <div style={{ color: t.textDim, fontSize: 11, fontStyle: "italic" }}>
-            (worker cooldown engaged — scans paused for {Math.round(data.cooldown.remaining_s)}s)
-          </div>
-        )}
       </div>
     </div>
   );
