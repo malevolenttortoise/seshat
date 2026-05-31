@@ -32,17 +32,19 @@ enrichment, and Calibre delivery — all from a single unified interface.
 ### Discovery
 
 Sync your Calibre library and find every book you're missing across
-9 metadata sources (Goodreads, Hardcover, Kobo, Amazon, IBDB, Google
+nine metadata sources (Goodreads, Hardcover, Kobo, Amazon, IBDB, Google
 Books, Open Library, Audible, MAM). Manage authors, series, and
 pen-name aliases. Search MAM for matches and see which titles are
 available.
 
 Per-source coverage, priority defaults, the Cloudflare bypass behind
-Goodreads, the resolver chain that maps ISBN/ASIN → Goodreads ID
-without scraping `/search`, and the v2.21.0 Amazon metadata cache
-(background worker + `metadata_cache_amazon.db` + the 3-tier status
-UI) are all documented in
-[`docs/metadata-sources.md`](docs/metadata-sources.md).
+Goodreads, and the resolver chain that maps ISBN/ASIN → Goodreads ID
+without scraping `/search` are documented in
+[`docs/guide/metadata-sources.md`](docs/guide/metadata-sources.md).
+Amazon and Goodreads both run behind a background metadata cache so
+synchronous scans read locally instead of hitting Akamai or Cloudflare
+live — see [`docs/guide/metadata-cache.md`](docs/guide/metadata-cache.md)
+for the cache architecture, worker postures, and status surfaces.
 
 Container restarts run an **incremental sync** by default — Calibre's
 `last_modified` column and Audiobookshelf's `updatedAt` field drive a
@@ -67,11 +69,17 @@ ABS library alongside Calibre, pulls metadata from Audible + Audnexus,
 routes audiobook MAM grabs through a dedicated sink, and triggers a
 scan on the ABS server so new books show up without a manual refresh.
 
-Cross-library *works* link the same book across ebook + audiobook
-libraries so your Discovery views can show "Foundation" as one entity
-with both formats. Per-author tracking preferences let you pin an
-author to ebook-only, audiobook-only, or both — missing detection and
-MAM scans respect the preference automatically.
+Authorship is modelled as a contributor set — every book carries an
+ordered list of credited authors, and a cross-library **Person** links
+each author's Calibre row to their Audiobookshelf row through stable
+source IDs (Goodreads / Amazon / Hardcover / Audnexus). That means
+"Foundation" surfaces as one entity across both libraries, and a
+co-authored series classifies correctly without the operator hand-
+linking anything. Per-author tracking preferences let you pin an author
+to ebook-only, audiobook-only, or both — missing detection and MAM
+scans respect the preference automatically. See
+[`docs/guide/multi-author-and-series.md`](docs/guide/multi-author-and-series.md)
+for the full model.
 
 ### Unified Dashboard
 
@@ -152,21 +160,22 @@ state lives entirely on the `/app/data` volume.
 - **Frontend:** Vite + React 18 + TypeScript
 - **Databases:** Separate SQLite files — per-library discovery DBs +
   pipeline DB + auth DB + per-source metadata caches
-  (`metadata_cache_amazon.db` as of v2.21.0)
+  (`metadata_cache_amazon.db`, `metadata_cache_goodreads.db`)
 - **Background jobs:** supervised asyncio tasks + APScheduler
 - **Auth:** bcrypt + itsdangerous signed cookies + Fernet-encrypted secrets
 - **Theme:** Egyptian goddess palette (gold, deep indigo, jade green)
 - **Docker:** two-stage build (node:22-alpine + python:3.12-slim)
-- **API routes:** 197 total (107 discovery + 90 pipeline/shared)
+- **API routes:** 240 total (128 discovery + 112 pipeline/shared)
 - **Library backends:** Calibre (file-based) + Audiobookshelf (API-based),
-  composable — users can run multiple of either. Cross-library `works`
-  linked via the pipeline DB.
-- **Metadata cache layer (v2.21.0):** Amazon scans are decoupled from
-  user-facing flow via a paced background worker and a separate cache
-  DB. Synchronous scans read cache, never hit Akamai. Status surfaces
-  at three tiers — navbar icon, Amazon Cache card, per-author badge.
-  See [`docs/metadata-sources.md`](docs/metadata-sources.md) for the
-  full architecture.
+  composable — users can run multiple of either. Cross-library author
+  identity via the `persons` table and `author_links`.
+- **Metadata cache layer:** Amazon and Goodreads scans are decoupled
+  from user-facing flow via paced background workers and per-source
+  cache DBs. Synchronous scans read cache, never hit Akamai or
+  Cloudflare live. Status surfaces at three tiers — navbar icon,
+  per-source cache card, per-author badge. See
+  [`docs/guide/metadata-cache.md`](docs/guide/metadata-cache.md) for
+  the full architecture.
 
 ---
 
@@ -193,7 +202,7 @@ the user already saved through the UI.
 
 | Mount path | Required | Purpose |
 | --- | :---: | --- |
-| `/app/data` | yes | Seshat's persistent state — `settings.json`, per-library `seshat_<slug>.db`, pipeline DB, auth DB, per-source metadata caches (`metadata_cache_amazon.db`), optional rotated worker log under `logs/`, encrypted secrets store. **Never delete.** |
+| `/app/data` | yes | Seshat's persistent state — `settings.json`, per-library `seshat_<slug>.db`, pipeline DB, auth DB, per-source metadata caches (`metadata_cache_amazon.db`, `metadata_cache_goodreads.db`), optional rotated worker log under `logs/`, encrypted secrets store. **Never delete.** |
 | `/calibre` | yes (if using Calibre) | Calibre library directory — read-only is fine. Seshat reads `metadata.db` to discover books. |
 | `/audiobooks` | optional | Audiobookshelf library path — same volume ABS sees, so Seshat can drop new audiobook files where ABS will scan them. |
 | `/downloads` | recommended | qBit's download directory as Seshat sees it (the other side of the qBit/Seshat path translation). |
@@ -323,6 +332,14 @@ while Seshat's container has the same host directory mounted at
 *Settings → Pipeline*) translate between the two namespaces so Seshat
 can pre-create folders, find downloaded files, and hand the right path
 back to qBit.
+
+---
+
+## Documentation
+
+- [Operator + power-user guide](docs/guide/README.md) — multi-author/series, metadata sources + cache, Metadata Manager, hygiene jobs, notifications, active replacement.
+- [Architecture Decision Records](docs/adr/README.md) — why decisions were made.
+- [Changelog](CHANGELOG.md) — per-release history.
 
 ---
 
