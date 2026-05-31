@@ -489,6 +489,24 @@ async def patch_settings(
     new_enabled = bool(_cache_settings_get(source).get("enabled", False))
     new_mode = metadata_cache_worker.get_worker_mode(source)
     sched_now = _cache_settings_get(source).get("schedule") or {}
+
+    # v3.4.0 slice 04 — GR mode change must rebuild the `goodreads`
+    # module-level source in lookup.py so the live↔cached swap
+    # takes effect without a container restart. Amazon's cached
+    # source has been the only path since v2.21.0 so its panel
+    # never needed this hook; GR is the first source the mode
+    # toggle re-wires.
+    if source == metadata_cache.SOURCE_GOODREADS:
+        try:
+            from app.discovery.lookup import reload_sources
+            reload_sources()
+        except Exception:
+            _log.exception(
+                "metadata_cache settings: goodreads source reload "
+                "failed (non-fatal; next container restart will "
+                "honor the new mode)"
+            )
+
     return SettingsPatchResponse(
         ok=True, source=source,
         enabled=new_enabled,

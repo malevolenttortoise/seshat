@@ -64,6 +64,7 @@ logger = logging.getLogger("seshat.discovery.metadata_cache_reader")
 
 # Re-export so callers don't have to import both modules.
 SOURCE_AMAZON = metadata_cache.SOURCE_AMAZON
+SOURCE_GOODREADS = metadata_cache.SOURCE_GOODREADS
 
 
 # Heuristic copied from `app/discovery/sources/amazon.py`. A 10-char
@@ -427,6 +428,70 @@ async def read_cached_author(
     )
 
 
+async def read_cached_goodreads_raw_books(
+    *,
+    author_id: str,
+    library_slug: str,
+) -> Optional[list[dict]]:
+    """v3.4.0 slice 04 — return the cached GR list-page raw_book
+    records for `(author_id, library_slug)` flattened across all
+    pages, or None on cache miss.
+
+    Cache miss = no row in `metadata_cache_goodreads_state` for
+    this (author, library) pair. Cache hit but zero list-page
+    rows returns `[]` so the caller can distinguish "no books on
+    GR" from "never scanned."
+
+    The records are the dict shape `_parse_list_page_records`
+    produces: `[{book_id, title, list_series, list_series_idx,
+    list_cover, is_audio_list}, ...]`. The caller feeds these
+    straight into `GoodreadsSource.get_author_books(...,
+    cached_raw_books=...)` to skip the list-page HTTP fetch.
+    """
+    st = metadata_cache.state_table(SOURCE_GOODREADS)
+    lp = metadata_cache.list_pages_table(SOURCE_GOODREADS)
+    db = await metadata_cache.get_db(SOURCE_GOODREADS)
+    try:
+        state_cur = await db.execute(
+            f"SELECT last_outcome, last_scanned_at, book_count "
+            f"FROM {st} WHERE author_id = ? AND library_slug = ?",
+            (author_id, library_slug),
+        )
+        state_row = await state_cur.fetchone()
+        if state_row is None:
+            return None  # cache miss — never scanned
+        lp_cur = await db.execute(
+            f"SELECT page_num, book_ids_json FROM {lp} "
+            f"WHERE author_id = ? AND library_slug = ? "
+            f"ORDER BY page_num",
+            (author_id, library_slug),
+        )
+        lp_rows = await lp_cur.fetchall()
+    finally:
+        await db.close()
+
+    out: list[dict] = []
+    for row in lp_rows:
+        try:
+            records = json.loads(row["book_ids_json"]) or []
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(records, list):
+            continue
+        for rec in records:
+            # Defensive: a slice-03 install may have persisted bare
+            # ID strings before the slice-04 shape extension. Coerce
+            # so the cache-HIT path stays robust through an upgrade.
+            if isinstance(rec, str):
+                rec = {"book_id": rec, "title": "", "list_series": None,
+                       "list_series_idx": None, "list_cover": None,
+                       "is_audio_list": False}
+            elif not isinstance(rec, dict):
+                continue
+            out.append(rec)
+    return out
+
+
 # ─── Drop-in source class ──────────────────────────────────────
 
 
@@ -522,7 +587,6 @@ class CachedSource:
         with the Goodreads resume hook but never consulted (cache
         reads complete atomically).
         """
-        del existing_titles, start_at, _extra  # not used for cache reads
         slug = get_active_library() or ""
         if not slug:
             logger.debug(
@@ -530,6 +594,23 @@ class CachedSource:
                 self.source_name,
             )
             return None
+
+        # v3.4.0 slice 04 — Goodreads hybrid path. Cache HIT returns
+        # the cached list-page raw_books to a live GoodreadsSource
+        # via `cached_raw_books`, which skips the list-page HTTP
+        # fetch but still runs the detail loop (so Phase 3.2
+        # contributor parsing + existing_titles short-circuit + new-
+        # book detail fetches all work as before). Cache MISS
+        # enqueues + returns None just like Amazon.
+        if self.source_name == SOURCE_GOODREADS:
+            return await self._goodreads_get_author_books(
+                author_id=author_id, library_slug=slug,
+                existing_titles=existing_titles or set(),
+                owned_titles=owned_titles or [],
+                owned_only=owned_only, start_at=start_at,
+            )
+
+        del existing_titles, start_at, _extra  # not used for cache reads
 
         # Legacy state: authors.amazon_id occasionally stores a name
         # from the pre-v2.11.0 AmazonSource implementation. We can't
@@ -572,6 +653,73 @@ class CachedSource:
             self.source_name, author_id, slug, n_books,
         )
         return result
+
+    async def _goodreads_get_author_books(
+        self, *,
+        author_id: str, library_slug: str,
+        existing_titles: set, owned_titles: list,
+        owned_only: bool, start_at: int,
+    ) -> Optional[AuthorResult]:
+        """v3.4.0 slice 04 — GR cache-HIT path.
+
+        Reads cached list-page raw_books → hands them to a live
+        `GoodreadsSource.get_author_books` via the `cached_raw_books`
+        kwarg, which short-circuits the list-page HTTP fetch and
+        runs the detail loop directly. Detail loop honors the
+        existing_titles short-circuit so a re-scan of a mostly-
+        owned author returns nearly instantly.
+
+        Cache MISS → enqueue + return None.
+        """
+        cached_raw_books = await read_cached_goodreads_raw_books(
+            author_id=author_id, library_slug=library_slug,
+        )
+        if cached_raw_books is None:
+            new_row = await ensure_enqueued(
+                source_name=SOURCE_GOODREADS,
+                author_id=author_id,
+                priority=1000.0,
+                enqueued_reason="lookup_miss",
+            )
+            logger.info(
+                "goodreads cache reader: MISS for %s in %s — %s for worker",
+                author_id, library_slug,
+                "enqueued" if new_row else "queue row already present",
+            )
+            return None
+
+        # HIT — even empty cached_raw_books means the worker last
+        # scanned this author successfully and saw zero books.
+        logger.debug(
+            "goodreads cache reader: HIT for %s in %s — %d cached "
+            "list-page records",
+            author_id, library_slug, len(cached_raw_books),
+        )
+        from app.discovery.sources.goodreads import GoodreadsSource
+        source = GoodreadsSource(rate_limit=0.0)
+        # Forward the lookup.py-set per-book progress callback so the
+        # scan widget keeps ticking through cache-HIT-driven detail
+        # fetches.
+        if self._on_book is not None:
+            source._on_book = self._on_book
+        if self._on_new_candidate is not None:
+            source._on_new_candidate = self._on_new_candidate
+        try:
+            return await source.get_author_books(
+                author_id,
+                existing_titles=existing_titles,
+                owned_titles=owned_titles,
+                owned_only=owned_only,
+                start_at=start_at,
+                cached_raw_books=cached_raw_books,
+            )
+        finally:
+            try:
+                sess = getattr(source, "_session", None)
+                if sess is not None and hasattr(sess, "aclose"):
+                    await sess.aclose()
+            except Exception:
+                pass
 
 
 # ─── Module-level convenience constructor ──────────────────────

@@ -1164,19 +1164,27 @@ async def _fetch_prior_book_asins(
 async def _replace_list_page_rows(
     db: aiosqlite.Connection, source_name: str, *,
     author_id: str, library_slug: str,
-    pages: dict[int, list[str]],
+    pages: dict[int, list[dict]],
 ) -> None:
-    """v3.4.0 slice 03 — Goodreads-shape cache write. Replaces all
-    `_list_pages` rows for one (author, library) atomically: DELETE
-    the previous snapshots, INSERT the fresh scan's per-page book-ID
-    arrays as JSON.
+    """v3.4.0 slice 03/04 — Goodreads-shape cache write. Replaces
+    all `_list_pages` rows for one (author, library) atomically:
+    DELETE the previous snapshots, INSERT the fresh scan's per-page
+    raw_book records as JSON.
 
-    Mirrors `_replace_book_rows` for Amazon — same DELETE-then-INSERT
-    discipline so deletions on Goodreads' side (a book removed from
-    an author's list page) propagate correctly. Worth it because
-    list_page rows are tiny (one JSON array per page) and a stale
-    page outliving its GR shape would mask removed books from the
-    reader downstream.
+    `pages` is `{page_num: [{book_id, title, list_series,
+    list_series_idx, list_cover, is_audio_list}, ...]}` — the
+    slice 04 hybrid path needs these records to drive the detail-
+    only loop in `GoodreadsSource.get_author_books` without
+    re-fetching the list page. The column name `book_ids_json`
+    predates slice 04 (it stored bare IDs in slice 03) but is
+    kept as-is to avoid a schema rename + back-compat shim.
+
+    Mirrors `_replace_book_rows` for Amazon — same DELETE-then-
+    INSERT discipline so deletions on Goodreads' side (a book
+    removed from an author's list page) propagate correctly. Worth
+    it because list_page rows are tiny and a stale page outliving
+    its GR shape would mask removed books from the reader
+    downstream.
     """
     import json
     lp_table = metadata_cache.list_pages_table(source_name)
@@ -1187,8 +1195,8 @@ async def _replace_list_page_rows(
         (author_id, library_slug),
     )
     rows = [
-        (author_id, library_slug, page_num, now, json.dumps(ids))
-        for page_num, ids in sorted(pages.items())
+        (author_id, library_slug, page_num, now, json.dumps(records))
+        for page_num, records in sorted(pages.items())
     ]
     if rows:
         await db.executemany(
@@ -2037,7 +2045,8 @@ async def tick_goodreads() -> TickResult:
     # We still fan out per-library state + list_pages rows so the
     # downstream reader can scope by library_slug (matches v2.21.0
     # Amazon shape; required for ADR-0002 compliance).
-    book_count_total = sum(len(ids) for ids in pages.values())
+    # `pages` is `{page_num: [{book_id, title, ...}, ...]}` post-slice 04.
+    book_count_total = sum(len(records) for records in pages.values())
     try:
         db = await metadata_cache.get_db(source_name)
         try:

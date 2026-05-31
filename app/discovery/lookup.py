@@ -233,7 +233,30 @@ def reload_sources():
     from app.metadata.source_config import get_source_rate_limit
     s = load_settings()
     hardcover = HardcoverSource(api_key=s.get("hardcover_api_key", ""))
-    goodreads = GoodreadsSource(rate_limit=get_source_rate_limit(s, "goodreads"))
+    # v3.4.0 slice 04 — when the GR cache worker is enabled
+    # (`metadata_cache.goodreads.mode` != "disabled"), substitute
+    # `CachedSource(source_name="goodreads")` so synchronous scans
+    # serve from cache (hybrid: list cached, detail fetches still
+    # live). Disabled-mode + missing-nested-keys both fall through
+    # to the live `GoodreadsSource` so this is fully backwards-
+    # compatible. See ADR-0018 §6 + slice 04 issue spec.
+    _gr_cache_cfg = (s.get("metadata_cache") or {}).get("goodreads") or {}
+    _gr_cache_enabled = (
+        _gr_cache_cfg.get("mode", "disabled") != "disabled"
+        or bool(_gr_cache_cfg.get("enabled", False))
+    )
+    if _gr_cache_enabled:
+        from app.discovery.metadata_cache_reader import (
+            CachedSource as _CachedSource,
+            SOURCE_GOODREADS as _SOURCE_GOODREADS,
+        )
+        goodreads = _CachedSource(source_name=_SOURCE_GOODREADS)
+        logger.info(
+            "discovery sources: goodreads → CachedSource (cache mode %s)",
+            _gr_cache_cfg.get("mode", "continuous"),
+        )
+    else:
+        goodreads = GoodreadsSource(rate_limit=get_source_rate_limit(s, "goodreads"))
     # v2.11.1 N5: kobo.concurrency exposed via metadata_sources panel.
     # Read with default=4 so pre-v2.11.1 settings.json files (no
     # `concurrency` key) keep the v2.11.0 ship-default behaviour.

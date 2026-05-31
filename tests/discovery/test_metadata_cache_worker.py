@@ -1816,7 +1816,17 @@ class TestReplaceListPageRows:
             await metadata_cache_worker._replace_list_page_rows(
                 db, metadata_cache.SOURCE_GOODREADS,
                 author_id="GR-100", library_slug="books-lib",
-                pages={1: ["10", "11", "12"], 2: ["20", "21"]},
+                pages={
+                    1: [
+                        {"book_id": "10", "title": "Ten"},
+                        {"book_id": "11", "title": "Eleven"},
+                        {"book_id": "12", "title": "Twelve"},
+                    ],
+                    2: [
+                        {"book_id": "20", "title": "Twenty"},
+                        {"book_id": "21", "title": "Twenty-one"},
+                    ],
+                },
             )
             cur = await db.execute(
                 f"SELECT page_num, book_ids_json FROM "
@@ -1831,9 +1841,12 @@ class TestReplaceListPageRows:
         import json
         assert len(rows) == 2
         assert rows[0][0] == 1
-        assert json.loads(rows[0][1]) == ["10", "11", "12"]
+        page1 = json.loads(rows[0][1])
+        assert [r["book_id"] for r in page1] == ["10", "11", "12"]
+        assert page1[0]["title"] == "Ten"
         assert rows[1][0] == 2
-        assert json.loads(rows[1][1]) == ["20", "21"]
+        page2 = json.loads(rows[1][1])
+        assert [r["book_id"] for r in page2] == ["20", "21"]
 
     async def test_rescan_replaces_pages(self, gr_worker_under):
         db = await metadata_cache.get_db(metadata_cache.SOURCE_GOODREADS)
@@ -1849,7 +1862,8 @@ class TestReplaceListPageRows:
             await metadata_cache_worker._replace_list_page_rows(
                 db, metadata_cache.SOURCE_GOODREADS,
                 author_id="GR-101", library_slug="books-lib",
-                pages={1: ["a", "b", "c"]},
+                pages={1: [{"book_id": "a"}, {"book_id": "b"},
+                           {"book_id": "c"}]},
             )
             # Re-scan with a different page set — old rows must be
             # gone (DELETE-then-INSERT discipline; mirrors Amazon's
@@ -1857,7 +1871,7 @@ class TestReplaceListPageRows:
             await metadata_cache_worker._replace_list_page_rows(
                 db, metadata_cache.SOURCE_GOODREADS,
                 author_id="GR-101", library_slug="books-lib",
-                pages={1: ["x", "y"]},
+                pages={1: [{"book_id": "x"}, {"book_id": "y"}]},
             )
             cur = await db.execute(
                 f"SELECT page_num, book_ids_json FROM "
@@ -1870,7 +1884,8 @@ class TestReplaceListPageRows:
             await db.close()
         import json
         assert len(rows) == 1
-        assert json.loads(rows[0][1]) == ["x", "y"]
+        records = json.loads(rows[0][1])
+        assert [r["book_id"] for r in records] == ["x", "y"]
 
 
 class TestGoodreadsTick:
@@ -1900,7 +1915,14 @@ class TestGoodreadsTick:
         self, gr_worker_under, monkeypatch,
     ):
         await _seed_gr_queue_row(author_id="GR-200")
-        pages = {1: ["b1", "b2", "b3"], 2: ["b4"]}
+        pages = {
+            1: [
+                {"book_id": "b1", "title": "B1"},
+                {"book_id": "b2", "title": "B2"},
+                {"book_id": "b3", "title": "B3"},
+            ],
+            2: [{"book_id": "b4", "title": "B4"}],
+        }
         async def _ok_scan(author_id):
             assert author_id == "GR-200"
             return (pages, None, False)
@@ -2052,7 +2074,9 @@ class TestGoodreadsListPageInventory:
 
         source = GoodreadsSource(rate_limit=0.0)
         pages = await source.list_page_inventory("12345")
-        assert pages == {1: ["100", "200"]}
+        assert set(pages.keys()) == {1}
+        assert [r["book_id"] for r in pages[1]] == ["100", "200"]
+        assert pages[1][0]["title"] == "X"
         # Only the first-page fetch happened — no next_page link in
         # fixture, so pagination short-circuits.
         assert len(gets) == 1
@@ -2093,7 +2117,9 @@ class TestGoodreadsListPageInventory:
 
         source = GoodreadsSource(rate_limit=0.0)
         pages = await source.list_page_inventory("9")
-        assert pages == {1: ["1"], 2: ["2", "3"]}
+        assert set(pages.keys()) == {1, 2}
+        assert [r["book_id"] for r in pages[1]] == ["1"]
+        assert [r["book_id"] for r in pages[2]] == ["2", "3"]
 
     async def test_first_fetch_failure_returns_none(self, monkeypatch):
         from app.discovery.sources.goodreads import GoodreadsSource
