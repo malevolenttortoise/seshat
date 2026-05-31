@@ -30,6 +30,7 @@ import {
 } from "../lib/authorDetail";
 import { SourceBadgeRow } from "../components/SourceBadgeRow";
 import { AuthorCacheStatusBadge } from "../components/AuthorCacheStatusBadge";
+import { GoodreadsAuthorCacheStatusBadge } from "../components/GoodreadsAuthorCacheStatusBadge";
 import { useViewport } from "../hooks/useViewport";
 import { useMobileCodepath } from "../components/mobile";
 import MobileAuthorDetailPage from "./MobileAuthorDetailPage";
@@ -1454,11 +1455,16 @@ function DesktopAuthorDetailPage({
         />
       ) : null}
 
-      {/* v2.21.0 Phase F tier 3 — per-author cache status. Renders
-          only when an amazon_id is resolved (no ID → nothing to look
-          up). Shows one line per library the author exists in. */}
+      {/* v2.21.0 Phase F tier 3 + v3.6.0 frontend parity —
+          per-author cache status for each metadata source. Renders
+          only when the matching source ID is resolved (no ID →
+          nothing to look up). Shows one line per library the author
+          exists in. */}
       <AuthorCacheStatusBadge
         amazonAuthorId={(a.source_ids || {}).amazon as string | undefined}
+      />
+      <GoodreadsAuthorCacheStatusBadge
+        goodreadsAuthorId={(a.source_ids || {}).goodreads as string | undefined}
       />
 
 

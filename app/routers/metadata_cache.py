@@ -195,20 +195,40 @@ class RecentDiscoveriesResponse(BaseModel):
     discoveries: list[RecentDiscoveryRow]
 
 
+class ListPageEntry(BaseModel):
+    """One Goodreads list-page snapshot per `(author, library, page_num)`.
+    GR caches list pages instead of per-book detail (ADR-0018 §1, Path
+    B), so the per-author projection is a count of cached pages + the
+    total book IDs they cover. v3.6.0 frontend-parity slice."""
+    page_num: int
+    fetched_at: float
+    book_count: int
+
+
 class AuthorCacheStateRow(BaseModel):
     """One per-(author, library) cache state + queue position. The
     frontend's per-author badge composes a single human-readable line
     from one or more of these (an author may appear in multiple
     libraries — e.g. ebook + audiobook — and have different cache
-    state in each)."""
+    state in each).
+
+    `list_pages` is populated for the GR projection only (ADR-0018 §2
+    — GR caches list pages, not per-book detail). Amazon rows always
+    carry `list_pages=None`."""
     library_slug: str
     state: Optional[dict]  # last_scanned_at / last_outcome / book_count
     queue: Optional[dict]  # status / priority / next_scan_due_at / consecutive_failures
+    list_pages: Optional[list[ListPageEntry]] = None
 
 
 class AuthorCacheResponse(BaseModel):
     source: str
-    amazon_author_id: str
+    # `amazon_author_id` predates the v3.6.0 GR projection and stays
+    # populated for the Amazon source for backwards compatibility with
+    # `AuthorCacheStatusBadge.tsx`. GR responses leave it as the empty
+    # string and rely on `author_id` instead.
+    amazon_author_id: str = ""
+    author_id: str = ""
     libraries: list[AuthorCacheStateRow]
     cooldown: CooldownModel
 
@@ -615,19 +635,22 @@ async def get_author_cache_state(
     source: str, author_id: str,
 ) -> AuthorCacheResponse:
     """Per-author cache state across every library that's seen this
-    Amazon Author Store ID.
+    author ID.
 
-    Used by the author detail page's per-author cache badge (Phase F
-    tier 3) to render a single human-readable line summarizing
-    whether this specific author has been scanned, when, and how
-    many books are cached. Returns an empty `libraries` list when
-    the author has never been seen by the worker — the frontend
-    surfaces that as "never scanned" without distinguishing
-    "never enqueued" from "enqueued but not yet popped."
+    Used by the author detail page's per-author cache badges to
+    render a single human-readable line summarizing whether this
+    specific author has been scanned, when, and how many books /
+    list pages are cached.
+
+    Source-branched: Amazon projects per-book detail (`books` table);
+    Goodreads projects list-page snapshots (`list_pages` table) per
+    ADR-0018 §1 (Path B = list-page only). Both share `state` and
+    `queue` columns from the source-agnostic state/queue tables, so
+    the same per-library scaffold serves both shapes.
     """
     _validate_source(source)
-    _require_amazon_shape(source)
     cooldown = _cooldown_state(source)
+    is_gr = source == metadata_cache.SOURCE_GOODREADS
 
     db = await metadata_cache.get_db(source)
     try:
@@ -639,17 +662,35 @@ async def get_author_cache_state(
             (author_id,),
         )
         state_rows = await cur.fetchall()
-        # Schema-v2: queue is keyed by author_id only — singleton row
-        # per author. The same queue info applies to every library
-        # this author lives in; we duplicate it onto each library
-        # entry below so the existing frontend shape (one line per
-        # library) keeps working without a frontend-side change.
         cur = await db.execute(
             f"SELECT status, priority, next_scan_due_at, "
             f"consecutive_failures FROM {q_table} WHERE author_id = ?",
             (author_id,),
         )
         queue_row = await cur.fetchone()
+
+        list_pages_by_slug: dict[str, list[ListPageEntry]] = {}
+        if is_gr:
+            lp_table = metadata_cache.list_pages_table(source)
+            cur = await db.execute(
+                f"SELECT library_slug, page_num, fetched_at, "
+                f"book_ids_json FROM {lp_table} "
+                f"WHERE author_id = ? ORDER BY library_slug, page_num",
+                (author_id,),
+            )
+            import json as _json
+            for row in await cur.fetchall():
+                try:
+                    ids = _json.loads(row["book_ids_json"]) or []
+                except Exception:
+                    ids = []
+                list_pages_by_slug.setdefault(row["library_slug"], []).append(
+                    ListPageEntry(
+                        page_num=row["page_num"],
+                        fetched_at=row["fetched_at"],
+                        book_count=len(ids),
+                    )
+                )
     finally:
         await db.close()
 
@@ -662,13 +703,6 @@ async def get_author_cache_state(
             "consecutive_failures": queue_row["consecutive_failures"],
         }
 
-    # Index by library_slug. State rows give us the "scanned" side of
-    # each library; the singleton queue row attaches uniformly. When
-    # there are no state rows but a queue row exists (author was
-    # backfilled / cache-missed but the worker hasn't fanned out
-    # yet), we surface one synthesized entry per library this author
-    # is in via `_libraries_for_author` so the frontend can still
-    # render an "in queue" line per library.
     by_slug: dict[str, dict[str, Any]] = {}
     for row in state_rows:
         by_slug[row["library_slug"]] = {
@@ -678,32 +712,35 @@ async def get_author_cache_state(
                 "book_count": row["book_count"],
             },
             "queue": queue_info,
+            "list_pages": list_pages_by_slug.get(row["library_slug"]),
         }
 
     if not by_slug and queue_info is not None:
-        # No state rows yet — synthesize from the discovery-DB authors
-        # tables so the frontend can render one "in queue" line per
-        # library this author belongs to. Best-effort: a failure
-        # opening any single discovery DB just skips that library.
+        # No state rows yet — synthesize one "in queue" line per
+        # library this author belongs to via `_libraries_for_author`.
         from app.discovery.metadata_cache_worker import _libraries_for_author
         try:
-            libs = await _libraries_for_author(author_id)
+            libs = await _libraries_for_author(author_id, source)
         except Exception:
             libs = []
         for lib in libs:
-            by_slug[lib["slug"]] = {"state": None, "queue": queue_info}
+            by_slug[lib["slug"]] = {
+                "state": None, "queue": queue_info, "list_pages": None,
+            }
 
     libraries = [
         AuthorCacheStateRow(
             library_slug=slug,
             state=entry["state"],
             queue=entry["queue"],
+            list_pages=entry.get("list_pages"),
         )
         for slug, entry in sorted(by_slug.items())
     ]
     return AuthorCacheResponse(
         source=source,
-        amazon_author_id=author_id,
+        amazon_author_id="" if is_gr else author_id,
+        author_id=author_id,
         libraries=libraries,
         cooldown=cooldown,
     )

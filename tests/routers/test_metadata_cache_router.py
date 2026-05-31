@@ -657,3 +657,188 @@ class TestRecentDiscoveries:
             "/api/v1/metadata-cache/hardcover/recent-discoveries"
         )
         assert r.status_code == 404
+
+
+# ─── GET /goodreads/author/{id} — v3.6.0 frontend parity ───────
+
+
+@pytest.fixture
+async def gr_cache_router_client(tmp_path, monkeypatch):
+    """Same shape as `cache_router_client` but additionally inits the
+    GR cache DB so the v3.6.0 /goodreads/author endpoint tests have
+    its tables available."""
+    from app import config as app_config
+    from app.discovery import database as disco_db
+
+    monkeypatch.setattr(app_config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(metadata_cache, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(disco_db, "DATA_DIR", tmp_path)
+
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(json.dumps({**config.DEFAULT_SETTINGS}))
+    monkeypatch.setattr(app_config, "SETTINGS_PATH", settings_path)
+    app_config._settings_cache["data"] = None
+    app_config._settings_cache["mtime"] = object()
+
+    await metadata_cache.init_db(metadata_cache.SOURCE_GOODREADS)
+
+    app = _make_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://test",
+    ) as ac:
+        yield ac
+
+    app_config._settings_cache["data"] = None
+
+
+class TestGetGoodreadsAuthorCacheState:
+    """v3.6.0 ADR-0018-aware projection: GR caches list pages, not
+    per-book detail, so the `/goodreads/author/{aid}` response
+    populates `list_pages` per library instead of (well, alongside)
+    the shared `state` + `queue` shape."""
+
+    async def test_returns_empty_libraries_for_unknown_author(
+        self, gr_cache_router_client,
+    ):
+        r = await gr_cache_router_client.get(
+            "/api/v1/metadata-cache/goodreads/author/9999.NeverSeen"
+        )
+        assert r.status_code == 200
+        body = r.json()
+        # GR responses use `author_id`; `amazon_author_id` is empty.
+        assert body["author_id"] == "9999.NeverSeen"
+        assert body["amazon_author_id"] == ""
+        assert body["libraries"] == []
+        # GR has no IP-level cooldown surface.
+        assert body["cooldown"]["blocked"] is False
+
+    async def test_returns_state_and_list_pages_for_cached_author(
+        self, gr_cache_router_client,
+    ):
+        now = time.time()
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_GOODREADS)
+        try:
+            state_t = metadata_cache.state_table(
+                metadata_cache.SOURCE_GOODREADS,
+            )
+            await db.execute(
+                f"INSERT INTO {state_t} "
+                f"(author_id, library_slug, last_scanned_at, "
+                f" last_outcome, book_count) VALUES (?, ?, ?, ?, ?)",
+                ("38550.Sanderson", "cwa-library", now, "ok", 399),
+            )
+            lp_t = metadata_cache.list_pages_table(
+                metadata_cache.SOURCE_GOODREADS,
+            )
+            # Three pages, varying book counts. fetched_at slightly
+            # earlier than now so the seconds_ago math is sensible.
+            await db.execute(
+                f"INSERT INTO {lp_t} "
+                f"(author_id, library_slug, page_num, fetched_at, "
+                f" book_ids_json) VALUES (?, ?, ?, ?, ?)",
+                ("38550.Sanderson", "cwa-library", 1, now - 60.0,
+                 json.dumps(["b1", "b2", "b3"])),
+            )
+            await db.execute(
+                f"INSERT INTO {lp_t} "
+                f"(author_id, library_slug, page_num, fetched_at, "
+                f" book_ids_json) VALUES (?, ?, ?, ?, ?)",
+                ("38550.Sanderson", "cwa-library", 2, now - 60.0,
+                 json.dumps(["b4", "b5"])),
+            )
+            await db.commit()
+        finally:
+            await db.close()
+
+        r = await gr_cache_router_client.get(
+            "/api/v1/metadata-cache/goodreads/author/38550.Sanderson"
+        )
+        body = r.json()
+        assert body["author_id"] == "38550.Sanderson"
+        assert len(body["libraries"]) == 1
+        row = body["libraries"][0]
+        assert row["library_slug"] == "cwa-library"
+        assert row["state"]["last_outcome"] == "ok"
+        assert row["state"]["book_count"] == 399
+        # List-page projection: 2 pages, book counts derived from the
+        # cached `book_ids_json` array lengths.
+        assert row["list_pages"] is not None
+        assert len(row["list_pages"]) == 2
+        assert row["list_pages"][0]["page_num"] == 1
+        assert row["list_pages"][0]["book_count"] == 3
+        assert row["list_pages"][1]["page_num"] == 2
+        assert row["list_pages"][1]["book_count"] == 2
+
+    async def test_amazon_response_unchanged_carries_no_list_pages(
+        self, cache_router_client,
+    ):
+        """Amazon-side regression — adding `list_pages` to the model
+        as Optional must default to None for Amazon responses (Path
+        B caching is GR-only). Confirms the v2.21.0 frontend badge
+        stays unaffected by the v3.6.0 model extension."""
+        now = time.time()
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+        try:
+            await db.execute(
+                f"INSERT INTO {metadata_cache.state_table()} "
+                f"(author_id, library_slug, last_scanned_at, "
+                f" last_outcome, book_count) VALUES (?, ?, ?, ?, ?)",
+                ("B0TESTAUTH2", "calibre-library", now, "ok", 5),
+            )
+            await db.commit()
+        finally:
+            await db.close()
+        r = await cache_router_client.get(
+            "/api/v1/metadata-cache/amazon/author/B0TESTAUTH2"
+        )
+        body = r.json()
+        row = body["libraries"][0]
+        assert row["list_pages"] is None
+        # Backwards-compat: Amazon still populates amazon_author_id.
+        assert body["amazon_author_id"] == "B0TESTAUTH2"
+        # And the new generic field too.
+        assert body["author_id"] == "B0TESTAUTH2"
+
+    async def test_returns_multiple_libraries_with_per_library_pages(
+        self, gr_cache_router_client,
+    ):
+        """List pages partition by library_slug — Sanderson fanned
+        out across cwa + abs should return both libraries with
+        independent per-library list_pages projections."""
+        now = time.time()
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_GOODREADS)
+        try:
+            state_t = metadata_cache.state_table(
+                metadata_cache.SOURCE_GOODREADS,
+            )
+            lp_t = metadata_cache.list_pages_table(
+                metadata_cache.SOURCE_GOODREADS,
+            )
+            for slug in ("cwa-library", "abs-audiobooks"):
+                await db.execute(
+                    f"INSERT INTO {state_t} "
+                    f"(author_id, library_slug, last_scanned_at, "
+                    f" last_outcome, book_count) VALUES (?, ?, ?, ?, ?)",
+                    ("38550.Sanderson", slug, now, "ok", 399),
+                )
+                await db.execute(
+                    f"INSERT INTO {lp_t} "
+                    f"(author_id, library_slug, page_num, fetched_at, "
+                    f" book_ids_json) VALUES (?, ?, ?, ?, ?)",
+                    ("38550.Sanderson", slug, 1, now - 30.0,
+                     json.dumps(["a", "b"])),
+                )
+            await db.commit()
+        finally:
+            await db.close()
+        r = await gr_cache_router_client.get(
+            "/api/v1/metadata-cache/goodreads/author/38550.Sanderson"
+        )
+        body = r.json()
+        slugs = sorted(row["library_slug"] for row in body["libraries"])
+        assert slugs == ["abs-audiobooks", "cwa-library"]
+        for row in body["libraries"]:
+            assert row["list_pages"] is not None
+            assert len(row["list_pages"]) == 1
+            assert row["list_pages"][0]["book_count"] == 2
