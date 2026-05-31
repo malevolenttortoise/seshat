@@ -34,7 +34,25 @@ from typing import Any, Optional
 from difflib import SequenceMatcher
 import aiosqlite
 from app.config import load_settings
-from app.discovery.database import get_db, write_book_authors, resolve_or_create_author
+from app.discovery.database import (
+    get_db,
+    write_book_authors,
+    resolve_or_create_author,
+    get_active_library,
+)
+# v3.5.0 — mirror trio hoisted from lazy try-time imports inside
+# `_merge_result` to module level (Issue 02). No cycle risk:
+# `author_identity` imports only from `app.config`, `app.database`,
+# and `app.metadata.author_names` — never from `app.discovery.lookup`.
+# The semantic divergence between the three helpers (ADR-0016 §3/§4 —
+# `mirror_source_id` fill-if-empty per column / `mirror_bio` COALESCE-
+# fill / `mirror_image_url` canonical-overwrite-all) lives inside the
+# helpers themselves and is unaffected by this hoist.
+from app.discovery.author_identity import (
+    mirror_source_id,
+    mirror_bio,
+    mirror_image_url,
+)
 from app.discovery.sources.hardcover import HardcoverSource
 from app.discovery.sources.openlibrary import OpenLibrarySource
 from app.discovery.sources.goodreads import GoodreadsSource
@@ -1159,55 +1177,71 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
         up.append("last_lookup_at = ?"); pr.append(time.time()); pr.append(author_id)
         if up: await db.execute(f"UPDATE authors SET {', '.join(up)} WHERE id = ?", pr)
 
+        # v3.5.0 — mirror-trio dispatcher (Issue 02). Three structurally
+        # identical guarded best-effort calls used to inline the same
+        # try/import/active-slug/call/debug-log boilerplate three times;
+        # this helper expresses that pattern once. The three target
+        # helpers themselves are UNCHANGED — their deliberately divergent
+        # semantics (`mirror_source_id` fill-if-empty per source-ID
+        # column, `mirror_bio` COALESCE-fill, `mirror_image_url`
+        # canonical-overwrite-all) live inside their definitions per
+        # ADR-0016 §3/§4 and are preserved by the hoisted module-level
+        # imports above. Failure isolation: each call's exception is
+        # caught here independently, so a failure in one mirror does NOT
+        # short-circuit the next two.
+        async def _run_mirror(label, mirror_call):
+            """Run a mirror call best-effort.
+
+            `label`: short tag baked into the failure log so the
+            failing mirror is identifiable from `:refactor-slim` /
+            `:latest-slim` container logs.
+            `mirror_call(active_slug)`: callable returning an
+            awaitable; receives the resolved active library slug.
+
+            No-op when no active library slug is set (pre-migration
+            state or a brand-new row before the sync-insert hook fires).
+            """
+            try:
+                active_slug = get_active_library()
+                if not active_slug:
+                    return
+                await mirror_call(active_slug)
+            except Exception as exc:
+                # Mirror is best-effort — the per-library write at
+                # line 1160 has already landed. Log + continue.
+                logger.debug(
+                    "%s failed for author_id=%d: %s", label, author_id, exc,
+                )
+
         # v2.20.0 — mirror the source-ID write across linked per-library
         # author rows so a discovery scan in calibre-library populates
         # the matching abs-audio-library row's `{source}_id` for free.
-        # No-op when the author hasn't been linked yet (pre-migration
-        # state or a brand-new row before the sync-insert hook fires).
         if result.external_id:
-            try:
-                from app.discovery.author_identity import mirror_source_id
-                from app.discovery.database import get_active_library
-                active_slug = get_active_library()
-                if active_slug:
-                    await mirror_source_id(
-                        active_slug, author_id,
-                        source_name, result.external_id,
-                    )
-            except Exception as exc:
-                # Mirror is best-effort — the per-library write above
-                # has already landed. Log + continue.
-                logger.debug(
-                    "mirror_source_id failed for author_id=%d %s=%s: %s",
-                    author_id, source_name, result.external_id, exc,
-                )
+            await _run_mirror(
+                f"mirror_source_id ({source_name}={result.external_id})",
+                lambda slug: mirror_source_id(
+                    slug, author_id, source_name, result.external_id,
+                ),
+            )
 
         # v2.22.0 — mirror the bio across linked siblings AND update
         # `persons.bio` canonically. Author Detail returns
-        # `persons.bio`, so this is what users see. Best-effort: no
-        # local write was done if `result.bio` is falsy.
+        # `persons.bio`, so this is what users see.
         if result.bio:
-            try:
-                from app.discovery.author_identity import mirror_bio
-                from app.discovery.database import get_active_library
-                active_slug = get_active_library()
-                if active_slug:
-                    await mirror_bio(active_slug, author_id, result.bio)
-            except Exception as exc:
-                logger.debug(
-                    "mirror_bio failed for author_id=%d: %s",
-                    author_id, exc,
-                )
+            await _run_mirror(
+                "mirror_bio",
+                lambda slug: mirror_bio(slug, author_id, result.bio),
+            )
 
         # v3.x (ADR-0016 slice 02) — mirror the author image across
         # linked siblings AND update `persons.image_url` canonically
         # under the scanned-author trust rule (rank-aware overwrite).
         # The helper handles rank comparison + canonical-overwrite-all
         # fanout; unrecognized `source_name` (not in IMAGE_SOURCE_RANK)
-        # short-circuits to a warning + no-op. Best-effort.
+        # short-circuits to a warning + no-op.
         #
         # Pass `db=db` so the helper writes the caller's own per-library
-        # row through the SAME connection — line 1005's UPDATE hasn't
+        # row through the SAME connection — line 1160's UPDATE hasn't
         # committed yet, and a fresh connection to the same row would
         # deadlock against the open write transaction until busy_timeout
         # fires (30s). This is the exact path the helper's `db=` param
@@ -1216,22 +1250,14 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
         # mirror_image_url's canonical-overwrite-all writes the caller's
         # slug too (per ADR-0016 §4).
         if result.image_url:
-            try:
-                from app.discovery.author_identity import mirror_image_url
-                from app.discovery.database import get_active_library
-                active_slug = get_active_library()
-                if active_slug:
-                    await mirror_image_url(
-                        active_slug, author_id,
-                        source_name, result.image_url,
-                        trust="scanned", db=db,
-                    )
-            except Exception as exc:
-                logger.debug(
-                    "mirror_image_url(scanned) failed for author_id=%d "
-                    "source=%s: %s",
-                    author_id, source_name, exc,
-                )
+            await _run_mirror(
+                f"mirror_image_url(scanned, source={source_name})",
+                lambda slug: mirror_image_url(
+                    slug, author_id,
+                    source_name, result.image_url,
+                    trust="scanned", db=db,
+                ),
+            )
 
         # SELECT includes pub_date, description, expected_date so the
         # owned-book metadata logic in _update_existing can compare against
