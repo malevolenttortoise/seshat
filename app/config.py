@@ -602,6 +602,38 @@ DEFAULT_SETTINGS = {
     # cadence (90s scan + 60s idle), so transient delays don't trip
     # the alarm.
     "metadata_cache_stall_threshold_s": 300,
+    # v3.4.0 slice 01 — nested per-source cache settings. Both Amazon
+    # and Goodreads get identical shape; the router + worker have
+    # been reading these via `mc.get(...)` fallbacks since v2.21.0,
+    # but Amazon's tree was never actually seeded — fresh installs
+    # relied on the in-code defaults. Seeding both sources here
+    # closes that latent fresh-install gap AND lets the operator
+    # introspect / hand-edit the file without first opening a
+    # Settings panel. Both default to `mode=disabled` so no live
+    # behavior changes on upgrade. See ADR-0018.
+    #
+    # Nested-key seeding for existing installs runs via
+    # `_apply_legacy_settings_migrations` so a saved `metadata_cache`
+    # sub-dict (which shallow-merge would otherwise mask) gets any
+    # missing sub-keys back-filled.
+    "metadata_cache": {
+        "amazon": {
+            "enabled": False,
+            "mode": "disabled",
+            "schedule": {
+                "active_hours": "10:00-22:00",
+                "timezone": "",
+            },
+        },
+        "goodreads": {
+            "enabled": False,
+            "mode": "disabled",
+            "schedule": {
+                "active_hours": "10:00-22:00",
+                "timezone": "",
+            },
+        },
+    },
     "notify_daily_accepted": True,
     "notify_daily_tentative": True,
     "notify_daily_ignored": True,
@@ -895,6 +927,41 @@ def _apply_legacy_settings_migrations(settings: dict) -> bool:
                 changed = True
         del settings["accept_audiobook_announces"]
         changed = True
+    # v3.4.0 slice 01 — back-fill missing nested `metadata_cache.<source>`
+    # sub-keys for existing installs. `load_settings` shallow-merges
+    # the saved file over DEFAULT_SETTINGS, so a user who has any
+    # saved `metadata_cache` dict (Amazon, post-v2.21.0) would
+    # otherwise have the new goodreads sub-tree masked. Deep-seed only
+    # — never overwrite a user value.
+    mc_default = DEFAULT_SETTINGS.get("metadata_cache") or {}
+    mc = settings.get("metadata_cache")
+    if not isinstance(mc, dict):
+        settings["metadata_cache"] = dict(mc_default)
+        changed = True
+    else:
+        for src, default_src in mc_default.items():
+            if not isinstance(default_src, dict):
+                continue
+            cur_src = mc.get(src)
+            if not isinstance(cur_src, dict):
+                mc[src] = dict(default_src)
+                changed = True
+                continue
+            for key, default_val in default_src.items():
+                if key not in cur_src:
+                    cur_src[key] = (
+                        dict(default_val)
+                        if isinstance(default_val, dict)
+                        else default_val
+                    )
+                    changed = True
+                elif isinstance(default_val, dict) and isinstance(
+                    cur_src.get(key), dict
+                ):
+                    for sub_k, sub_v in default_val.items():
+                        if sub_k not in cur_src[key]:
+                            cur_src[key][sub_k] = sub_v
+                            changed = True
     return changed
 
 

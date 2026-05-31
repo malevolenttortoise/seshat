@@ -18,6 +18,7 @@ here pinning down the relationship.** That way the next time someone
 adds a new ENV_FOO without wiring it up, this test fails immediately.
 """
 import importlib
+import json
 
 import pytest
 
@@ -297,6 +298,156 @@ class TestLegacySettingsMigration:
         second = app.config._apply_legacy_settings_migrations(settings)
         assert second is False
         assert settings == snapshot
+
+
+class TestMetadataCacheNestedSettingsSeed:
+    """v3.4.0 slice 01 — DEFAULT_SETTINGS now seeds nested
+    `metadata_cache.{amazon, goodreads}.{enabled, mode, schedule.*}`.
+    Existing installs get missing sub-keys back-filled via
+    `_apply_legacy_settings_migrations` deep-seed (shallow-merge would
+    otherwise mask the new GR sub-tree under any saved amazon dict).
+    See ADR-0018 §3."""
+
+    def _seed_settings_file(self, tmp_path, payload: dict) -> None:
+        import json
+        (tmp_path / "settings.json").write_text(json.dumps(payload))
+
+    def test_default_settings_seeds_both_sources_symmetrically(self):
+        import app.config
+        mc = app.config.DEFAULT_SETTINGS["metadata_cache"]
+        assert set(mc.keys()) == {"amazon", "goodreads"}
+        for src, sub in mc.items():
+            assert sub["enabled"] is False, f"{src} default should be off"
+            assert sub["mode"] == "disabled", (
+                f"{src} default mode should be disabled "
+                "(no live behavior change on upgrade)"
+            )
+            assert sub["schedule"]["active_hours"] == "10:00-22:00"
+            assert sub["schedule"]["timezone"] == ""
+
+    def test_fresh_install_persists_nested_shape(
+        self, monkeypatch, tmp_path,
+    ):
+        """First-ever load with no settings.json writes the nested
+        sub-tree to disk so an operator hand-editing the file finds
+        the keys present rather than absent."""
+        monkeypatch.setenv("DATA_DIR", str(tmp_path))
+        import app.config
+        importlib.reload(app.config)
+
+        settings = app.config.load_settings()
+        mc = settings.get("metadata_cache")
+        assert isinstance(mc, dict)
+        assert "amazon" in mc and "goodreads" in mc
+        assert mc["goodreads"]["mode"] == "disabled"
+
+        import json
+        saved = json.loads((tmp_path / "settings.json").read_text())
+        assert "metadata_cache" in saved
+        assert "goodreads" in saved["metadata_cache"]
+        assert saved["metadata_cache"]["goodreads"]["enabled"] is False
+
+    def test_existing_install_with_amazon_only_gets_goodreads_seeded(
+        self, monkeypatch, tmp_path,
+    ):
+        """The shallow-merge gotcha: a saved
+        `metadata_cache: {amazon: {…}}` would otherwise mask the new
+        goodreads sub-tree from DEFAULT_SETTINGS. The deep-seed in
+        `_apply_legacy_settings_migrations` must fill it in."""
+        monkeypatch.setenv("DATA_DIR", str(tmp_path))
+        import app.config
+        importlib.reload(app.config)
+        self._seed_settings_file(tmp_path, {
+            "metadata_cache": {
+                "amazon": {"enabled": True, "mode": "continuous"},
+            },
+        })
+
+        settings = app.config.load_settings()
+        mc = settings["metadata_cache"]
+        # User's amazon settings preserved exactly.
+        assert mc["amazon"]["enabled"] is True
+        assert mc["amazon"]["mode"] == "continuous"
+        # Missing amazon sub-keys back-filled from defaults.
+        assert mc["amazon"]["schedule"]["active_hours"] == "10:00-22:00"
+        # Brand-new goodreads sub-tree appears.
+        assert mc["goodreads"]["enabled"] is False
+        assert mc["goodreads"]["mode"] == "disabled"
+        assert mc["goodreads"]["schedule"]["timezone"] == ""
+
+    def test_existing_install_user_overrides_never_clobbered(
+        self, monkeypatch, tmp_path,
+    ):
+        """A user who has explicitly opted into goodreads (somehow —
+        e.g. hand-edit) must keep their values across re-load."""
+        monkeypatch.setenv("DATA_DIR", str(tmp_path))
+        import app.config
+        importlib.reload(app.config)
+        self._seed_settings_file(tmp_path, {
+            "metadata_cache": {
+                "goodreads": {
+                    "enabled": True,
+                    "mode": "scheduled",
+                    "schedule": {
+                        "active_hours": "01:00-05:00",
+                        "timezone": "America/New_York",
+                    },
+                },
+            },
+        })
+
+        settings = app.config.load_settings()
+        gr = settings["metadata_cache"]["goodreads"]
+        assert gr["enabled"] is True
+        assert gr["mode"] == "scheduled"
+        assert gr["schedule"]["active_hours"] == "01:00-05:00"
+        assert gr["schedule"]["timezone"] == "America/New_York"
+        # Amazon sub-tree appears with defaults (was missing on disk).
+        amz = settings["metadata_cache"]["amazon"]
+        assert amz["enabled"] is False
+        assert amz["mode"] == "disabled"
+
+    def test_existing_install_partial_schedule_subkeys_get_backfilled(
+        self, monkeypatch, tmp_path,
+    ):
+        """User wrote only `schedule.active_hours` — the missing
+        `timezone` sub-key gets back-filled to the default empty
+        string so callers don't NPE on a missing key."""
+        monkeypatch.setenv("DATA_DIR", str(tmp_path))
+        import app.config
+        importlib.reload(app.config)
+        self._seed_settings_file(tmp_path, {
+            "metadata_cache": {
+                "amazon": {
+                    "schedule": {"active_hours": "06:00-22:00"},
+                },
+            },
+        })
+
+        settings = app.config.load_settings()
+        amz_sched = settings["metadata_cache"]["amazon"]["schedule"]
+        assert amz_sched["active_hours"] == "06:00-22:00"  # user value
+        assert amz_sched["timezone"] == ""                  # back-filled
+
+    def test_seeder_is_idempotent(self, monkeypatch, tmp_path):
+        """Running the deep-seed twice on an already-seeded dict
+        is a no-op — protects against double-write loops."""
+        monkeypatch.setenv("DATA_DIR", str(tmp_path))
+        import app.config
+        importlib.reload(app.config)
+
+        settings = {
+            "metadata_cache": {
+                "amazon": {"enabled": True, "mode": "continuous"},
+            },
+        }
+        first = app.config._apply_legacy_settings_migrations(settings)
+        assert first is True
+        snapshot = json.loads(json.dumps(settings))
+
+        second = app.config._apply_legacy_settings_migrations(settings)
+        assert second is False
+        assert json.loads(json.dumps(settings)) == snapshot
 
 
 class TestNoSilentlyMissingSeeds:

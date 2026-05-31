@@ -617,14 +617,24 @@ async def _read_state_for_summary(
     its own connection so the summary path doesn't deadlock against
     the worker tick's transaction."""
     table = metadata_cache.worker_state_table(source_name)
+    is_gr = source_name == metadata_cache.SOURCE_GOODREADS
     db = await metadata_cache.get_db(source_name)
     try:
-        cur = await db.execute(
-            f"SELECT today_scan_count, today_block_count, "
-            f"       last_heartbeat_at, last_scan_completed_at, "
-            f"       last_block_at, consecutive_blocks "
-            f"FROM {table} WHERE id = 1"
-        )
+        if is_gr:
+            cur = await db.execute(
+                f"SELECT today_scan_count, today_block_count, "
+                f"       last_heartbeat_at, last_scan_completed_at, "
+                f"       last_block_at, consecutive_blocks, "
+                f"       today_budget_exhaust_count "
+                f"FROM {table} WHERE id = 1"
+            )
+        else:
+            cur = await db.execute(
+                f"SELECT today_scan_count, today_block_count, "
+                f"       last_heartbeat_at, last_scan_completed_at, "
+                f"       last_block_at, consecutive_blocks "
+                f"FROM {table} WHERE id = 1"
+            )
         row = await cur.fetchone()
         if row is None:
             return {
@@ -632,17 +642,72 @@ async def _read_state_for_summary(
                 "last_heartbeat_at": None,
                 "last_scan_completed_at": None,
                 "last_block_at": 0.0, "consecutive_blocks": 0,
+                "today_budget_exhaust_count": 0,
             }
-        return {
+        snapshot = {
             "today_scan_count": int(row[0] or 0),
             "today_block_count": int(row[1] or 0),
             "last_heartbeat_at": row[2],
             "last_scan_completed_at": row[3],
             "last_block_at": float(row[4] or 0.0),
             "consecutive_blocks": int(row[5] or 0),
+            "today_budget_exhaust_count": 0,
         }
+        if is_gr and len(row) > 6:
+            snapshot["today_budget_exhaust_count"] = int(row[6] or 0)
+        return snapshot
     finally:
         await db.close()
+
+
+async def record_goodreads_budget_exhaust() -> None:
+    """v3.4.0 slice 05 — bump the GR budget-exhaust counter.
+
+    Called from `lookup.py` at the `[goodreads] giving up on …`
+    warning point (the Path A wall-clock budget exhaustion). Persists
+    in `metadata_cache_goodreads_worker_state.today_budget_exhaust_count`;
+    daily-summary rolls it over alongside the other today_* counters.
+
+    Best-effort — a DB hiccup never raises into the caller. The
+    daily summary message body surfaces the count, giving Mark a
+    data signal for the v3.5.0 Path C decision (PRD §6.2 "perceptible
+    wastage on filter-rejected new books that Path B can't eliminate").
+    """
+    try:
+        source_name = metadata_cache.SOURCE_GOODREADS
+        table = metadata_cache.worker_state_table(source_name)
+        db = await metadata_cache.get_db(source_name)
+        try:
+            now = time.time()
+            cur = await db.execute(
+                f"SELECT today_budget_exhaust_count, last_block_at "
+                f"FROM {table} WHERE id = 1"
+            )
+            row = await cur.fetchone()
+            prior_count = int(row[0] or 0) if row else 0
+            prior_last = float(row[1] or 0.0) if row else 0.0
+            # Same day-rollover heuristic as the other today_*
+            # counters: if the singleton hasn't been touched today,
+            # this exhaust is the first of the new day.
+            new_count = (
+                prior_count + 1
+                if _is_same_local_day(prior_last, now)
+                else 1
+            )
+            await db.execute(
+                f"UPDATE {table} "
+                f"SET today_budget_exhaust_count = ? WHERE id = 1",
+                (new_count,),
+            )
+            await db.commit()
+        finally:
+            await db.close()
+    except Exception:
+        logger.debug(
+            "metadata_cache_worker: goodreads budget-exhaust "
+            "counter bump failed (non-fatal)",
+            exc_info=True,
+        )
 
 
 async def send_daily_summary(
@@ -657,23 +722,37 @@ async def send_daily_summary(
     UI numbers reflect the past 24h, not all-time.
     """
     snapshot = await _read_state_for_summary(source_name)
-    prior_scans, prior_blocks = await reset_today_counters(source_name)
+    prior_scans, prior_blocks, prior_exhausts = (
+        await reset_today_counters(source_name)
+    )
     # The day-rollover logic in `_record_scan_completed` may have
     # already partially reset things on the first tick of the new
     # day. Either way, the snapshot above reflects the moment-before
     # state and is what we summarize.
     today_scans = max(snapshot["today_scan_count"], prior_scans)
     today_blocks = max(snapshot["today_block_count"], prior_blocks)
+    today_exhausts = max(
+        snapshot.get("today_budget_exhaust_count", 0), prior_exhausts,
+    )
     logger.info(
         "metadata_cache_worker: daily summary for source=%s — "
-        "scans=%d, blocks=%d",
-        source_name, today_scans, today_blocks,
+        "scans=%d, blocks=%d, budget_exhausts=%d",
+        source_name, today_scans, today_blocks, today_exhausts,
     )
-    title = f"Amazon worker — daily summary ({today_scans} scans)"
+    title = (
+        f"{source_name.title()} worker — daily summary "
+        f"({today_scans} scans)"
+    )
     message_lines = [
         f"Scans: {today_scans}",
         f"Soft-blocks: {today_blocks}",
     ]
+    if source_name == metadata_cache.SOURCE_GOODREADS:
+        # v3.4.0 slice 05 — Path C decision data signal. Operator
+        # sees the budget-exhaust count for the day; non-zero on
+        # prolific authors is the trigger condition for shipping
+        # detail-cache as v3.5.0 (PRD §6.2).
+        message_lines.append(f"Budget exhausts: {today_exhausts}")
     if snapshot["consecutive_blocks"]:
         message_lines.append(
             f"Consecutive blocks in last hour: "
@@ -769,34 +848,58 @@ async def check_stall(
 
 async def reset_today_counters(
     source_name: str = metadata_cache.SOURCE_AMAZON,
-) -> tuple[int, int]:
-    """Zero the `today_scan_count` + `today_block_count` columns and
-    return the pre-reset values so the daily-summary scheduler job
-    can include them in the ntfy message.
+) -> tuple[int, int, int]:
+    """Zero the today_* counters and return the pre-reset values so
+    the daily-summary scheduler job can include them in the ntfy
+    message.
 
-    Idempotent — calling twice in the same day returns (0, 0) the
+    Returns `(today_scan_count, today_block_count,
+    today_budget_exhaust_count)` — the third element is always 0 for
+    sources that don't track budget exhausts (Amazon today; only
+    Goodreads since v3.4.0 slice 05).
+
+    Idempotent — calling twice in the same day returns (0, 0, 0) the
     second time. Doesn't touch `last_scan_completed_at` /
     `last_block_at`, so the day-rollover heuristic in
     `_record_scan_completed` / `_record_block_in_worker_state`
     continues to work.
     """
     table = metadata_cache.worker_state_table(source_name)
+    is_gr = source_name == metadata_cache.SOURCE_GOODREADS
     db = await metadata_cache.get_db(source_name)
     try:
-        cur = await db.execute(
-            f"SELECT today_scan_count, today_block_count "
-            f"FROM {table} WHERE id = 1"
-        )
-        row = await cur.fetchone()
-        prior_scans = int(row[0] or 0) if row else 0
-        prior_blocks = int(row[1] or 0) if row else 0
-        await db.execute(
-            f"UPDATE {table} "
-            f"SET today_scan_count = 0, today_block_count = 0 "
-            f"WHERE id = 1"
-        )
+        if is_gr:
+            cur = await db.execute(
+                f"SELECT today_scan_count, today_block_count, "
+                f"       today_budget_exhaust_count "
+                f"FROM {table} WHERE id = 1"
+            )
+            row = await cur.fetchone()
+            prior_scans = int(row[0] or 0) if row else 0
+            prior_blocks = int(row[1] or 0) if row else 0
+            prior_exhausts = int(row[2] or 0) if row else 0
+            await db.execute(
+                f"UPDATE {table} "
+                f"SET today_scan_count = 0, today_block_count = 0, "
+                f"    today_budget_exhaust_count = 0 "
+                f"WHERE id = 1"
+            )
+        else:
+            cur = await db.execute(
+                f"SELECT today_scan_count, today_block_count "
+                f"FROM {table} WHERE id = 1"
+            )
+            row = await cur.fetchone()
+            prior_scans = int(row[0] or 0) if row else 0
+            prior_blocks = int(row[1] or 0) if row else 0
+            prior_exhausts = 0
+            await db.execute(
+                f"UPDATE {table} "
+                f"SET today_scan_count = 0, today_block_count = 0 "
+                f"WHERE id = 1"
+            )
         await db.commit()
-        return prior_scans, prior_blocks
+        return prior_scans, prior_blocks, prior_exhausts
     finally:
         await db.close()
 
@@ -953,17 +1056,31 @@ def _bindings_for_content_type(content_type: str) -> frozenset[str]:
 
 async def _libraries_for_author(
     author_id: str,
+    source_name: str = metadata_cache.SOURCE_AMAZON,
 ) -> list[dict[str, Any]]:
     """Return the list of libraries that have a row for ``author_id``.
 
     Each entry carries `slug`, `content_type`, and `seshat_author_id`
     (the per-library authors.id). Used by the worker to fan out a
-    single Amazon scan into per-library state + book rows.
+    single source scan into per-library state + cache rows.
 
     Reads from the discovery DBs every time — no caching — so a
-    just-resolved amazon_id is observed without needing a worker
+    just-resolved source ID is observed without needing a worker
     restart.
+
+    `source_name` picks the discovery-authors column to look up by
+    (amazon → `amazon_id`, goodreads → `goodreads_id`). v3.4.0 slice
+    03 extension; pre-slice the function was Amazon-only.
     """
+    _COL_BY_SOURCE = {
+        metadata_cache.SOURCE_AMAZON: "amazon_id",
+        metadata_cache.SOURCE_GOODREADS: "goodreads_id",
+    }
+    column = _COL_BY_SOURCE.get(source_name)
+    if column is None:
+        raise ValueError(
+            f"_libraries_for_author: unknown source {source_name!r}"
+        )
     from app.discovery.database import get_db as get_discovery_db
     result: list[dict[str, Any]] = []
     for lib in state._discovered_libraries:
@@ -981,7 +1098,7 @@ async def _libraries_for_author(
             continue
         try:
             cur = await disc.execute(
-                "SELECT id FROM authors WHERE amazon_id = ?",
+                f"SELECT id FROM authors WHERE {column} = ?",
                 (author_id,),
             )
             row = await cur.fetchone()
@@ -1147,6 +1264,54 @@ async def _fetch_prior_book_asins(
     return {row[0] for row in await cur.fetchall()}
 
 
+async def _replace_list_page_rows(
+    db: aiosqlite.Connection, source_name: str, *,
+    author_id: str, library_slug: str,
+    pages: dict[int, list[dict]],
+) -> None:
+    """v3.4.0 slice 03/04 — Goodreads-shape cache write. Replaces
+    all `_list_pages` rows for one (author, library) atomically:
+    DELETE the previous snapshots, INSERT the fresh scan's per-page
+    raw_book records as JSON.
+
+    `pages` is `{page_num: [{book_id, title, list_series,
+    list_series_idx, list_cover, is_audio_list}, ...]}` — the
+    slice 04 hybrid path needs these records to drive the detail-
+    only loop in `GoodreadsSource.get_author_books` without
+    re-fetching the list page. The column name `book_ids_json`
+    predates slice 04 (it stored bare IDs in slice 03) but is
+    kept as-is to avoid a schema rename + back-compat shim.
+
+    Mirrors `_replace_book_rows` for Amazon — same DELETE-then-
+    INSERT discipline so deletions on Goodreads' side (a book
+    removed from an author's list page) propagate correctly. Worth
+    it because list_page rows are tiny and a stale page outliving
+    its GR shape would mask removed books from the reader
+    downstream.
+    """
+    import json
+    lp_table = metadata_cache.list_pages_table(source_name)
+    now = time.time()
+    await db.execute(
+        f"DELETE FROM {lp_table} "
+        f"WHERE author_id = ? AND library_slug = ?",
+        (author_id, library_slug),
+    )
+    rows = [
+        (author_id, library_slug, page_num, now, json.dumps(records))
+        for page_num, records in sorted(pages.items())
+    ]
+    if rows:
+        await db.executemany(
+            f"INSERT INTO {lp_table} "
+            f"(author_id, library_slug, page_num, fetched_at, "
+            f" book_ids_json) "
+            f"VALUES (?, ?, ?, ?, ?)",
+            rows,
+        )
+    await db.commit()
+
+
 async def _replace_book_rows(
     db: aiosqlite.Connection, source_name: str, *,
     author_id: str, library_slug: str,
@@ -1258,6 +1423,63 @@ async def _perform_amazon_scan(
     if result is None:
         return None, "source returned None (transport / soft-block)"
     return result, None
+
+
+async def _perform_goodreads_scan(
+    author_id: str,
+) -> tuple[Optional[dict[int, list[str]]], Optional[str], bool]:
+    """v3.4.0 slice 03 — Goodreads list-only scan for the cache
+    worker (ADR-0018 §1).
+
+    Builds a one-shot `GoodreadsSource` (NO curl_cffi, NO warmup —
+    GR has no Akamai layer; the existing httpx-based GR session is
+    sufficient) and calls `list_page_inventory(author_id)`.
+
+    Returns `(pages_dict, error_msg, is_soft_block)`:
+      - `(pages, None, False)` on success — pages is `{page_num:
+        [book_id, ...]}`.
+      - `(None, error_msg, False)` on hard error (parser raised,
+        transport-level failure).
+      - `(None, error_msg, True)` on soft-block (HTTP 202 / 503
+        observed by the source's existing retry path; surfaces as
+        the source returning None after exhausting retries).
+
+    The soft-block vs hard-error distinction matters in `tick`: a
+    soft-block defers the queue row past a cooldown without
+    incrementing `consecutive_failures`; a hard error increments
+    failures and eventually flips the row to `failed_permanent`.
+    The current `GoodreadsSource` doesn't surface the distinction
+    explicitly — it just returns None — so we treat None as a
+    cooldown-class signal (soft-block) for safety. A future
+    `list_page_inventory` extension can return a richer error.
+    """
+    from app.discovery.sources.goodreads import GoodreadsSource
+    s = app_config.load_settings()
+    gr_cfg = (s.get("metadata_sources") or {}).get("goodreads") or {}
+    rate_limit = float(gr_cfg.get("rate_limit", 5.0))
+    source = GoodreadsSource(rate_limit=rate_limit)
+    try:
+        pages = await source.list_page_inventory(author_id)
+    except Exception as exc:
+        logger.exception(
+            "metadata_cache_worker: goodreads list-page scan raised "
+            "for %s: %s", author_id, exc,
+        )
+        return None, f"{type(exc).__name__}: {exc}", False
+    finally:
+        # GoodreadsSource may hold an httpx session in
+        # `_goodreads_session`; close it cleanly if exposed.
+        try:
+            sess = getattr(source, "_session", None)
+            if sess is not None and hasattr(sess, "aclose"):
+                await sess.aclose()
+        except Exception:
+            pass
+    if pages is None:
+        # GR source returned None — treat as soft-block (cooldown
+        # class). A genuine hard parser failure would have raised.
+        return None, "goodreads returned None (likely 202/503 soft-block)", True
+    return pages, None, False
 
 
 # ─── Crash recovery ────────────────────────────────────────────
@@ -1739,6 +1961,291 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
     )
 
 
+# ─── Goodreads tick (v3.4.0 slice 03) ──────────────────────────
+
+
+# GR has no global IP-level cooldown (no Akamai-class hard wall) —
+# soft-block defers the queue row by a single 300s cooldown without
+# escalating (per ADR-0018 §1 — "lighter cooldown curve" diverges
+# intentionally from Amazon's 600s/1800s/3600s tier).
+_GR_SOFT_BLOCK_COOLDOWN_S = 300.0
+
+
+async def tick_goodreads() -> TickResult:
+    """v3.4.0 slice 03 — Goodreads cache worker tick (ADR-0018).
+
+    Mirrors `tick()`'s skeleton (heartbeat / mode gate / schedule
+    gate / queue pop / per-library fan-out / cache write) but with
+    GR-specific differences: NO curl_cffi session, NO warmup, NO
+    `is_amazon_blocked()` global gate (GR has no IP-level cooldown),
+    NO escalation tier, and writes to the GR-shape `list_pages`
+    table instead of Amazon's `books` table. New-book detection
+    deferred to slice 05 telemetry.
+
+    Never raises; every error path returns a `TickResult` so
+    `run_loop` can decide the next sleep.
+    """
+    source_name = metadata_cache.SOURCE_GOODREADS
+    now = time.time()
+    started_at = now
+    scan_log = _scan_logger(source_name)
+
+    # Heartbeat fires every tick before any gate (same rationale as
+    # the Amazon tick — distinguishes "disabled / cooled / empty"
+    # from "task died").
+    try:
+        hb_db = await metadata_cache.get_db(source_name)
+        try:
+            await _stamp_heartbeat(hb_db, source_name, now)
+        finally:
+            await hb_db.close()
+    except Exception:
+        logger.exception(
+            "metadata_cache_worker[goodreads]: heartbeat stamp "
+            "failed (non-fatal)"
+        )
+
+    if not state._discovered_libraries:
+        return TickResult(
+            source_name=source_name, outcome="no_libraries",
+            next_sleep_s=_IDLE_SLEEP_S,
+        )
+
+    if not is_worker_enabled(source_name):
+        return TickResult(
+            source_name=source_name, outcome="disabled",
+            next_sleep_s=_IDLE_SLEEP_S,
+        )
+
+    if not is_inside_schedule_window(source_name):
+        wait_s = seconds_until_window_open(source_name)
+        sleep_s = min(max(wait_s, _IDLE_SLEEP_S), _COOLDOWN_MAX_SLEEP_S)
+        return TickResult(
+            source_name=source_name, outcome="outside_schedule",
+            next_sleep_s=sleep_s,
+        )
+
+    db = await metadata_cache.get_db(source_name)
+    try:
+        queue_row = await _pop_next_queue_row(db, source_name, now)
+        if queue_row is None:
+            return TickResult(
+                source_name=source_name, outcome="queue_empty",
+                queue_size=0, next_sleep_s=_IDLE_SLEEP_S,
+            )
+        queue_size = await _count_pending_queue_rows(db, source_name)
+    finally:
+        await db.close()
+
+    author_id = queue_row["author_id"]
+    libraries = await _libraries_for_author(author_id, source_name)
+    if not libraries:
+        db = await metadata_cache.get_db(source_name)
+        try:
+            await _mark_queue_row_pending(
+                db, source_name,
+                author_id=author_id,
+                next_scan_due_at=now + _NORMAL_RESCAN_CADENCE_S,
+                reset_failures=True,
+            )
+        finally:
+            await db.close()
+        return TickResult(
+            source_name=source_name, outcome="ok_empty",
+            author_id=author_id, queue_size=queue_size,
+            next_sleep_s=random.uniform(_JITTER_MIN_S, _JITTER_MAX_S),
+        )
+
+    pages, scan_error, is_soft_block = await _perform_goodreads_scan(
+        author_id,
+    )
+
+    if is_soft_block:
+        cooldown_s = _GR_SOFT_BLOCK_COOLDOWN_S
+        db = await metadata_cache.get_db(source_name)
+        try:
+            await _record_block_in_worker_state(
+                db, source_name, now, cooldown_s=cooldown_s,
+            )
+            # Defer the queue row past the cooldown; not a failure.
+            await _mark_queue_row_pending(
+                db, source_name,
+                author_id=author_id,
+                next_scan_due_at=now + cooldown_s + 60.0,
+                reset_failures=True,
+            )
+        finally:
+            await db.close()
+        elapsed_ms = (time.time() - started_at) * 1000.0
+        scan_log.warning(
+            "[scan] %s",
+            _format_fields(
+                author=author_id, outcome="soft_block",
+                cooldown_s=cooldown_s, elapsed_ms=elapsed_ms,
+            ),
+        )
+        return TickResult(
+            source_name=source_name, outcome="soft_block",
+            author_id=author_id,
+            queue_size=queue_size, cooldown_remaining_s=cooldown_s,
+            next_sleep_s=min(cooldown_s + 1.0, _COOLDOWN_MAX_SLEEP_S),
+            elapsed_ms=elapsed_ms,
+        )
+
+    if pages is None:
+        # Hard error path (scan raised). Mark the row failed; after
+        # N consecutive failures it flips to `failed_permanent`.
+        db = await metadata_cache.get_db(source_name)
+        try:
+            new_count, became_permanent = await _mark_queue_row_failure(
+                db, source_name,
+                author_id=author_id,
+                next_scan_due_at=now + _NORMAL_RESCAN_CADENCE_S,
+            )
+            for lib in libraries:
+                await _upsert_state_row(
+                    db, source_name,
+                    author_id=author_id, library_slug=lib["slug"],
+                    seshat_author_id=lib["seshat_author_id"],
+                    now=now, outcome="error",
+                    book_count=0, last_error=(scan_error or "unknown"),
+                )
+        finally:
+            await db.close()
+        outcome = "permanent_fail" if became_permanent else "error"
+        elapsed_ms = (time.time() - started_at) * 1000.0
+        scan_log.warning(
+            "[scan] %s",
+            _format_fields(
+                author=author_id, outcome=outcome,
+                consecutive_failures=new_count, permanent=became_permanent,
+                elapsed_ms=elapsed_ms, error=(scan_error or "unknown"),
+            ),
+        )
+        if became_permanent:
+            await _send_ntfy(
+                event_key="metadata_cache_warning",
+                title="Goodreads worker — author flipped to failed_permanent",
+                message=(
+                    f"{author_id} hit {_MAX_CONSECUTIVE_FAILURES} consecutive "
+                    f"failures and was retired from the active queue. "
+                    f"Last error: {scan_error or 'unknown'}."
+                ),
+                priority=4,
+                tags=["warning", "skull"],
+            )
+        return TickResult(
+            source_name=source_name, outcome=outcome,
+            author_id=author_id,
+            queue_size=queue_size, error=scan_error,
+            next_sleep_s=random.uniform(_JITTER_MIN_S, _JITTER_MAX_S),
+            elapsed_ms=elapsed_ms,
+        )
+
+    # Successful scan. Goodreads list pages are global per GR
+    # author (no per-library divergence — the list page doesn't
+    # vary by content_type the way Amazon's binding_symbol does).
+    # We still fan out per-library state + list_pages rows so the
+    # downstream reader can scope by library_slug (matches v2.21.0
+    # Amazon shape; required for ADR-0002 compliance).
+    # `pages` is `{page_num: [{book_id, title, ...}, ...]}` post-slice 04.
+    book_count_total = sum(len(records) for records in pages.values())
+    try:
+        db = await metadata_cache.get_db(source_name)
+        try:
+            for lib in libraries:
+                await _upsert_state_row(
+                    db, source_name,
+                    author_id=author_id, library_slug=lib["slug"],
+                    seshat_author_id=lib["seshat_author_id"],
+                    now=now, outcome="ok", book_count=book_count_total,
+                )
+                await _replace_list_page_rows(
+                    db, source_name,
+                    author_id=author_id, library_slug=lib["slug"],
+                    pages=pages,
+                )
+            await _mark_queue_row_pending(
+                db, source_name,
+                author_id=author_id,
+                next_scan_due_at=now + _NORMAL_RESCAN_CADENCE_S,
+                reset_failures=True,
+            )
+            await _record_scan_completed(db, source_name, now)
+        finally:
+            await db.close()
+    except Exception as exc:
+        logger.exception(
+            "metadata_cache_worker[goodreads]: cache-write failed "
+            "for %s (%s)", author_id, exc,
+        )
+        try:
+            db = await metadata_cache.get_db(source_name)
+            try:
+                await _mark_queue_row_failure(
+                    db, source_name,
+                    author_id=author_id,
+                    next_scan_due_at=now + _NORMAL_RESCAN_CADENCE_S,
+                )
+            finally:
+                await db.close()
+        except Exception:
+            logger.exception(
+                "metadata_cache_worker[goodreads]: queue-row recovery "
+                "also failed — startup recovery will sweep on next "
+                "restart"
+            )
+        elapsed_ms = (time.time() - started_at) * 1000.0
+        scan_log.error(
+            "[scan] %s",
+            _format_fields(
+                author=author_id, outcome="cache_write_fail",
+                elapsed_ms=elapsed_ms,
+                error=f"{type(exc).__name__}: {exc}",
+            ),
+        )
+        await _send_ntfy(
+            event_key="metadata_cache_error",
+            title="Goodreads worker — cache write failed",
+            message=(
+                f"Author {author_id}: {type(exc).__name__}: {exc}. "
+                "Queue row reset; worker will retry next tick."
+            ),
+            priority=5,
+            tags=["rotating_light"],
+        )
+        return TickResult(
+            source_name=source_name, outcome="error",
+            author_id=author_id,
+            queue_size=queue_size,
+            error=f"cache write failed: {type(exc).__name__}: {exc}",
+            next_sleep_s=random.uniform(_JITTER_MIN_S, _JITTER_MAX_S),
+            elapsed_ms=elapsed_ms,
+        )
+
+    elapsed_ms = (time.time() - started_at) * 1000.0
+    outcome = "ok" if book_count_total else "ok_empty"
+    per_lib_summary = ", ".join(
+        f"{lib['slug']}={book_count_total}" for lib in libraries
+    )
+    scan_log.info(
+        "[scan] %s [%s]",
+        _format_fields(
+            author=author_id, outcome=outcome,
+            books=book_count_total, pages=len(pages),
+            libraries=len(libraries), elapsed_ms=elapsed_ms,
+        ),
+        per_lib_summary,
+    )
+    return TickResult(
+        source_name=source_name, outcome=outcome,
+        author_id=author_id,
+        books_cached=book_count_total, queue_size=queue_size,
+        next_sleep_s=random.uniform(_JITTER_MIN_S, _JITTER_MAX_S),
+        elapsed_ms=elapsed_ms,
+    )
+
+
 # ─── Run loop ──────────────────────────────────────────────────
 
 
@@ -1772,9 +2279,23 @@ async def run_loop(
             "but stuck rows will block their PK)"
         )
 
+    # v3.4.0 slice 03 — per-source dispatch. Amazon uses the
+    # original `tick()` (curl_cffi + Akamai-tuned soft-block); GR
+    # uses the slim `tick_goodreads()` (no session prep, no
+    # warmup, no escalation). Source-name picks the correct tick.
+    tick_fn = (
+        tick_goodreads
+        if source_name == metadata_cache.SOURCE_GOODREADS
+        else tick
+    )
+
     while True:
         try:
-            result = await tick(source_name)
+            result = (
+                await tick_fn()
+                if source_name == metadata_cache.SOURCE_GOODREADS
+                else await tick_fn(source_name)
+            )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -1787,7 +2308,7 @@ async def run_loop(
             try:
                 await _send_ntfy(
                     event_key="metadata_cache_error",
-                    title="Amazon worker — tick crashed",
+                    title=f"{source_name.title()} worker — tick crashed",
                     message=(
                         f"{type(exc).__name__}: {exc}. "
                         "Worker loop is recovering automatically; "

@@ -102,6 +102,12 @@ class CacheStatsModel(BaseModel):
     error_authors: int    # state rows with last_outcome='error' (per-lib)
     unique_ok_authors: int = 0      # DISTINCT author_id w/ any 'ok' state row
     unique_total_authors: int = 0   # DISTINCT author_id in the state table
+    # v3.4.0 slice 06 — GR-shape counters. `list_pages_rows` is the
+    # per-page snapshot count; always 0 for Amazon (no list_pages
+    # table). `today_budget_exhaust_count` mirrors slice 05's
+    # worker_state column for GR; always 0 for Amazon.
+    list_pages_rows: int = 0
+    today_budget_exhaust_count: int = 0
 
 
 class CooldownModel(BaseModel):
@@ -218,6 +224,22 @@ def _validate_source(source: str) -> str:
     return source
 
 
+def _require_amazon_shape(source: str) -> None:
+    """Reject non-Amazon sources for endpoints that read Amazon-shape
+    per-book detail rows (`books` table). v3.4.0 slice 06 un-gated
+    `/status` (per-source-aware now); `/recent-discoveries` +
+    `/author/{aid}` stay Amazon-only because they project per-book
+    detail rows that GR doesn't cache (Path B = list-page only,
+    ADR-0018 §1)."""
+    if source != metadata_cache.SOURCE_AMAZON:
+        raise HTTPException(
+            501,
+            f"endpoint not yet wired for source={source!r} "
+            f"(only Amazon caches per-book detail rows; GR is list-"
+            f"page only per ADR-0018 §1)",
+        )
+
+
 def _cache_settings_get(source: str) -> dict:
     s = load_settings()
     mc = s.get("metadata_cache") or {}
@@ -264,6 +286,7 @@ async def get_status(source: str) -> StatusResponse:
     _validate_source(source)
     enabled = bool(_cache_settings_get(source).get("enabled", False))
     cooldown = _cooldown_state(source)
+    is_gr = source == metadata_cache.SOURCE_GOODREADS
 
     db = await metadata_cache.get_db(source)
     try:
@@ -295,13 +318,24 @@ async def get_status(source: str) -> StatusResponse:
         )
         due_now = int((await cur.fetchone())[0])
 
-        # Cache state + books counts.
+        # Cache state + per-source-shape detail counts.
         st_table = metadata_cache.state_table(source)
-        b_table = metadata_cache.books_table(source)
         cur = await db.execute(f"SELECT COUNT(*) FROM {st_table}")
         state_rows = int((await cur.fetchone())[0])
-        cur = await db.execute(f"SELECT COUNT(*) FROM {b_table}")
-        books_rows = int((await cur.fetchone())[0])
+        # v3.4.0 slice 06 — per-source shape (ADR-0018 §2).
+        # Amazon has `books`; Goodreads has `list_pages`. Surface
+        # the right count under the matching response field; the
+        # other field stays 0.
+        books_rows = 0
+        list_pages_rows = 0
+        if is_gr:
+            lp_table = metadata_cache.list_pages_table(source)
+            cur = await db.execute(f"SELECT COUNT(*) FROM {lp_table}")
+            list_pages_rows = int((await cur.fetchone())[0])
+        else:
+            b_table = metadata_cache.books_table(source)
+            cur = await db.execute(f"SELECT COUNT(*) FROM {b_table}")
+            books_rows = int((await cur.fetchone())[0])
         cur = await db.execute(
             f"SELECT last_outcome, COUNT(*) FROM {st_table} "
             f"GROUP BY last_outcome"
@@ -342,6 +376,20 @@ async def get_status(source: str) -> StatusResponse:
         ),
     )
 
+    # v3.4.0 slice 05 — budget-exhaust counter is GR-only (Amazon
+    # worker has no equivalent failure mode). Pull from the row if
+    # the column exists; fall back to 0 otherwise so a pre-v3.4.0
+    # Amazon-only install (no migration v7 ever ran) still serves
+    # /amazon/status without exploding.
+    today_budget_exhausts = 0
+    if is_gr and wrow is not None:
+        try:
+            today_budget_exhausts = int(
+                wrow["today_budget_exhaust_count"] or 0
+            )
+        except (IndexError, KeyError, TypeError):
+            today_budget_exhausts = 0
+
     pending = qcounts.pop("pending", 0)
     in_progress = qcounts.pop("in_progress", 0)
     failed_permanent = qcounts.pop("failed_permanent", 0)
@@ -365,6 +413,8 @@ async def get_status(source: str) -> StatusResponse:
         error_authors=state_outcomes.get("error", 0),
         unique_ok_authors=unique_ok_authors,
         unique_total_authors=unique_total_authors,
+        list_pages_rows=list_pages_rows,
+        today_budget_exhaust_count=today_budget_exhausts,
     )
 
     # Phase I — mode + schedule. Reads through the same accessors the
@@ -474,6 +524,24 @@ async def patch_settings(
     new_enabled = bool(_cache_settings_get(source).get("enabled", False))
     new_mode = metadata_cache_worker.get_worker_mode(source)
     sched_now = _cache_settings_get(source).get("schedule") or {}
+
+    # v3.4.0 slice 04 — GR mode change must rebuild the `goodreads`
+    # module-level source in lookup.py so the live↔cached swap
+    # takes effect without a container restart. Amazon's cached
+    # source has been the only path since v2.21.0 so its panel
+    # never needed this hook; GR is the first source the mode
+    # toggle re-wires.
+    if source == metadata_cache.SOURCE_GOODREADS:
+        try:
+            from app.discovery.lookup import reload_sources
+            reload_sources()
+        except Exception:
+            _log.exception(
+                "metadata_cache settings: goodreads source reload "
+                "failed (non-fatal; next container restart will "
+                "honor the new mode)"
+            )
+
     return SettingsPatchResponse(
         ok=True, source=source,
         enabled=new_enabled,
@@ -504,6 +572,7 @@ async def get_recent_discoveries(
     isn't tied to client clock accuracy.
     """
     _validate_source(source)
+    _require_amazon_shape(source)
     now = time.time()
     cutoff = now - (hours * 3600)
     bt = metadata_cache.books_table(source)
@@ -557,6 +626,7 @@ async def get_author_cache_state(
     "never enqueued" from "enqueued but not yet popped."
     """
     _validate_source(source)
+    _require_amazon_shape(source)
     cooldown = _cooldown_state(source)
 
     db = await metadata_cache.get_db(source)

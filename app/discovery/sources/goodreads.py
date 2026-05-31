@@ -15,17 +15,21 @@ per author:
      a higher-quality cover.
 
 The two-pass design exists because the list page doesn't carry enough
-metadata to confidently filter foreign editions, sets, or translator-
-only credits, but visiting every book page for every author is
-expensive — so the list-page pre-filters cheap exclusions (`(translator)`,
-`(contributor)`, obvious set titles) and the book-page pass only runs
-for survivors.
+metadata to confidently filter foreign editions, sets, or translation
+editions, but visiting every book page for every author is expensive
+— so the list-page pre-filters cheap exclusions (obvious set titles,
+audiobook-format byline tokens) and the book-page pass only runs for
+survivors. Role-based filtering (translator / contributor / illustrator
+co-credits) lives entirely on the book-page side via the v3.0.0
+Phase 3.2 `_parse_book_contributors` parser and `contributor_is_author`
+allowlist — the historical list-page substring skip was strictly weaker
+and dropped legitimate books whose blurb mentioned those words; retired
+in v3.4.0 slice 02, see ADR-0018 §4.
 
 Per-book progress hook: this module calls `self._on_book(title)` (set
 by lookup.py) on every entry that does real work (a DETAIL fetch or a
 URL-backfill emit) but NOT on filter-noise skips, so the unified scan
-widget never flickers through "skipped translator", "skipped foreign",
-etc.
+widget never flickers through "skipped foreign", etc.
 """
 import asyncio, logging, re, json
 from datetime import datetime
@@ -107,6 +111,77 @@ def _parse_book_contributors(soup) -> list[Contributor]:
             gid = m.group(1)
         out.append(Contributor(name=name, role=role or None, source_author_id=gid))
     return out
+
+
+def _parse_list_page_records(page_soup) -> list[dict]:
+    """v3.4.0 slice 04 — extract per-book records from a GR author
+    list page. Same dict shape `get_author_books` builds for its
+    pass-1 `raw_books` accumulator, so the hybrid cache HIT path can
+    feed these straight back into the detail loop without per-key
+    translation.
+
+    Returns ``[{"book_id", "title", "list_series", "list_series_idx",
+    "list_cover", "is_audio_list"}, ...]`` — empty list if no rows
+    on this page (caller treats as end-of-pagination).
+    """
+    records: list[dict] = []
+    page_rows = page_soup.select("tr[itemtype='http://schema.org/Book']")
+    if not page_rows:
+        page_rows = page_soup.select("table.tableList tr")
+    for row in page_rows:
+        title_el = (
+            row.select_one("a.bookTitle span")
+            or row.select_one("a.bookTitle")
+        )
+        if not title_el:
+            continue
+        full_title = title_el.get_text(strip=True)
+
+        sname = None
+        sidx: Optional[float] = None
+        # Title shape "Title (Series, #N)" — same regex as
+        # `_series_from_title_paren` body but inlined to grab
+        # both halves at once.
+        series_match = re.search(r'\(([^)]+),\s*#([\d.]+)\)', full_title)
+        if series_match:
+            sname = series_match.group(1).strip()
+            try:
+                sidx = float(series_match.group(2))
+            except (TypeError, ValueError):
+                pass
+        full_title = re.sub(
+            r'\s*\([^)]+,\s*#[\d.]+\)', '', full_title,
+        ).strip()
+
+        title_link = row.select_one("a.bookTitle")
+        book_id = None
+        if title_link:
+            m = re.search(
+                r"/book/show/(\d+)", title_link.get("href", ""),
+            )
+            if m:
+                book_id = m.group(1)
+
+        img = row.select_one("img.bookCover, img.bookSmallImg")
+        cover = img.get("src") if img else None
+        if cover:
+            if "_SX" in cover:
+                cover = re.sub(r'_SX\d+_', '_SX300_', cover)
+            elif "_SY" in cover:
+                cover = re.sub(r'_SY\d+_', '_SY400_', cover)
+
+        row_text_lower = row.get_text(" ", strip=True).lower()
+        is_audio_list = any(kw in row_text_lower for kw in [
+            "audible audio", "audio cd", "(narrator)", "audiobook",
+            "(read by)", "mp3 cd",
+        ])
+
+        records.append({
+            "title": full_title, "book_id": book_id,
+            "list_series": sname, "list_series_idx": sidx,
+            "list_cover": cover, "is_audio_list": is_audio_list,
+        })
+    return records
 
 
 def _extract_author_photo(soup) -> Optional[str]:
@@ -532,7 +607,86 @@ class GoodreadsSource(BaseSource):
         )
         return None
 
-    async def get_author_books(self, author_id: str, existing_titles: set = None, owned_titles: list = None, owned_only: bool = False, start_at: int = 0) -> Optional[AuthorResult]:
+    async def list_page_inventory(
+        self, author_id: str, *, max_pages: int = 70,
+    ) -> Optional[dict[int, list[dict]]]:
+        """v3.4.0 slice 03/04 — list-page-only fetch for the GR cache
+        worker (ADR-0018). Paginates through the author list pages
+        and returns ``{page_num: [raw_book_record, ...]}`` for the
+        worker to persist. **Never** visits per-book detail pages —
+        that's Path C's scope, deferred to v3.5.0 conditional.
+
+        Each raw_book record carries enough metadata to drive the
+        hybrid cache HIT path in `get_author_books` (slice 04 — the
+        `cached_raw_books` kwarg skips the list-page fetch when
+        present): `book_id` + `title` + `list_series` + `list_series_idx`
+        + `list_cover` + `is_audio_list`. This is the same dict
+        shape the original list-page parse builds, so the cache HIT
+        path can hand the records straight into the existing detail
+        loop without per-key translation.
+
+        Reuses this source's existing `_get` HTTP path (same rate
+        limit, same cookies, same 202/503/timeout handling) so the
+        worker inherits the GR session semantics without a parallel
+        HTTP client.
+
+        Returns None on the first-fetch failure (so caller can mark
+        an error outcome). Per-page failures during pagination are
+        logged but treated as "end of pagination" — the result
+        carries everything fetched so far.
+        """
+        try:
+            r = await self._get(
+                f"{BASE}/author/list/{author_id}",
+                retries=2, params={"per_page": 100},
+            )
+        except Exception as exc:
+            logger.warning(
+                "  Goodreads list-page inventory: first-fetch failed "
+                "for %s (%s)", author_id, exc,
+            )
+            return None
+        if r is None:
+            return None
+        soup = BeautifulSoup(r.text, "lxml")
+        # Same redirect-capture trick as `get_author_books`: GR
+        # 301s `/author/list/{id}` → `/author/list/{id}.{slug}`,
+        # so reuse the resolved path for pagination.
+        list_path = str(r.url).split("?", 1)[0]
+
+        pages: dict[int, list[dict]] = {}
+        first_records = _parse_list_page_records(soup)
+        pages[1] = first_records
+
+        page_num = 1
+        while page_num < max_pages:
+            next_link = soup.select_one("a.next_page")
+            if not next_link or not next_link.get("href"):
+                break
+            page_num += 1
+            try:
+                r = await self._get(
+                    list_path, retries=1,
+                    params={"per_page": 100, "page": page_num},
+                )
+            except Exception as exc:
+                logger.warning(
+                    "  Goodreads list-page inventory: pagination "
+                    "failed at page %d for %s (%s) — returning "
+                    "%d pages",
+                    page_num, author_id, exc, len(pages),
+                )
+                break
+            if r is None:
+                break
+            soup = BeautifulSoup(r.text, "lxml")
+            records = _parse_list_page_records(soup)
+            if not records:
+                break
+            pages[page_num] = records
+        return pages
+
+    async def get_author_books(self, author_id: str, existing_titles: set = None, owned_titles: list = None, owned_only: bool = False, start_at: int = 0, cached_raw_books: Optional[list[dict]] = None) -> Optional[AuthorResult]:
         """Scrape an author's full book list and visit per-book detail pages.
 
         Validates author identity from list-page titles BEFORE running
@@ -578,132 +732,155 @@ class GoodreadsSource(BaseSource):
             resume_books = None
             resume_series_map = None
         try:
-            r = await self._get(f"{BASE}/author/list/{author_id}", retries=2, params={"per_page": 100})
-            soup = BeautifulSoup(r.text, "lxml")
+            # v3.4.0 slice 04 — hybrid cache HIT path. When the GR
+            # cache reader hands us pre-fetched list-page records,
+            # skip the entire list-page HTTP fetch + pagination
+            # (instant return instead of 1–4 list-page fetches +
+            # author-validation) and run the detail loop straight
+            # away. Author name + photo aren't cached today; the
+            # merge layer doesn't depend on either when an
+            # established `authors` row already exists (the only
+            # state in which the cache could HIT — workers populate
+            # the cache from author IDs the discovery DB already
+            # knows about).
+            r = None  # only used downstream by the live-fetch branch
+            list_path = ""
+            soup = None
+            if cached_raw_books is not None:
+                raw_books = list(cached_raw_books)
+                author_name = author_id  # placeholder
+                author_img = None
+            else:
+                r = await self._get(f"{BASE}/author/list/{author_id}", retries=2, params={"per_page": 100})
+                soup = BeautifulSoup(r.text, "lxml")
 
-            # Goodreads always 301-redirects /author/list/{id} →
-            # /author/list/{id}.{Author_Slug}. httpx auto-follows so the
-            # first request still works, but every pagination page
-            # would also do its own 301→200 round-trip. Capturing the
-            # resolved URL once and reusing its path for subsequent
-            # pages cuts out one redirect per page — a 4-page Sanderson
-            # list goes from 8 requests (4×301 + 4×200) to 5.
-            list_path = str(r.url).split("?", 1)[0]
+                # Goodreads always 301-redirects /author/list/{id} →
+                # /author/list/{id}.{Author_Slug}. httpx auto-follows so the
+                # first request still works, but every pagination page
+                # would also do its own 301→200 round-trip. Capturing the
+                # resolved URL once and reusing its path for subsequent
+                # pages cuts out one redirect per page — a 4-page Sanderson
+                # list goes from 8 requests (4×301 + 4×200) to 5.
+                list_path = str(r.url).split("?", 1)[0]
 
-            nm_el = soup.select_one("a.authorName span")
-            author_name = nm_el.get_text(strip=True) if nm_el else None
-            # Fallback if the byline anchor is absent on this layout:
-            # the list page's <h1> reads "Books by <Author>" — a
-            # page-author-specific signal that never picks up a book
-            # row's co-author (the failure mode recorded in
-            # feedback_seshat_goodreads_authorname_selector_bug).
-            if not author_name or author_name == "Unknown":
-                h1 = soup.find("h1")
-                if h1:
-                    hm = re.match(r"\s*Books by\s+(.+?)\s*$", h1.get_text(strip=True))
-                    if hm:
-                        author_name = hm.group(1).strip()
-            author_name = author_name or "Unknown"
+                nm_el = soup.select_one("a.authorName span")
+                author_name = nm_el.get_text(strip=True) if nm_el else None
+                # Fallback if the byline anchor is absent on this layout:
+                # the list page's <h1> reads "Books by <Author>" — a
+                # page-author-specific signal that never picks up a book
+                # row's co-author (the failure mode recorded in
+                # feedback_seshat_goodreads_authorname_selector_bug).
+                if not author_name or author_name == "Unknown":
+                    h1 = soup.find("h1")
+                    if h1:
+                        hm = re.match(r"\s*Books by\s+(.+?)\s*$", h1.get_text(strip=True))
+                        if hm:
+                            author_name = hm.group(1).strip()
+                author_name = author_name or "Unknown"
 
-            # Get author image (selector rebuilt in v3.x ADR-0016 slice 04;
-            # see `_extract_author_photo` for selector rationale + recon).
-            author_img = _extract_author_photo(soup)
+                # Get author image (selector rebuilt in v3.x ADR-0016 slice 04;
+                # see `_extract_author_photo` for selector rationale + recon).
+                author_img = _extract_author_photo(soup)
+                raw_books = []
 
-            # Pass 1: collect every book entry from the author list
-            # pages (paginating through `?page=N` until exhausted).
-            raw_books = []
-            max_pages = 70  # Safety cap: 70 pages × 30 = ~2100 books max (Goodreads caps at 30/page)
+            # v3.4.0 slice 04 — entire list-fetch + page-parse is
+            # skipped on cache HIT (raw_books already populated above).
+            if cached_raw_books is None:
+                max_pages = 70  # Safety cap: 70 pages × 30 = ~2100 books
 
-            def _parse_book_rows(page_soup):
-                """Parse book rows from a single author list page."""
-                parsed = []
-                page_rows = page_soup.select("tr[itemtype='http://schema.org/Book']")
-                if not page_rows:
-                    page_rows = page_soup.select("table.tableList tr")
-                for row in page_rows:
+                def _parse_book_rows(page_soup):
+                    """Parse book rows from a single author list page."""
+                    parsed = []
+                    page_rows = page_soup.select("tr[itemtype='http://schema.org/Book']")
+                    if not page_rows:
+                        page_rows = page_soup.select("table.tableList tr")
+                    for row in page_rows:
+                        title_el = row.select_one("a.bookTitle span") or row.select_one("a.bookTitle")
+                        if not title_el:
+                            continue
+                        parsed.append(row)
+                    return parsed
+
+                # Parse first page
+                rows = _parse_book_rows(soup)
+
+                # Check for additional pages and fetch them
+                page_num = 1
+                while page_num < max_pages:
+                    next_link = soup.select_one("a.next_page")
+                    if not next_link or not next_link.get("href"):
+                        break
+                    page_num += 1
+                    logger.debug(f"  Goodreads: fetching author list page {page_num}...")
+                    try:
+                        r = await self._get(list_path, retries=1,
+                                            params={"per_page": 100, "page": page_num})
+                        soup = BeautifulSoup(r.text, "lxml")
+                        new_rows = _parse_book_rows(soup)
+                        if not new_rows:
+                            break
+                        rows.extend(new_rows)
+                    except Exception as e:
+                        logger.warning(f"  Goodreads: failed to fetch page {page_num}: {e}")
+                        break
+
+                if page_num > 1:
+                    logger.info(f"  Goodreads: fetched {page_num} pages of author books ({len(rows)} entries)")
+
+                for row in rows:
                     title_el = row.select_one("a.bookTitle span") or row.select_one("a.bookTitle")
                     if not title_el:
                         continue
-                    parsed.append(row)
-                return parsed
+                    full_title = title_el.get_text(strip=True)
 
-            # Parse first page
-            rows = _parse_book_rows(soup)
+                    # Parse series from title
+                    sname = sidx = None
+                    sm = re.search(r'\(([^)]+),\s*#([\d.]+)\)', full_title)
+                    if sm:
+                        sname = sm.group(1).strip()
+                        try:
+                            sidx = float(sm.group(2))
+                        except ValueError:
+                            pass
+                        full_title = re.sub(r'\s*\([^)]+,\s*#[\d.]+\)', '', full_title).strip()
 
-            # Check for additional pages and fetch them
-            page_num = 1
-            while page_num < max_pages:
-                next_link = soup.select_one("a.next_page")
-                if not next_link or not next_link.get("href"):
-                    break
-                page_num += 1
-                logger.debug(f"  Goodreads: fetching author list page {page_num}...")
-                try:
-                    r = await self._get(list_path, retries=1,
-                                        params={"per_page": 100, "page": page_num})
-                    soup = BeautifulSoup(r.text, "lxml")
-                    new_rows = _parse_book_rows(soup)
-                    if not new_rows:
-                        break
-                    rows.extend(new_rows)
-                except Exception as e:
-                    logger.warning(f"  Goodreads: failed to fetch page {page_num}: {e}")
-                    break
+                    # Get book ID
+                    title_link = row.select_one("a.bookTitle")
+                    book_id = None
+                    if title_link:
+                        m = re.search(r"/book/show/(\d+)", title_link.get("href", ""))
+                        if m:
+                            book_id = m.group(1)
 
-            if page_num > 1:
-                logger.info(f"  Goodreads: fetched {page_num} pages of author books ({len(rows)} entries)")
+                    # Get cover from list page (fallback)
+                    img = row.select_one("img.bookCover, img.bookSmallImg")
+                    cover = img.get("src") if img else None
+                    if cover:
+                        if "_SX" in cover:
+                            cover = re.sub(r'_SX\d+_', '_SX300_', cover)
+                        elif "_SY" in cover:
+                            cover = re.sub(r'_SY\d+_', '_SY400_', cover)
 
-            for row in rows:
-                title_el = row.select_one("a.bookTitle span") or row.select_one("a.bookTitle")
-                if not title_el:
-                    continue
-                full_title = title_el.get_text(strip=True)
+                    # v3.4.0 slice 02 — list-page (translator)/(contributor)
+                    # substring filter retired. v3.0.0 Phase 3.2's detail-
+                    # page `ContributorLink__role` parser is authoritative
+                    # for role identification; the substring skip was
+                    # strictly weaker and dropped legitimate books whose
+                    # title or blurb incidentally mentioned "translator" or
+                    # "contributor." See ADR-0018 §4.
+                    row_text = row.get_text(" ", strip=True)
+                    row_text_lower = row_text.lower()
+                    is_audio_list = any(kw in row_text_lower for kw in [
+                        "audible audio", "audio cd", "(narrator)", "audiobook",
+                        "(read by)", "mp3 cd",
+                    ])
 
-                # Parse series from title
-                sname = sidx = None
-                sm = re.search(r'\(([^)]+),\s*#([\d.]+)\)', full_title)
-                if sm:
-                    sname = sm.group(1).strip()
-                    try:
-                        sidx = float(sm.group(2))
-                    except ValueError:
-                        pass
-                    full_title = re.sub(r'\s*\([^)]+,\s*#[\d.]+\)', '', full_title).strip()
-
-                # Get book ID
-                title_link = row.select_one("a.bookTitle")
-                book_id = None
-                if title_link:
-                    m = re.search(r"/book/show/(\d+)", title_link.get("href", ""))
-                    if m:
-                        book_id = m.group(1)
-
-                # Get cover from list page (fallback)
-                img = row.select_one("img.bookCover, img.bookSmallImg")
-                cover = img.get("src") if img else None
-                if cover:
-                    if "_SX" in cover:
-                        cover = re.sub(r'_SX\d+_', '_SX300_', cover)
-                    elif "_SY" in cover:
-                        cover = re.sub(r'_SY\d+_', '_SY400_', cover)
-
-                # Quick check from list text for translator, contributor, or audiobook format
-                row_text = row.get_text(" ", strip=True)
-                row_text_lower = row_text.lower()
-                has_translator = "(translator)" in row_text_lower
-                is_contributor = "(contributor)" in row_text_lower
-                is_audio_list = any(kw in row_text_lower for kw in [
-                    "audible audio", "audio cd", "(narrator)", "audiobook",
-                    "(read by)", "mp3 cd",
-                ])
-
-                raw_books.append({
-                    "title": full_title, "book_id": book_id,
-                    "list_series": sname, "list_series_idx": sidx,
-                    "list_cover": cover, "has_translator": has_translator,
-                    "is_contributor": is_contributor,
-                    "is_audio_list": is_audio_list,
-                })
+                    raw_books.append({
+                        "title": full_title, "book_id": book_id,
+                        "list_series": sname, "list_series_idx": sidx,
+                        "list_cover": cover,
+                        "is_audio_list": is_audio_list,
+                    })
 
             # Validate author using list page titles BEFORE visiting individual pages
             list_titles = [rb["title"] for rb in raw_books]
@@ -714,35 +891,46 @@ class GoodreadsSource(BaseSource):
                 nb = re.sub(r'[^\w\s]', '', b.lower()).strip()
                 return na == nb or na in nb or nb in na
 
-            author_confirmed = False
+            # v3.4.0 slice 04 — cache HIT IS validation (the worker
+            # only persists state on a successful, schema-valid list-
+            # page parse). Skip the title-match validator that the
+            # live path uses to catch wrong-author-ID anchoring.
+            if cached_raw_books is not None:
+                author_confirmed = True
+                logger.info(
+                    "  Goodreads: cache HIT — skipping title validation, "
+                    "proceeding with %d cached books", len(list_titles),
+                )
+            else:
+                author_confirmed = False
 
-            # Check 1: Do any owned book titles appear on the list page?
-            if owned_titles:
-                for ot in owned_titles:
-                    if any(_title_match(ot, lt) for lt in list_titles):
-                        author_confirmed = True
-                        break
-
-            # Check 2: Do any existing DB titles appear on the list page? (re-scan)
-            if not author_confirmed and existing_titles:
-                for lt in list_titles:
-                    norm_lt = re.sub(r'[^\w\s]', '', lt.lower()).strip()
-                    norm_lt = re.sub(r'\s+', ' ', norm_lt)
-                    if any(norm_lt == et or norm_lt in et or et in norm_lt 
-                           for et in existing_titles):
-                        author_confirmed = True
-                        break
-
-            if not author_confirmed:
+                # Check 1: Do any owned book titles appear on the list page?
                 if owned_titles:
-                    logger.info(f"  Goodreads: author validation failed — none of {len(owned_titles)} owned titles match {len(list_titles)} list titles")
-                    return None
-                else:
-                    # No owned titles to validate against (first sync before Calibre?) — proceed cautiously
-                    logger.info(f"  Goodreads: no owned titles for validation, proceeding with {len(list_titles)} books")
-                    author_confirmed = True
+                    for ot in owned_titles:
+                        if any(_title_match(ot, lt) for lt in list_titles):
+                            author_confirmed = True
+                            break
 
-            logger.info(f"  Goodreads: author confirmed via title match")
+                # Check 2: Do any existing DB titles appear on the list page? (re-scan)
+                if not author_confirmed and existing_titles:
+                    for lt in list_titles:
+                        norm_lt = re.sub(r'[^\w\s]', '', lt.lower()).strip()
+                        norm_lt = re.sub(r'\s+', ' ', norm_lt)
+                        if any(norm_lt == et or norm_lt in et or et in norm_lt
+                               for et in existing_titles):
+                            author_confirmed = True
+                            break
+
+                if not author_confirmed:
+                    if owned_titles:
+                        logger.info(f"  Goodreads: author validation failed — none of {len(owned_titles)} owned titles match {len(list_titles)} list titles")
+                        return None
+                    else:
+                        # No owned titles to validate against (first sync before Calibre?) — proceed cautiously
+                        logger.info(f"  Goodreads: no owned titles for validation, proceeding with {len(list_titles)} books")
+                        author_confirmed = True
+
+                logger.info(f"  Goodreads: author confirmed via title match")
 
             # Pass 2: visit each surviving book's detail page for the
             # full metadata Goodreads only exposes per book.
@@ -761,16 +949,11 @@ class GoodreadsSource(BaseSource):
                 if not rb["book_id"]:
                     continue
 
-                # Quick skip: if list page already shows translator or contributor
-                if rb["has_translator"]:
-                    skipped["translation"] += 1
-                    logger.debug(f"    SKIP (translator): '{rb['title']}'")
-                    continue
-                if rb.get("is_contributor"):
-                    skipped.setdefault("contributor", 0)
-                    skipped["contributor"] += 1
-                    logger.debug(f"    SKIP (contributor): '{rb['title']}'")
-                    continue
+                # v3.4.0 slice 02 — translator/contributor list-page
+                # skip retired; the detail-page role parser handles
+                # role filtering authoritatively at merge. Audiobook
+                # list-page skip stays — different concern (format
+                # filter, not role filter).
                 if rb.get("is_audio_list"):
                     skipped.setdefault("audiobook", 0)
                     skipped["audiobook"] += 1
@@ -971,7 +1154,6 @@ class GoodreadsSource(BaseSource):
                 if skipped.get("foreign"): parts.append(f"{skipped['foreign']} foreign")
                 if skipped.get("set"): parts.append(f"{skipped['set']} sets")
                 if skipped.get("translation"): parts.append(f"{skipped['translation']} translations")
-                if skipped.get("contributor"): parts.append(f"{skipped['contributor']} contributor-only")
                 if skipped.get("unowned"): parts.append(f"{skipped['unowned']} unowned (library-only)")
                 logger.info(f"  Goodreads: skipped {', '.join(parts)}")
 

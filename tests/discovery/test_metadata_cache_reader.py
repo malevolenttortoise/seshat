@@ -471,3 +471,225 @@ class TestDispatcherContract:
             start_at=0,
         )
         assert result is None  # cache miss path
+
+
+# ─── v3.4.0 slice 04 — Goodreads cache reader hybrid path ──────
+
+
+import asyncio
+import json
+import time
+
+import pytest
+
+from app.discovery import metadata_cache
+from app.discovery.metadata_cache_reader import (
+    CachedSource, SOURCE_GOODREADS,
+    read_cached_goodreads_raw_books,
+)
+
+
+@pytest.fixture
+async def gr_reader_under(tmp_path, monkeypatch):
+    """Init GR cache under tmp_path + redirect imports."""
+    from app import config as app_config
+    from app.discovery import database as disco_db
+    monkeypatch.setattr(app_config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(metadata_cache, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(disco_db, "DATA_DIR", tmp_path)
+
+    await metadata_cache.init_db(metadata_cache.SOURCE_GOODREADS)
+    yield tmp_path
+
+
+async def _seed_gr_cache(
+    *, author_id: str, library_slug: str,
+    pages: dict[int, list[dict]],
+) -> None:
+    """Insert a state row + per-page list_page rows for GR cache."""
+    db = await metadata_cache.get_db(metadata_cache.SOURCE_GOODREADS)
+    try:
+        await db.execute(
+            f"INSERT INTO "
+            f"{metadata_cache.state_table(metadata_cache.SOURCE_GOODREADS)} "
+            f"(author_id, library_slug, last_scanned_at, last_outcome, "
+            f" book_count) VALUES (?, ?, ?, ?, ?)",
+            (author_id, library_slug, time.time(), "ok",
+             sum(len(p) for p in pages.values())),
+        )
+        for page_num, records in pages.items():
+            await db.execute(
+                f"INSERT INTO "
+                f"{metadata_cache.list_pages_table(metadata_cache.SOURCE_GOODREADS)} "
+                f"(author_id, library_slug, page_num, fetched_at, "
+                f" book_ids_json) VALUES (?, ?, ?, ?, ?)",
+                (author_id, library_slug, page_num, time.time(),
+                 json.dumps(records)),
+            )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+class TestReadCachedGoodreadsRawBooks:
+    async def test_miss_returns_none(self, gr_reader_under):
+        result = await read_cached_goodreads_raw_books(
+            author_id="GR-MISS", library_slug="books-lib",
+        )
+        assert result is None
+
+    async def test_hit_returns_flattened_records(self, gr_reader_under):
+        await _seed_gr_cache(
+            author_id="GR-700", library_slug="books-lib",
+            pages={
+                1: [{"book_id": "a", "title": "A"},
+                    {"book_id": "b", "title": "B"}],
+                2: [{"book_id": "c", "title": "C"}],
+            },
+        )
+        result = await read_cached_goodreads_raw_books(
+            author_id="GR-700", library_slug="books-lib",
+        )
+        assert [r["book_id"] for r in result] == ["a", "b", "c"]
+        assert result[0]["title"] == "A"
+
+    async def test_hit_with_zero_pages_returns_empty_list(
+        self, gr_reader_under,
+    ):
+        """State row exists but no list_pages rows — the worker ran
+        a successful scan but the author had zero books at GR."""
+        await _seed_gr_cache(
+            author_id="GR-EMPTY", library_slug="books-lib",
+            pages={},
+        )
+        result = await read_cached_goodreads_raw_books(
+            author_id="GR-EMPTY", library_slug="books-lib",
+        )
+        assert result == []
+
+    async def test_legacy_bare_id_strings_coerce_to_dicts(
+        self, gr_reader_under,
+    ):
+        """Slice 03 stored bare ID strings; slice 04 stores dicts.
+        An install upgrading from slice-03-shipped-but-never-04-shipped
+        would have bare strings. Coerce defensively so the cache-HIT
+        path doesn't crash on the dict access."""
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_GOODREADS)
+        try:
+            await db.execute(
+                f"INSERT INTO "
+                f"{metadata_cache.state_table(metadata_cache.SOURCE_GOODREADS)} "
+                f"(author_id, library_slug, last_scanned_at, last_outcome) "
+                f"VALUES (?, ?, ?, ?)",
+                ("GR-LEGACY", "books-lib", time.time(), "ok"),
+            )
+            await db.execute(
+                f"INSERT INTO "
+                f"{metadata_cache.list_pages_table(metadata_cache.SOURCE_GOODREADS)} "
+                f"(author_id, library_slug, page_num, fetched_at, "
+                f" book_ids_json) VALUES (?, ?, ?, ?, ?)",
+                ("GR-LEGACY", "books-lib", 1, time.time(),
+                 json.dumps(["legacy-id-1", "legacy-id-2"])),
+            )
+            await db.commit()
+        finally:
+            await db.close()
+        result = await read_cached_goodreads_raw_books(
+            author_id="GR-LEGACY", library_slug="books-lib",
+        )
+        assert [r["book_id"] for r in result] == [
+            "legacy-id-1", "legacy-id-2",
+        ]
+
+
+class TestCachedSourceGoodreads:
+    async def test_cache_miss_enqueues_and_returns_none(
+        self, gr_reader_under, monkeypatch,
+    ):
+        from app.discovery import database as disco_db
+        monkeypatch.setattr(disco_db, "_active_library_slug", "books-lib")
+
+        source = CachedSource(source_name=SOURCE_GOODREADS)
+        result = await source.get_author_books("GR-MISS-2")
+        assert result is None
+
+        # Queue row landed with priority 1000 + reason lookup_miss.
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_GOODREADS)
+        try:
+            cur = await db.execute(
+                f"SELECT priority, enqueued_reason FROM "
+                f"{metadata_cache.queue_table(metadata_cache.SOURCE_GOODREADS)} "
+                f"WHERE author_id = ?",
+                ("GR-MISS-2",),
+            )
+            q = await cur.fetchone()
+        finally:
+            await db.close()
+        assert q[0] == 1000.0
+        assert q[1] == "lookup_miss"
+
+    async def test_cache_hit_calls_source_with_cached_raw_books(
+        self, gr_reader_under, monkeypatch,
+    ):
+        from app.discovery import database as disco_db
+        monkeypatch.setattr(disco_db, "_active_library_slug", "books-lib")
+
+        # Seed a cache HIT.
+        await _seed_gr_cache(
+            author_id="GR-HIT-1", library_slug="books-lib",
+            pages={1: [
+                {"book_id": "h1", "title": "Hit One",
+                 "list_series": None, "list_series_idx": None,
+                 "list_cover": None, "is_audio_list": False},
+                {"book_id": "h2", "title": "Hit Two",
+                 "list_series": None, "list_series_idx": None,
+                 "list_cover": None, "is_audio_list": False},
+            ]},
+        )
+
+        # Capture what get_author_books gets called with — we stub
+        # the LIVE GoodreadsSource so no HTTP fires; assert that the
+        # cached records were passed through to it.
+        observed: dict = {}
+        from app.discovery.sources import goodreads as gr_mod
+
+        from app.discovery.sources.base import AuthorResult
+        async def _fake_get_author_books(
+            self, author_id, existing_titles=None,
+            owned_titles=None, owned_only=False, start_at=0,
+            cached_raw_books=None,
+        ):
+            observed["author_id"] = author_id
+            observed["cached_raw_books"] = cached_raw_books
+            return AuthorResult(
+                name=author_id, external_id=author_id,
+                books=[], series=[],
+            )
+
+        monkeypatch.setattr(
+            gr_mod.GoodreadsSource, "get_author_books",
+            _fake_get_author_books,
+        )
+
+        source = CachedSource(source_name=SOURCE_GOODREADS)
+        result = await source.get_author_books(
+            "GR-HIT-1",
+            existing_titles={"hit one"},
+            owned_titles=["Hit One"],
+        )
+        assert result is not None
+        assert observed["author_id"] == "GR-HIT-1"
+        assert observed["cached_raw_books"] is not None
+        assert [r["book_id"] for r in observed["cached_raw_books"]] == [
+            "h1", "h2",
+        ]
+
+    async def test_no_active_library_skips_silently(
+        self, gr_reader_under, monkeypatch,
+    ):
+        from app.discovery import database as disco_db
+        monkeypatch.setattr(disco_db, "_active_library_slug", "")
+
+        source = CachedSource(source_name=SOURCE_GOODREADS)
+        result = await source.get_author_books("GR-ANY")
+        assert result is None

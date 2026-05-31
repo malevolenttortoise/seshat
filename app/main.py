@@ -879,6 +879,53 @@ async def lifespan(app: FastAPI):
                 "will rebuild the queue lazily as authors are scanned)"
             )
 
+        # v3.4.0 slice 01 — Goodreads list-page cache scaffolding.
+        # Creates `metadata_cache_goodreads.db` and its four tables
+        # (state / list_pages / queue / worker_state) on first run.
+        # No queue backfill yet (slice 04 will populate the queue
+        # via cache-miss enqueues from lookup.py). Disabled by
+        # default — operator opts in via `metadata_cache.goodreads.mode`
+        # once slice 06 ships the UI.
+        try:
+            from app.discovery import metadata_cache
+            await metadata_cache.init_db(metadata_cache.SOURCE_GOODREADS)
+        except Exception:
+            _log.exception(
+                "metadata_cache: goodreads init_db failed (non-fatal — "
+                "the live GoodreadsSource still serves scans; cache "
+                "stays empty until the worker lands in slice 03)"
+            )
+
+        # v3.4.0 slice 03 — background Goodreads list-page cache
+        # worker. Drains `metadata_cache_goodreads_queue` (populated
+        # in slice 04). Disabled by default — operator opts in via
+        # `metadata_cache.goodreads.mode` (slice 06 UI).
+        try:
+            from app.discovery import metadata_cache_worker as _gr_worker_mod
+
+            async def _metadata_cache_goodreads_worker_factory():
+                await _gr_worker_mod.run_loop(
+                    source_name=metadata_cache.SOURCE_GOODREADS,
+                )
+
+            state._metadata_cache_goodreads_worker_task = (
+                state.supervised_task(
+                    _metadata_cache_goodreads_worker_factory,
+                    name="metadata-cache-goodreads-worker",
+                )
+            )
+            _log.info(
+                "metadata_cache_worker: goodreads worker task spawned "
+                "(disabled by default — enable via "
+                "metadata_cache.goodreads.mode)"
+            )
+        except Exception:
+            _log.exception(
+                "metadata_cache_worker: failed to spawn goodreads worker "
+                "(non-fatal — the live GoodreadsSource still serves "
+                "scans; cache stays empty until next restart succeeds)"
+            )
+
         # v2.21.0 Phase D — background metadata cache worker.
         # Runs every ~30-90s (jittered) and pops one queue row per
         # iteration: fresh curl_cffi session, behavioral warmup, scan
@@ -1192,6 +1239,8 @@ async def lifespan(app: FastAPI):
             "_startup_sync_task",
             # v2.21.0 Phase D — Amazon metadata cache worker.
             "_metadata_cache_amazon_worker_task",
+            # v3.4.0 slice 03 — Goodreads list-page cache worker.
+            "_metadata_cache_goodreads_worker_task",
         ):
             task = getattr(state, task_attr, None)
             if task is not None and not task.done():

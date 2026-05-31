@@ -768,7 +768,7 @@ function SourceDetailPane({
             tab={scope}
             onChange={(key, value) => setToggle(key, value)}
           />
-          <AmazonCacheStatusCard />
+          <CacheStatusCard sourceKey="amazon" />
         </>
       )}
       {sourceName === "kobo" && scope === "ebook" && (
@@ -777,7 +777,15 @@ function SourceDetailPane({
           onChange={(key, value) => setToggle(key, value)}
         />
       )}
-      {sourceName === "goodreads" && <GoodreadsStatusCard />}
+      {sourceName === "goodreads" && (
+        <>
+          <GoodreadsStatusCard />
+          {/* v3.4.0 slice 06 — list-page cache worker card; mirrors
+              the Amazon Phase-I layout via the same parameterized
+              `CacheStatusCard` component (ADR-0018 §1+§5). */}
+          <CacheStatusCard sourceKey="goodreads" />
+        </>
+      )}
     </div>
   );
 }
@@ -1216,6 +1224,11 @@ type CacheStats = {
   // v2.22.0 — author-level dedup so X/Y shows authors not per-library rows.
   unique_ok_authors?: number;
   unique_total_authors?: number;
+  // v3.4.0 slice 06 — GR-shape counters. `list_pages_rows` is the
+  // per-page snapshot count; `today_budget_exhaust_count` mirrors
+  // slice 05's worker_state column. Both default to 0 for Amazon.
+  list_pages_rows?: number;
+  today_budget_exhaust_count?: number;
 };
 
 type CacheCooldown = {
@@ -1276,7 +1289,13 @@ function _formatCooldown(s: number): string {
 }
 
 
-function AmazonCacheStatusCard() {
+// v3.4.0 slice 06 — parameterized in `sourceKey` so the same
+// component renders for both `amazon` (cache mode since v2.21.0)
+// and `goodreads` (Path B list-page cache since v3.4.0). Per-source
+// shape differences captured inline: Amazon has cooldown +
+// books_rows tile; Goodreads has list_pages_rows + budget-exhaust
+// tile + no cooldown UI (no IP-level penalty box, ADR-0018 §1).
+function CacheStatusCard({ sourceKey }: { sourceKey: "amazon" | "goodreads" }) {
   const t = useTheme();
   const [status, setStatus] = useState<CacheStatusResponse | null>(null);
   const [busy, setBusy] = useState<null | "mode" | "schedule" | "reset">(null);
@@ -1290,6 +1309,12 @@ function AmazonCacheStatusCard() {
   // so the Save button can stay disabled when there's nothing to save.
   const [scheduleDirty, setScheduleDirty] = useState<boolean>(false);
 
+  const isGr = sourceKey === "goodreads";
+  const sourceLabel = isGr ? "Goodreads" : "Amazon";
+  const statusUrl = `/v1/metadata-cache/${sourceKey}/status`;
+  const settingsUrl = `/v1/metadata-cache/${sourceKey}/settings`;
+  const resetCooldownUrl = `/v1/metadata-cache/${sourceKey}/reset-cooldown`;
+
   // Poll every 30s while mounted. Heartbeat-staleness checks rely on
   // a recent reading; faster polling burns CPU for no real-world
   // benefit (worker iterations are ≥30s by design).
@@ -1298,9 +1323,7 @@ function AmazonCacheStatusCard() {
     let timer: ReturnType<typeof setInterval> | null = null;
     const fetchStatus = async () => {
       try {
-        const r = await api.get<CacheStatusResponse>(
-          "/v1/metadata-cache/amazon/status",
-        );
+        const r = await api.get<CacheStatusResponse>(statusUrl);
         if (cancelled) return;
         setStatus(r);
         // Seed the local edit buffer on first load — and on every
@@ -1324,7 +1347,7 @@ function AmazonCacheStatusCard() {
       cancelled = true;
       if (timer) clearInterval(timer);
     };
-  }, [scheduleDirty]);
+  }, [scheduleDirty, statusUrl]);
 
   async function setMode(nextMode: CacheMode) {
     if (status === null || nextMode === status.mode) return;
@@ -1332,8 +1355,7 @@ function AmazonCacheStatusCard() {
     setErr("");
     try {
       const r = await api.patch<CacheSettingsResponse>(
-        "/v1/metadata-cache/amazon/settings",
-        { mode: nextMode },
+        settingsUrl, { mode: nextMode },
       );
       // Optimistic: update mode + enabled (kept in sync server-side)
       // so the pill flips without waiting for the next poll.
@@ -1356,7 +1378,7 @@ function AmazonCacheStatusCard() {
     setErr("");
     try {
       const r = await api.patch<CacheSettingsResponse>(
-        "/v1/metadata-cache/amazon/settings",
+        settingsUrl,
         {
           schedule: {
             active_hours: pendingHours.trim(),
@@ -1378,13 +1400,9 @@ function AmazonCacheStatusCard() {
     setBusy("reset");
     setErr("");
     try {
-      await api.post<ResetCooldownResponse>(
-        "/v1/metadata-cache/amazon/reset-cooldown",
-      );
+      await api.post<ResetCooldownResponse>(resetCooldownUrl);
       // Force-refresh status so the cooldown banner clears.
-      const r = await api.get<CacheStatusResponse>(
-        "/v1/metadata-cache/amazon/status",
-      );
+      const r = await api.get<CacheStatusResponse>(statusUrl);
       setStatus(r);
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Reset failed");
@@ -1455,7 +1473,7 @@ function AmazonCacheStatusCard() {
           panel is narrow. */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <span style={{ color: t.textDim, fontWeight: 600 }}>
-          Cache worker
+          {sourceLabel} cache worker
         </span>
         <span style={{
           fontSize: 11, fontWeight: 700, textTransform: "uppercase",
@@ -1530,10 +1548,22 @@ function AmazonCacheStatusCard() {
           value={`${(status.cache.unique_ok_authors ?? status.cache.ok_authors).toLocaleString()} / ${(status.cache.unique_total_authors ?? status.cache.state_rows).toLocaleString()}`}
           hint="ok / total (author-level)"
         />
-        <StatTile
-          label="Books cached"
-          value={status.cache.books_rows.toLocaleString()}
-        />
+        {/* v3.4.0 slice 06 — GR caches list-page snapshots (not
+            per-book detail), so the third tile diverges by shape.
+            Amazon: "Books cached" → `books_rows`; Goodreads:
+            "List pages" → `list_pages_rows`. */}
+        {isGr ? (
+          <StatTile
+            label="List pages"
+            value={(status.cache.list_pages_rows ?? 0).toLocaleString()}
+            hint="cached list-page snapshots (sum across libraries)"
+          />
+        ) : (
+          <StatTile
+            label="Books cached"
+            value={status.cache.books_rows.toLocaleString()}
+          />
+        )}
         <StatTile
           label="Last scan"
           value={_formatSecondsAgo(status.worker.seconds_since_scan_completed)}
@@ -1552,11 +1582,23 @@ function AmazonCacheStatusCard() {
           value={status.queue.in_progress.toLocaleString()}
           tone={status.queue.in_progress > 1 ? "warn" : undefined}
         />
-        <StatTile
-          label="Failed perm."
-          value={status.queue.failed_permanent.toLocaleString()}
-          tone={status.queue.failed_permanent > 0 ? "err" : undefined}
-        />
+        {/* v3.4.0 slice 06 — Failed perm. for Amazon (mature signal),
+            Budget exhausts for GR (Path A signal that motivates Path
+            C — ADR-0018 §6.2). Both fit the 8-tile grid. */}
+        {isGr ? (
+          <StatTile
+            label="Budget exhausts"
+            value={(status.cache.today_budget_exhaust_count ?? 0).toLocaleString()}
+            tone={(status.cache.today_budget_exhaust_count ?? 0) > 0 ? "warn" : undefined}
+            hint="GR per-author wall-clock budget exhausts today; non-zero on prolific authors motivates the v3.5.0 detail-cache decision"
+          />
+        ) : (
+          <StatTile
+            label="Failed perm."
+            value={status.queue.failed_permanent.toLocaleString()}
+            tone={status.queue.failed_permanent > 0 ? "err" : undefined}
+          />
+        )}
       </div>
 
       {/* Schedule editor — only relevant when mode=scheduled */}
@@ -1616,8 +1658,12 @@ function AmazonCacheStatusCard() {
         </div>
       )}
 
-      {/* Cooldown banner + reset button (only rendered when blocked) */}
-      {status.cooldown.blocked && (
+      {/* Cooldown banner + reset button — Amazon only. GR has no
+          IP-level penalty box (no Akamai layer; soft-blocks defer
+          per-queue-row via the lighter 300s cooldown — ADR-0018 §1).
+          Backend reports `cooldown.blocked=false` always for GR, so
+          this whole block stays hidden anyway. */}
+      {!isGr && status.cooldown.blocked && (
         <div style={{
           display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap",
           background: t.bg3, border: `1px solid ${t.borderL}`,

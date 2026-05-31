@@ -252,3 +252,46 @@ def register_metadata_cache_health(
         coalesce=True,
         max_instances=1,
     )
+
+    # v3.4.0 slice 05 — sibling pair for the Goodreads worker. Same
+    # cadence (2-min stall watch + daily summary at user-configured
+    # hour) reusing the source-agnostic `check_stall` / `send_daily_summary`
+    # primitives. Separate job IDs so APScheduler can hold both
+    # without collision. The daily summary cron is intentionally
+    # offset by 1 minute so the two source summaries don't fire
+    # simultaneously (small ntfy-quality nicety).
+    async def _gr_stall_watch():
+        from app.discovery import metadata_cache_worker
+        try:
+            await metadata_cache_worker.check_stall("goodreads")
+        except Exception:
+            _log.exception("metadata_cache_goodreads_stall_watch crashed")
+
+    async def _gr_daily_summary():
+        from app.discovery import metadata_cache_worker
+        _log.info("metadata_cache goodreads daily summary tick")
+        try:
+            await metadata_cache_worker.send_daily_summary("goodreads")
+        except Exception:
+            _log.exception(
+                "metadata_cache_goodreads_daily_summary crashed"
+            )
+
+    scheduler.add_job(
+        _gr_stall_watch,
+        trigger=IntervalTrigger(minutes=2),
+        id="metadata_cache_goodreads_stall_watch",
+        name="Goodreads metadata-cache stall watchdog",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
+    scheduler.add_job(
+        _gr_daily_summary,
+        trigger=CronTrigger(hour=int(daily_summary_hour), minute=6),
+        id="metadata_cache_goodreads_daily_summary",
+        name="Goodreads metadata-cache daily summary",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
