@@ -254,6 +254,36 @@ async def job_empty_cleanup(
         deleted_series = await cleanup_empty_series(db) or 0
         stats["deleted_series"] += deleted_series
 
+        # Orphan-cleanup pass for `book_authors`: rows whose `book_id`
+        # no longer exists in `books`. These accumulate when books
+        # were deleted with PRAGMA foreign_keys=OFF (the FK was added
+        # in v3.0.0 with ON DELETE CASCADE on book_id, but historical
+        # deletes happened with FKs disabled, leaving the join rows
+        # behind). Two consequences if we don't clean them up:
+        #   1. The empty-author HAVING-COUNT query below still sees
+        #      these orphans via the LEFT JOIN to authors, so it
+        #      undercounts genuinely-empty authors when an orphan
+        #      row references the author through a dangling book.
+        #      In fact it OVERCOUNTS — the LEFT JOIN to books
+        #      gives NULL for the orphan, COUNT(b.id) still =0, so
+        #      such authors fall INTO the "empty" batch.
+        #   2. The DELETE FROM authors at the bottom of this job
+        #      then trips `book_authors.author_id` FK because the
+        #      orphan row still pins the author. Observed live in
+        #      hygiene on 2026-06-02 for abs-audio-library.
+        cur = await db.execute(
+            "DELETE FROM book_authors "
+            "WHERE book_id NOT IN (SELECT id FROM books)"
+        )
+        orphan_ba_count = cur.rowcount or 0
+        if orphan_ba_count:
+            await db.commit()
+            logger.info(
+                "hygiene[%s] book_authors orphan-cleanup: deleted=%d "
+                "(rows referencing book_id no longer in books)",
+                slug, orphan_ba_count,
+            )
+
         # Author cleanup — count books per author, skip allowlisted
         # names, skip cross-library mirrors, delete the rest.
         allowed_norms = await _load_allowed_norms()

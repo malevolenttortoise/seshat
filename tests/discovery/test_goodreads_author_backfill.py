@@ -27,14 +27,18 @@ async def discovery_db(tmp_path, monkeypatch):
 
     Also patches SETTINGS_PATH (since the goodreads_session module
     reads/writes the runtime-state flag through settings.json) so
-    state writes don't leak.
+    state writes don't leak. Patches `metadata_cache.DATA_DIR` so
+    `_persist_author_goodreads_id`'s v3.6.1 guard against
+    `unavailable_404` rows reads from the same tmp_path.
     """
     from app import config as app_config
     from app.discovery import database as disco_db
+    from app.discovery import metadata_cache
 
     monkeypatch.setattr(app_config, "DATA_DIR", tmp_path)
     monkeypatch.setattr(app_config, "SETTINGS_PATH", tmp_path / "settings.json")
     monkeypatch.setattr(disco_db, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(metadata_cache, "DATA_DIR", tmp_path)
     disco_db.set_active_library("test")
     await disco_db.init_db("test")
     # Reset cached settings + goodreads_session singleton.
@@ -216,6 +220,63 @@ class TestPersist:
         finally:
             await db.close()
         assert row[0] == "67890"
+
+    async def test_skips_when_gr_id_marked_unavailable_404(self, discovery_db):
+        """v3.6.1 — when the GR cache stamped a goodreads_id as
+        `unavailable_404` (worker hit HTTP 404), backfill must NOT
+        re-stamp it onto authors.goodreads_id. Otherwise the next
+        worker tick re-pops the queue row, hits 404 again, and the
+        whole retire-the-row dance is wasted. Mirrors ADR-0006's
+        MAM `source="unavailable"` lookup discipline.
+        """
+        from app.discovery import metadata_cache
+        from app.discovery.goodreads_author_backfill import (
+            _persist_author_goodreads_id,
+        )
+        from app.discovery.database import get_db
+        import time
+
+        # Seed an unavailable_404 row for GR-DEAD in the cache.
+        await metadata_cache.init_db(metadata_cache.SOURCE_GOODREADS)
+        cdb = await metadata_cache.get_db(metadata_cache.SOURCE_GOODREADS)
+        try:
+            await cdb.execute(
+                f"INSERT INTO "
+                f"{metadata_cache.state_table(metadata_cache.SOURCE_GOODREADS)} "
+                f"(author_id, library_slug, last_scanned_at, "
+                f" last_outcome, book_count) VALUES (?, ?, ?, ?, ?)",
+                ("47498844", "test", time.time(), "unavailable_404", 0),
+            )
+            await cdb.commit()
+        finally:
+            await cdb.close()
+
+        # Author has NO goodreads_id; backfill is asked to write 47498844.
+        author_id = await _insert_author("Ghost Author")
+        await _persist_author_goodreads_id(author_id, "47498844")
+
+        # authors.goodreads_id must still be NULL — guard fired.
+        db = await get_db()
+        try:
+            row = await (await db.execute(
+                "SELECT goodreads_id FROM authors WHERE id = ?",
+                (author_id,),
+            )).fetchone()
+        finally:
+            await db.close()
+        assert row[0] is None
+
+        # A non-dead GR ID still writes through.
+        await _persist_author_goodreads_id(author_id, "11111")
+        db = await get_db()
+        try:
+            row = await (await db.execute(
+                "SELECT goodreads_id FROM authors WHERE id = ?",
+                (author_id,),
+            )).fetchone()
+        finally:
+            await db.close()
+        assert row[0] == "11111"
 
 
 class TestResolveAuthorGoodreadsId:
