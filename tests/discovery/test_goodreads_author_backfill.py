@@ -306,13 +306,15 @@ class TestResolveAuthorGoodreadsId:
 
     async def test_direct_goodreads_id_path(self, discovery_db, monkeypatch):
         """Book has stored goodreads_id → /book/show fetched directly,
-        author parsed, persisted."""
+        author parsed, persisted. v3.6.2: JSON-LD author name must
+        match the queried author by normalized name before stamping.
+        """
         from app.discovery.goodreads_author_backfill import (
             resolve_author_goodreads_id,
         )
         html = """
         <script type="application/ld+json">
-        {"author":{"@type":"Person",
+        {"author":{"@type":"Person", "name": "Test",
                    "url":"https://www.goodreads.com/author/show/55555"}}
         </script>
         """
@@ -330,7 +332,10 @@ class TestResolveAuthorGoodreadsId:
 
     async def test_isbn_resolver_path(self, discovery_db, monkeypatch):
         """Book has only ISBN → resolver chain converts to goodreads_book_id
-        → /book/show fetched → author parsed."""
+        → /book/show fetched → author parsed.
+
+        v3.6.2 also requires the JSON-LD author's name to match.
+        """
         from app.discovery.goodreads_author_backfill import (
             resolve_author_goodreads_id,
         )
@@ -346,16 +351,93 @@ class TestResolveAuthorGoodreadsId:
         monkeypatch.setattr(backfill_mod, "resolve_goodreads_id", fake_resolve)
 
         html = """
-        <a href="/author/show/12321.Some_Author">Some Author</a>
+        <script type="application/ld+json">
+        {"author":{"@type":"Person", "name": "Some Author",
+                   "url":"https://www.goodreads.com/author/show/12321.Some_Author"}}
+        </script>
         """
         stub = await self._stub_session(monkeypatch, html=html)
 
-        author_id = await _insert_author("Test")
+        author_id = await _insert_author("Some Author")
         await _insert_book("Seed", author_id, isbn="9780000000001")
 
         resolved = await resolve_author_goodreads_id(author_id)
         assert resolved == "12321"
         assert "/book/show/777" in stub.calls[0]
+
+    async def test_coauthored_book_does_not_misstamp(
+        self, discovery_db, monkeypatch,
+    ):
+        """v3.6.2 — regression for the Chohokiteki Kaeru → Roy Colt
+        wrong-merge observed live 2026-06-02.
+
+        Setup: the queried author is "Chohokiteki Kaeru" but the
+        seed book's GR page lists ONLY Roy Colt in JSON-LD (because
+        Seshat's book_authors join attributed a co-authored Roy Colt
+        book to Chohokiteki Kaeru, OR a resolver returned a wrong
+        GR book ID). Pre-v3.6.2 Phase 1 silently stamped Roy Colt's
+        author ID onto Chohokiteki Kaeru. The name-verification
+        guard MUST reject the stamp and return None.
+        """
+        from app.discovery.goodreads_author_backfill import (
+            resolve_author_goodreads_id,
+        )
+        from app.discovery.database import get_db
+        # GR page for a Roy Colt book — only Roy Colt is in JSON-LD.
+        html = """
+        <script type="application/ld+json">
+        {"author":{"@type":"Person", "name": "Roy Colt",
+                   "url":"https://www.goodreads.com/author/show/56641006"}}
+        </script>
+        """
+        await self._stub_session(monkeypatch, html=html)
+
+        author_id = await _insert_author("Chohokiteki Kaeru")
+        await _insert_book("Borrowed Seed", author_id, goodreads_id="999")
+
+        resolved = await resolve_author_goodreads_id(author_id)
+
+        # No stamp — name mismatch rejected the resolution.
+        assert resolved is None
+        db = await get_db()
+        try:
+            row = await (await db.execute(
+                "SELECT goodreads_id FROM authors WHERE id = ?",
+                (author_id,),
+            )).fetchone()
+        finally:
+            await db.close()
+        assert row[0] is None  # authors.goodreads_id stayed NULL
+
+    async def test_multi_author_picks_matching_name(
+        self, discovery_db, monkeypatch,
+    ):
+        """v3.6.2 — multi-author page with the queried author present
+        stamps the correct ID, not just the first one. JSON-LD lists
+        Dante King FIRST (co-author, primary byline), Matt Waid SECOND.
+        Queried author is Matt Waid — we must skip Dante King and
+        return Matt Waid's ID.
+        """
+        from app.discovery.goodreads_author_backfill import (
+            resolve_author_goodreads_id,
+        )
+        html = """
+        <script type="application/ld+json">
+        {"author":[
+          {"@type":"Person", "name":"Dante King",
+           "url":"https://www.goodreads.com/author/show/19000001"},
+          {"@type":"Person", "name":"Matt Waid",
+           "url":"https://www.goodreads.com/author/show/52279464"}
+        ]}
+        </script>
+        """
+        await self._stub_session(monkeypatch, html=html)
+
+        author_id = await _insert_author("Matt Waid")
+        await _insert_book("Hero of Another World", author_id, goodreads_id="888")
+
+        resolved = await resolve_author_goodreads_id(author_id)
+        assert resolved == "52279464"
 
     async def test_no_resolvable_book_returns_none(self, discovery_db, monkeypatch):
         """Author has only books with no identifiers → graceful None."""

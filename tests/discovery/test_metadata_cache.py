@@ -839,3 +839,80 @@ class TestIsGoodreadsIdKnownUnavailable:
         assert result is True
         # Empty / missing arg short-circuits to False without DB hit.
         assert await metadata_cache.is_goodreads_id_known_unavailable("") is False
+
+
+# ─── v3.6.2 — backfill_queues_for_library helper ────────────────
+
+
+class TestBackfillQueuesForLibrary:
+    """`backfill_queues_for_library` — the end-of-sync hook for
+    enqueuing newly-added authors into both worker queues at once.
+    Pre-v3.6.2 backfills only ran at container startup, so authors
+    added between restarts were invisible to the workers.
+    """
+
+    async def test_enqueues_both_sources_when_gr_enabled(
+        self, cache_under, fake_discovery_libraries,
+    ):
+        """books-lib seed: 2 amazon_id authors + 2 goodreads_id authors.
+        With GR mode != disabled, both backfills run and both report
+        non-zero new-enqueue counts.
+        """
+        await metadata_cache.init_db(metadata_cache.SOURCE_AMAZON)
+        await metadata_cache.init_db(metadata_cache.SOURCE_GOODREADS)
+        settings = {"metadata_cache": {"goodreads": {"mode": "scheduled"}}}
+        counts = await metadata_cache.backfill_queues_for_library(
+            "books-lib", settings=settings,
+        )
+        # 2 amazon_id authors in the books-lib seed.
+        assert counts["amazon"] == 2
+        # 2 goodreads_id authors in the books-lib seed.
+        assert counts["goodreads"] == 2
+
+    async def test_gr_disabled_skips_goodreads_backfill(
+        self, cache_under, fake_discovery_libraries,
+    ):
+        """The Goodreads backfill is gated on
+        settings.metadata_cache.goodreads.mode. When 'disabled' (or
+        absent), GR is skipped entirely — operators who haven't
+        opted into GR caching shouldn't see queue rows accumulate.
+        """
+        await metadata_cache.init_db(metadata_cache.SOURCE_AMAZON)
+        await metadata_cache.init_db(metadata_cache.SOURCE_GOODREADS)
+        # Default settings (no metadata_cache.goodreads.mode) → disabled.
+        counts = await metadata_cache.backfill_queues_for_library(
+            "books-lib", settings={},
+        )
+        assert counts["amazon"] == 2
+        assert counts["goodreads"] == 0
+
+    async def test_idempotent_second_call(
+        self, cache_under, fake_discovery_libraries,
+    ):
+        """Both underlying backfills use INSERT OR IGNORE, so a
+        second call against an unchanged library reports 0 new
+        enqueues for each source.
+        """
+        await metadata_cache.init_db(metadata_cache.SOURCE_AMAZON)
+        await metadata_cache.init_db(metadata_cache.SOURCE_GOODREADS)
+        settings = {"metadata_cache": {"goodreads": {"mode": "scheduled"}}}
+        first = await metadata_cache.backfill_queues_for_library(
+            "books-lib", settings=settings,
+        )
+        assert first["amazon"] + first["goodreads"] > 0
+        second = await metadata_cache.backfill_queues_for_library(
+            "books-lib", settings=settings,
+        )
+        assert second == {"amazon": 0, "goodreads": 0}
+
+    async def test_unknown_slug_returns_zeros(self, cache_under):
+        """A slug the discovery layer can't open returns zero counts
+        for both sources (best-effort — caller logs and moves on).
+        """
+        await metadata_cache.init_db(metadata_cache.SOURCE_AMAZON)
+        await metadata_cache.init_db(metadata_cache.SOURCE_GOODREADS)
+        settings = {"metadata_cache": {"goodreads": {"mode": "scheduled"}}}
+        counts = await metadata_cache.backfill_queues_for_library(
+            "no-such-slug", settings=settings,
+        )
+        assert counts == {"amazon": 0, "goodreads": 0}

@@ -1756,6 +1756,14 @@ async def run_all() -> dict[str, Any]:
         # then this job merges persons sharing a (source, source_id).
         _set_phase(8, library="(cross-library)")
         await job_consolidate_persons_by_source_id(stats)
+        # v3.6.2 — explicit job-completion log so operators see Jobs
+        # 9/11/12 in the log stream. Pre-v3.6.2, only Job 10 emitted
+        # a finish-line marker (`prune-orphan-links: dropped=%d`),
+        # leaving the other cross-library jobs invisible.
+        logger.info(
+            "hygiene: %s complete: persons_merged_by_source_id=%d",
+            JOB_NAMES[8], stats["persons_merged_by_source_id"],
+        )
         state._hygiene_progress["jobs"].append({
             "name": JOB_NAMES[8],
             "persons_merged_by_source_id": stats["persons_merged_by_source_id"],
@@ -1778,6 +1786,12 @@ async def run_all() -> dict[str, Any]:
         # non-200 responses. Local-clear-only (ADR-0016 §6 D8(i)).
         _set_phase(10, library="(cross-library)")
         await job_image_url_health_check(stats)
+        logger.info(
+            "hygiene: %s complete: blacklisted_path=%d head_failed=%d",
+            JOB_NAMES[10],
+            stats["image_urls_blacklisted_path"],
+            stats["image_urls_head_failed"],
+        )
         state._hygiene_progress["jobs"].append({
             "name": JOB_NAMES[10],
             "image_urls_blacklisted_path": stats["image_urls_blacklisted_path"],
@@ -1805,6 +1819,14 @@ async def run_all() -> dict[str, Any]:
             stats["errors"].append(
                 f"soft_delete_sweep: {type(e).__name__}: {e}"
             )
+        logger.info(
+            "hygiene: %s complete: purged=%d kept=%d malformed=%d errors=%d",
+            JOB_NAMES[11],
+            stats["soft_deletes_purged"],
+            stats["soft_deletes_kept"],
+            stats["soft_deletes_malformed"],
+            stats["soft_deletes_errors"],
+        )
         state._hygiene_progress["jobs"].append({
             "name": JOB_NAMES[11],
             "soft_deletes_purged":    stats["soft_deletes_purged"],

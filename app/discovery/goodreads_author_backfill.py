@@ -654,8 +654,36 @@ async def resolve_author_goodreads_id(author_id: int) -> Optional[str]:
     Returns the goodreads_id string on success, None on any failure.
     Never raises — author-resolution failures are non-fatal everywhere
     this is called from.
+
+    v3.6.2 — name-verification guard. Before this fix, Phase 1 stamped
+    whichever author appeared FIRST in the seed book's JSON-LD `author[]`
+    block, with no check that the queried author was actually that author.
+    Co-authored seed books silently misassigned the wrong GR ID, which
+    Hygiene Job 9 (`consolidate_persons_by_source_id`) then merged into
+    wrong persons — produced the Chohokiteki Kaeru → Roy Colt and
+    Fehu Kazuno → Matt Waid wrong-merges observed live 2026-06-02.
+    Mirrors Phase 2's existing match-by-normalized-name pattern at
+    `_resolve_via_calibre_coauthor`.
     """
     try:
+        # Read the author's name first so we can verify the GR
+        # resolution by normalized-name match below.
+        db = await get_db()
+        try:
+            row = await (await db.execute(
+                "SELECT name FROM authors WHERE id = ?", (author_id,),
+            )).fetchone()
+        finally:
+            await db.close()
+        if not row or not row[0]:
+            _log.debug(
+                "backfill: author_id=%d not found or unnamed; skip",
+                author_id,
+            )
+            return None
+        author_name = str(row[0])
+        target_norm = normalize_author_name(author_name)
+
         book = await _pick_seed_book(author_id)
         if not book:
             _log.debug(
@@ -701,22 +729,46 @@ async def resolve_author_goodreads_id(author_id: int) -> Optional[str]:
         html = getattr(resp, "text", "") or (
             (getattr(resp, "content", b"") or b"").decode("utf-8", "ignore")
         )
-        author_goodreads_id = _parse_author_id_from_html(html)
-        if not author_goodreads_id:
+
+        # v3.6.2 — multi-author parse + match-by-name. Walk every
+        # JSON-LD `author[]` entry on the page and stamp ONLY when
+        # one of them normalizes to the queried author's name.
+        # Without this guard, co-authored seed books mis-stamp the
+        # wrong GR ID on the queried author and Hygiene Job 9
+        # later merges them into the wrong person.
+        all_authors = _parse_all_authors_from_html(html)
+        if not all_authors:
             _log.info(
                 "backfill: no author goodreads_id parsed from %s "
-                "(JSON-LD + anchor fallback both empty) for author_id=%d",
+                "(JSON-LD authors empty) for author_id=%d",
                 url, author_id,
             )
             return None
 
-        await _persist_author_goodreads_id(author_id, author_goodreads_id)
+        match: Optional[str] = None
+        for cand_name, cand_id in all_authors:
+            if normalize_author_name(cand_name) == target_norm:
+                match = cand_id
+                break
+        if not match:
+            _log.info(
+                "backfill: %d author(s) found at %s but none matched "
+                "%r (normalized) — skipping stamp to avoid wrong-merge. "
+                "JSON-LD authors: %r",
+                len(all_authors), url, author_name,
+                [n for n, _ in all_authors],
+            )
+            return None
+
+        await _persist_author_goodreads_id(author_id, match)
         _log.info(
-            "backfill: author_id=%d ← goodreads_id=%s "
-            "(seed book id=%s, book_goodreads_id=%s)",
-            author_id, author_goodreads_id, book.get("id"), book_id,
+            "backfill: author_id=%d %r ← goodreads_id=%s "
+            "(seed book id=%s, book_goodreads_id=%s; matched by "
+            "normalized name out of %d JSON-LD authors)",
+            author_id, author_name, match, book.get("id"), book_id,
+            len(all_authors),
         )
-        return author_goodreads_id
+        return match
     except Exception:
         _log.exception(
             "backfill: unexpected error resolving author_id=%d (non-fatal)",

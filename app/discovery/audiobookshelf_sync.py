@@ -570,6 +570,43 @@ async def sync_audiobookshelf(library: dict) -> dict:
             "last_check_at": time.time(),
             "sync_mode": mode,
         })
+
+        # v3.6.2 — fire-and-forget Goodreads author-id backfill, then
+        # enqueue newly-resolved Amazon + GR author IDs into the
+        # metadata-cache worker queues. Pre-v3.6.2, both ran only at
+        # container startup, so ABS-side new authors stayed invisible
+        # to the workers until reboot. Mirror of the Calibre-sync
+        # end-of-sync block.
+        try:
+            import asyncio
+            from app.discovery.goodreads_author_backfill import (
+                backfill_missing_author_ids,
+            )
+            asyncio.create_task(backfill_missing_author_ids())
+        except Exception:
+            logger.exception(
+                "ABS sync: failed to spawn Goodreads author-id "
+                "backfill task (non-fatal)"
+            )
+        try:
+            from app.discovery import metadata_cache
+            backfill_counts = await metadata_cache.backfill_queues_for_library(
+                slug,
+            )
+            if any(backfill_counts.values()):
+                logger.info(
+                    "ABS sync: metadata-cache queues enqueued "
+                    "amazon=%d goodreads=%d for slug=%r",
+                    backfill_counts["amazon"],
+                    backfill_counts["goodreads"],
+                    slug,
+                )
+        except Exception:
+            logger.exception(
+                "ABS sync: metadata-cache queue backfill failed "
+                "(non-fatal — hourly APScheduler job will catch up)"
+            )
+
         return {
             "books_found": books_found,
             "books_new": books_new,
