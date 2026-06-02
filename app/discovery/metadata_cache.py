@@ -758,3 +758,39 @@ async def db_summary(source: str = SOURCE_AMAZON) -> dict[str, object]:
         "last_modified": last_modified,
         "row_counts": counts,
     }
+
+
+async def is_goodreads_id_known_unavailable(goodreads_id: str) -> bool:
+    """True iff the GR cache has at least one state row stamped
+    `unavailable_404` for `goodreads_id`.
+
+    Mirrors the MAM "torrent deleted" lookup pattern (ADR-0006) for
+    Goodreads. Callers (the GR backfill in particular) use this to
+    avoid re-stamping a known-dead author ID onto `authors.goodreads_id`
+    after the cache worker has retired it.
+
+    Returns False if the cache DB hasn't been initialized yet (no
+    file on disk), which preserves backfill behavior on a fresh
+    install where the cache hasn't been built.
+    """
+    if not goodreads_id:
+        return False
+    db_path = get_db_path(SOURCE_GOODREADS)
+    if not db_path.exists():
+        return False
+    db = await get_db(SOURCE_GOODREADS)
+    try:
+        cur = await db.execute(
+            f"SELECT 1 FROM {state_table(SOURCE_GOODREADS)} "
+            f"WHERE author_id = ? AND last_outcome = 'unavailable_404' "
+            f"LIMIT 1",
+            (str(goodreads_id),),
+        )
+        row = await cur.fetchone()
+        return row is not None
+    except aiosqlite.OperationalError:
+        # Pre-migration shape — treat as "not known dead" so backfill
+        # behaves as it did before this guard was added.
+        return False
+    finally:
+        await db.close()

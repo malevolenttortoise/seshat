@@ -248,7 +248,23 @@ async def _derive_goodreads_book_id(book: dict) -> Optional[str]:
 
 async def _persist_author_goodreads_id(author_id: int, goodreads_id: str) -> None:
     """Write authors.goodreads_id. Idempotent — no-op if already set
-    to the same value (cheap optimization for repeat backfill runs)."""
+    to the same value (cheap optimization for repeat backfill runs).
+
+    Guard: if the GR metadata cache has stamped `goodreads_id` as
+    `unavailable_404` (the worker hit HTTP 404 from GR), skip the
+    write. Otherwise backfill resolves the same dead ID from another
+    book row and re-stamps it, restarting the worker retry loop the
+    user manually broke. Mirrors ADR-0006's MAM stub semantics.
+    """
+    from app.discovery import metadata_cache
+    if await metadata_cache.is_goodreads_id_known_unavailable(goodreads_id):
+        _log.info(
+            "backfill: skipping author_id=%s — goodreads_id=%s is marked "
+            "unavailable_404 in the GR cache (author does not exist on "
+            "Goodreads)",
+            author_id, goodreads_id,
+        )
+        return
     db = await get_db()
     try:
         cur = await db.execute(

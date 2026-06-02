@@ -53,6 +53,24 @@ HDR = {
 }
 
 
+class GoodreadsAuthorNotFound(Exception):
+    """Goodreads returned HTTP 404 for the author list page.
+
+    Distinct from the generic transport/parser failures `list_page_inventory`
+    swallows into a `None` return: 404 is unambiguous — the author ID does
+    not exist on Goodreads (was deleted, never existed, or got renumbered).
+    The cache worker treats this as a permanent failure (no soft-block
+    cooldown ladder) and writes an `unavailable_404` stub so backfill won't
+    re-resolve to the same dead ID. Parallels the MAM "torrent deleted"
+    stub pattern from ADR-0006.
+    """
+
+    def __init__(self, author_id: str, url: str):
+        super().__init__(f"Goodreads author {author_id} not found (HTTP 404 for {url})")
+        self.author_id = author_id
+        self.url = url
+
+
 def _parse_date(text: str) -> Optional[str]:
     """Try to parse a date from various Goodreads formats."""
     if not text:
@@ -635,11 +653,30 @@ class GoodreadsSource(BaseSource):
         logged but treated as "end of pagination" — the result
         carries everything fetched so far.
         """
+        list_url = f"{BASE}/author/list/{author_id}"
         try:
             r = await self._get(
-                f"{BASE}/author/list/{author_id}",
-                retries=2, params={"per_page": 100},
+                list_url, retries=2, params={"per_page": 100},
             )
+        except httpx.HTTPStatusError as exc:
+            # HTTP 404 = author doesn't exist on Goodreads (deleted /
+            # never existed / renumbered). Surface distinctly so the
+            # worker can write a permanent stub instead of treating
+            # it as a soft-block and looping forever on the cooldown
+            # ladder. Other HTTP errors (5xx, soft-blocks) fall
+            # through to the generic Exception branch below.
+            status = getattr(exc.response, "status_code", None)
+            if status == 404:
+                logger.warning(
+                    "  Goodreads list-page inventory: author %s does not "
+                    "exist on Goodreads (HTTP 404)", author_id,
+                )
+                raise GoodreadsAuthorNotFound(author_id, list_url) from exc
+            logger.warning(
+                "  Goodreads list-page inventory: first-fetch failed "
+                "for %s (%s)", author_id, exc,
+            )
+            return None
         except Exception as exc:
             logger.warning(
                 "  Goodreads list-page inventory: first-fetch failed "

@@ -278,6 +278,11 @@ class TickResult:
       - "soft_block"       — scan tripped the cooldown (worker bumped
                              its own queue row)
       - "permanent_fail"   — author hit the consecutive-failure cap
+      - "hard_404"         — Goodreads returned HTTP 404; queue row
+                             flipped directly to failed_permanent
+                             (no failure-counter ladder) and per-
+                             library state stamped `unavailable_404`
+                             so backfill won't re-resolve to it
       - "error"            — unexpected exception caught + logged
     """
     author_id: Optional[str] = None
@@ -1027,6 +1032,33 @@ async def _mark_queue_row_failure(
     return new_count, became_permanent
 
 
+async def _mark_queue_row_permanent_404(
+    db: aiosqlite.Connection, source_name: str, *,
+    author_id: str,
+    next_scan_due_at: float,
+) -> None:
+    """Flip a queue row directly to `failed_permanent` for an
+    unambiguous "this ID doesn't exist" signal (HTTP 404).
+
+    Skips the `consecutive_failures` ladder used by
+    `_mark_queue_row_failure` — 404 is not a transient error and
+    doesn't deserve N retries before retirement. Mirrors the MAM
+    "torrent deleted" stub pattern (ADR-0006) at the queue layer;
+    the corresponding permanent stub in the per-library state
+    table is written by the tick caller via `_upsert_state_row`
+    with `outcome="unavailable_404"`.
+    """
+    queue = metadata_cache.queue_table(source_name)
+    await db.execute(
+        f"UPDATE {queue} "
+        f"SET status = 'failed_permanent', "
+        f"    next_scan_due_at = ? "
+        f"WHERE author_id = ?",
+        (next_scan_due_at, author_id),
+    )
+    await db.commit()
+
+
 # ─── Per-library partitioning (schema-v2) ────────────────────
 
 
@@ -1427,7 +1459,7 @@ async def _perform_amazon_scan(
 
 async def _perform_goodreads_scan(
     author_id: str,
-) -> tuple[Optional[dict[int, list[str]]], Optional[str], bool]:
+) -> tuple[Optional[dict[int, list[str]]], Optional[str], bool, bool]:
     """v3.4.0 slice 03 — Goodreads list-only scan for the cache
     worker (ADR-0018 §1).
 
@@ -1435,37 +1467,38 @@ async def _perform_goodreads_scan(
     GR has no Akamai layer; the existing httpx-based GR session is
     sufficient) and calls `list_page_inventory(author_id)`.
 
-    Returns `(pages_dict, error_msg, is_soft_block)`:
-      - `(pages, None, False)` on success — pages is `{page_num:
-        [book_id, ...]}`.
-      - `(None, error_msg, False)` on hard error (parser raised,
-        transport-level failure).
-      - `(None, error_msg, True)` on soft-block (HTTP 202 / 503
-        observed by the source's existing retry path; surfaces as
-        the source returning None after exhausting retries).
-
-    The soft-block vs hard-error distinction matters in `tick`: a
-    soft-block defers the queue row past a cooldown without
-    incrementing `consecutive_failures`; a hard error increments
-    failures and eventually flips the row to `failed_permanent`.
-    The current `GoodreadsSource` doesn't surface the distinction
-    explicitly — it just returns None — so we treat None as a
-    cooldown-class signal (soft-block) for safety. A future
-    `list_page_inventory` extension can return a richer error.
+    Returns `(pages_dict, error_msg, is_soft_block, is_hard_404)`:
+      - `(pages, None, False, False)` on success — pages is
+        `{page_num: [book_id, ...]}`.
+      - `(None, error_msg, False, False)` on hard error (parser
+        raised, transport-level failure).
+      - `(None, error_msg, True, False)` on soft-block (HTTP 202 /
+        503 observed by the source's existing retry path; surfaces
+        as the source returning None after exhausting retries).
+      - `(None, error_msg, False, True)` on hard 404 — the GR
+        author ID does not exist. Caller writes a permanent
+        `unavailable_404` stub and flips the queue row to
+        `failed_permanent` immediately (no soft-block ladder, no
+        consecutive_failures counter). Mirrors the MAM "torrent
+        deleted" stub pattern (ADR-0006).
     """
-    from app.discovery.sources.goodreads import GoodreadsSource
+    from app.discovery.sources.goodreads import (
+        GoodreadsSource, GoodreadsAuthorNotFound,
+    )
     s = app_config.load_settings()
     gr_cfg = (s.get("metadata_sources") or {}).get("goodreads") or {}
     rate_limit = float(gr_cfg.get("rate_limit", 5.0))
     source = GoodreadsSource(rate_limit=rate_limit)
     try:
         pages = await source.list_page_inventory(author_id)
+    except GoodreadsAuthorNotFound as exc:
+        return None, str(exc), False, True
     except Exception as exc:
         logger.exception(
             "metadata_cache_worker: goodreads list-page scan raised "
             "for %s: %s", author_id, exc,
         )
-        return None, f"{type(exc).__name__}: {exc}", False
+        return None, f"{type(exc).__name__}: {exc}", False, False
     finally:
         # GoodreadsSource may hold an httpx session in
         # `_goodreads_session`; close it cleanly if exposed.
@@ -1478,8 +1511,8 @@ async def _perform_goodreads_scan(
     if pages is None:
         # GR source returned None — treat as soft-block (cooldown
         # class). A genuine hard parser failure would have raised.
-        return None, "goodreads returned None (likely 202/503 soft-block)", True
-    return pages, None, False
+        return None, "goodreads returned None (likely 202/503 soft-block)", True, False
+    return pages, None, False, False
 
 
 # ─── Crash recovery ────────────────────────────────────────────
@@ -2056,9 +2089,63 @@ async def tick_goodreads() -> TickResult:
             next_sleep_s=random.uniform(_JITTER_MIN_S, _JITTER_MAX_S),
         )
 
-    pages, scan_error, is_soft_block = await _perform_goodreads_scan(
+    pages, scan_error, is_soft_block, is_hard_404 = await _perform_goodreads_scan(
         author_id,
     )
+
+    if is_hard_404:
+        # Hard 404 = author doesn't exist on Goodreads. Skip the
+        # soft-block cooldown ladder AND the consecutive_failures
+        # counter — both are designed for transient errors. Flip
+        # the queue row directly to `failed_permanent` and write a
+        # permanent `unavailable_404` stub to the per-library
+        # state table so backfill (and any future re-queue) knows
+        # not to chase this GR ID. Parallels ADR-0006's MAM
+        # "torrent deleted" pattern.
+        db = await metadata_cache.get_db(source_name)
+        try:
+            await _mark_queue_row_permanent_404(
+                db, source_name,
+                author_id=author_id,
+                next_scan_due_at=now + _NORMAL_RESCAN_CADENCE_S,
+            )
+            for lib in libraries:
+                await _upsert_state_row(
+                    db, source_name,
+                    author_id=author_id, library_slug=lib["slug"],
+                    seshat_author_id=lib["seshat_author_id"],
+                    now=now, outcome="unavailable_404",
+                    book_count=0, last_error=(scan_error or "HTTP 404"),
+                )
+        finally:
+            await db.close()
+        elapsed_ms = (time.time() - started_at) * 1000.0
+        scan_log.warning(
+            "[scan] %s",
+            _format_fields(
+                author=author_id, outcome="hard_404",
+                permanent=True, elapsed_ms=elapsed_ms,
+            ),
+        )
+        await _send_ntfy(
+            event_key="metadata_cache_warning",
+            title="Goodreads worker — author retired (HTTP 404)",
+            message=(
+                f"{author_id} returned HTTP 404 from Goodreads — the ID "
+                f"does not exist (deleted, renumbered, or never existed). "
+                f"Queue row flipped to failed_permanent; per-library state "
+                f"rows marked unavailable_404. Backfill will skip this ID."
+            ),
+            priority=3,
+            tags=["warning", "ghost"],
+        )
+        return TickResult(
+            source_name=source_name, outcome="hard_404",
+            author_id=author_id,
+            queue_size=queue_size, error=scan_error,
+            next_sleep_s=random.uniform(_JITTER_MIN_S, _JITTER_MAX_S),
+            elapsed_ms=elapsed_ms,
+        )
 
     if is_soft_block:
         cooldown_s = _GR_SOFT_BLOCK_COOLDOWN_S

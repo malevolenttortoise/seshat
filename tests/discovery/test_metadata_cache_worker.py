@@ -1900,7 +1900,7 @@ class TestGoodreadsTick:
         called: list[str] = []
         async def _no_scan(author_id):
             called.append(author_id)
-            return ({}, None, False)
+            return ({}, None, False, False)
         monkeypatch.setattr(
             metadata_cache_worker, "_perform_goodreads_scan", _no_scan,
         )
@@ -1929,7 +1929,7 @@ class TestGoodreadsTick:
         }
         async def _ok_scan(author_id):
             assert author_id == "GR-200"
-            return (pages, None, False)
+            return (pages, None, False, False)
         monkeypatch.setattr(
             metadata_cache_worker, "_perform_goodreads_scan", _ok_scan,
         )
@@ -1984,7 +1984,7 @@ class TestGoodreadsTick:
     ):
         await _seed_gr_queue_row(author_id="GR-300", consecutive_failures=2)
         async def _soft_block(author_id):
-            return (None, "goodreads returned None (202)", True)
+            return (None, "goodreads returned None (202)", True, False)
         monkeypatch.setattr(
             metadata_cache_worker, "_perform_goodreads_scan", _soft_block,
         )
@@ -2014,7 +2014,7 @@ class TestGoodreadsTick:
     ):
         await _seed_gr_queue_row(author_id="GR-400", consecutive_failures=2)
         async def _hard_err(author_id):
-            return (None, "ValueError: parser exploded", False)
+            return (None, "ValueError: parser exploded", False, False)
         monkeypatch.setattr(
             metadata_cache_worker, "_perform_goodreads_scan", _hard_err,
         )
@@ -2046,6 +2046,74 @@ class TestGoodreadsTick:
         assert {(s[0], s[1]) for s in states} == {
             ("books-lib", "error"), ("audio-lib", "error"),
         }
+
+    async def test_hard_404_flips_queue_permanent_and_stamps_state(
+        self, gr_worker_under, monkeypatch,
+    ):
+        """v3.6.1 — HTTP 404 from GR's author/list page means the
+        author ID doesn't exist (deleted / renumbered / never was).
+        The worker must:
+          - flip the queue row directly to `failed_permanent` (no
+            consecutive_failures ladder, no soft-block cooldown)
+          - stamp each library's state row with `unavailable_404`
+            so backfill won't re-resolve the dead ID
+          - return outcome="hard_404"
+        Regression target: the 47498844 retry loop observed live
+        on 2026-06-02 (UAT: every 5-min cooldown for ~90 min).
+        """
+        await _seed_gr_queue_row(
+            author_id="GR-DEAD", consecutive_failures=2,
+        )
+        async def _hard_404(author_id):
+            return (
+                None,
+                "Goodreads author GR-DEAD not found (HTTP 404 for ...)",
+                False, True,
+            )
+        monkeypatch.setattr(
+            metadata_cache_worker, "_perform_goodreads_scan", _hard_404,
+        )
+        sent: list[dict] = []
+        async def _capture_ntfy(**kwargs):
+            sent.append(kwargs)
+        monkeypatch.setattr(
+            metadata_cache_worker, "_send_ntfy", _capture_ntfy,
+        )
+
+        result = await metadata_cache_worker.tick_goodreads()
+        assert result.outcome == "hard_404"
+        assert result.author_id == "GR-DEAD"
+
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_GOODREADS)
+        try:
+            cur = await db.execute(
+                f"SELECT status, consecutive_failures FROM "
+                f"{metadata_cache.queue_table(metadata_cache.SOURCE_GOODREADS)} "
+                f"WHERE author_id = ?",
+                ("GR-DEAD",),
+            )
+            q = await cur.fetchone()
+            cur = await db.execute(
+                f"SELECT library_slug, last_outcome FROM "
+                f"{metadata_cache.state_table(metadata_cache.SOURCE_GOODREADS)} "
+                f"WHERE author_id = ?",
+                ("GR-DEAD",),
+            )
+            states = await cur.fetchall()
+        finally:
+            await db.close()
+        # Queue row: permanent, counter NOT incremented (404 skips
+        # the consecutive_failures ladder entirely).
+        assert q[0] == "failed_permanent"
+        assert q[1] == 2  # unchanged from seed value
+        # State rows: both libraries stamped unavailable_404.
+        assert {(s[0], s[1]) for s in states} == {
+            ("books-lib", "unavailable_404"),
+            ("audio-lib", "unavailable_404"),
+        }
+        # ntfy fired once with the GR-retired title.
+        assert len(sent) == 1
+        assert "404" in sent[0]["title"]
 
 
 class TestGoodreadsListPageInventory:
@@ -2130,6 +2198,51 @@ class TestGoodreadsListPageInventory:
         async def _raises(self, url, retries=2, **kwargs):
             raise RuntimeError("transport fail")
         monkeypatch.setattr(GoodreadsSource, "_get", _raises)
+
+        source = GoodreadsSource(rate_limit=0.0)
+        pages = await source.list_page_inventory("9")
+        assert pages is None
+
+    async def test_first_fetch_404_raises_author_not_found(self, monkeypatch):
+        """v3.6.1 — HTTP 404 must NOT fall through to the generic
+        `return None` path. It signals the GR author ID doesn't
+        exist, and the worker needs the distinct exception so it
+        can write a permanent stub instead of looping forever on
+        the cooldown ladder.
+        """
+        import httpx
+        from app.discovery.sources.goodreads import (
+            GoodreadsSource, GoodreadsAuthorNotFound,
+        )
+        async def _404(self, url, retries=2, **kwargs):
+            raise httpx.HTTPStatusError(
+                "HTTP 404 for /author/list/47498844",
+                request=httpx.Request("GET", url),
+                response=httpx.Response(404),
+            )
+        monkeypatch.setattr(GoodreadsSource, "_get", _404)
+
+        source = GoodreadsSource(rate_limit=0.0)
+        import pytest
+        with pytest.raises(GoodreadsAuthorNotFound) as exc_info:
+            await source.list_page_inventory("47498844")
+        assert exc_info.value.author_id == "47498844"
+
+    async def test_first_fetch_500_still_returns_none(self, monkeypatch):
+        """A 5xx error is NOT a permanent failure — it falls
+        through to the generic `return None` path (worker treats
+        it as a soft-block-class signal). Only 404 short-circuits
+        to GoodreadsAuthorNotFound.
+        """
+        import httpx
+        from app.discovery.sources.goodreads import GoodreadsSource
+        async def _500(self, url, retries=2, **kwargs):
+            raise httpx.HTTPStatusError(
+                "HTTP 503 for /author/list/9",
+                request=httpx.Request("GET", url),
+                response=httpx.Response(503),
+            )
+        monkeypatch.setattr(GoodreadsSource, "_get", _500)
 
         source = GoodreadsSource(rate_limit=0.0)
         pages = await source.list_page_inventory("9")

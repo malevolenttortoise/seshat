@@ -777,3 +777,65 @@ class TestSourceValidation:
     async def test_get_db_rejects_unknown_source(self, cache_under):
         with pytest.raises(ValueError, match="unknown metadata cache source"):
             await metadata_cache.get_db("hardcover")
+
+
+# ─── v3.6.1 — GR `unavailable_404` lookup helper ────────────────
+
+
+class TestIsGoodreadsIdKnownUnavailable:
+    """`is_goodreads_id_known_unavailable` — backfill's guard against
+    re-stamping a GR ID that the cache worker has retired with a
+    `unavailable_404` stub.
+    """
+
+    async def test_no_db_returns_false(self, cache_under):
+        # Fresh tmp_path; GR cache DB doesn't exist yet.
+        result = await metadata_cache.is_goodreads_id_known_unavailable("12345")
+        assert result is False
+
+    async def test_no_state_row_returns_false(self, cache_under):
+        await metadata_cache.init_db(metadata_cache.SOURCE_GOODREADS)
+        result = await metadata_cache.is_goodreads_id_known_unavailable("12345")
+        assert result is False
+
+    async def test_state_row_with_ok_outcome_returns_false(self, cache_under):
+        await metadata_cache.init_db(metadata_cache.SOURCE_GOODREADS)
+        import time
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_GOODREADS)
+        try:
+            await db.execute(
+                f"INSERT INTO "
+                f"{metadata_cache.state_table(metadata_cache.SOURCE_GOODREADS)} "
+                f"(author_id, library_slug, last_scanned_at, "
+                f" last_outcome, book_count) VALUES (?, ?, ?, ?, ?)",
+                ("12345", "books-lib", time.time(), "ok", 7),
+            )
+            await db.commit()
+        finally:
+            await db.close()
+        result = await metadata_cache.is_goodreads_id_known_unavailable("12345")
+        assert result is False
+
+    async def test_state_row_with_unavailable_404_returns_true(self, cache_under):
+        await metadata_cache.init_db(metadata_cache.SOURCE_GOODREADS)
+        import time
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_GOODREADS)
+        try:
+            await db.execute(
+                f"INSERT INTO "
+                f"{metadata_cache.state_table(metadata_cache.SOURCE_GOODREADS)} "
+                f"(author_id, library_slug, last_scanned_at, "
+                f" last_outcome, last_error, book_count) "
+                f"VALUES (?, ?, ?, ?, ?, ?)",
+                ("47498844", "books-lib", time.time(),
+                 "unavailable_404", "HTTP 404", 0),
+            )
+            await db.commit()
+        finally:
+            await db.close()
+        result = await metadata_cache.is_goodreads_id_known_unavailable(
+            "47498844",
+        )
+        assert result is True
+        # Empty / missing arg short-circuits to False without DB hit.
+        assert await metadata_cache.is_goodreads_id_known_unavailable("") is False

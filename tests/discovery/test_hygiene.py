@@ -314,6 +314,53 @@ class TestEmptyCleanup:
         assert gone is None
         assert stats["deleted_authors"] == 1
 
+    async def test_orphan_book_authors_pre_cleanup_prevents_fk_error(
+        self, hygiene_dbs,
+    ):
+        """v3.6.1 regression — `book_authors` rows whose `book_id`
+        references a non-existent book must be cleaned up BEFORE
+        the empty-author DELETE batch, otherwise the FK constraint
+        fires (`FOREIGN KEY constraint failed`).
+
+        Repro: an author has one `book_authors` row pointing at a
+        deleted book. The HAVING COUNT(b.id)=0 query still classes
+        the author as empty (LEFT JOIN to books gives NULL b.id).
+        Pre-v3.6.1 the subsequent `DELETE FROM authors` tripped FK
+        because the orphan book_authors row still pinned the author.
+
+        Observed live in hygiene on 2026-06-02 for abs-audio-library.
+        """
+        db = hygiene_dbs
+        ghost = await _insert_author(db, "Ghost Author")
+        # Insert an orphan book_authors row pointing at a book that
+        # was never inserted (book_id=99999 doesn't exist).
+        await db.execute(
+            "PRAGMA foreign_keys = OFF"
+        )
+        await db.execute(
+            "INSERT INTO book_authors (book_id, author_id, position) "
+            "VALUES (?, ?, 0)",
+            (99999, ghost),
+        )
+        await db.commit()
+        await db.execute("PRAGMA foreign_keys = ON")
+
+        stats = hygiene._zero_stats()
+        await hygiene.job_empty_cleanup("testlib", stats)
+
+        # No FK error logged.
+        assert stats["errors"] == []
+        # Ghost author deleted (now genuinely orphaned).
+        gone = await (await db.execute(
+            "SELECT id FROM authors WHERE id = ?", (ghost,),
+        )).fetchone()
+        assert gone is None
+        # The orphan book_authors row got cleaned up too.
+        leftover = await (await db.execute(
+            "SELECT COUNT(*) AS c FROM book_authors WHERE book_id = 99999"
+        )).fetchone()
+        assert leftover["c"] == 0
+
 
 # ─── Job 2 — Hardcover identifier backfill ──────────────────────────
 
