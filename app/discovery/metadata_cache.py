@@ -56,7 +56,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional
 
 import aiosqlite
 
@@ -710,6 +710,54 @@ async def backfill_goodreads_queue_from_authors(
     finally:
         await cache_db.close()
     return counts
+
+
+async def backfill_queues_for_library(
+    slug: str, *, settings: Optional[dict] = None,
+) -> dict[str, int]:
+    """Run both Amazon + Goodreads queue backfills against one library.
+
+    v3.6.2 — wired into the end-of-Calibre-sync and end-of-ABS-sync
+    hooks so newly-added authors land in the worker queues
+    immediately rather than waiting for the next container restart.
+    Idempotent (the underlying ``backfill_*_queue_from_authors``
+    functions use ``INSERT OR IGNORE`` on the queue PK), so safe to
+    call repeatedly. Best-effort: each source's failure is logged
+    and swallowed so a stale Goodreads enrichment can't tank Amazon
+    enqueuing (or vice versa).
+
+    Goodreads backfill is gated on the same
+    ``settings.metadata_cache.goodreads.mode != "disabled"`` check
+    used at startup so the call is a no-op when the operator hasn't
+    opted into GR caching.
+
+    Returns ``{"amazon": N, "goodreads": M}`` — N and M are the
+    counts of NEW queue rows enqueued (0 when nothing new).
+    """
+    from app import config as _app_config
+    s = settings or _app_config.load_settings()
+    out: dict[str, int] = {"amazon": 0, "goodreads": 0}
+    try:
+        amz_counts = await backfill_amazon_queue_from_authors([slug])
+        out["amazon"] = int(amz_counts.get(slug, 0) or 0)
+    except Exception:
+        _log.exception(
+            "backfill_queues_for_library[amazon][%s] failed (non-fatal)",
+            slug,
+        )
+    try:
+        gr_mode = (
+            (s.get("metadata_cache") or {}).get("goodreads") or {}
+        ).get("mode", "disabled")
+        if gr_mode != "disabled":
+            gr_counts = await backfill_goodreads_queue_from_authors([slug])
+            out["goodreads"] = int(gr_counts.get(slug, 0) or 0)
+    except Exception:
+        _log.exception(
+            "backfill_queues_for_library[goodreads][%s] failed (non-fatal)",
+            slug,
+        )
+    return out
 
 
 # ─── Read helpers (used by Database Manager surface + tests) ────

@@ -787,6 +787,55 @@ async def lifespan(app: FastAPI):
         settings.get("metadata_cache_daily_summary_hour", 9),
     )
 
+    # v3.6.2 — hourly metadata-cache queue catch-up.
+    # Belt-and-suspenders for the end-of-Calibre-sync /
+    # end-of-ABS-sync triggers added in calibre_sync.py /
+    # audiobookshelf_sync.py. Catches the gap where a source-ID
+    # gets resolved AFTER the sync completes (eg by a scheduled
+    # lookup hours later) or where the operator edits
+    # `authors.amazon_id` / `authors.goodreads_id` manually via
+    # Database Manager without re-syncing. Idempotent (INSERT OR
+    # IGNORE on queue PK), per-source failures swallowed inside
+    # `backfill_queues_for_library`.
+    async def _hourly_queue_backfill_job():
+        try:
+            slugs = [
+                l["slug"] for l in (state._discovered_libraries or [])
+                if l.get("slug")
+            ]
+            if not slugs:
+                return
+            from app.discovery import metadata_cache
+            totals = {"amazon": 0, "goodreads": 0}
+            for slug in slugs:
+                counts = await metadata_cache.backfill_queues_for_library(
+                    slug, settings=settings,
+                )
+                totals["amazon"] += counts.get("amazon", 0)
+                totals["goodreads"] += counts.get("goodreads", 0)
+            if totals["amazon"] or totals["goodreads"]:
+                _log.info(
+                    "Hourly queue catch-up: enqueued amazon=%d "
+                    "goodreads=%d across %d libraries",
+                    totals["amazon"], totals["goodreads"], len(slugs),
+                )
+        except Exception:
+            _log.exception(
+                "Hourly queue catch-up failed (non-fatal — next hour will retry)"
+            )
+
+    scheduler.add_job(
+        _hourly_queue_backfill_job,
+        "interval",
+        hours=1,
+        name="metadata-cache hourly queue catch-up",
+        coalesce=True,
+        max_instances=1,
+    )
+    _log.info(
+        "Hourly metadata-cache queue catch-up registered (every 1h)"
+    )
+
     # ── Discovery domain startup ─────────────────────────────
     # Library discovery, per-library DB init, initial Calibre sync.
     # This runs AFTER the pipeline startup so both domains are live

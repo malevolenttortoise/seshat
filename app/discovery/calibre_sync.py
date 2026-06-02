@@ -1389,6 +1389,32 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
                 "backfill task (non-fatal)"
             )
 
+        # v3.6.2 — enqueue newly-resolved Amazon + GR author IDs into
+        # the metadata-cache worker queues. Pre-v3.6.2 this only ran
+        # at container startup, so authors whose source IDs got
+        # populated between restarts were invisible to the workers
+        # until the next reboot. End-of-sync trigger closes that gap
+        # for the Calibre side. Idempotent (INSERT OR IGNORE on
+        # queue PK) so the call is cheap on no-change syncs.
+        try:
+            from app.discovery import metadata_cache
+            backfill_counts = await metadata_cache.backfill_queues_for_library(
+                slug,
+            )
+            if any(backfill_counts.values()):
+                logger.info(
+                    "Calibre sync: metadata-cache queues enqueued "
+                    "amazon=%d goodreads=%d for slug=%r",
+                    backfill_counts["amazon"],
+                    backfill_counts["goodreads"],
+                    slug,
+                )
+        except Exception:
+            logger.exception(
+                "Calibre sync: metadata-cache queue backfill failed "
+                "(non-fatal — hourly APScheduler job will catch up)"
+            )
+
         return {
             "books_found": books_found,
             "books_new": books_new,

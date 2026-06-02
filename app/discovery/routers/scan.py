@@ -435,11 +435,19 @@ def _project_mam() -> dict:
 def _project_hygiene() -> dict:
     """Project _hygiene_progress into the unified scan-status shape.
 
-    The Hygiene chain runs 6 sub-jobs; we expose its overall "job X
-    of 6" framing as `current` / `total` for the banner's main
-    progress bar, and stash per-job rolling stats in `extra.jobs`
-    so the dashboard can render a one-line "this run merged 12
-    books, +83 IDs" digest while running and after completion.
+    The Hygiene chain runs 12 sub-jobs (see `JOB_NAMES` in
+    `app/discovery/hygiene.py`); we expose its overall "job X of 12"
+    framing as `current` / `total` for the banner's main progress
+    bar, and stash per-job rolling stats in `extra.jobs` so the
+    dashboard can render a one-line "this run merged 12 books, +83
+    IDs" digest while running and after completion.
+
+    (The stale "6 sub-jobs" comment that lived here pre-v3.6.2 was
+    written when the chain only had Jobs 1-6 — Jobs 7-12 were added
+    incrementally across v2.20.0, v2.22.0, v2.27.0, v3.x ADR-0015
+    slice 05, and v3.x ADR-0016 slice 05. The runtime code always
+    read `total_jobs` from the coordinator so the count was correct,
+    but the comment misled readers.)
     """
     p = state._hygiene_progress
     return {
