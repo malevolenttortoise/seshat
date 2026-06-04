@@ -17,7 +17,7 @@ import time
 from fastapi import APIRouter, Body, HTTPException, Query
 
 from app import state
-from app.discovery.database import get_db, HF, cleanup_empty_series, attach_contributors
+from app.discovery.database import get_db, HF, cleanup_empty_series, attach_contributors, load_contributors
 from app.discovery.cross_library import (
     run_across_libraries,
     sort_and_paginate,
@@ -1232,6 +1232,119 @@ async def delete_book(bid: int, slug: str | None = Query(None)):
             await _recompute_series_author(db, [sid])
         await db.commit()
         return {"status": "ok"}
+    finally:
+        await db.close()
+
+
+@router.delete("/books/{bid}/contributors/{author_id}")
+async def remove_book_contributor(
+    bid: int,
+    author_id: int,
+    slug: str | None = Query(None),
+    replacement_author_id: int | None = Query(None),
+):
+    """Remove one contributor (author) from a book's byline.
+
+    A book's authors live in `book_authors` (position 0 = primary,
+    1..N = co-authors). Removing a contributor deletes its row and
+    re-densifies the survivors' positions so there's never a gap or a
+    duplicate position-0 — two position-0 rows is exactly the corruption
+    that makes a single book render twice on each author's detail page
+    (the detail query joins `book_authors` a second time on position=0
+    to find the primary, so two "primaries" fan the row out).
+
+    Roles are preserved: the renumber re-reads each survivor's `role`
+    rather than going through `write_book_authors` (which would reset
+    every role to NULL).
+
+    Last-author guard: a book must keep at least one author. If
+    `author_id` is the sole contributor, the caller must pass
+    `replacement_author_id` (an author in the SAME library) to swap in;
+    otherwise we 409 with `{"code": "last_author"}` so the UI can prompt
+    for a replacement.
+
+    `slug` routes the per-library books table (ADR-0002 — the same
+    numeric id can exist in two libraries).
+
+    A removed author left with zero books becomes an orphan and is
+    hard-purged (author row + global author_links + orphaned person) by
+    the hourly hygiene `empty-cleanup` job. `removed_author_orphaned`
+    signals this so the UI can say the author will be cleaned up.
+    """
+    db = await get_db(slug)
+    try:
+        book = await (await db.execute(
+            "SELECT id FROM books WHERE id=?", (bid,),
+        )).fetchone()
+        if not book:
+            raise HTTPException(404, "Book not found")
+        rows = await (await db.execute(
+            "SELECT author_id, role FROM book_authors WHERE book_id=? "
+            "ORDER BY position",
+            (bid,),
+        )).fetchall()
+        current = [r["author_id"] for r in rows]
+        if author_id not in current:
+            raise HTTPException(
+                404, "That author is not a contributor of this book")
+
+        if len(current) == 1:
+            # Sole author — refuse to leave the book authorless; a
+            # replacement is mandatory.
+            if replacement_author_id is None:
+                raise HTTPException(409, detail={
+                    "code": "last_author",
+                    "message": (
+                        "This is the book's only author. Pick a "
+                        "replacement author to keep the book attributed."
+                    ),
+                })
+            if replacement_author_id == author_id:
+                raise HTTPException(
+                    400, "Replacement author must differ from the one removed")
+            rep = await (await db.execute(
+                "SELECT id FROM authors WHERE id=?",
+                (replacement_author_id,),
+            )).fetchone()
+            if not rep:
+                raise HTTPException(
+                    404, "Replacement author not found in this library")
+            await db.execute(
+                "DELETE FROM book_authors WHERE book_id=?", (bid,))
+            await db.execute(
+                "INSERT INTO book_authors "
+                "(book_id, author_id, position, role) VALUES (?, ?, 0, NULL)",
+                (bid, replacement_author_id),
+            )
+        else:
+            # Drop the one row, then renumber survivors 0..N-1 keeping
+            # their existing roles and relative order.
+            survivors = [
+                (r["author_id"], r["role"]) for r in rows
+                if r["author_id"] != author_id
+            ]
+            await db.execute(
+                "DELETE FROM book_authors WHERE book_id=?", (bid,))
+            for pos, (aid, role) in enumerate(survivors):
+                await db.execute(
+                    "INSERT INTO book_authors "
+                    "(book_id, author_id, position, role) VALUES (?, ?, ?, ?)",
+                    (bid, aid, pos, role),
+                )
+        await db.commit()
+
+        # Is the removed author now bookless in this library? (Signals
+        # the hourly hygiene orphan purge will sweep it.)
+        left = await (await db.execute(
+            "SELECT COUNT(*) AS n FROM book_authors WHERE author_id=?",
+            (author_id,),
+        )).fetchone()
+        contribs = await load_contributors(db, [bid])
+        return {
+            "status": "ok",
+            "contributors": contribs.get(bid, []),
+            "removed_author_orphaned": left["n"] == 0,
+        }
     finally:
         await db.close()
 

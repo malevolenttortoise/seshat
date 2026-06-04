@@ -384,6 +384,42 @@ async def _author_detail_for_slug(slug: str, aid: int) -> Optional[dict]:
         await db.close()
 
 
+@router.get("/authors/search")
+async def search_authors(
+    q: str = Query(...),
+    slug: Optional[str] = Query(None),
+    limit: int = Query(15),
+):
+    """Lightweight slug-scoped author typeahead.
+
+    Returns ``[{id, name}]`` from a SINGLE library (the one named by
+    ``slug``, else the active library) so the returned ``id`` is a valid
+    ``book_authors.author_id`` FK target for that library. This is what
+    the contributor "replace last author" picker hits — distinct from
+    ``GET /authors`` (paginated, cross-library-mergeable) whose ids can't
+    be assumed to live in any one library's table.
+
+    Declared BEFORE ``/authors/{aid}`` on purpose: ``aid`` is typed
+    ``int``, so a later-declared ``/authors/search`` would be shadowed
+    and 422 on the "search" segment.
+    """
+    term = (q or "").strip()
+    if not term:
+        return {"authors": []}
+    n = max(1, min(limit, 50))
+    db = await get_db(slug)
+    try:
+        rows = await (await db.execute(
+            "SELECT id, name FROM authors WHERE name LIKE ? "
+            # Prefix matches first, then alphabetical by sort_name.
+            "ORDER BY (name LIKE ?) DESC, sort_name ASC, name ASC LIMIT ?",
+            (f"%{term}%", f"{term}%", n),
+        )).fetchall()
+        return {"authors": [{"id": r["id"], "name": r["name"]} for r in rows]}
+    finally:
+        await db.close()
+
+
 @router.get("/authors/{aid}")
 async def get_author(aid: int, include_cross_library: bool = False, slug: Optional[str] = None):
     """Return an author's detail (series + standalone + stats).

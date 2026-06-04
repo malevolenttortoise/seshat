@@ -24,11 +24,13 @@ import { SBRow } from "./SBRow";
 import { BufferInsufficientBanner } from "./BufferInsufficientBanner";
 import { CompareModal } from "./CompareModal";
 import { MergeBookModal } from "./MergeBookModal";
+import { ReplaceAuthorModal } from "./ReplaceAuthorModal";
 import { economyApi, type PreflightResponse } from "../lib/economyApi";
 import type {
   Book,
   BookAction,
   BookActionHandler,
+  Contributor,
   MamStatusResponse,
   WorkSibling,
 } from "../types";
@@ -174,6 +176,65 @@ export function BookSidebar({
   const [editing, setEditing] = useState(false);
   const [compareOpen, setCompareOpen] = useState(false);
   const [mergeOpen, setMergeOpen] = useState(false);
+  // Contributor editing — a local copy of the byline so removals reflect
+  // instantly without waiting on the parent list refresh. `removingId`
+  // drives the per-chip spinner; `replaceTarget` opens the
+  // last-author replacement modal.
+  const [contribs, setContribs] = useState<Contributor[]>(
+    book.contributors ?? [],
+  );
+  const [removingId, setRemovingId] = useState<number | null>(null);
+  const [replaceTarget, setReplaceTarget] = useState<Contributor | null>(null);
+  // Re-seed when a different book is selected into the same sidebar
+  // instance (the parent reuses one BookSidebar and swaps `book`).
+  useEffect(() => {
+    setContribs(book.contributors ?? []);
+    setReplaceTarget(null);
+    setRemovingId(null);
+  }, [book.id, book.library_slug, book.contributors]);
+
+  // DELETE one contributor. With >1 author it removes immediately; with
+  // exactly 1 it opens the replacement modal (the backend refuses to
+  // leave a book authorless). `replacementId` is supplied only from the
+  // modal path.
+  const removeContributor = async (c: Contributor, replacementId?: number) => {
+    if (contribs.length <= 1 && replacementId === undefined) {
+      setReplaceTarget(c);
+      return;
+    }
+    setRemovingId(c.author_id);
+    try {
+      const repQs =
+        replacementId !== undefined
+          ? `${slugQs ? "&" : "?"}replacement_author_id=${replacementId}`
+          : "";
+      const res = await api.del<{
+        contributors: Contributor[];
+        removed_author_orphaned: boolean;
+      }>(`/discovery/books/${book.id}/contributors/${c.author_id}${slugQs}${repQs}`);
+      setContribs(res.contributors);
+      setReplaceTarget(null);
+      toast.success(
+        res.removed_author_orphaned
+          ? `Removed ${c.name} — now-empty author will be cleaned up automatically`
+          : `Removed ${c.name} from this book`,
+      );
+      // Refresh the parent list/counts (byline, author totals) in the
+      // background — the local `contribs` already updated the sidebar.
+      if (onEdit) {
+        Promise.resolve(onEdit()).catch(() => {
+          /* background refresh — surfaces on parent list */
+        });
+      }
+    } catch (e) {
+      toast.error(
+        `Remove failed: ${e instanceof Error ? e.message : String(e)}`,
+      );
+      throw e; // let the modal surface it too
+    } finally {
+      setRemovingId(null);
+    }
+  };
   const [ef, setEf] = useState<EditFields>({
     title: "",
     description: "",
@@ -983,18 +1044,79 @@ export function BookSidebar({
         {/* v3.0.0: show the full contributor set (position order), not
             just the primary. Falls back to author_name on stale payloads
             with no contributors[]. */}
+        {/* v3.x — contributors are individually removable. Each is a
+            chip with an × ; with >1 author the removal is immediate
+            (after a confirm), with exactly 1 it opens the replacement
+            modal since a book can't be left authorless. */}
         <SBRow
-          label={(book.contributors?.length ?? 0) > 1 ? "Authors" : "Author"}
+          label={contribs.length > 1 ? "Authors" : "Author"}
           value={
-            book.contributors && book.contributors.length
-              ? book.contributors.map((c, i) => (
-                  <span key={`${c.author_id}-${c.position}`}>
-                    {i > 0 ? ", " : ""}
+            contribs.length ? (
+              <span
+                style={{
+                  display: "inline-flex",
+                  flexWrap: "wrap",
+                  gap: 6,
+                  justifyContent: "flex-end",
+                }}
+              >
+                {contribs.map((c) => (
+                  <span
+                    key={`${c.author_id}-${c.position}`}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 4,
+                      padding: "1px 4px 1px 8px",
+                      background: t.bg4,
+                      border: `1px solid ${t.border}`,
+                      borderRadius: 11,
+                      fontSize: 12,
+                      lineHeight: 1.5,
+                    }}
+                  >
                     {c.name}
-                    {c.role ? ` (${c.role})` : ""}
+                    {c.role ? <span style={{ color: t.td }}>({c.role})</span> : null}
+                    <button
+                      title={`Remove ${c.name} from this book`}
+                      aria-label={`Remove ${c.name}`}
+                      disabled={removingId !== null}
+                      onClick={() => {
+                        if (
+                          contribs.length > 1 &&
+                          !window.confirm(
+                            `Remove ${c.name} from "${book.title}"?`,
+                          )
+                        )
+                          return;
+                        removeContributor(c).catch(() => {
+                          /* toast already surfaced in handler */
+                        });
+                      }}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        width: 15,
+                        height: 15,
+                        padding: 0,
+                        borderRadius: "50%",
+                        border: "none",
+                        background: "none",
+                        color: t.red,
+                        cursor: removingId !== null ? "default" : "pointer",
+                        fontSize: 14,
+                        opacity: removingId === c.author_id ? 0.4 : 0.8,
+                      }}
+                    >
+                      ×
+                    </button>
                   </span>
-                ))
-              : book.author_name
+                ))}
+              </span>
+            ) : (
+              book.author_name
+            )
           }
         />
 
@@ -2334,6 +2456,19 @@ export function BookSidebar({
             }
             onClose();
           }}
+        />
+      ) : null}
+
+      {replaceTarget ? (
+        <ReplaceAuthorModal
+          bookTitle={book.title}
+          slug={book.library_slug}
+          removingName={replaceTarget.name}
+          removingAuthorId={replaceTarget.author_id}
+          onCancel={() => setReplaceTarget(null)}
+          onConfirm={(replacementId) =>
+            removeContributor(replaceTarget, replacementId)
+          }
         />
       ) : null}
     </div>
