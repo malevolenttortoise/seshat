@@ -32,6 +32,7 @@ import { SourceBadgeRow } from "../components/SourceBadgeRow";
 import { AuthorCacheStatusBadge } from "../components/AuthorCacheStatusBadge";
 import { GoodreadsAuthorCacheStatusBadge } from "../components/GoodreadsAuthorCacheStatusBadge";
 import { useViewport } from "../hooks/useViewport";
+import { useScanPolling } from "../hooks/useScanPolling";
 import { useMobileCodepath } from "../components/mobile";
 import MobileAuthorDetailPage from "./MobileAuthorDetailPage";
 import type {
@@ -44,7 +45,6 @@ import type {
   NavFn,
   PenNameLink,
   PenNamesResponse,
-  ScanStatusResponse,
   Series,
 } from "../types";
 
@@ -805,53 +805,21 @@ function DesktopAuthorDetailPage({
   const scanEbookSources = () => _crossLibraryAuthorScan("ebook");
   const scanAudiobookSources = () => _crossLibraryAuthorScan("audiobook");
 
-  // v2.14.0 — page-local scan-completion poll. UAT 2026-05-14 surfaced
-  // that after triggering an audiobook scan, this page didn't refresh
-  // when the scan finished: spinners stayed up and newly-merged books
-  // didn't appear until manual reload. Root cause: the prior
-  // implementation listened for `seshat:scan-completed`, but that
-  // event is never dispatched anywhere in the frontend — the
-  // app-wide unified poller it referenced only runs while the user
-  // is on the Dashboard.
-  //
-  // Fix: poll `/discovery/scan-status` directly while on this page
-  // (3s cadence, mirrors `DiscBooksPage`'s MAM-scan poller). On a
-  // running→idle transition for `lookup` or `mam`, clear the
-  // corresponding local spinner state, call `loadA()` to refresh the
-  // author + book data, and bump `rk` so child series components
-  // re-mount with fresh keys.
-  useEffect(() => {
-    let active = true;
-    let prevLookup = false;
-    let prevMam = false;
-    const tick = async () => {
-      try {
-        const r = await api.get<ScanStatusResponse>("/discovery/scan-status");
-        if (!active) return;
-        const scans = r.scans || [];
-        const lookupRunning = scans.some((s) => s.kind === "lookup" && s.running);
-        const mamRunning = scans.some((s) => s.kind === "mam" && s.running);
-        const lookupDone = prevLookup && !lookupRunning;
-        const mamDone = prevMam && !mamRunning;
-        if (lookupDone || mamDone) {
-          if (lookupDone) setRef(false);
-          if (mamDone) setMamRef(false);
-          loadA();
-          setRk((k) => k + 1);
-        }
-        prevLookup = lookupRunning;
-        prevMam = mamRunning;
-      } catch {
-        /* ignore — scan-status is non-critical */
-      }
-    };
-    tick();
-    const id = window.setInterval(tick, 3000);
-    return () => {
-      active = false;
-      window.clearInterval(id);
-    };
-  }, [loadA]);
+  // v2.14.0 — page-local scan-completion poll (shared with the mobile
+  // twin via useScanPolling). After triggering a scan this page must
+  // refresh when it finishes, else spinners stay up and newly-merged
+  // books don't appear until manual reload. On a lookup/mam running→idle
+  // edge: clear the matching spinner, reload the author + books, and
+  // bump `rk` so child series components re-mount with fresh keys.
+  useScanPolling({
+    kinds: ["lookup", "mam"],
+    onComplete: (kind) => {
+      if (kind === "lookup") setRef(false);
+      if (kind === "mam") setMamRef(false);
+      loadA();
+      setRk((k) => k + 1);
+    },
+  });
 
   const onAction = async (act: BookAction, id: number, slug?: string) => {
     const scrollY = window.scrollY;
