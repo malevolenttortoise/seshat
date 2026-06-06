@@ -227,6 +227,20 @@ _JITTER_MAX_S = 90.0
 # we don't spin a CPU loop checking for new work.
 _IDLE_SLEEP_S = 60.0
 
+# Hard cap on any single inter-iteration sleep. A tick stamps the
+# heartbeat at its top; if the loop sleeps a full cooldown (up to
+# 3600s) or a circuit-breaker rest (hours) in one `asyncio.sleep`,
+# the heartbeat goes stale and the stall watchdog pages a FALSE
+# "stalled" alert for a worker that's healthily waiting. Capping the
+# sleep below the stall threshold (default 300s) means the loop
+# re-ticks, re-stamps the heartbeat, re-checks its gates (cooldown /
+# circuit-breaker / schedule still cheaply short-circuit), and sleeps
+# again — so a genuine task death is still detected within ~150s even
+# mid-cooldown, while a healthy wait never false-pages. 150s = half
+# the default threshold, leaving margin for tick duration + watchdog
+# jitter.
+_MAX_SLEEP_BETWEEN_HEARTBEATS_S = 150.0
+
 # When the cooldown is engaged, sleep until it clears (capped so a
 # parse error in cooldown math can't deadlock the worker).
 _COOLDOWN_MAX_SLEEP_S = 3600.0
@@ -242,6 +256,36 @@ _NORMAL_RESCAN_CADENCE_S = 7 * 24 * 3600.0
 # top tier sticks.
 _ESCALATION_TIERS_S: tuple[float, ...] = (600.0, 1800.0, 3600.0)
 _ESCALATION_RESET_WINDOW_S = 3600.0  # 1h blockless → reset counter
+
+# Circuit breaker. The escalation tiers cap at 3600s, but a single
+# soft-block trips the whole global cooldown and the worker only
+# samples one author per cooldown cycle — so against a *probationary*
+# IP (some requests pass, some get shimmed) the worker oscillates:
+# it re-trips on the occasional bad request far more often than it can
+# string together the 1h-blockless gap needed to reset escalation, and
+# every hourly poke feeds Akamai another bad signal that prevents the
+# reputation from decaying. Once `consecutive_blocks` reaches this
+# threshold — i.e. we've climbed 600→1800→3600 and STILL got blocked
+# again at the top tier — that's a genuine wall, not a blip. The
+# worker stops probing and rests: one long uninterrupted quiet
+# (longer than any cooldown tier can express) so the IP can cool, then
+# auto-resumes. This is the manual "disable the worker for a while"
+# remediation, automated.
+#
+# The rest length is staged so a stubborn wall escalates the backoff:
+#   - scheduled mode, first trip (or first trip since a clean recovery):
+#       rest `_CIRCUIT_BREAKER_STAGE1_REST_S` (a few hours), then resume.
+#   - scheduled mode, tripped AGAIN before any successful scan since the
+#       last trip ("armed"): give up for the day — rest until the next
+#       window-open (handled by `_seconds_until_next_window_open`).
+#   - continuous mode: flat `_CIRCUIT_BREAKER_REST_S` every trip (no
+#       schedule to fall back to).
+# The "armed" flag (worker_state.circuit_breaker_armed) is set on a
+# trip and cleared on the next successful scan, so a genuine recovery
+# resets the staging — a later, unrelated wall starts at stage 1 again.
+_CIRCUIT_BREAKER_TRIP_CONSECUTIVE = 4
+_CIRCUIT_BREAKER_STAGE1_REST_S = 4 * 3600.0   # scheduled: first rest
+_CIRCUIT_BREAKER_REST_S = 6 * 3600.0          # continuous: flat rest
 
 # A queue row with this many consecutive failures becomes
 # `failed_permanent` and surfaces in the Database Manager triage
@@ -277,6 +321,12 @@ class TickResult:
       - "no_libraries"     — pre-setup state
       - "soft_block"       — scan tripped the cooldown (worker bumped
                              its own queue row)
+      - "circuit_breaker"  — consecutive top-tier soft-blocks crossed
+                             `_CIRCUIT_BREAKER_TRIP_CONSECUTIVE`; the
+                             worker is resting for hours (staged via
+                             the armed flag) so the IP can recover, and
+                             will auto-resume. Also returned by the
+                             pre-queue gate while a rest is in effect.
       - "permanent_fail"   — author hit the consecutive-failure cap
       - "hard_404"         — Goodreads returned HTTP 404; queue row
                              flipped directly to failed_permanent
@@ -459,6 +509,41 @@ def seconds_until_window_open(source_name: str) -> float:
     return float(delta)
 
 
+def _seconds_until_next_window_open(source_name: str) -> float:
+    """Seconds until the NEXT window-open strictly in the future.
+
+    Unlike `seconds_until_window_open`, this does NOT return 0 when the
+    worker is currently inside its window — it always points at the
+    next opening. The circuit breaker uses it to rest "until the next
+    day's schedule" after a repeat wall: tripped at 14:00 inside a
+    10:00-22:00 window, it returns ~20h (tomorrow's 10:00).
+
+    Falls back to `_CIRCUIT_BREAKER_REST_S` when the worker isn't in
+    scheduled mode or the active-hours spec doesn't parse — so a
+    continuous-mode breaker or a typo'd window still gets a sane long
+    rest instead of 0.
+    """
+    if get_worker_mode(source_name) != "scheduled":
+        return _CIRCUIT_BREAKER_REST_S
+    mc = _source_settings(source_name)
+    schedule = mc.get("schedule") or {}
+    spec = schedule.get("active_hours") or "10:00-22:00"
+    parsed = _parse_active_hours(spec)
+    if parsed is None:
+        return _CIRCUIT_BREAKER_REST_S
+    start_h, start_m, _, _ = parsed
+    now = _resolve_local_now(schedule.get("timezone") or "")
+    today_start = now.replace(
+        hour=start_h, minute=start_m, second=0, microsecond=0,
+    )
+    delta = (today_start - now).total_seconds()
+    if delta <= 0:
+        # Today's open is in the past (we're inside the window or after
+        # it) — next open is tomorrow's same time.
+        delta += 24 * 3600
+    return float(delta)
+
+
 def _library_content_type(library_slug: str) -> str:
     """Map a library slug to its `content_type` (`"ebook"` /
     `"audiobook"`). Reads from `state._discovered_libraries`; falls
@@ -583,6 +668,82 @@ async def _record_block_in_worker_state(
     )
     await db.commit()
     return new_consecutive
+
+
+async def _read_circuit_breaker(
+    db: aiosqlite.Connection, source_name: str,
+) -> tuple[float, bool]:
+    """Return `(circuit_breaker_until, armed)` from the worker_state
+    row. Defensive: returns `(0.0, False)` if the columns are missing
+    (pre-v3 schema, e.g. mid-migration) or the row is absent, so the
+    worker degrades to "breaker never engaged" rather than crashing."""
+    table = metadata_cache.worker_state_table(source_name)
+    try:
+        cur = await db.execute(
+            f"SELECT circuit_breaker_until, circuit_breaker_armed "
+            f"FROM {table} WHERE id = 1"
+        )
+        row = await cur.fetchone()
+    except Exception:
+        return 0.0, False
+    if row is None:
+        return 0.0, False
+    return float(row[0] or 0.0), bool(row[1] or 0)
+
+
+async def _read_circuit_breaker_safe(
+    source_name: str,
+) -> tuple[float, bool]:
+    """Connection-owning, never-raising variant of
+    `_read_circuit_breaker` for the tick's pre-queue gate (which runs
+    before the main db handle is opened). On any error returns
+    `(0.0, False)` so a transient DB hiccup can't strand the worker in
+    a phantom breaker rest."""
+    try:
+        db = await metadata_cache.get_db(source_name)
+        try:
+            return await _read_circuit_breaker(db, source_name)
+        finally:
+            await db.close()
+    except Exception:
+        logger.debug(
+            "metadata_cache_worker: circuit-breaker read failed "
+            "(non-fatal — treating as not engaged)",
+            exc_info=True,
+        )
+        return 0.0, False
+
+
+async def _engage_circuit_breaker(
+    db: aiosqlite.Connection, source_name: str, *, until_ts: float,
+) -> None:
+    """Trip the breaker: stamp the rest-until timestamp, arm the flag,
+    and clear `consecutive_blocks` (the long rest supersedes the
+    escalation ladder — when the worker resumes it starts a fresh
+    ladder)."""
+    table = metadata_cache.worker_state_table(source_name)
+    await db.execute(
+        f"UPDATE {table} SET circuit_breaker_until = ?, "
+        f"    circuit_breaker_armed = 1, consecutive_blocks = 0 "
+        f"WHERE id = 1",
+        (until_ts,),
+    )
+    await db.commit()
+
+
+async def _disarm_circuit_breaker(
+    db: aiosqlite.Connection, source_name: str,
+) -> None:
+    """Clear the armed flag after a successful scan. This marks the
+    current incident as recovered, so the next independent wall starts
+    at the short stage-1 rest again instead of the rest-until-window
+    escalation. Leaves `circuit_breaker_until` untouched (it's already
+    in the past once the worker is scanning again)."""
+    table = metadata_cache.worker_state_table(source_name)
+    await db.execute(
+        f"UPDATE {table} SET circuit_breaker_armed = 0 WHERE id = 1"
+    )
+    await db.commit()
 
 
 async def _record_scan_completed(
@@ -1603,6 +1764,21 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
             next_sleep_s=sleep_s,
         )
 
+    # Circuit-breaker gate. After a genuine wall (top-tier escalation
+    # tripped N times) the worker rests for hours so the IP reputation
+    # can decay; until then it makes NO Amazon requests. Checked before
+    # the cooldown gate because the breaker rest is the longer, binding
+    # constraint. The loop's sleep cap keeps the heartbeat fresh during
+    # the rest, so this long wait never trips the stall watchdog.
+    cb_until, _cb_armed = await _read_circuit_breaker_safe(source_name)
+    if cb_until > now:
+        remaining = cb_until - now
+        return TickResult(
+            source_name=source_name, outcome="circuit_breaker",
+            cooldown_remaining_s=remaining,
+            next_sleep_s=min(remaining + 1.0, _COOLDOWN_MAX_SLEEP_S),
+        )
+
     # Cooldown gate — shared with the resolver / live AmazonSource. If
     # `record_amazon_soft_block` was triggered by anything in this
     # process (or persisted across restart in v2.20.3), we honor it.
@@ -1693,6 +1869,13 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
     # `record_amazon_soft_block`; treat that as a soft-block outcome.
     if is_amazon_blocked():
         cooldown_s = amazon_block_remaining_s()
+        mode = get_worker_mode(source_name)
+        # Filled inside the transaction so the post-commit logging /
+        # ntfy / return can branch on whether the breaker tripped.
+        breaker_tripped = False
+        breaker_armed = False
+        breaker_until = 0.0
+        rest_s = 0.0
         db = await metadata_cache.get_db(source_name)
         try:
             consecutive = await _record_block_in_worker_state(
@@ -1711,16 +1894,86 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
                     retry_after_s=escalated_s,
                 )
                 cooldown_s = escalated_s
-            # Defer queue row past the cooldown; not a failure.
-            await _mark_queue_row_pending(
-                db, source_name,
-                author_id=author_id,
-                next_scan_due_at=now + cooldown_s + 60.0,
-                reset_failures=True,
-            )
+
+            # Circuit breaker: once we've climbed to the top tier and
+            # STILL get blocked again, the IP is genuinely walled, not
+            # probationary. Stop probing and rest for hours so the
+            # reputation can decay (the global cooldown caps at 1h, too
+            # short to break the poke-while-hot oscillation). The rest
+            # is staged via the `armed` flag — see the constant comment.
+            breaker_tripped = consecutive >= _CIRCUIT_BREAKER_TRIP_CONSECUTIVE
+            if breaker_tripped:
+                _, breaker_armed = await _read_circuit_breaker(db, source_name)
+                if mode == "scheduled":
+                    rest_s = (
+                        _seconds_until_next_window_open(source_name)
+                        if breaker_armed
+                        else _CIRCUIT_BREAKER_STAGE1_REST_S
+                    )
+                else:
+                    rest_s = _CIRCUIT_BREAKER_REST_S
+                breaker_until = now + rest_s
+                await _engage_circuit_breaker(
+                    db, source_name, until_ts=breaker_until,
+                )
+                # Defer the queue row past the whole rest so it can't
+                # re-pop even if the breaker state is later cleared.
+                await _mark_queue_row_pending(
+                    db, source_name,
+                    author_id=author_id,
+                    next_scan_due_at=breaker_until + 60.0,
+                    reset_failures=True,
+                )
+            else:
+                # Defer queue row past the cooldown; not a failure.
+                await _mark_queue_row_pending(
+                    db, source_name,
+                    author_id=author_id,
+                    next_scan_due_at=now + cooldown_s + 60.0,
+                    reset_failures=True,
+                )
         finally:
             await db.close()
         elapsed_ms = (time.time() - started_at) * 1000.0
+
+        if breaker_tripped:
+            rest_kind = (
+                "until_next_window"
+                if (mode == "scheduled" and breaker_armed)
+                else "stage1" if mode == "scheduled"
+                else "continuous"
+            )
+            scan_log.warning(
+                "[scan] %s",
+                _format_fields(
+                    author=author_id, outcome="circuit_breaker",
+                    consecutive=consecutive, rest_s=rest_s,
+                    rest_kind=rest_kind, elapsed_ms=elapsed_ms,
+                ),
+            )
+            hours = rest_s / 3600.0
+            await _send_ntfy(
+                event_key="metadata_cache_warning",
+                title="Amazon worker — circuit breaker tripped",
+                message=(
+                    f"Author {author_id} hit consecutive soft-block "
+                    f"#{consecutive} at the top cooldown tier — the IP "
+                    f"looks genuinely walled, not just rate-limited. "
+                    f"Pausing all Amazon scans for ~{hours:.1f}h "
+                    f"({rest_kind}) so the reputation can recover, then "
+                    "resuming automatically."
+                ),
+                priority=4,
+                tags=["warning", "no_entry"],
+            )
+            return TickResult(
+                source_name=source_name, outcome="circuit_breaker",
+                author_id=author_id,
+                queue_size=queue_size, cooldown_remaining_s=rest_s,
+                next_sleep_s=min(rest_s + 1.0, _COOLDOWN_MAX_SLEEP_S),
+                elapsed_ms=elapsed_ms,
+            )
+
         scan_log.warning(
             "[scan] %s",
             _format_fields(
@@ -1878,6 +2131,10 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
                 reset_failures=True,
             )
             await _record_scan_completed(db, source_name, now)
+            # A successful scan = the IP recovered. Disarm the circuit
+            # breaker so a later, unrelated wall starts at the short
+            # stage-1 rest rather than the rest-until-window escalation.
+            await _disarm_circuit_breaker(db, source_name)
         finally:
             await db.close()
     except Exception as exc:
@@ -2433,16 +2690,23 @@ async def run_loop(
             )
             return
 
+        # Cap the sleep so the heartbeat (stamped at the top of every
+        # tick) never goes stale during a long cooldown / circuit-
+        # breaker rest. The gate it's waiting on (cooldown expiry,
+        # breaker rest, schedule window) short-circuits cheaply on the
+        # re-tick, so this just keeps the worker observable — it does
+        # not shorten the actual wait.
+        sleep_for = min(result.next_sleep_s, _MAX_SLEEP_BETWEEN_HEARTBEATS_S)
         try:
             if stop_event is not None:
                 await asyncio.wait_for(
-                    stop_event.wait(), timeout=result.next_sleep_s,
+                    stop_event.wait(), timeout=sleep_for,
                 )
                 logger.info(
                     "metadata_cache_worker: stop_event during sleep, exiting"
                 )
                 return
             else:
-                await asyncio.sleep(result.next_sleep_s)
+                await asyncio.sleep(sleep_for)
         except asyncio.TimeoutError:
             continue

@@ -2346,3 +2346,229 @@ class TestGoodreadsBudgetExhaustCounter:
         assert "Budget exhausts: 2" in body
         # GR-specific title.
         assert "Goodreads" in summaries[-1]["title"]
+
+
+# ─── Circuit breaker (Amazon wall recovery) ─────────────────────
+
+
+async def _set_consecutive_blocks(n: int, *, last_block_at: float | None = None) -> None:
+    """Pre-stamp worker_state so the next soft-block becomes block #(n+1)
+    in-window (drives the escalation/breaker thresholds deterministically)."""
+    db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+    try:
+        await db.execute(
+            f"UPDATE {metadata_cache.worker_state_table()} "
+            f"SET last_block_at = ?, consecutive_blocks = ? WHERE id = 1",
+            (last_block_at if last_block_at is not None else time.time(), n),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def _read_breaker() -> tuple[float, int]:
+    db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+    try:
+        cur = await db.execute(
+            f"SELECT circuit_breaker_until, circuit_breaker_armed "
+            f"FROM {metadata_cache.worker_state_table()} WHERE id = 1"
+        )
+        row = await cur.fetchone()
+    finally:
+        await db.close()
+    return float(row[0] or 0.0), int(row[1] or 0)
+
+
+def _softblock_scan():
+    """A `_perform_amazon_scan` stub that trips a tier-1 soft-block."""
+    async def _fake_scan(author_id, session):
+        from app.discovery import amazon_author_id_resolver as r
+        r.record_amazon_soft_block("fake wall during test", retry_after_s=600)
+        return None, "HTTP 429 (fake)"
+    return _fake_scan
+
+
+class TestCircuitBreaker:
+    async def test_migration_added_breaker_columns(self, worker_under):
+        # Both new columns exist after init_db ran in the fixture.
+        until, armed = await _read_breaker()
+        assert until == 0.0 and armed == 0
+
+    async def test_trips_at_threshold_continuous_6h(
+        self, worker_under, monkeypatch,
+    ):
+        # Continuous mode (fixture default: enabled=True, no mode key).
+        # Pre-stamp 3 consecutive blocks so this scan is block #4 = trip.
+        await _set_consecutive_blocks(3)
+        monkeypatch.setattr(
+            metadata_cache_worker, "_perform_amazon_scan", _softblock_scan(),
+        )
+        await _seed_queue_row(author_id="B0BREAK001")
+        now = time.time()
+        result = await metadata_cache_worker.tick()
+        assert result.outcome == "circuit_breaker"
+        until, armed = await _read_breaker()
+        # ~6h rest, armed, escalation counter reset.
+        assert abs(until - (now + metadata_cache_worker._CIRCUIT_BREAKER_REST_S)) < 120
+        assert armed == 1
+        # Queue row deferred past the whole rest.
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+        try:
+            cur = await db.execute(
+                f"SELECT next_scan_due_at, status FROM "
+                f"{metadata_cache.queue_table()} WHERE author_id = ?",
+                ("B0BREAK001",),
+            )
+            q = await cur.fetchone()
+        finally:
+            await db.close()
+        assert q[1] == "pending"
+        assert q[0] > now + metadata_cache_worker._CIRCUIT_BREAKER_REST_S
+
+    async def test_gate_skips_scan_while_resting(
+        self, worker_under, monkeypatch,
+    ):
+        # Breaker resting in the future → tick must NOT scan.
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+        try:
+            await db.execute(
+                f"UPDATE {metadata_cache.worker_state_table()} "
+                f"SET circuit_breaker_until = ? WHERE id = 1",
+                (time.time() + 1000.0,),
+            )
+            await db.commit()
+        finally:
+            await db.close()
+        scanned = {"called": False}
+        async def _fake_scan(author_id, session):
+            scanned["called"] = True
+            return None, "should not run"
+        monkeypatch.setattr(
+            metadata_cache_worker, "_perform_amazon_scan", _fake_scan,
+        )
+        await _seed_queue_row(author_id="B0BREAK002")
+        result = await metadata_cache_worker.tick()
+        assert result.outcome == "circuit_breaker"
+        assert scanned["called"] is False
+        assert result.next_sleep_s > 0
+
+    async def test_scheduled_stage1_then_next_window_when_armed(
+        self, worker_under, monkeypatch,
+    ):
+        # Scheduled mode, always-inside window so the schedule gate
+        # doesn't short-circuit. Isolate the staging decision from
+        # wallclock by stubbing the next-window helper.
+        worker_under["settings"]["metadata_cache"]["amazon"] = {
+            "enabled": True, "mode": "scheduled",
+            "schedule": {"active_hours": "00:00-23:59", "timezone": ""},
+        }
+        monkeypatch.setattr(
+            metadata_cache_worker, "_seconds_until_next_window_open",
+            lambda *_a, **_k: 50000.0,
+        )
+        monkeypatch.setattr(
+            metadata_cache_worker, "_perform_amazon_scan", _softblock_scan(),
+        )
+
+        # First trip: armed=0 → stage-1 (4h) rest.
+        await _set_consecutive_blocks(3)
+        await _seed_queue_row(author_id="B0BREAK003")
+        now1 = time.time()
+        r1 = await metadata_cache_worker.tick()
+        assert r1.outcome == "circuit_breaker"
+        until1, armed1 = await _read_breaker()
+        assert armed1 == 1
+        assert abs(until1 - (now1 + metadata_cache_worker._CIRCUIT_BREAKER_STAGE1_REST_S)) < 120
+
+        # Simulate the stage-1 rest having expired (worker resumed) but
+        # WITHOUT a clean scan since — armed stays 1. Clear both the
+        # breaker `until` AND the global soft-block cooldown (both have
+        # long expired after a 4h rest) so the next tick reaches the
+        # scan and re-trips.
+        from app.discovery import amazon_author_id_resolver as _r
+        _r._blocked_until = 0.0
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+        try:
+            await db.execute(
+                f"UPDATE {metadata_cache.worker_state_table()} "
+                f"SET circuit_breaker_until = 0 WHERE id = 1"
+            )
+            await db.commit()
+        finally:
+            await db.close()
+
+        # Second trip while still armed (no clean scan since) → rest
+        # until next window (the stubbed 50000s), not stage-1.
+        await _set_consecutive_blocks(3)
+        await _seed_queue_row(author_id="B0BREAK004")
+        now2 = time.time()
+        r2 = await metadata_cache_worker.tick()
+        assert r2.outcome == "circuit_breaker"
+        until2, _ = await _read_breaker()
+        assert abs(until2 - (now2 + 50000.0)) < 120
+
+    async def test_successful_scan_disarms_breaker(
+        self, worker_under, monkeypatch,
+    ):
+        # Arm the breaker (rest already expired), then a clean scan
+        # should disarm it.
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+        try:
+            await db.execute(
+                f"UPDATE {metadata_cache.worker_state_table()} "
+                f"SET circuit_breaker_armed = 1, circuit_breaker_until = 0 "
+                f"WHERE id = 1"
+            )
+            await db.commit()
+        finally:
+            await db.close()
+        async def _fake_scan(author_id, session):
+            return _author_result("Recovered Book", author_id=author_id), None
+        monkeypatch.setattr(
+            metadata_cache_worker, "_perform_amazon_scan", _fake_scan,
+        )
+        await _seed_queue_row(author_id="B0BREAK005")
+        result = await metadata_cache_worker.tick()
+        assert result.outcome in ("ok", "ok_empty")
+        _, armed = await _read_breaker()
+        assert armed == 0
+
+
+# ─── Loop sleep cap (heartbeat stays fresh; no false stall pages) ──
+
+
+class TestLoopSleepCap:
+    async def test_run_loop_caps_sleep_to_heartbeat_interval(
+        self, worker_under, monkeypatch,
+    ):
+        import asyncio as _aio
+        captured: list[float] = []
+        stop = _aio.Event()
+
+        async def _fake_tick(source_name=metadata_cache.SOURCE_AMAZON):
+            # Pretend we're mid-cooldown: a long requested sleep.
+            return metadata_cache_worker.TickResult(
+                source_name=source_name, outcome="cooldown",
+                next_sleep_s=9999.0,
+            )
+        monkeypatch.setattr(metadata_cache_worker, "tick", _fake_tick)
+
+        async def _fake_wait_for(awaitable, timeout):
+            captured.append(timeout)
+            awaitable.close()  # avoid 'coroutine never awaited'
+            if len(captured) >= 2:
+                stop.set()
+                return None  # simulate stop_event firing → loop exits
+            raise _aio.TimeoutError
+        monkeypatch.setattr(
+            metadata_cache_worker.asyncio, "wait_for", _fake_wait_for,
+        )
+
+        await metadata_cache_worker.run_loop(
+            source_name=metadata_cache.SOURCE_AMAZON, stop_event=stop,
+        )
+        assert captured, "loop should have slept at least once"
+        cap = metadata_cache_worker._MAX_SLEEP_BETWEEN_HEARTBEATS_S
+        # A 9999s requested sleep is clamped to the heartbeat interval.
+        assert max(captured) == cap
+        assert all(t <= cap for t in captured)
