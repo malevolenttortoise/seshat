@@ -11,7 +11,6 @@ import { fmtDuration, fmtNum } from "../lib/format";
 import { BookSidebar } from "../components/BookSidebar";
 import { toast } from "../lib/toast";
 import {
-  loadAuthorDetailViaPerson,
   type AuthorDetail,
   type PersonHit,
   type PersonSearchResponse,
@@ -20,6 +19,7 @@ import { SourceBadgeRow } from "../components/SourceBadgeRow";
 import { AuthorCacheStatusBadge } from "../components/AuthorCacheStatusBadge";
 import { GoodreadsAuthorCacheStatusBadge } from "../components/GoodreadsAuthorCacheStatusBadge";
 import { useScanPolling } from "../hooks/useScanPolling";
+import { useAuthorDetail } from "../hooks/useAuthorDetail";
 import {
   MobileBtn,
   MobileChip,
@@ -241,8 +241,7 @@ export default function MobileAuthorDetailPage({
   onNav,
 }: MobileAuthorDetailPageProps) {
   const t = useTheme();
-  const [a, setA] = useState<AuthorDetail | null>(null);
-  const [ld, setLd] = useState(true);
+  const { a, ld, loadA, authorIdNum, authorSlug } = useAuthorDetail(authorId);
   const [ref, setRef] = useState(false);
   const [mamRef, setMamRef] = useState(false);
   const [sb, setSb] = useState<Book | null>(null);
@@ -292,42 +291,6 @@ export default function MobileAuthorDetailPage({
   const [penResults, setPenResults] = useState<PersonHit[]>([]);
   const [penBusy, setPenBusy] = useState(false);
 
-  // Parse "slug:id" arg shape for cross-library nav.
-  const parsed = (() => {
-    const s = String(authorId);
-    if (s.includes(":")) {
-      const [slug, id] = s.split(":");
-      return { slug, id: parseInt(id) || 0 };
-    }
-    return {
-      slug: null as string | null,
-      id: parseInt(s) || (typeof authorId === "number" ? authorId : 0),
-    };
-  })();
-  const authorIdNum = parsed.id;
-  const authorSlug = parsed.slug;
-
-  const loadA = useCallback(
-    (signal?: AbortSignal) => {
-      setLd(true);
-      // v2.20.0 — shared loader resolves the canonical person and
-      // adapts the unified /persons/{person_id} view to AuthorDetail.
-      return loadAuthorDetailViaPerson(authorIdNum, authorSlug, signal)
-        .then((d) => {
-          setA(d);
-          setLd(false);
-        })
-        .catch(() => setLd(false));
-    },
-    [authorIdNum, authorSlug],
-  );
-
-  useEffect(() => {
-    if (!authorIdNum) return;
-    const c = new AbortController();
-    loadA(c.signal);
-    return () => c.abort();
-  }, [loadA, authorIdNum]);
 
   useEffect(() => {
     api
