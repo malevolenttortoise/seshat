@@ -332,6 +332,24 @@ def _build_amazon_migrations() -> list[str]:
         CREATE INDEX IF NOT EXISTS idx_{queue}_priority_due
             ON {queue} (status, priority DESC, next_scan_due_at ASC)
         """,
+        # ─── v3: circuit-breaker rest timestamp ─────────────────────
+        # When the worker escalates to the top cooldown tier N times in
+        # a row (a genuine Akamai wall, not a probationary blip), it
+        # stops probing entirely and rests until this timestamp — a
+        # single long uninterrupted quiet so the IP reputation can
+        # decay. The global soft-block cooldown caps at 1h
+        # (amazon_author_id_resolver._BLOCK_COOLDOWN_MAX_S), which is
+        # too short to break the poke-while-hot oscillation that
+        # prevents recovery, so the worker tracks a longer rest here.
+        # 0 = breaker not engaged. Idempotent ADD COLUMN (the
+        # `duplicate column` error is swallowed by _apply_migrations).
+        f"ALTER TABLE {worker} ADD COLUMN circuit_breaker_until REAL NOT NULL DEFAULT 0",
+        # `circuit_breaker_armed` = 1 once the breaker has tripped and
+        # 0 again after the next successful scan. It stages the rest:
+        # a re-trip while still armed (no clean scan since) means "still
+        # walled after resting", so the worker escalates from the short
+        # stage-1 rest to a rest-until-next-window backoff.
+        f"ALTER TABLE {worker} ADD COLUMN circuit_breaker_armed INTEGER NOT NULL DEFAULT 0",
     ]
 
 
