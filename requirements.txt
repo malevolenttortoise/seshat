@@ -62,7 +62,11 @@ curl_cffi>=0.7.0
 # validation, HIGH); 46.0.6 rolls in CVE-2026-34073 (DNS name
 # constraint enforcement) and a patched OpenSSL wheel (older
 # CVE-2024-12797); 46.0.7 closes CVE-2026-39892 (buffer overflow
-# when non-contiguous Python buffers are passed to Hash-family APIs
-# — not a path we hit, but a clean dep graph is worth keeping).
-# Fernet API is unchanged across the whole range — no code impact.
-cryptography==46.0.7
+# when non-contiguous Python buffers are passed to Hash-family APIs).
+# 49.0.0 clears GHSA-537c-gmf6-5ccf (HIGH): the 46.x wheels statically
+# bundle a vulnerable OpenSSL; 49.0.0 ships a patched one. We only use
+# Fernet (symmetric AES/HMAC) — no untrusted TLS/X.509 through this lib,
+# so practical exposure was low, but a runtime dep is worth keeping clean.
+# Fernet wire format + API are unchanged across 46→49 — no code impact,
+# and existing encrypted secrets decrypt as-is.
+cryptography==49.0.0
