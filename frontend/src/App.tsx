@@ -115,6 +115,19 @@ const WIDE_PAGES = new Set([
   "logs", "database",
 ]);
 
+// v3.8.3 — the desktop horizontal navbar (logo + section switcher +
+// full nav items + 280px global search + right-rail icons) is roughly
+// 1700px wide once Discovery's section is active. Below that it
+// overflows and the search box visually overlaps the right-rail icons
+// (reported by a user on a sub-1700px window; invisible at the 1800px
+// dev width). Rather than clip nav items (which would also clip the
+// Tools dropdown), collapse the whole bar to the compact chrome —
+// hamburger drawer + search icon — at narrower widths. This is the
+// same chrome mobile already uses, so it's pure reuse. Page *bodies*
+// are unaffected: they pick their layout from useMobileCodepath
+// (≤1024 / touch), not from this flag. Single tunable constant.
+const NAV_COMPACT_MAX = 1700;
+
 function loadSavedPage(): string {
   try { return localStorage.getItem("seshat_page") || "dashboard"; }
   catch { return "dashboard"; }
@@ -204,6 +217,10 @@ function SeshatApp() {
   // covers every iPad/iPhone regardless of orientation while still
   // letting a mouse-pointer 1024-1366px laptop use the desktop nav.
   const isMobile = vp.isMobile || vp.isTablet || vp.isTouch;
+  // Collapse the navbar to compact (hamburger + search icon) chrome on
+  // true-mobile/tablet/touch OR on any desktop window narrower than the
+  // point where the horizontal bar overflows. See NAV_COMPACT_MAX.
+  const compactNav = isMobile || vp.width < NAV_COMPACT_MAX;
   const [navOpen, setNavOpen] = useState(false);
 
   const [auth, setAuth] = useState<AuthState>({ loading: true, authenticated: false, firstRun: false });
@@ -376,13 +393,13 @@ function SeshatApp() {
         borderBottom: `1px solid ${t.border}`,
         display: "flex",
         alignItems: "center",
-        padding: isMobile ? "0 12px" : "0 80px",
+        padding: compactNav ? "0 12px" : "0 80px",
         paddingTop: "env(safe-area-inset-top, 0px)",
         height: `calc(52px + env(safe-area-inset-top, 0px))`,
         position: "sticky",
         top: 0,
         zIndex: 100,
-        gap: isMobile ? 10 : 0,
+        gap: compactNav ? 10 : 0,
       }}>
         {/* Logo / Dashboard */}
         <div
@@ -390,26 +407,26 @@ function SeshatApp() {
           style={{
             cursor: "pointer",
             fontWeight: 800,
-            fontSize: isMobile ? 18 : 20,
+            fontSize: compactNav ? 18 : 20,
             color: t.accent,
             letterSpacing: "0.02em",
-            marginRight: isMobile ? 0 : 20,
+            marginRight: compactNav ? 0 : 20,
             userSelect: "none",
             display: "flex",
             alignItems: "center",
             gap: 8,
-            flex: isMobile ? 1 : "0 0 auto",
+            flex: compactNav ? 1 : "0 0 auto",
           }}
         >
-          <img src="/icon.svg" alt="" style={{ width: isMobile ? 28 : 32, height: isMobile ? 28 : 32 }} />
+          <img src="/icon.svg" alt="" style={{ width: compactNav ? 28 : 32, height: compactNav ? 28 : 32 }} />
           Seshat
         </div>
 
-        {isMobile ? (
-          // Mobile: search icon + hamburger. Search opens a fullscreen
-          // overlay (mounted at the bottom of the SeshatApp tree);
-          // the nav drawer is a separate overlay also mounted at
-          // the bottom.
+        {compactNav ? (
+          // Compact (mobile/tablet/touch + narrow desktop): search icon
+          // + hamburger. Search opens a fullscreen overlay (mounted at
+          // the bottom of the SeshatApp tree); the nav drawer is a
+          // separate overlay also mounted at the bottom.
           <>
             <button
               onClick={() => setMobileSearchOpen(true)}
@@ -556,11 +573,12 @@ function SeshatApp() {
         </NavigationProvider>
       </main>
 
-      {/* Mobile nav drawer — only mounted when isMobile flips true.
-          The MobileNavDrawer guards on `open` itself so this stays
-          cheap to keep mounted; we still gate on isMobile to avoid
-          firing the body-scroll-lock effect on desktop. */}
-      {isMobile ? (
+      {/* Nav drawer — mounted whenever the navbar is in compact chrome
+          (true mobile/tablet/touch OR a narrow desktop window). The
+          MobileNavDrawer guards on `open` itself so this stays cheap to
+          keep mounted; we still gate on compactNav to avoid firing the
+          body-scroll-lock effect when the horizontal nav is showing. */}
+      {compactNav ? (
         <MobileNavDrawer
           open={navOpen}
           onClose={() => setNavOpen(false)}
@@ -577,12 +595,12 @@ function SeshatApp() {
         />
       ) : null}
 
-      {/* v2.15.0 #B — mobile fullscreen search overlay. Sits above
-         the page content and the nav drawer (the drawer uses z-index
-         201, the search uses 220 so it covers a drawer that's
+      {/* v2.15.0 #B — fullscreen search overlay (compact-nav chrome).
+         Sits above the page content and the nav drawer (the drawer uses
+         z-index 201, the search uses 220 so it covers a drawer that's
          already open). Closes on result-tap, on Escape, or via the
          backdrop tap. */}
-      {isMobile && mobileSearchOpen ? (
+      {compactNav && mobileSearchOpen ? (
         <div
           onClick={(e) => {
             if (e.target === e.currentTarget) setMobileSearchOpen(false);
