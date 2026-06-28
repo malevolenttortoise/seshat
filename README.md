@@ -27,6 +27,38 @@ enrichment, and Calibre delivery — all from a single unified interface.
 
 ---
 
+## What Seshat is (and isn't)
+
+Seshat is **not** a Readarr-style auto-downloader, and that trips up
+people who arrive expecting one. Readarr is *proactive*: point it at a
+library and it hunts down the entire back-catalogue on its own. Seshat
+is deliberately **reactive**, paired with a catalogue you browse:
+
+- **Pipeline — the auto-grabber.** Seshat watches MAM's live IRC
+  announce feed. When a *new* release drops from an author already in
+  your library, it grabs it automatically (subject to your filters and
+  economy rules). It does **not** go digging through MAM's back-catalogue
+  on its own — that's the core difference from Readarr.
+- **Discovery — the catalogue.** Seshat cross-references your library
+  against nine metadata sources and lists everything those authors have
+  written. If it shows thousands of "books you don't own," **that's this
+  catalogue — a reference list, not a download queue.** Nothing in it is
+  ever grabbed automatically; it's there so you can *see* the gaps.
+
+**So how do I actually grab a missing book?** Open it from Discovery, or
+run a **MAM Scan** (from the Dashboard, an author's page, etc.). Seshat
+checks which of your missing titles MAM actually has; any it finds get a
+**"Send to pipeline"** button in the book's sidebar. Click it and the
+book flows through the normal pipeline. That's the manual path for
+"I have a series with gaps — fill them."
+
+**What Seshat can't do (yet):** there's no free-text "search all of MAM
+for any title and grab it" box the way Readarr lets you add an arbitrary
+new book. That proactive-search model is on the roadmap but not built —
+today it's reactive (live announces) plus scan-against-your-own-library.
+
+---
+
 ## Two domains, one app
 
 ### Discovery
@@ -98,6 +130,11 @@ its own in-page search that filters all sections at once and matches
 on field labels, descriptions, section names, and section keywords —
 typing "ntfy" surfaces every Notifications field, "qbit" surfaces
 Download Client, etc.
+
+On narrower windows the horizontal top bar collapses to a hamburger
+drawer and the search bar becomes an icon that opens a full-screen
+search overlay, so nothing overlaps on smaller laptops or resized
+browser windows.
 
 ---
 
