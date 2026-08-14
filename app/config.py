@@ -337,6 +337,21 @@ DEFAULT_SETTINGS = {
     # stored value is still 0 (the DEFAULT_SETTINGS sentinel). Never
     # auto-updated after that.
     "qbit_orphan_adoption_since": 0,
+    # Hours a grab may sit in `submitted` with its torrent absent from
+    # the qBit snapshot before the download watcher gives up and marks
+    # it `failed_torrent_gone`.
+    #
+    # Without this the watcher re-checks such a grab forever: the
+    # snatch ledger already releases the budget slot when a torrent
+    # disappears (`released_reason=removed_from_qbit`), but that
+    # release was never mirrored into the grab state machine, so the
+    # row stayed `submitted` and was polled every tick indefinitely.
+    #
+    # The window is generous on purpose — a user who removes a torrent
+    # from qBit isn't in a hurry, whereas wrongly failing a grab that
+    # qBit is slow to report costs a real download. `0` disables the
+    # sweep. See `download_watcher.check_for_completions`.
+    "qbit_missing_grab_grace_hours": 12,
     # Comma-separated tag list applied to every torrent Seshat
     # submits to qBit. Lines up with the user's existing
     # manual-seed / autobrr-seed / seshat-seed convention so

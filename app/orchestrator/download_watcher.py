@@ -10,6 +10,15 @@ newly-completed grab, it:
   2. Creates a `pipeline_runs` row in `staged` state
   3. Returns the list of newly-detected completions
 
+It also retires grabs whose torrent has disappeared from qBit. The
+snatch ledger already treats absence as a release
+(`released_reason=removed_from_qbit`), but that verdict was never
+mirrored into the grab state machine — so a torrent the user deleted
+left its grab in `submitted` forever, re-checked on every tick. Once
+`qbit_missing_grab_grace_hours` have passed the grab is moved to
+`failed_torrent_gone`. See `check_for_completions` for the guards that
+keep a transient empty snapshot from failing healthy grabs.
+
 This module is called by the budget watcher's tick — not as a
 separate polling loop — because both need the same qBit snapshot.
 No extra HTTP round-trips.
@@ -32,10 +41,32 @@ from datetime import datetime, timezone
 
 import aiosqlite
 
+from app.config import load_settings
 from app.storage import grabs as grabs_storage
 from app.storage import pipeline as pipeline_storage
 
 _log = logging.getLogger("seshat.orchestrator.download_watcher")
+
+def _missing_duration_hours(grab, now: datetime) -> float | None:
+    """Hours since `grab` was submitted, or None if that can't be determined.
+
+    `submitted_at` is written by SQLite's `datetime('now')`, which is
+    naive UTC — so it's compared against a UTC `now`, not local time.
+    Returning None when the stamp is missing or unparseable means the
+    caller leaves the grab alone: a grab we can't age is a grab we
+    have no business failing.
+    """
+    raw = getattr(grab, "submitted_at", None)
+    if not raw:
+        return None
+    try:
+        stamp = datetime.fromisoformat(str(raw).replace(" ", "T"))
+    except ValueError:
+        return None
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    return max(0.0, (now - stamp).total_seconds() / 3600.0)
+
 
 # qBit states that mean "still downloading / not yet complete".
 _DOWNLOADING_STATES = frozenset({
@@ -200,6 +231,29 @@ async def check_for_completions(
             len(rows), len(qbit_snapshot),
         )
 
+    # Give-up threshold for grabs whose torrent has vanished from qBit.
+    # Read per-call rather than frozen at startup so turning it off
+    # takes effect on the next tick — `load_settings()` is mtime-cached.
+    #
+    # Two guards keep this from failing healthy grabs:
+    #
+    #   * An EMPTY snapshot is never treated as evidence of removal. A
+    #     qBit outage raises out of `list_torrents` before we get here,
+    #     but a successful call returning zero torrents (wrong category,
+    #     qBit mid-restore) would otherwise condemn every submitted grab
+    #     at once. Absence only counts when qBit is reporting *something*.
+    #   * `0` disables the sweep entirely, so there's an off switch that
+    #     doesn't require a code change.
+    grace_hours = 0.0
+    if qbit_snapshot:
+        try:
+            grace_hours = float(
+                load_settings().get("qbit_missing_grab_grace_hours", 0) or 0
+            )
+        except (TypeError, ValueError):
+            grace_hours = 0.0
+    now = datetime.now(timezone.utc)
+
     for row in rows:
         grab = grabs_storage._row_to_grab(row)
         if not grab.qbit_hash:
@@ -207,10 +261,28 @@ async def check_for_completions(
 
         snap = qbit_snapshot.get(grab.qbit_hash)
         if snap is None:
-            _log.debug(
-                "download watcher: grab_id=%d hash=%s not in qBit snapshot",
-                grab.id, grab.qbit_hash[:16],
-            )
+            missing_for = _missing_duration_hours(grab, now)
+            if grace_hours > 0 and missing_for is not None and missing_for >= grace_hours:
+                await grabs_storage.set_state(
+                    db,
+                    grab.id,
+                    grabs_storage.STATE_FAILED_TORRENT_GONE,
+                    failed_reason=(
+                        f"torrent absent from qBit for {missing_for:.1f}h "
+                        f"(grace {grace_hours:.1f}h)"
+                    ),
+                )
+                _log.info(
+                    "download watcher: grab_id=%d hash=%s gone from qBit for "
+                    "%.1fh — marking %s",
+                    grab.id, grab.qbit_hash[:16], missing_for,
+                    grabs_storage.STATE_FAILED_TORRENT_GONE,
+                )
+            else:
+                _log.debug(
+                    "download watcher: grab_id=%d hash=%s not in qBit snapshot",
+                    grab.id, grab.qbit_hash[:16],
+                )
             continue
 
         if snap.state in _DOWNLOADING_STATES:

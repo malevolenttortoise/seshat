@@ -85,11 +85,15 @@ class TestCheckForCompletions:
     async def test_ignores_missing_from_qbit(self, temp_db):
         db = await get_db()
         try:
-            await _insert_submitted_grab(db, "333", "hash_ccc")
+            grab_id = await _insert_submitted_grab(db, "333", "hash_ccc")
             snapshot = {}  # torrent not in qBit
 
             events = await check_for_completions(db, snapshot)
             assert len(events) == 0
+            # An empty snapshot is never evidence of removal — the grab
+            # stays submitted rather than being failed wholesale.
+            grab = await grabs_storage.get_grab(db, grab_id)
+            assert grab.state == grabs_storage.STATE_SUBMITTED
         finally:
             await db.close()
 
@@ -467,5 +471,138 @@ class TestFileRaceRetry:
 
             events = await check_for_completions(db, snapshot)
             assert events == []
+        finally:
+            await db.close()
+
+
+class TestMissingTorrentGiveUp:
+    """Grabs whose torrent vanished from qBit must not poll forever.
+
+    The snatch ledger already releases the budget slot when a torrent
+    disappears; before this sweep existed the `grabs` row stayed
+    `submitted` indefinitely and was re-checked on every tick (the
+    production log carried ~8,900 repeats of a single grab).
+    """
+
+    async def _backdate_submitted(self, db, grab_id: int, hours_ago: float) -> None:
+        await db.execute(
+            "UPDATE grabs SET submitted_at = datetime('now', ?) WHERE id = ?",
+            (f"-{hours_ago} hours", grab_id),
+        )
+        await db.commit()
+
+    async def test_gives_up_after_grace_period(self, temp_db, monkeypatch):
+        import app.orchestrator.download_watcher as dw
+
+        monkeypatch.setattr(
+            dw, "load_settings", lambda: {"qbit_missing_grab_grace_hours": 12}
+        )
+        db = await get_db()
+        try:
+            grab_id = await _insert_submitted_grab(db, "901", "hash_gone")
+            await self._backdate_submitted(db, grab_id, hours_ago=24)
+            # Snapshot is non-empty but doesn't contain our hash — qBit
+            # is clearly reporting, and this torrent isn't there.
+            snapshot = {
+                "other_hash": TorrentSnap(state="uploading", save_path="/dl/x")
+            }
+
+            events = await check_for_completions(db, snapshot)
+            assert events == []
+
+            grab = await grabs_storage.get_grab(db, grab_id)
+            assert grab.state == grabs_storage.STATE_FAILED_TORRENT_GONE
+            assert "absent from qBit" in (grab.failed_reason or "")
+        finally:
+            await db.close()
+
+    async def test_within_grace_period_left_alone(self, temp_db, monkeypatch):
+        import app.orchestrator.download_watcher as dw
+
+        monkeypatch.setattr(
+            dw, "load_settings", lambda: {"qbit_missing_grab_grace_hours": 12}
+        )
+        db = await get_db()
+        try:
+            grab_id = await _insert_submitted_grab(db, "902", "hash_recent")
+            await self._backdate_submitted(db, grab_id, hours_ago=1)
+            snapshot = {
+                "other_hash": TorrentSnap(state="uploading", save_path="/dl/x")
+            }
+
+            await check_for_completions(db, snapshot)
+
+            grab = await grabs_storage.get_grab(db, grab_id)
+            assert grab.state == grabs_storage.STATE_SUBMITTED
+        finally:
+            await db.close()
+
+    async def test_empty_snapshot_never_gives_up(self, temp_db, monkeypatch):
+        """A qBit that reports zero torrents must not condemn everything.
+
+        `list_torrents` raising is handled upstream, but a *successful*
+        empty response (wrong category, qBit mid-restore) would
+        otherwise fail every submitted grab at once.
+        """
+        import app.orchestrator.download_watcher as dw
+
+        monkeypatch.setattr(
+            dw, "load_settings", lambda: {"qbit_missing_grab_grace_hours": 12}
+        )
+        db = await get_db()
+        try:
+            grab_id = await _insert_submitted_grab(db, "903", "hash_orphan")
+            await self._backdate_submitted(db, grab_id, hours_ago=999)
+
+            await check_for_completions(db, {})
+
+            grab = await grabs_storage.get_grab(db, grab_id)
+            assert grab.state == grabs_storage.STATE_SUBMITTED
+        finally:
+            await db.close()
+
+    async def test_zero_grace_disables_sweep(self, temp_db, monkeypatch):
+        import app.orchestrator.download_watcher as dw
+
+        monkeypatch.setattr(
+            dw, "load_settings", lambda: {"qbit_missing_grab_grace_hours": 0}
+        )
+        db = await get_db()
+        try:
+            grab_id = await _insert_submitted_grab(db, "904", "hash_disabled")
+            await self._backdate_submitted(db, grab_id, hours_ago=999)
+            snapshot = {
+                "other_hash": TorrentSnap(state="uploading", save_path="/dl/x")
+            }
+
+            await check_for_completions(db, snapshot)
+
+            grab = await grabs_storage.get_grab(db, grab_id)
+            assert grab.state == grabs_storage.STATE_SUBMITTED
+        finally:
+            await db.close()
+
+    async def test_unparseable_submitted_at_left_alone(self, temp_db, monkeypatch):
+        """A grab we can't age is a grab we have no business failing."""
+        import app.orchestrator.download_watcher as dw
+
+        monkeypatch.setattr(
+            dw, "load_settings", lambda: {"qbit_missing_grab_grace_hours": 12}
+        )
+        db = await get_db()
+        try:
+            grab_id = await _insert_submitted_grab(db, "905", "hash_nostamp")
+            await db.execute(
+                "UPDATE grabs SET submitted_at = NULL WHERE id = ?", (grab_id,)
+            )
+            await db.commit()
+            snapshot = {
+                "other_hash": TorrentSnap(state="uploading", save_path="/dl/x")
+            }
+
+            await check_for_completions(db, snapshot)
+
+            grab = await grabs_storage.get_grab(db, grab_id)
+            assert grab.state == grabs_storage.STATE_SUBMITTED
         finally:
             await db.close()
