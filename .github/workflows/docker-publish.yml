@@ -13,16 +13,25 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
-# Tag pushes + branch pushes for the SAME commit fire two
-# workflow runs (branch=main + tag=vX.Y.Z) and historically raced
-# each other for GHCR push credentials / checkout token state.
-# Whichever lost the race failed noisily even though the winner
-# published the image correctly. Serialize them by SHA so the
-# second run queues behind the first — both still publish (their
-# metadata-action invocations emit different tags based on
-# github.ref) but they don't step on each other.
+# Serialize by REF, not by SHA.
+#
+# A release fires three pushes at the same commit in quick
+# succession — the merge to `main`, the `vX.Y.Z` tag, and the
+# `development` fast-forward. Keying the group on `github.sha` put
+# all three in ONE group, and a group holds at most one running +
+# one pending run: the third arrival evicts whichever was queued.
+# So the tag build was cancelled on every release from v3.8.1
+# through v3.9.0, and `:vX.Y.Z-slim` was never actually published
+# (each had to be re-run by hand to exist at all).
+#
+# Keying on `github.ref` gives main / the tag / development their
+# own groups, so all three publish. It still serializes what the
+# original grouping was there for: two rapid pushes to the SAME
+# ref queue behind each other rather than racing for the GHCR
+# push. Their metadata-action invocations emit different image
+# tags per ref, so parallel runs across refs don't collide.
 concurrency:
-  group: docker-publish-${{ github.sha }}
+  group: docker-publish-${{ github.ref }}
   cancel-in-progress: false
 
 env:
