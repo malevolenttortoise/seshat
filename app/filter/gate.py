@@ -9,14 +9,20 @@ trivial to call from any pipeline (the IRC listener, the manual-grab
 endpoint, the dry-run replay, the test harness).
 
 Decision matrix (faithful port of `previous-stuff/ebook_gate.sh`,
-extended with format, language, and category-exclude gates):
+extended with format, language, and category-exclude gates).
+
+Steps 3 and 4 are any-match over the announce's full category list:
+MAM's post-2026-08-11 announce format carries several content tags per
+torrent where the old one carried a single category. Matching only the
+first tag would make both gates order-dependent — see `_category_keys`:
 
     1. Format gate (prefix before " - " in category):
        a. If allowed_formats non-empty and format not in it → SKIP, reason=format_not_allowed
        b. If format in excluded_formats                     → SKIP, reason=format_excluded
     2. If allowed_languages non-empty and language not in it → SKIP, reason=language_not_allowed
-    3. If allowed_categories non-empty and cat not in it     → SKIP, reason=category_not_allowed
-    4. If category in excluded_categories                    → SKIP, reason=category_excluded
+    3. If allowed_categories non-empty and NO category
+       is in it                                              → SKIP, reason=category_not_allowed
+    4. If ANY category is in excluded_categories             → SKIP, reason=category_excluded
     5. If no author can be detected                          → SKIP, reason=author_not_detected
     6. Walk every parsed author:
        a. If ANY author is on the allow list  → ALLOW, reason=allowed_author
@@ -85,6 +91,20 @@ class Announce:
     filetype: str = ""
     language: str = ""
     vip: bool = False
+    # Multi-value fields from MAM's post-2026-08-11 announce format.
+    # `category` / `filetype` above stay single-valued and carry the
+    # synthesized legacy `"Ebooks - Fantasy"` / `"cbz, pdf"` forms so
+    # existing consumers are untouched; these carry the real lists.
+    #
+    # `categories` defaults empty, and the category gate falls back to
+    # the single `category` field when it is — that keeps manually
+    # injected announces and the older `announces` rows working.
+    categories: tuple[str, ...] = ()
+    filetypes: tuple[str, ...] = ()
+    # MAM's new media-type vocabulary ("Ebook", "Audiobook", "Manga",
+    # ...). Distinct from the format prefix `extract_format` derives
+    # from `category`, which stays in the legacy plural spelling.
+    media_type: str = ""
 
 
 @dataclass(frozen=True)
@@ -221,6 +241,30 @@ def split_authors(blob: str) -> list[str]:
 # ─── The gate ────────────────────────────────────────────────
 
 
+def _category_keys(announce: Announce, fmt: str) -> frozenset[str]:
+    """Build the set of normalized category keys to match settings against.
+
+    Saved settings use the legacy combined form — `"ebooks fantasy"`,
+    not `"fantasy"` — because that's the shape the pre-2026-08-11
+    announce carried. Rather than migrate every user's settings, each
+    content tag is recombined with the announce's format prefix here,
+    yielding one key per tag.
+
+    Falls back to the single `category` field when `categories` is empty
+    so manually-injected announces and replayed historical rows (which
+    only ever had the combined string) still evaluate correctly.
+    """
+    if not announce.categories:
+        return frozenset({normalize_category(announce.category)})
+    if not fmt:
+        # No recognizable format prefix — match on the bare tag so a
+        # settings entry can still target it rather than nothing at all.
+        return frozenset(normalize_category(c) for c in announce.categories)
+    return frozenset(
+        normalize_category(f"{fmt} - {c}") for c in announce.categories
+    )
+
+
 def evaluate_announce(announce: Announce, config: FilterConfig) -> Decision:
     """Decide whether to grab, skip, or queue this announce.
 
@@ -252,17 +296,35 @@ def evaluate_announce(announce: Announce, config: FilterConfig) -> Decision:
                 reason="language_not_allowed",
             )
 
-    # Step 3: category gate (inclusion).
-    cat_norm = normalize_category(announce.category)
-    if config.allowed_categories and cat_norm not in config.allowed_categories:
+    # Steps 3 & 4 evaluate against EVERY category on the announce, not
+    # just one. MAM's post-2026-08-11 format carries a list ("Fantasy,
+    # LGBTQIA+, Romance") where the old one carried a single value, and
+    # the saved settings are still keyed on the legacy combined form
+    # ("ebooks fantasy") — so each tag is recombined with the format
+    # prefix before lookup.
+    cat_norms = _category_keys(announce, fmt)
+
+    # Step 3: category gate (inclusion). ANY matching tag admits the
+    # announce. First-tag-only would drop a "Romance, Fantasy" release
+    # for a user who allows fantasy but not romance, purely because of
+    # MAM's tag ordering.
+    if config.allowed_categories and not (cat_norms & config.allowed_categories):
         return Decision(
             action="skip",
             reason="category_not_allowed",
         )
 
-    # Step 4: category gate (exclusion). Lets the user include a whole
-    # format but carve out specific subcategories they don't want.
-    if cat_norm in config.excluded_categories:
+    # Step 4: category gate (exclusion). ANY matching tag rejects, and
+    # exclusion is checked after inclusion so it always wins.
+    #
+    # This is now the *only* content filter available: MAM demoted
+    # "Erotica/Sexual Content" and "LGBTQI+" from torrent flags to real
+    # categories (and dropped Violence / Crude Language entirely), so a
+    # user who wants those excluded has nothing else to gate on. An
+    # any-match check is what makes that reachable — under first-tag
+    # matching an excluded tag would slip through whenever MAM happened
+    # to order it second.
+    if cat_norms & config.excluded_categories:
         return Decision(
             action="skip",
             reason="category_excluded",

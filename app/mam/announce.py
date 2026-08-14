@@ -5,24 +5,34 @@ Turns one raw announce line from MouseBot in `#announce` on
 `irc.myanonamouse.net` into a fully populated `Announce` object that the
 filter can evaluate.
 
-The regex is the exact one Autobrr uses in its `myanonamouse.yaml`
-indexer definition. Lifted verbatim with no modifications because it's
-been battle-tested against years of real MAM IRC traffic — divergence
-would be a footgun. The capture groups are:
+MAM changed the `#announce` format on 2026-08-11 19:15 UTC to carry the
+new multi-category taxonomy (8 media types + 61 content tags, the same
+one already snapshotted in `categories_v2.json`). Staff announcement:
 
-    1. title              "The Demon King"
-    2. author_blob        "Peter V Brett"
-    3. category           "Audiobooks - Fantasy"
-    4. size               "921.91 MiB"
-    5. filetype           "m4b"
-    6. language           "English"
-    7. base_url           "https://www.myanonamouse.net/"
-    8. torrent_id         "1233592"
-    9. vip                "VIP" or None
+    Title By: Author, Author,... [Lang] [Media Type] [Fiction/Non-Fiction]
+    [filetype, filetype,...] [size] - Category, Category,... - link VIP|Normal
 
-Real format observed in production (from autobrr.log fixtures):
+Real line (color codes stripped):
+
+    Yield Under Great Persuasion By: Alexandra Rowland [English] [Audiobook] [Fiction] [m4b] [575.62 MiB] - Fantasy,  LGBTQIA+,  Romance - https://www.myanonamouse.net/t/1263153 VIP
+
+The **old** format — which this parser handled via Autobrr's regex —
+was a single flat category and is now permanently gone:
 
     New Torrent: The Demon King By: Peter V Brett Category: ( Audiobooks - Fantasy ) Size: ( 921.91 MiB ) Filetype: ( m4b ) Language: ( English ) Link: ( https://www.myanonamouse.net/t/1233592 ) VIP
+
+Two structural changes drive the parsing strategy:
+
+  * **Everything is anchored on the trailing URL**, never on separators.
+    Both the title and the content-tag list can legitimately contain
+    `" - "` — real examples are the title "I Want to Hold Aono-kun So
+    Badly I Could Die - Full Series" and the tag "Complete Editions -
+    Music". Splitting on the separator would corrupt both.
+  * **Categories and filetypes are lists.** `[cbz, pdf]` is real (comic
+    and manga bundles). The single-valued `category` / `filetype` fields
+    are preserved as synthesized legacy values so the ~15 downstream
+    consumers that parse the old `"Ebooks - Fantasy"` shape keep working
+    untouched; `categories` / `filetypes` carry the full truth.
 
 This module is intentionally pure — no I/O, no logging, no state.
 Database persistence and side effects are the caller's job.
@@ -35,16 +45,50 @@ from typing import Optional
 from app.filter.gate import Announce
 
 
-# The Autobrr MAM regex, ported verbatim. See module docstring for the
-# capture-group breakdown. The leading `New Torrent: ` literal is what
-# distinguishes a real announce from any other PRIVMSG MouseBot might
-# emit (status messages, errors, etc.) — anything that doesn't start
-# with that prefix is silently ignored.
+# The post-2026-08-11 announce grammar.
+#
+# Anchoring notes (see module docstring for why this matters):
+#   * `title` is greedy up to the LAST " By: " so a title containing
+#     "By:" resolves to the title, matching the old parser's behavior.
+#   * `authors` is lazy up to the first bracket group.
+#   * `categories` is lazy, bounded by the ` - <url>` tail rather than
+#     by a separator split, so tags containing " - " survive intact.
+#   * The five-bracket run is required. A PRIVMSG that doesn't carry it
+#     isn't an announce (MouseBot also emits status chatter), so the
+#     parser returns None and the listener ignores the line.
 _ANNOUNCE_RX = re.compile(
-    r"New Torrent: (.*) By: (.*) Category: \( (.*) \) "
-    r"Size: \( (.*) \) Filetype: \( (.*) \) Language: \( (.*) \) "
-    r"Link: \( (https?://[^/]+/).*?(\d+)\s*\)\s*(VIP)?"
+    r"^\s*(?P<title>.+) By:\s*(?P<authors>.+?)\s*"
+    r"\[(?P<language>[^\]]*)\]\s*"
+    r"\[(?P<media_type>[^\]]*)\]\s*"
+    r"\[(?P<fiction>[^\]]*)\]\s*"
+    r"\[(?P<filetypes>[^\]]*)\]\s*"
+    r"\[(?P<size>[^\]]*)\]\s*"
+    r"-\s*(?P<categories>.*?)\s*"
+    r"-\s*(?P<base_url>https?://[^/\s]+/)t/(?P<torrent_id>\d+)"
+    r"\s*(?P<vip>VIP|Normal)?\s*$",
+    re.IGNORECASE,
 )
+
+# New-format media type → the legacy `"<Format> - <Sub>"` prefix that
+# `filter.normalize.extract_format`, `format_dedup.media_type_from_category`
+# and the `LOWER(g.category) LIKE 'audiobook%'` SQL in
+# `discovery.acquisition_linkback` all still key on.
+#
+# The plural is load-bearing: MAM's new feed says "Ebook"/"Audiobook"
+# (singular) but every existing consumer — and the user's saved
+# `allowed_formats` / `allowed_categories` settings — expects
+# "ebooks"/"audiobooks". Synthesizing the plural is what makes this a
+# parser-only change instead of a settings migration.
+_MEDIA_TYPE_TO_LEGACY_FORMAT: dict[str, str] = {
+    "audiobook": "Audiobooks",
+    "ebook": "Ebooks",
+    "musicology": "Musicology",
+    "radio": "Radio",
+    "manga": "Manga",
+    "comic book / graphic novel": "Comics/Graphic novels",
+    "periodical ebook": "Periodical Ebooks",
+    "periodical audiobook": "Periodical Audiobooks",
+}
 
 # mIRC formatting codes that real MAM IRC traffic includes inline.
 # Without stripping these, the regex above silently fails to match
@@ -104,12 +148,26 @@ def _strip_and_n_more(blob: str) -> str:
     return cleaned
 
 
+def _split_list_field(blob: str) -> tuple[str, ...]:
+    """Split a comma-separated announce field into clean parts.
+
+    The live IRC feed pads with double spaces after commas
+    (`"Fantasy,  LGBTQIA+,  Romance"`) where the staff announcement
+    showed single — so normalize whitespace rather than trusting either.
+    Empty parts are dropped so a trailing comma can't yield a `""` tag.
+    """
+    if not blob:
+        return ()
+    parts = (re.sub(r"\s+", " ", p).strip() for p in blob.split(","))
+    return tuple(p for p in parts if p)
+
+
 def parse_announce(line: str) -> Optional[Announce]:
     """Parse one IRC announce line into an `Announce`, or None if it doesn't match.
 
-    The MAM IRC channel emits a steady stream of `New Torrent:` PRIVMSGs
-    plus the occasional unrelated bot message. Anything that doesn't
-    match the announce regex returns None — the caller treats None as
+    The MAM IRC channel emits a steady stream of torrent PRIVMSGs plus
+    the occasional unrelated bot message. Anything that doesn't match
+    the announce grammar returns None — the caller treats None as
     "ignore this line, not for us."
 
     No exceptions are raised for malformed input. The contract is
@@ -121,26 +179,42 @@ def parse_announce(line: str) -> Optional[Announce]:
         return None
 
     # Strip mIRC color and formatting codes BEFORE running the regex.
-    # MAM's MouseBot wraps fields in color codes (`\x0304New
-    # Torrent:\x0314 ...`) that the unit-test fixtures didn't have
-    # because they came from Autobrr's already-decolored log dump.
+    # MAM's MouseBot wraps fields in color codes (`\x0314English\x0304`)
+    # that the unit-test fixtures didn't have because they came from
+    # Autobrr's already-decolored log dump.
     cleaned = _strip_irc_formatting(line)
 
     m = _ANNOUNCE_RX.search(cleaned)
     if not m:
         return None
 
-    title = m.group(1).strip()
-    raw_author = m.group(2).strip()
-    category = m.group(3).strip()
-    size = m.group(4).strip()
-    filetype = m.group(5).strip()
-    language = m.group(6).strip()
-    base_url = m.group(7)
-    torrent_id = m.group(8)
-    vip = bool(m.group(9))
+    title = m.group("title").strip()
+    raw_author = m.group("authors").strip()
+    language = m.group("language").strip()
+    media_type = m.group("media_type").strip()
+    size = m.group("size").strip()
+    torrent_id = m.group("torrent_id")
+    base_url = m.group("base_url")
+
+    categories = _split_list_field(m.group("categories"))
+    filetypes = _split_list_field(m.group("filetypes"))
+
+    # "Normal" is MAM's explicit non-VIP marker, not a missing field.
+    vip = (m.group("vip") or "").strip().lower() == "vip"
 
     author_blob = _strip_and_n_more(raw_author)
+
+    # Synthesize the legacy `"<Format> - <Subcategory>"` category string.
+    # The first content tag is the stand-in for the old single
+    # subcategory; the full list rides along in `categories` and is what
+    # the filter gate actually evaluates, so nothing is lost by the
+    # first-tag choice here. Unknown media types pass through verbatim
+    # rather than being dropped — a new MAM media type should degrade to
+    # "unrecognized format" at the gate, not to "no category at all".
+    legacy_format = _MEDIA_TYPE_TO_LEGACY_FORMAT.get(
+        media_type.lower(), media_type
+    )
+    category = f"{legacy_format} - {categories[0]}" if categories else legacy_format
 
     # Reconstruct the canonical info URL from the captured base + ID.
     # MAM's torrent landing page URL is `<base>t/<id>`. Building it from
@@ -152,12 +226,15 @@ def parse_announce(line: str) -> Optional[Announce]:
         torrent_id=torrent_id,
         torrent_name=title,
         category=category,
+        categories=categories,
         author_blob=author_blob,
         title=title,
         info_url=info_url,
         size=size,
-        filetype=filetype,
+        filetype=", ".join(filetypes),
+        filetypes=filetypes,
         language=language,
+        media_type=media_type,
         vip=vip,
     )
 

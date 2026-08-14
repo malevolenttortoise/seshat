@@ -171,8 +171,71 @@ async def get_categories(
                     normalized=normalize_category(f"{main_name} - {sub_name}"),
                 )
             )
+
+    flat.extend(_v2_category_entries({e.normalized for e in flat}))
     _cache["categories"] = flat
     return flat
+
+
+# The v2 media types the filter gate actually supports, mapped to the
+# legacy main-category spelling the settings are keyed on. Comics,
+# manga, periodicals and musicology are deliberately absent: the gate
+# has no dedup/priority rules for them, so offering the checkboxes
+# would imply support that isn't there.
+_V2_MEDIA_TYPES: tuple[tuple[str, str], ...] = (
+    ("1", "AudioBooks"),
+    ("2", "E-Books"),
+)
+
+
+def _v2_category_entries(existing: set[str]) -> list[CategoryEntry]:
+    """Synthesize CategoryEntry rows for MAM's post-2026-08-11 content tags.
+
+    MAM's announce feed moved to the new taxonomy (8 media types + 61
+    content tags) on 2026-08-11, but the legacy `categories.php` list
+    the picker is built from only covers 32 of those tags. The missing
+    29 — LitRPG, Progression Fantasy, Thriller/Suspense, LGBTQIA+,
+    Erotica/Sexual Content and friends — had no checkbox at all, so a
+    user could neither allow nor exclude them.
+
+    That gap matters most for exclusion: MAM demoted "Erotica/Sexual
+    Content" and "LGBTQI+" from torrent *flags* to real categories (and
+    retired Violence / Crude Language outright), so `excluded_categories`
+    is now the only lever for that content — and it was unreachable.
+
+    Emitted in the same shape and normalized form as the legacy entries
+    so the desktop and mobile pickers render them with no frontend
+    change, and so saved settings stay a single flat list of
+    `"ebooks fantasy"`-style strings. Tags already covered by the legacy
+    list are skipped, keyed on `normalized` — that's the value the UI
+    and the filter both compare on, so matching there is what prevents a
+    visible duplicate checkbox.
+    """
+    v2 = get_v2_enums()
+    tags = v2.get("content_tags") or []
+    out: list[CategoryEntry] = []
+    seen = set(existing)
+    for main_id, main_name in _V2_MEDIA_TYPES:
+        for tag in tags:
+            tag_name = str(tag.get("name", "")).strip()
+            if not tag_name:
+                continue
+            normalized = normalize_category(f"{main_name} - {tag_name}")
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            out.append(
+                CategoryEntry(
+                    # Prefixed so these can never be mistaken for the
+                    # real MAM numeric ids that `catname_for_id` resolves.
+                    id=f"v2:{main_id}:{tag.get('id', '')}",
+                    name=tag_name,
+                    main_id=main_id,
+                    main_name=main_name,
+                    normalized=normalized,
+                )
+            )
+    return out
 
 
 def catname_for_id(cat_id: str | int) -> str | None:

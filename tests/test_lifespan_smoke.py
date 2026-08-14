@@ -47,14 +47,13 @@ from tests.fake_irc import FakeIrc, drive_sasl_handshake
 from tests.fake_mam import FakeMAM
 
 
-# A real fixture announce line, captured from the user's autobrr.log.
+# A real fixture announce line in MAM's post-2026-08-11 format.
 # Goes through the same parser the IRC listener uses in production.
 _REAL_ANNOUNCE_PRIVMSG = (
     ":MouseBot!~bot@host PRIVMSG #announce :"
-    "New Torrent: The Demon King By: Peter V Brett "
-    "Category: ( Audiobooks - Fantasy ) Size: ( 921.91 MiB ) "
-    "Filetype: ( m4b ) Language: ( English ) "
-    "Link: ( https://www.myanonamouse.net/t/1233592 ) VIP"
+    "The Demon King By: Peter V Brett [English] [Audiobook] "
+    "[Fiction] [m4b] [921.91 MiB] - Fantasy - "
+    "https://www.myanonamouse.net/t/1233592 VIP"
 )
 
 
