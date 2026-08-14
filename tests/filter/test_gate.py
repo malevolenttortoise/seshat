@@ -80,6 +80,91 @@ def make_announce(
     )
 
 
+# ─── Multi-category gate (MAM post-2026-08-11 announce format) ──
+
+
+class TestMultiCategoryGate:
+    """MAM announces now carry several content tags per torrent.
+
+    Both category gates are any-match over that list. Matching only the
+    first tag would make every verdict depend on MAM's tag ordering,
+    which is not a property Seshat controls.
+    """
+
+    def test_allowed_when_any_category_matches(self):
+        # "Horror" is not allowed, "Science Fiction" is, and Horror
+        # sorts first — this is a real announce shape (tid 1262725).
+        config = make_config(
+            allowed=["Jonathan Maberry"],
+            categories=["Ebooks - Science Fiction"],
+        )
+        announce = make_announce(
+            author_blob="Jonathan Maberry",
+            category="Ebooks - Horror",
+            categories=("Horror", "Science Fiction"),
+        )
+        decision = evaluate_announce(announce, config)
+        assert decision.action == "allow"
+
+    def test_skipped_when_no_category_matches(self):
+        config = make_config(
+            allowed=["Brandon Sanderson"],
+            categories=["Ebooks - Science Fiction"],
+        )
+        announce = make_announce(
+            category="Ebooks - Horror",
+            categories=("Horror", "Romance"),
+        )
+        decision = evaluate_announce(announce, config)
+        assert decision.action == "skip"
+        assert decision.reason == "category_not_allowed"
+
+    def test_excluded_when_any_category_matches(self):
+        # The exclusion path matters most: MAM demoted
+        # "Erotica/Sexual Content" from a torrent flag to a real
+        # category, so this gate is the only lever left for it — and a
+        # first-tag-only check would miss it whenever it isn't first.
+        config = make_config(
+            allowed=["Brandon Sanderson"],
+            categories=["Ebooks - Fantasy"],
+            excluded_categories=["Ebooks - Erotica/Sexual Content"],
+        )
+        announce = make_announce(
+            category="Ebooks - Fantasy",
+            categories=("Fantasy", "Erotica/Sexual Content", "Romance"),
+        )
+        decision = evaluate_announce(announce, config)
+        assert decision.action == "skip"
+        assert decision.reason == "category_excluded"
+
+    def test_exclusion_beats_inclusion(self):
+        config = make_config(
+            allowed=["Brandon Sanderson"],
+            categories=["Ebooks - Fantasy"],
+            excluded_categories=["Ebooks - Romance"],
+        )
+        announce = make_announce(
+            category="Ebooks - Fantasy",
+            categories=("Fantasy", "Romance"),
+        )
+        decision = evaluate_announce(announce, config)
+        assert decision.action == "skip"
+        assert decision.reason == "category_excluded"
+
+    def test_empty_categories_falls_back_to_single_field(self):
+        # Manually-injected announces and replayed historical rows only
+        # ever carry the combined `category` string.
+        config = make_config(
+            allowed=["Brandon Sanderson"],
+            categories=["Ebooks - Fantasy"],
+        )
+        announce = make_announce(category="Ebooks - Fantasy", categories=())
+        assert evaluate_announce(announce, config).action == "allow"
+
+        blocked = make_announce(category="Ebooks - Horror", categories=())
+        assert evaluate_announce(blocked, config).reason == "category_not_allowed"
+
+
 # ─── Category gate ───────────────────────────────────────────
 
 

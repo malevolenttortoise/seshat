@@ -4,16 +4,21 @@ Unit tests for the MAM announce parser.
 Two layers of testing:
 
   1. **Hand-written cases** — pin down specific behaviors (the
-     "and N more" stripping, the typographic apostrophe, optional VIP
-     suffix, malformed input rejection). These are the regression tests
-     that catch deliberate behavior changes.
+     "and N more" stripping, the typographic apostrophe, VIP vs Normal,
+     multi-category/multi-filetype handling, malformed input rejection).
+     These are the regression tests that catch deliberate changes.
 
   2. **Real fixture sweep** — every line in
-     `tests/fixtures/real_announces.txt` (18 captures from the user's
-     production Autobrr log) MUST parse cleanly. This is the safety net
-     that catches divergence between Autobrr's regex (which we cribbed
-     verbatim) and what MAM actually emits today. If MAM changes the
-     announce format, this sweep is the alarm.
+     `tests/fixtures/real_announces_v2.txt` (35 captures pulled straight
+     from the production container log, mIRC color bytes intact) MUST
+     parse cleanly. This is the safety net for the next format change:
+     the previous one shipped silently and cost three days of announces
+     because `parse_announce` returning None is indistinguishable from
+     "not an announce" at the call site.
+
+`real_announces.txt` holds the pre-2026-08-11 captures. Those are kept
+deliberately — not as a parser target but as the fixture proving the
+old grammar is gone, so nobody "restores" it later.
 """
 from pathlib import Path
 
@@ -26,15 +31,21 @@ from app.mam.announce import (
 )
 
 
-_FIXTURES_PATH = Path(__file__).parent.parent / "fixtures" / "real_announces.txt"
+_FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
+_FIXTURES_PATH = _FIXTURES_DIR / "real_announces_v2.txt"
+_LEGACY_FIXTURES_PATH = _FIXTURES_DIR / "real_announces.txt"
+
+
+def _read_lines(path: Path) -> list[str]:
+    return [
+        line.rstrip("\n")
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
 
 
 def _load_real_announces() -> list[str]:
-    return [
-        line.rstrip("\n")
-        for line in _FIXTURES_PATH.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
+    return _read_lines(_FIXTURES_PATH)
 
 
 # ─── Real-fixture sweep ──────────────────────────────────────
@@ -45,7 +56,7 @@ class TestRealFixturesParse:
 
     def test_all_fixtures_parse(self):
         announces = _load_real_announces()
-        assert len(announces) >= 18, "Fixture file shrunk unexpectedly"
+        assert len(announces) >= 34, "Fixture file shrunk unexpectedly"
         for line in announces:
             result = parse_announce(line)
             assert result is not None, f"Failed to parse: {line!r}"
@@ -53,7 +64,33 @@ class TestRealFixturesParse:
             assert result.torrent_id, f"Missing torrent_id in: {line!r}"
             assert result.torrent_name, f"Missing torrent_name in: {line!r}"
             assert result.category, f"Missing category in: {line!r}"
+            assert result.categories, f"Missing categories in: {line!r}"
             assert result.author_blob, f"Missing author_blob in: {line!r}"
+            assert result.filetypes, f"Missing filetypes in: {line!r}"
+            assert result.language, f"Missing language in: {line!r}"
+            assert result.media_type, f"Missing media_type in: {line!r}"
+
+    def test_fixtures_cover_both_vip_and_normal(self):
+        # "Normal" is MAM's explicit non-VIP marker. A regex that only
+        # knew about an optional trailing "VIP" would still match these
+        # lines while silently mis-flagging them, so the corpus has to
+        # contain both to make that failure visible.
+        parsed = [parse_announce(l) for l in _load_real_announces()]
+        flags = {p.vip for p in parsed if p is not None}
+        assert flags == {True, False}
+
+    def test_fixtures_cover_multiple_media_types(self):
+        parsed = [parse_announce(l) for l in _load_real_announces()]
+        media = {p.media_type for p in parsed if p is not None}
+        assert {"Ebook", "Audiobook"} <= media
+        assert len(media) >= 4, f"Corpus lost media-type variety: {media}"
+
+    def test_legacy_format_no_longer_parses(self):
+        # MAM retired this grammar on 2026-08-11. Pinned so the old
+        # regex can't be reintroduced without this test going red.
+        legacy = _read_lines(_LEGACY_FIXTURES_PATH)
+        assert len(legacy) >= 18
+        assert all(parse_announce(line) is None for line in legacy)
 
     def test_fixture_torrent_ids_are_unique_and_numeric(self):
         announces = _load_real_announces()
@@ -80,10 +117,9 @@ class TestRealFixturesParse:
 class TestParseAnnounce:
     def test_basic_single_author_with_vip(self):
         line = (
-            "New Torrent: The Demon King By: Peter V Brett "
-            "Category: ( Audiobooks - Fantasy ) Size: ( 921.91 MiB ) "
-            "Filetype: ( m4b ) Language: ( English ) "
-            "Link: ( https://www.myanonamouse.net/t/1233592 ) VIP"
+            "The Demon King By: Peter V Brett [English] [Audiobook] "
+            "[Fiction] [m4b] [921.91 MiB] - Fantasy - "
+            "https://www.myanonamouse.net/t/1233592 VIP"
         )
         result = parse_announce(line)
         assert result is not None
@@ -91,33 +127,124 @@ class TestParseAnnounce:
         assert result.torrent_name == "The Demon King"
         assert result.title == "The Demon King"
         assert result.author_blob == "Peter V Brett"
-        assert result.category == "Audiobooks - Fantasy"
+        assert result.media_type == "Audiobook"
+        assert result.categories == ("Fantasy",)
         assert result.size == "921.91 MiB"
         assert result.filetype == "m4b"
+        assert result.filetypes == ("m4b",)
         assert result.language == "English"
         assert result.vip is True
         assert result.info_url == "https://www.myanonamouse.net/t/1233592"
 
-    def test_basic_without_vip(self):
+    def test_legacy_category_string_is_synthesized(self):
+        # The single `category` field keeps the pre-2026-08-11
+        # "<Format> - <Sub>" shape because extract_format,
+        # media_type_from_category and the acquisition-linkback SQL all
+        # still parse it. Note the PLURAL: MAM now says "Audiobook",
+        # every consumer and every saved setting says "audiobooks".
+        result = parse_announce(
+            "The Demon King By: Peter V Brett [English] [Audiobook] "
+            "[Fiction] [m4b] [921.91 MiB] - Fantasy - "
+            "https://www.myanonamouse.net/t/1233592 VIP"
+        )
+        assert result is not None
+        assert result.category == "Audiobooks - Fantasy"
+
+        ebook = parse_announce(
+            "New Earth By: M R Forbes [English] [Ebook] [Fiction] [epub] "
+            "[1.10 MiB] - Science Fiction - "
+            "https://www.myanonamouse.net/t/1233593 Normal"
+        )
+        assert ebook is not None
+        assert ebook.category == "Ebooks - Science Fiction"
+
+    def test_normal_marker_is_not_vip(self):
+        # "Normal" replaced "no trailing token" as the non-VIP marker.
         line = (
-            "New Torrent: The Path of Ascension 11 By: C Mantis "
-            "Category: ( Audiobooks - Fantasy ) Size: ( 761.20 MiB ) "
-            "Filetype: ( m4b ) Language: ( English ) "
-            "Link: ( https://www.myanonamouse.net/t/1233620 )"
+            "The Path of Ascension 11 By: C Mantis [English] [Audiobook] "
+            "[Fiction] [m4b] [761.20 MiB] - Fantasy - "
+            "https://www.myanonamouse.net/t/1233620 Normal"
         )
         result = parse_announce(line)
         assert result is not None
         assert result.vip is False
         assert result.torrent_id == "1233620"
 
+    def test_multiple_categories_preserved_in_order(self):
+        line = (
+            "Yield Under Great Persuasion By: Alexandra Rowland [English] "
+            "[Audiobook] [Fiction] [m4b] [575.62 MiB] - "
+            "Fantasy,  LGBTQIA+,  Romance - "
+            "https://www.myanonamouse.net/t/1263153 VIP"
+        )
+        result = parse_announce(line)
+        assert result is not None
+        # The live feed double-spaces after commas; the staff post
+        # showed single. Neither is trusted — whitespace is collapsed.
+        assert result.categories == ("Fantasy", "LGBTQIA+", "Romance")
+        # First tag stands in for the old single subcategory.
+        assert result.category == "Audiobooks - Fantasy"
+
+    def test_multiple_filetypes(self):
+        # Real comic/manga bundles announce as "[cbz, pdf]".
+        line = (
+            "Ultimate Marvel Team-Up By: Matt Wagner [English] "
+            "[Comic Book / Graphic Novel] [Fiction] [cbz, pdf] "
+            "[1.20 GiB] - Superheroes - "
+            "https://www.myanonamouse.net/t/1262899 VIP"
+        )
+        result = parse_announce(line)
+        assert result is not None
+        assert result.filetypes == ("cbz", "pdf")
+        assert result.filetype == "cbz, pdf"
+
+    def test_title_containing_separator(self):
+        # This title carries " - ", which also delimits the category
+        # list. Anchoring on the trailing URL is what keeps it from
+        # being truncated at the first separator.
+        result = parse_announce(
+            "I Want to Hold Aono-kun So Badly I Could Die - Full Series "
+            "By: Umi Shiina [English] [Manga] [Fiction] [cbz] "
+            "[4.59 GiB] - Fantasy - "
+            "https://www.myanonamouse.net/t/1262900 VIP"
+        )
+        assert result is not None
+        assert result.title == (
+            "I Want to Hold Aono-kun So Badly I Could Die - Full Series"
+        )
+        assert result.author_blob == "Umi Shiina"
+
+    def test_category_containing_separator(self):
+        # "Complete Editions - Music" is a real MAM content tag, so the
+        # category region itself can contain the delimiter.
+        result = parse_announce(
+            "Guitar Anthology By: Various [English] [Musicology] "
+            "[Non-Fiction] [pdf] [88.10 MiB] - Complete Editions - Music,  "
+            "Music Book - https://www.myanonamouse.net/t/1262901 Normal"
+        )
+        assert result is not None
+        assert result.categories == ("Complete Editions - Music", "Music Book")
+        assert result.torrent_id == "1262901"
+
+    def test_unknown_media_type_passes_through(self):
+        # A media type MAM adds later should degrade to "unrecognized
+        # format" at the gate rather than losing the category entirely.
+        result = parse_announce(
+            "Some Thing By: A N Other [English] [Hologram] [Fiction] "
+            "[bin] [1.00 MiB] - Fantasy - "
+            "https://www.myanonamouse.net/t/1299999 VIP"
+        )
+        assert result is not None
+        assert result.media_type == "Hologram"
+        assert result.category == "Hologram - Fantasy"
+
     def test_and_n_more_stripped(self):
         # Real-world MAM truncation when there are too many co-authors.
         line = (
-            "New Torrent: The Hardboiled Mystery MEGAPACK "
+            "The Hardboiled Mystery MEGAPACK "
             "By: Stephen Marlowe, John Roeburt, Ed Lacy, and 1 more "
-            "Category: ( Ebooks - Mystery ) Size: ( 743.58 KiB ) "
-            "Filetype: ( epub ) Language: ( English ) "
-            "Link: ( https://www.myanonamouse.net/t/1233596 ) VIP"
+            "[English] [Ebook] [Fiction] [epub] [743.58 KiB] - Mystery - "
+            "https://www.myanonamouse.net/t/1233596 VIP"
         )
         result = parse_announce(line)
         assert result is not None
@@ -131,10 +258,10 @@ class TestParseAnnounce:
         # normalization happens in the filter layer when comparing
         # against author lists, not in the parser.
         line = (
-            "New Torrent: I Won\u2019t Let Mistress Suck My Blood, Vol. 1 "
-            "By: Paderapollonorio Category: ( Ebooks - Comics/Graphic novels ) "
-            "Size: ( 62.93 MiB ) Filetype: ( cbz ) Language: ( English ) "
-            "Link: ( https://www.myanonamouse.net/t/1233619 ) VIP"
+            "I Won\u2019t Let Mistress Suck My Blood, Vol. 1 "
+            "By: Paderapollonorio [English] [Comic Book / Graphic Novel] "
+            "[Fiction] [cbz] [62.93 MiB] - Comedy - "
+            "https://www.myanonamouse.net/t/1233619 VIP"
         )
         result = parse_announce(line)
         assert result is not None
@@ -144,10 +271,10 @@ class TestParseAnnounce:
         # "Classroom of the Elite: Year 2, Vol. 12.5" — the colon in the
         # title shouldn't confuse the regex (it's a real fixture).
         line = (
-            "New Torrent: Classroom of the Elite: Year 2, Vol. 12.5 "
-            "By: Syougo Kinugasa Category: ( Audiobooks - Young Adult ) "
-            "Size: ( 472.16 MiB ) Filetype: ( m4b ) Language: ( English ) "
-            "Link: ( https://www.myanonamouse.net/t/1233608 ) VIP"
+            "Classroom of the Elite: Year 2, Vol. 12.5 "
+            "By: Syougo Kinugasa [English] [Audiobook] [Fiction] [m4b] "
+            "[472.16 MiB] - Young Adult - "
+            "https://www.myanonamouse.net/t/1233608 VIP"
         )
         result = parse_announce(line)
         assert result is not None
@@ -157,26 +284,26 @@ class TestParseAnnounce:
     def test_title_with_comma(self):
         # "Sea of Wind, Shore of the Labyrinth" — comma in title
         line = (
-            "New Torrent: Sea of Wind, Shore of the Labyrinth "
-            "By: Fuyumi Ono Category: ( Audiobooks - Fantasy ) "
-            "Size: ( 401.33 MiB ) Filetype: ( m4b ) Language: ( English ) "
-            "Link: ( https://www.myanonamouse.net/t/1233605 ) VIP"
+            "Sea of Wind, Shore of the Labyrinth "
+            "By: Fuyumi Ono [English] [Audiobook] [Fiction] [m4b] "
+            "[401.33 MiB] - Fantasy - "
+            "https://www.myanonamouse.net/t/1233605 VIP"
         )
         result = parse_announce(line)
         assert result is not None
         assert result.title == "Sea of Wind, Shore of the Labyrinth"
 
     def test_category_with_slash(self):
-        # "Ebooks - Action/Adventure", "Ebooks - Crime/Thriller" — slashes
-        # in the category are common and shouldn't be eaten by the regex.
+        # "Action/Adventure", "Thriller/Suspense" — slashes in the
+        # category are common and shouldn't be eaten by the regex.
         line = (
-            "New Torrent: God's Eye By: Robert Rapoza "
-            "Category: ( Ebooks - Action/Adventure ) Size: ( 1.49 MiB ) "
-            "Filetype: ( epub ) Language: ( English ) "
-            "Link: ( https://www.myanonamouse.net/t/1233601 ) VIP"
+            "God's Eye By: Robert Rapoza [English] [Ebook] [Fiction] "
+            "[epub] [1.49 MiB] - Action/Adventure - "
+            "https://www.myanonamouse.net/t/1233601 VIP"
         )
         result = parse_announce(line)
         assert result is not None
+        assert result.categories == ("Action/Adventure",)
         assert result.category == "Ebooks - Action/Adventure"
 
     # ─── _strip_irc_formatting direct tests ──────────────────
@@ -238,49 +365,50 @@ class TestParseAnnounce:
         assert _strip_irc_formatting(line) == line
 
     def test_real_colored_privmsg_parses_after_stripping(self):
-        # The actual on-the-wire shape MAM IRC sends. Captured live
-        # from the first production smoke test once the keepalive
-        # fix landed and the listener actually started receiving
-        # PRIVMSGs. Color codes (\x03 followed by 1-2 digits) wrap
-        # every field — without the formatting stripper the regex
-        # silently doesn't match and Seshat looks like it's
+        # The actual on-the-wire shape MAM IRC sends, captured from the
+        # production container log. Color codes (\x03 followed by 1-2
+        # digits) wrap most fields — without the formatting stripper the
+        # regex silently doesn't match and Seshat looks like it's
         # working but never grabs anything.
         line = (
-            "\x0304New Torrent:\x0314 Hello, Melancholic! Vol. 1-3"
-            "\x0304 By:\x0303 Yayoi Ohsawa"
-            "\x0304 Category: (\x0314 Ebooks - Comics/Graphic novels"
-            "\x0304 ) Size: (\x0314 1,011.34 MiB"
-            "\x0304 ) Filetype: (\x0314 cbz"
-            "\x0304 ) Language: (\x0314 English"
-            "\x0304 ) Link: (\x0314 https://www.myanonamouse.net/t/1233678"
-            "\x0304 )"
+            "The Winds of Change... and Other Stories\x0304 By:\x0303 "
+            "Isaac Asimov\x0304 [\x0314English\x0304] [Ebook] [Fiction] "
+            "[\x0314epub\x0304] [\x0303301.58 KiB\x0304] -\x03 "
+            "Science Fiction\x0304 - \x0314"
+            "https://www.myanonamouse.net/t/1263152\x0304 VIP"
         )
         result = parse_announce(line)
         assert result is not None
-        assert result.torrent_id == "1233678"
-        assert result.torrent_name == "Hello, Melancholic! Vol. 1-3"
-        assert result.author_blob == "Yayoi Ohsawa"
-        assert result.category == "Ebooks - Comics/Graphic novels"
-        assert result.filetype == "cbz"
-
-    def test_real_colored_privmsg_with_vip(self):
-        # VIP variant of the colored line — the trailing `VIP` is
-        # OUTSIDE the closing color code, but the regex's optional
-        # capture should still match it.
-        line = (
-            "\x0304New Torrent:\x0314 Test Book"
-            "\x0304 By:\x0303 Test Author"
-            "\x0304 Category: (\x0314 Ebooks - Fantasy"
-            "\x0304 ) Size: (\x0314 1.5 MiB"
-            "\x0304 ) Filetype: (\x0314 epub"
-            "\x0304 ) Language: (\x0314 English"
-            "\x0304 ) Link: (\x0314 https://www.myanonamouse.net/t/9999"
-            "\x0304 ) VIP"
-        )
-        result = parse_announce(line)
-        assert result is not None
-        assert result.torrent_id == "9999"
+        assert result.torrent_id == "1263152"
+        assert result.torrent_name == "The Winds of Change... and Other Stories"
+        assert result.author_blob == "Isaac Asimov"
+        assert result.media_type == "Ebook"
+        assert result.categories == ("Science Fiction",)
+        assert result.category == "Ebooks - Science Fiction"
+        assert result.filetype == "epub"
         assert result.vip is True
+
+    def test_real_colored_privmsg_multi_category(self):
+        # Colored variant carrying several tags and the "Normal"
+        # non-VIP marker.
+        line = (
+            "RuinForged Architect\x0304 By:\x0303 Malik Mark\x0304 "
+            "[\x0314English\x0304] [Audiobook] [Fiction] "
+            "[\x0314m4b\x0304] [\x0303689.70 MiB\x0304] -\x03 "
+            "Action/Adventure,  Fantasy,  LitRPG,  Progression Fantasy"
+            "\x0304 - \x0314"
+            "https://www.myanonamouse.net/t/1262830\x0304 Normal"
+        )
+        result = parse_announce(line)
+        assert result is not None
+        assert result.torrent_id == "1262830"
+        assert result.vip is False
+        assert result.categories == (
+            "Action/Adventure",
+            "Fantasy",
+            "LitRPG",
+            "Progression Fantasy",
+        )
 
     def test_returns_none_on_unrelated_line(self):
         # The IRC channel emits other PRIVMSGs (status, errors, etc).
@@ -291,7 +419,22 @@ class TestParseAnnounce:
 
     def test_returns_none_on_partial_match(self):
         # Truncated / malformed announce — must NOT half-fill an Announce.
-        line = "New Torrent: The Demon King By: Peter V Brett Category: ("
+        assert parse_announce(
+            "The Demon King By: Peter V Brett [English] [Audiobook]"
+        ) is None
+
+    def test_returns_none_on_cutover_malformed_line(self):
+        # MAM's own first line under the new format was malformed —
+        # missing the space before "By:", a stray space in the size
+        # bracket, and ")" where the URL separator belongs. Rejecting it
+        # is correct; it's pinned so a future "be more lenient" change
+        # has to be deliberate.
+        line = (
+            " Frost HungerBy:\x0303 Indigo Frey\x0304 [\x0314English\x0304] "
+            "[Ebook] [Fiction] [\x0314epub\x0304] [1.07 MiB ]  - "
+            "Fantasy,  LGBTQIA+,  Erotica/Sexual Content,  Romance ) "
+            "https://www.myanonamouse.net/t/1262654 VIP"
+        )
         assert parse_announce(line) is None
 
 
@@ -336,10 +479,9 @@ class TestBuildDownloadUrl:
         # The torrent_id captured from a real announce should produce
         # a valid download URL when passed back to build_download_url.
         line = (
-            "New Torrent: The Demon King By: Peter V Brett "
-            "Category: ( Audiobooks - Fantasy ) Size: ( 921.91 MiB ) "
-            "Filetype: ( m4b ) Language: ( English ) "
-            "Link: ( https://www.myanonamouse.net/t/1233592 ) VIP"
+            "The Demon King By: Peter V Brett [English] [Audiobook] "
+            "[Fiction] [m4b] [921.91 MiB] - Fantasy - "
+            "https://www.myanonamouse.net/t/1233592 VIP"
         )
         result = parse_announce(line)
         assert result is not None

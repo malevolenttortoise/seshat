@@ -285,10 +285,9 @@ class TestReadLoop:
 
             fake_irc.feed_line(
                 ":MouseBot!~bot@host PRIVMSG #announce :"
-                "New Torrent: The Demon King By: Peter V Brett "
-                "Category: ( Audiobooks - Fantasy ) Size: ( 921.91 MiB ) "
-                "Filetype: ( m4b ) Language: ( English ) "
-                "Link: ( https://www.myanonamouse.net/t/1233592 ) VIP"
+                "The Demon King By: Peter V Brett [English] [Audiobook] "
+                "[Fiction] [m4b] [921.91 MiB] - Fantasy - "
+                "https://www.myanonamouse.net/t/1233592 VIP"
             )
 
             # Wait for the dispatch.
@@ -320,9 +319,8 @@ class TestReadLoop:
 
             fake_irc.feed_line(
                 ":SomeOtherUser!~x@y PRIVMSG #announce :"
-                "New Torrent: Foo By: Bar Category: ( Ebooks - Fantasy ) "
-                "Size: ( 1 MB ) Filetype: ( epub ) Language: ( English ) "
-                "Link: ( https://www.myanonamouse.net/t/999999 )"
+                "Foo By: Bar [English] [Ebook] [Fiction] [epub] [1 MB] "
+                "- Fantasy - https://www.myanonamouse.net/t/999999 Normal"
             )
             await asyncio.sleep(0.05)
             assert collector.announces == []
@@ -344,9 +342,8 @@ class TestReadLoop:
 
             fake_irc.feed_line(
                 ":MouseBot!~bot@host PRIVMSG #other-channel :"
-                "New Torrent: Foo By: Bar Category: ( Ebooks - Fantasy ) "
-                "Size: ( 1 MB ) Filetype: ( epub ) Language: ( English ) "
-                "Link: ( https://www.myanonamouse.net/t/999999 )"
+                "Foo By: Bar [English] [Ebook] [Fiction] [epub] [1 MB] "
+                "- Fantasy - https://www.myanonamouse.net/t/999999 Normal"
             )
             await asyncio.sleep(0.05)
             assert collector.announces == []
@@ -401,9 +398,8 @@ class TestReadLoop:
 
             fake_irc.feed_line(
                 ":MouseBot!~bot@host PRIVMSG #announce :"
-                "New Torrent: A By: B Category: ( Ebooks - Fantasy ) "
-                "Size: ( 1 MB ) Filetype: ( epub ) Language: ( English ) "
-                "Link: ( https://www.myanonamouse.net/t/1 )"
+                "A By: B [English] [Ebook] [Fiction] [epub] [1 MB] "
+                "- Fantasy - https://www.myanonamouse.net/t/1 Normal"
             )
             # Now feed a PING — if the loop is still alive, we'll
             # see a PONG response.
