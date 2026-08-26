@@ -3544,11 +3544,39 @@ async def _try_source(source, author_name, author_id, our_titles, languages, sou
             return 0
         logger.info(f"  [{source_name}] Retrieved {total_src} books ({len(full.series)} series, {len(full.books)} standalone)")
 
-        # Validate: skip if author already confirmed from previous scans
-        if existing_titles and len(existing_titles) > 0:
-            logger.debug(f"  [{source_name}] Author already confirmed ({len(existing_titles)} known books)")
-        elif not await _validate_author(author_name, our_titles, full):
-            logger.info(f"  [{source_name}] Author validation failed — skipping (likely wrong author)")
+        # Validate the source really found OUR author — EVERY source, EVERY
+        # scan.
+        #
+        # v3.10.0: this used to be skipped entirely whenever the author had
+        # any previously-known books ("already confirmed"). That made the
+        # wrong-author guard a one-shot: the first source to validate
+        # successfully disarmed it for every source that ran afterwards.
+        #
+        # Live consequence — "Nick Adams". Hardcover legitimately matched the
+        # owned Fold novels on scan one, so from then on OpenLibrary, Amazon
+        # and Goodreads were never checked, and OpenLibrary's name-collapsed
+        # author entity (OL2719653A — 41 works spanning a political
+        # commentator, a children's author and a sci-fi author) merged
+        # wholesale. "Trump and Churchill" and "Kenny the Koala Comes to the
+        # USA" became missing books for a sci-fi author.
+        #
+        # Validating against `our_titles` (OWNED books only) is deliberate.
+        # The broader `existing_titles` set includes previously-DISCOVERED
+        # rows, so validating against it would let a source that polluted
+        # this author on a past scan match its own junk and pass forever —
+        # self-reinforcing. Owned books are ground truth; discovered ones
+        # are the thing under suspicion.
+        #
+        # `_validate_author` returns True when `our_titles` is empty, so
+        # discovered-only authors (allow-listed, nothing owned yet) are
+        # unaffected — there is simply nothing to validate against.
+        if not await _validate_author(author_name, our_titles, full):
+            logger.info(
+                "  [%s] Author validation FAILED for %r — skipping %d books "
+                "(source's catalogue shares no title with the %d owned book(s) "
+                "we have; likely a different person with the same name)",
+                source_name, author_name, total_src, len(our_titles),
+            )
             return 0
 
         n, u = await _merge_result(author_id, full, source_name, languages, full_scan=full_scan, owned_only=owned_only, series_collector=series_collector, on_new_book=on_new_book, exclude_audiobooks=exclude_audiobooks, linked_author_ids=linked_author_ids, link_type_by_id=link_type_by_id)
