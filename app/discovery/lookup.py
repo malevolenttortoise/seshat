@@ -119,8 +119,27 @@ _RX_FOREIGN_ACCENTS = re.compile(
     r'[àáâãäåæçèéêëìíîïðñòóôõöùúûüýþÿąćęłńóśźżšžřůďťňĺľŕäöüß]',
     re.I,
 )
+# Non-Latin scripts. An English-language edition never renders its title
+# in any of these, so a hit is proof of a translation \u2014 no false-positive
+# risk, unlike the Latin-script heuristics below.
+#
+# v3.10.0: Greek + Hebrew were missing, which is how "DUNE: \u039f\u03af\u03ba\u03bf\u03c2 \u03c4\u03c9\u03bd
+# \u0391\u03c4\u03c1\u03b5\u03b9\u03b4\u03ce\u03bd" and "\u05e9\u05d9\u05e9\u05d4 \u05e2\u05d5\u05e8\u05d1\u05d9\u05dd" reached the live missing list (13 rows, from
+# openlibrary + hardcover). Added the other common scripts at the same
+# time rather than waiting to be surprised by each one in turn.
 _RX_FOREIGN_UNICODE = re.compile(
-    r'[\u0400-\u04ff\u3000-\u9fff\u0600-\u06ff\uac00-\ud7af]'
+    r'[\u0370-\u03ff'   # Greek and Coptic          (NEW v3.10.0)
+    r'\u1f00-\u1fff'    # Greek Extended            (NEW v3.10.0)
+    r'\u0400-\u04ff'    # Cyrillic
+    r'\u0500-\u052f'    # Cyrillic Supplement       (NEW v3.10.0)
+    r'\u0590-\u05ff'    # Hebrew                    (NEW v3.10.0)
+    r'\u0600-\u06ff'    # Arabic
+    r'\u0900-\u097f'    # Devanagari                (NEW v3.10.0)
+    r'\u0e00-\u0e7f'    # Thai                      (NEW v3.10.0)
+    r'\u0530-\u058f'    # Armenian                  (NEW v3.10.0)
+    r'\u10a0-\u10ff'    # Georgian                  (NEW v3.10.0)
+    r'\u3000-\u9fff'    # CJK (incl. kana)
+    r'\uac00-\ud7af]'   # Hangul
 )
 _RX_SERIES_REF_TITLE = re.compile(r'^.+\s+#\d+\s*$')
 
@@ -1325,7 +1344,7 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
             f"SELECT id, title, source_url, series_id, series_index, source, "
             f"pub_date, expected_date, description, isbn, "
             f"(SELECT author_id FROM book_authors WHERE book_id=books.id AND position=0) AS author_id, "
-            f"is_omnibus, hidden, owned "
+            f"is_omnibus, hidden, owned, language "
             f"FROM books WHERE id IN "
             f"(SELECT book_id FROM book_authors WHERE author_id IN ({id_ph}))",
             all_author_ids,
@@ -1713,6 +1732,21 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
             # apply the new rule to it too since users may swap covers
             # between sources.
             queue_rows: list[tuple] = []
+            # v3.10.0 — fill `language` if we don't have it yet. Strict
+            # fill-if-empty and deliberately NOT a REVIEW_FIELDS entry:
+            # language is source-reported provenance, not user-editable
+            # metadata, so a disagreement shouldn't cost the operator a
+            # review-queue row. Runs on every match (not just full_scan)
+            # so rows discovered before language was persisted acquire it
+            # on the next ordinary scan instead of staying NULL forever.
+            if bk.language:
+                try:
+                    _cur_lang = matched_row["language"]
+                except (IndexError, KeyError):
+                    _cur_lang = None
+                if _cur_lang is None or not str(_cur_lang).strip():
+                    sets.append("language=?")
+                    vals.append(bk.language)
             if full_scan:
                 REVIEW_FIELDS = (
                     ("description", bk.description),
@@ -2068,8 +2102,8 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                 # scanned author + co-authors are written to book_authors by
                 # _link_discovered_contributors below (always-links the
                 # scanned author at position 0).
-                _ins_cur = await db.execute(f"INSERT OR IGNORE INTO books (title,series_id,series_index,isbn,cover_url,pub_date,expected_date,is_unreleased,description,page_count,source,source_url,owned,is_new,is_omnibus,{source_name}_id,amazon_format_asins{_x_col_sql}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,1,?,?,?{_x_q_sql})",
-                    (bk.title, sid_use, s_idx, bk.isbn, bk.cover_url, bk.pub_date, bk.expected_date, 1 if bk.is_unreleased else 0, bk.description, bk.page_count, source_name, initial_urls, 1 if omnibus else 0, bk.external_id, bk.amazon_format_asins, *_xvals))
+                _ins_cur = await db.execute(f"INSERT OR IGNORE INTO books (title,series_id,series_index,isbn,cover_url,pub_date,expected_date,is_unreleased,description,page_count,source,source_url,language,owned,is_new,is_omnibus,{source_name}_id,amazon_format_asins{_x_col_sql}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,1,?,?,?{_x_q_sql})",
+                    (bk.title, sid_use, s_idx, bk.isbn, bk.cover_url, bk.pub_date, bk.expected_date, 1 if bk.is_unreleased else 0, bk.description, bk.page_count, source_name, initial_urls, bk.language, 1 if omnibus else 0, bk.external_id, bk.amazon_format_asins, *_xvals))
                 if _ins_cur.rowcount and _ins_cur.lastrowid:
                     await _link_discovered_contributors(db, _ins_cur.lastrowid, author_id, bk, source_name, roster=roster, stats=roster_stats)
                 existing.add(norm); new_books += 1
@@ -2220,8 +2254,8 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
             _x_q_sql = ("," + ",".join(["?"] * len(_xcols))) if _xcols else ""
             # v3.0.0 Phase 9 (ADR-0012): no books.author_id — contributors
             # written to book_authors by _link_discovered_contributors below.
-            _ins_cur = await db.execute(f"INSERT OR IGNORE INTO books (title,isbn,cover_url,pub_date,expected_date,is_unreleased,description,page_count,source,source_url,owned,is_new,is_omnibus,{source_name}_id,amazon_format_asins{_x_col_sql}) VALUES (?,?,?,?,?,?,?,?,?,?,0,1,?,?,?{_x_q_sql})",
-                (bk.title, bk.isbn, bk.cover_url, bk.pub_date, bk.expected_date, 1 if bk.is_unreleased else 0, bk.description, bk.page_count, source_name, initial_urls, 1 if omnibus else 0, bk.external_id, bk.amazon_format_asins, *_xvals))
+            _ins_cur = await db.execute(f"INSERT OR IGNORE INTO books (title,isbn,cover_url,pub_date,expected_date,is_unreleased,description,page_count,source,source_url,language,owned,is_new,is_omnibus,{source_name}_id,amazon_format_asins{_x_col_sql}) VALUES (?,?,?,?,?,?,?,?,?,?,?,0,1,?,?,?{_x_q_sql})",
+                (bk.title, bk.isbn, bk.cover_url, bk.pub_date, bk.expected_date, 1 if bk.is_unreleased else 0, bk.description, bk.page_count, source_name, initial_urls, bk.language, 1 if omnibus else 0, bk.external_id, bk.amazon_format_asins, *_xvals))
             if _ins_cur.rowcount and _ins_cur.lastrowid:
                 await _link_discovered_contributors(db, _ins_cur.lastrowid, author_id, bk, source_name, roster=roster, stats=roster_stats)
             existing.add(norm); new_books += 1
