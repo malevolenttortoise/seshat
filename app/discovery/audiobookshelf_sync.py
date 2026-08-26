@@ -607,6 +607,20 @@ async def sync_audiobookshelf(library: dict) -> dict:
                 "(non-fatal — hourly APScheduler job will catch up)"
             )
 
+        # v3.10.0 (ADR-0021) — mirror of the Calibre side: ABS bylines stay
+        # intact, but non-allow-listed library authors are offered for
+        # review so the allow list can become genuinely complete.
+        try:
+            from app.discovery.roster import (
+                surface_non_roster_library_authors,
+            )
+            await surface_non_roster_library_authors(slug)
+        except Exception:
+            logger.exception(
+                "ABS sync: non-roster author surfacing failed "
+                "(non-fatal — next sync retries)"
+            )
+
         return {
             "books_found": books_found,
             "books_new": books_new,

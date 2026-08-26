@@ -1415,6 +1415,21 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
                 "(non-fatal — hourly APScheduler job will catch up)"
             )
 
+        # v3.10.0 (ADR-0021) — library sync keeps every real contributor on
+        # the byline, but an author who is in Calibre and NOT on the allow
+        # list is a genuine gap (MAM announces for them still fall through
+        # the filter). Offer them for review rather than silently gating.
+        try:
+            from app.discovery.roster import (
+                surface_non_roster_library_authors,
+            )
+            await surface_non_roster_library_authors(slug)
+        except Exception:
+            logger.exception(
+                "Calibre sync: non-roster author surfacing failed "
+                "(non-fatal — next sync retries)"
+            )
+
         return {
             "books_found": books_found,
             "books_new": books_new,

@@ -217,6 +217,95 @@ async def scan_eligible_authors(
     return eligible
 
 
+# A library author is ALREADY a roster member via the owned half, so
+# surfacing them is a convenience (it lets the operator make the allow list
+# genuinely complete), never a correctness requirement. That makes it safe
+# to bound: an install with a large library and an empty allow list would
+# otherwise get one review row per author on first sync — the same flood
+# ADR-0021 refused to create for scan skips, and exactly what CLAUDE.md's
+# "auto-adopt features need a grandfather timestamp" rule warns about.
+# Surface a slice per sync instead; later syncs drain the rest.
+_MAX_SURFACED_PER_SYNC = 250
+
+
+async def surface_non_roster_library_authors(slug: str) -> int:
+    """Offer library authors that aren't allow-listed for operator review.
+
+    ADR-0021 keeps library sync's bylines intact — Calibre/ABS are
+    authoritative over their own contributor lists, and gating there would
+    orphan owned books for no pollution prevented. But an author who is in
+    the library and NOT on the allow list is a real gap: they're tracked
+    only because they own something, and MAM announces for them still fall
+    through the filter.
+
+    So they're pushed into the existing `authors_tentative_review` list,
+    where the operator can promote them to allowed (or ignored) from the
+    Authors page. Returns the number newly surfaced.
+
+    Skips anything already on the allow list, the ignore list, or already
+    pending review — a rejected author must not keep reappearing.
+    """
+    from app.discovery.database import get_db as _get_library_db
+
+    ldb = await _get_library_db(slug)
+    try:
+        rows = await (await ldb.execute(
+            "SELECT name FROM authors "
+            "WHERE (calibre_id IS NOT NULL OR audiobookshelf_id IS NOT NULL) "
+            "AND name IS NOT NULL AND TRIM(name) != ''"
+        )).fetchall()
+    finally:
+        await ldb.close()
+    if not rows:
+        return 0
+
+    import aiosqlite
+    from app import config as _config
+
+    db_path = _config.DATA_DIR / "seshat.db"
+    if not db_path.exists():
+        return 0
+
+    pdb = await aiosqlite.connect(str(db_path))
+    try:
+        pdb.row_factory = aiosqlite.Row
+        known: set[str] = set()
+        for table in ("authors_allowed", "authors_ignored",
+                      "authors_tentative_review"):
+            cur = await pdb.execute(f"SELECT normalized FROM {table}")  # nosec B608
+            known.update(str(r[0]) for r in await cur.fetchall() if r[0])
+
+        surfaced = 0
+        truncated = False
+        for r in rows:
+            name = (r["name"] or "").strip()
+            norm = normalize_author(name)
+            if not norm or norm in known:
+                continue
+            if surfaced >= _MAX_SURFACED_PER_SYNC:
+                truncated = True
+                break
+            await pdb.execute(
+                "INSERT OR IGNORE INTO authors_tentative_review "
+                "(name, normalized, source) VALUES (?,?,?)",
+                (name, norm, "library_sync"),
+            )
+            known.add(norm)
+            surfaced += 1
+        if surfaced:
+            await pdb.commit()
+    finally:
+        await pdb.close()
+
+    if surfaced:
+        logger.info(
+            "roster[%s]: surfaced %d library author(s) for allow-list review%s",
+            slug, surfaced,
+            " (capped — more will follow next sync)" if truncated else "",
+        )
+    return surfaced
+
+
 def invalidate(slug: Optional[str] = None) -> None:
     """Drop cached roster(s). Call after mutating the allow list."""
     if slug is None:
