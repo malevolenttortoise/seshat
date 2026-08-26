@@ -173,3 +173,62 @@ class _AllowAll:
     def __await__(self):
         async def _self(): return self
         return _self().__await__()
+
+
+# ─── 4. OpenLibrary language resolution (v3.10.0) ────────────
+
+
+def test_ol_extract_prefers_english_among_many():
+    """OL lists EVERY language a work was published in. The Cruel Prince
+    is ['eng','dut','heb'] — picking "the first code" would reject it
+    whenever OL happened to order Dutch first."""
+    from app.discovery.sources.openlibrary import _extract_language
+    work = {"key": "/works/OL17850410W"}
+    lang_map = {"OL17850410W": ["dut", "heb", "eng"]}
+    assert _extract_language(work, lang_map) == "en"
+
+
+def test_ol_extract_flags_translation_only_work():
+    """El rey malvado is filed as its own work with ['spa'] and no English
+    edition — that IS a translation and must be filterable."""
+    from app.discovery.sources.openlibrary import _extract_language
+    from app.discovery.lookup import _lang_ok
+    work = {"key": "/works/OL24208644W"}
+    lang = _extract_language(work, {"OL24208644W": ["spa"]})
+    assert lang == "es"
+    assert _lang_ok(lang, ["English"]) is False
+
+
+def test_ol_extract_falls_back_to_bulk_map():
+    """⚠️ The regression: /authors/{key}/works.json carries NO languages
+    field (0 of 60 measured), so the bulk map is the ONLY source on the
+    discovery path."""
+    from app.discovery.sources.openlibrary import _extract_language
+    work = {"key": "/works/OL1W"}          # no 'languages' key at all
+    assert _extract_language(work, None) is None
+    assert _extract_language(work, {"OL1W": ["ger"]}) == "de"
+
+
+def test_ol_extract_still_reads_inline_languages():
+    """The works.json shape must keep working where it IS present."""
+    from app.discovery.sources.openlibrary import _extract_language
+    work = {"key": "/works/OL2W", "languages": [{"key": "/languages/fre"}]}
+    assert _extract_language(work) == "fr"
+
+
+def test_ol_unknown_language_stays_permissive():
+    """Unknown/unmappable must return None, which _lang_ok lets through —
+    a language lookup failure must never silently drop a catalogue."""
+    from app.discovery.sources.openlibrary import _extract_language
+    from app.discovery.lookup import _lang_ok
+    assert _extract_language({"key": "/works/OL3W"}, {"OL3W": ["xyz"]}) is None
+    assert _lang_ok(None, ["English"]) is True
+
+
+def test_english_code_passes_lang_ok():
+    """Guard the substring semantics of _lang_ok against the 2-letter
+    codes _OL_LANGUAGE_MAP emits."""
+    from app.discovery.lookup import _lang_ok
+    assert _lang_ok("en", ["English"]) is True
+    for code in ("de", "es", "fr", "it", "nl", "pt", "ru", "ja", "zh", "pl"):
+        assert _lang_ok(code, ["English"]) is False, code
