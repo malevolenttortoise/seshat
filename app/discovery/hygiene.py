@@ -62,7 +62,7 @@ from app.discovery.database import (
     get_db as get_library_db,
     set_active_library,
 )
-from app.metadata.author_names import normalize_author_name
+from app.metadata.author_names import authors_match, normalize_author_name
 
 logger = logging.getLogger("seshat.discovery.hygiene")
 
@@ -89,6 +89,11 @@ JOB_NAMES = (
     # roster gate existed. The gate stops new junk; this removes what's
     # already there. Inert on clean installs.
     "Non-roster author cleanup",
+    # v3.10.0 — the inverse of Job 9. Splits persons that Job 9 merged on
+    # a mis-stamped source ID (the v3.6.2 incident class) and strips the
+    # bad ID so Job 9 doesn't re-merge them on the next pass. Runs LAST so
+    # a single hygiene run converges.
+    "Person un-merge",
 )
 TOTAL_JOBS = len(JOB_NAMES)
 
@@ -129,6 +134,11 @@ def _zero_stats() -> dict[str, Any]:
         "non_roster_books_deleted": 0,
         "non_roster_books_renumbered": 0,
         "non_roster_series_unlinked": 0,
+        # v3.10.0 — Job 14 person un-merge.
+        "persons_unmerged": 0,
+        "unmerge_links_detached": 0,
+        "unmerge_source_ids_cleared": 0,
+        "unmerge_norms_repaired": 0,
         "errors": [],
     }
 
@@ -1653,6 +1663,336 @@ async def job_consolidate_persons_by_source_id(
         stats["errors"].append(msg)
 
 
+def _surname(name: str) -> str:
+    """Last meaningful token of a normalized author name (``""`` if none)."""
+    parts = normalize_author_name(name).split()
+    return parts[-1] if parts else ""
+
+
+def _is_name_mismatch(library_name: str, canonical_name: str) -> bool:
+    """True if `library_name` should be DETACHED from a person whose
+    ``canonical_name`` is given — the Job 14 split predicate.
+
+    Keeps the link when either:
+
+      - ``authors_match()`` — normalized-equal or ≥0.92 fuzzy, the same
+        test the rest of the identity code uses; or
+      - **the surnames are equal** — the deliberate widening. Fuzzy alone
+        scores `"Tyler Burnworth"` vs `"Tyler E. C. Burnworth"` below
+        threshold and would UNDO Mark's hand-merge from 2026-05-23.
+        Surname equality also rescues `Aaron Bunce ~ Aaron S. Bunce`
+        (~0.917, just under the line), `Kevin White ~ W. Penn White` and
+        `Talia Beckett ~ Talia Becket`. All four are regression-tested.
+    """
+    if not library_name or not canonical_name:
+        return False
+    if authors_match(library_name, canonical_name):
+        return False
+    sa, sb = _surname(library_name), _surname(canonical_name)
+    if sa and sb and sa == sb:
+        return False
+    return True
+
+
+async def job_person_unmerge(stats: dict[str, Any]) -> None:
+    """Job 14 (v3.10.0) — split persons that Job 9 over-merged, and strip
+    the mis-stamped source IDs that caused the merge.
+
+    **The inverse of Job 9.** Job 9 merges persons sharing a
+    ``(source, source_id)``. When a wrong Goodreads ID got stamped onto a
+    co-authored seed book's author row (the v3.6.2 incident class), Job 9
+    faithfully merged two genuinely different authors into one person.
+    v3.6.2 fixed the *stamping*; the persons already fused stayed fused.
+    Symptom on the reference install: person 699 "Jon Del Arroz" held FOUR
+    links — his own Calibre+ABS pair *plus Stick Swinger's entire pair* —
+    so the cross-library author page rendered Stick Swinger's co-authored
+    "Crazy Girls" under Del Arroz and the header read 5 owned/14 series
+    instead of 4/12. Measured scope there: **57 mismatched links of 1,797,
+    29 over-linked persons**; this job detaches 50 links across 25 persons.
+
+    Split predicate is `_is_name_mismatch` (see its docstring). Three
+    structural rules, each one measured rather than assumed:
+
+    1. **An anchor is required.** If *every* link mismatches, there is no
+       trustworthy identity to keep, so the person is left alone. That is
+       a different pathology (a wrong `canonical_name`), and splitting on
+       it would strand all links on fresh persons.
+    2. **`link_source='manual'` is never auto-split.** An operator merge is
+       a deliberate act; only `auto` links are in scope.
+    3. **Detached links group by normalized name and land on ONE person.**
+       All 25 groups on the reference install are exactly a Calibre+ABS
+       pair, and splitting them onto two persons would immediately
+       re-create the v2.20.0 split-person bug this codebase already fixed.
+
+    `persons.normalized_name` is UNIQUE, so placement is reuse-or-create,
+    never a blind INSERT. **7 of the 25 groups collide with the person
+    being split** — those rows carry a stale `normalized_name` from the
+    loser side of the old merge (person 699 was `canonical_name='Jon Del
+    Arroz'` but `normalized_name='stick swinger'`). The fix is to repair
+    the source person's `normalized_name` from its own `canonical_name`
+    first, which frees the name for the detached group and heals the drift
+    in one step. All 7 repairs were verified collision-free.
+
+    **Stripping the shared source IDs is not optional.** Every one of the
+    25 groups still shares at least one source ID between the detached and
+    retained rows — Job 9 would re-merge all of them on the very next
+    hygiene run, and the two jobs would fight forever. A source's author ID
+    identifies exactly one author, so a value present on both sides is
+    provably wrong on one of them; the retained rows match the person's
+    canonical name, so the detached copy is the wrong one and is NULLed.
+    IDs unique to the detached row are left alone — they may well be that
+    author's own, and the next scan re-resolves anything missing.
+
+    Ordering: runs LAST, after Job 9 has merged and Job 13 has cleaned, so
+    a single pass converges — Job 9 finds no shared IDs to act on next run.
+
+    Audit: one `person_merges` row per group with
+    ``reason='unmerge_name_mismatch'``, where `winner_person_id` is the
+    person that now HOLDS the links and `loser_person_id` is the person
+    that gave them up (note: unlike a merge, that person still exists).
+    `source`/`source_id` carry the evidence (`'name_mismatch'` + the
+    detached display name). The split reverses as
+    ``UPDATE author_links SET person_id=loser WHERE person_id=winner``.
+
+    Stats: ``persons_unmerged``, ``unmerge_links_detached``,
+    ``unmerge_source_ids_cleared``, ``unmerge_norms_repaired``.
+    """
+    from app.database import get_db as get_global_db
+    from app.discovery.author_identity import (
+        MIRRORABLE_SOURCE_ID_COLUMNS, _open_per_library,
+    )
+
+    id_cols = sorted(MIRRORABLE_SOURCE_ID_COLUMNS)
+    persons_split = 0
+    links_detached = 0
+    ids_cleared = 0
+    norms_repaired = 0
+
+    try:
+        libs = cross_library.libraries_for("all")
+        slugs = [l["slug"] for l in libs if l.get("slug")]
+
+        # Per-library author rows: (slug, id) -> {name, <source ids>}.
+        lib_rows: dict[tuple[str, int], dict[str, Any]] = {}
+        cols_sql = ", ".join(["id", "name"] + id_cols)
+        for slug in slugs:
+            try:
+                per_lib = await _open_per_library(slug)
+            except Exception:
+                continue
+            try:
+                has_authors = await (await per_lib.execute(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type='table' AND name='authors' LIMIT 1"
+                )).fetchone()
+                if not has_authors:
+                    continue
+                cur = await per_lib.execute(
+                    f"SELECT {cols_sql} FROM authors"  # nosec B608
+                )
+                for r in await cur.fetchall():
+                    lib_rows[(slug, r["id"])] = dict(r)
+            finally:
+                await per_lib.close()
+
+        gdb = await get_global_db()
+        try:
+            persons: dict[int, dict[str, Any]] = {
+                r["id"]: dict(r)
+                for r in await (await gdb.execute(
+                    "SELECT id, canonical_name, normalized_name FROM persons"
+                )).fetchall()
+            }
+            taken_norms = {
+                p["normalized_name"]: pid for pid, p in persons.items()
+            }
+
+            by_person: dict[int, list[dict[str, Any]]] = {}
+            for r in await (await gdb.execute(
+                "SELECT person_id, library_slug, author_id, link_source "
+                "FROM author_links"
+            )).fetchall():
+                by_person.setdefault(r["person_id"], []).append(dict(r))
+
+            for pid, links in sorted(by_person.items()):
+                person = persons.get(pid)
+                if not person or len(links) < 2:
+                    continue
+                canonical = person["canonical_name"] or ""
+
+                moving, staying = [], []
+                for link in links:
+                    row = lib_rows.get(
+                        (link["library_slug"], link["author_id"])
+                    )
+                    if row is None:
+                        continue  # Job 10 prunes orphan links
+                    name = row["name"] or ""
+                    if (link.get("link_source") == "manual"
+                            or not _is_name_mismatch(name, canonical)):
+                        staying.append((link, row))
+                    else:
+                        moving.append((link, row))
+
+                # Rule 1 — no anchor, no split.
+                if not moving or not staying:
+                    continue
+
+                # Source IDs held by the rows that keep the person.
+                retained_ids: set[tuple[str, str]] = set()
+                for _, row in staying:
+                    for c in id_cols:
+                        v = row.get(c)
+                        if v and str(v).strip():
+                            retained_ids.add((c, str(v).strip()))
+
+                # Rule 3 — group detached links by normalized name.
+                groups: dict[str, list[tuple[dict, dict]]] = {}
+                for link, row in moving:
+                    groups.setdefault(
+                        normalize_author_name(row["name"] or ""), []
+                    ).append((link, row))
+
+                did_split = False
+                for norm, members in sorted(groups.items()):
+                    if not norm:
+                        continue
+                    display = members[0][1]["name"] or norm
+
+                    # Self-collision: the person being split still carries
+                    # the detached group's normalized_name from the old
+                    # merge. Repair it from its own canonical_name first.
+                    if taken_norms.get(norm) == pid:
+                        repaired = normalize_author_name(canonical)
+                        if not repaired or (
+                            taken_norms.get(repaired) not in (None, pid)
+                        ):
+                            logger.warning(
+                                "hygiene: person-unmerge: cannot free %r "
+                                "from person_id=%d (repair target %r taken) "
+                                "— skipping group",
+                                norm, pid, repaired,
+                            )
+                            continue
+                        await gdb.execute(
+                            "UPDATE persons SET normalized_name = ? "
+                            "WHERE id = ?",
+                            (repaired, pid),
+                        )
+                        taken_norms.pop(norm, None)
+                        taken_norms[repaired] = pid
+                        persons[pid]["normalized_name"] = repaired
+                        norms_repaired += 1
+                        logger.info(
+                            "hygiene: person-unmerge: repaired stale "
+                            "normalized_name on person_id=%d: %r -> %r",
+                            pid, norm, repaired,
+                        )
+
+                    target = taken_norms.get(norm)
+                    if target is None:
+                        cur = await gdb.execute(
+                            "INSERT INTO persons (canonical_name, "
+                            "normalized_name) VALUES (?, ?)",
+                            (display, norm),
+                        )
+                        target = cur.lastrowid
+                        taken_norms[norm] = target
+                        persons[target] = {
+                            "id": target,
+                            "canonical_name": display,
+                            "normalized_name": norm,
+                        }
+
+                    moved = 0
+                    for link, row in members:
+                        await gdb.execute(
+                            "UPDATE author_links SET person_id = ? "
+                            "WHERE library_slug = ? AND author_id = ?",
+                            (target, link["library_slug"],
+                             link["author_id"]),
+                        )
+                        moved += 1
+
+                        # Strip the mis-stamped IDs so Job 9 stays quiet.
+                        stale = [
+                            c for c in id_cols
+                            if row.get(c)
+                            and (c, str(row[c]).strip()) in retained_ids
+                        ]
+                        if stale:
+                            try:
+                                per_lib = await _open_per_library(
+                                    link["library_slug"]
+                                )
+                            except Exception:
+                                per_lib = None
+                            if per_lib is not None:
+                                try:
+                                    sets = ", ".join(
+                                        f"{c} = NULL" for c in stale
+                                    )
+                                    await per_lib.execute(
+                                        f"UPDATE authors SET {sets} "  # nosec B608
+                                        f"WHERE id = ?",
+                                        (link["author_id"],),
+                                    )
+                                    await per_lib.commit()
+                                    ids_cleared += len(stale)
+                                    logger.info(
+                                        "hygiene: person-unmerge: cleared "
+                                        "%s on %s#%d (%r) — belonged to "
+                                        "person_id=%d (%r)",
+                                        ", ".join(stale),
+                                        link["library_slug"],
+                                        link["author_id"], display,
+                                        pid, canonical,
+                                    )
+                                finally:
+                                    await per_lib.close()
+
+                    links_detached += moved
+                    did_split = True
+                    await gdb.execute(
+                        "INSERT INTO person_merges "
+                        "(winner_person_id, loser_person_id, reason, "
+                        " source, source_id, moved_links, "
+                        " loser_canonical_name) "
+                        "VALUES (?, ?, 'unmerge_name_mismatch', "
+                        "        'name_mismatch', ?, ?, ?)",
+                        (target, pid, display, moved, canonical),
+                    )
+                    logger.info(
+                        "hygiene: person-unmerge: detached %d link(s) for "
+                        "%r from person_id=%d (%r) onto person_id=%d",
+                        moved, display, pid, canonical, target,
+                    )
+
+                if did_split:
+                    persons_split += 1
+
+            await gdb.commit()
+        finally:
+            await gdb.close()
+
+        stats["persons_unmerged"] = (
+            stats.get("persons_unmerged", 0) + persons_split
+        )
+        stats["unmerge_links_detached"] = (
+            stats.get("unmerge_links_detached", 0) + links_detached
+        )
+        stats["unmerge_source_ids_cleared"] = (
+            stats.get("unmerge_source_ids_cleared", 0) + ids_cleared
+        )
+        stats["unmerge_norms_repaired"] = (
+            stats.get("unmerge_norms_repaired", 0) + norms_repaired
+        )
+    except Exception as e:
+        msg = f"person-unmerge: {type(e).__name__}: {e}"
+        logger.exception(msg)
+        stats["errors"].append(msg)
+
+
 async def job_prune_orphan_links(stats: dict[str, Any]) -> None:
     from app.discovery import author_identity
     try:
@@ -2053,6 +2393,31 @@ async def run_all() -> dict[str, Any]:
             "non_roster_books_deleted":    stats["non_roster_books_deleted"],
             "non_roster_books_renumbered": stats["non_roster_books_renumbered"],
             "non_roster_series_unlinked":  stats["non_roster_series_unlinked"],
+        })
+
+        # Job 14 — Person un-merge (v3.10.0). The inverse of Job 9, and
+        # deliberately LAST: Job 9 has already merged by shared source ID
+        # earlier in this pass, so splitting now (and clearing the
+        # mis-stamped IDs that anchored those merges) lets one run
+        # converge instead of the two jobs trading the same links back
+        # and forth on alternating runs.
+        _set_phase(13, library="(cross-library)")
+        await job_person_unmerge(stats)
+        logger.info(
+            "hygiene: %s complete: persons=%d links_detached=%d "
+            "source_ids_cleared=%d norms_repaired=%d",
+            JOB_NAMES[13],
+            stats["persons_unmerged"],
+            stats["unmerge_links_detached"],
+            stats["unmerge_source_ids_cleared"],
+            stats["unmerge_norms_repaired"],
+        )
+        state._hygiene_progress["jobs"].append({
+            "name": JOB_NAMES[13],
+            "persons_unmerged":           stats["persons_unmerged"],
+            "unmerge_links_detached":     stats["unmerge_links_detached"],
+            "unmerge_source_ids_cleared": stats["unmerge_source_ids_cleared"],
+            "unmerge_norms_repaired":     stats["unmerge_norms_repaired"],
         })
 
         state._hygiene_progress.update({

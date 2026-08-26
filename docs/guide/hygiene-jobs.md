@@ -167,6 +167,33 @@ Per-job stats: `non_roster_authors_deleted`, `non_roster_books_deleted`, `non_ro
 
 > **Related.** Library authors that aren't on your allow list are pushed into the tentative-review list at the end of each Calibre/ABS sync (capped at 250 per sync), so you can promote them to allowed or ignored from the Authors page.
 
+## Job 14 — Person un-merge
+
+**What it does.** The inverse of [Job 9](#job-9--consolidate-persons-by-shared-source-id). It splits apart persons that Job 9 merged on a **mis-stamped source ID**, and clears the bad ID so the merge can't come straight back.
+
+Job 9 merges two persons whenever their linked author rows share a `(source, source_id)`. That is the right rule — until the ID itself is wrong. When a wrong Goodreads ID got stamped onto a co-authored seed book's author row (the incident v3.6.2 fixed at the stamping end), Job 9 faithfully fused two genuinely different authors into one person. v3.6.2 stopped the *stamping*; the persons already fused stayed fused.
+
+The symptom is a cross-library author page showing someone else's books. On the reference install, person "Jon Del Arroz" held **four** links — his own Calibre+ABS pair *plus another author's entire pair* — so that author's co-authored book rendered under Del Arroz tagged SHARED/Co-authored, and the header read 5 owned / 14 series instead of 4 / 12. Measured scope there: **57 mismatched links out of 1,797, across 29 over-linked persons**; the job detaches 50 links from 25 persons and leaves the 4 legitimate ones alone.
+
+**The split rule.** A link is detached when the per-library author's name disagrees with the person's `canonical_name` — **unless** the names fuzzy-match (`authors_match`, the same test the rest of the identity code uses) **or the surnames are equal**. The surname clause is the part that matters: fuzzy matching alone scores `Tyler Burnworth` vs `Tyler E. C. Burnworth` below threshold and would silently undo a hand-merge. Four real pairs depend on it and are regression-tested — `Tyler Burnworth ~ Tyler E. C. Burnworth`, `Aaron Bunce ~ Aaron S. Bunce` (~0.917, just under the 0.92 line), `Kevin White ~ W. Penn White`, `Talia Beckett ~ Talia Becket`.
+
+**When it runs.** Manual, cross-library, **last** in the chain — after Job 9 has already merged in the same pass. That ordering is what lets a single run converge: if it ran first, Job 9 would re-merge everything it split, and the two jobs would trade the same links back and forth on alternating runs.
+
+**Guards.**
+
+- **An anchor is required.** If *every* link mismatches the canonical name, the person is left alone — that's a wrong `canonical_name`, a different problem, and splitting would strand all links on fresh persons.
+- **`link_source='manual'` is never auto-split.** An operator merge is a deliberate act.
+- **Detached links group by normalized name onto ONE person.** All 25 groups on the reference install were exactly a Calibre+ABS pair; splitting them onto two persons would re-create the split-person bug v2.20.0 already fixed.
+- **Owned books are never touched.** The job only moves `author_links`; no book row is created, deleted or re-attributed.
+
+**Clearing the bad source ID is the load-bearing part.** Every one of the 25 groups still shared at least one source ID between the detached rows and the retained ones — without clearing it, Job 9 re-merges all 25 on the very next run. A source's author ID identifies exactly one author, so a value on both sides is provably wrong on one of them; the retained rows match the person's canonical name, so the detached copy is the wrong one and is set to NULL. **IDs unique to the detached row are left alone** — they may well be that author's own, and the next scan re-resolves anything missing.
+
+**Stale `normalized_name` repair.** `persons.normalized_name` is UNIQUE, and 7 of the 25 groups targeted a name still held by the person being split — those rows carry the *loser's* normalized name from the old merge (canonical `Jon Del Arroz`, normalized `stick swinger`). The job repairs the source person's `normalized_name` from its own `canonical_name` first, which frees the name and heals the drift in one step.
+
+Per-job stats: `persons_unmerged`, `unmerge_links_detached`, `unmerge_source_ids_cleared`, `unmerge_norms_repaired`.
+
+**Pre-flight notes.** Idempotent — a second run reports all zeros. Inert on installs Job 9 never over-merged. Splits are audited and reversible (see below). One judgement call it can't make for you: a genuine **pen name** (an author published under two names, both correctly linked) looks exactly like an over-merge and will be split. If that's not what you want, re-merge from the author page and the `manual` link source will keep Job 14 off it thereafter.
+
 ## What to do if a job fails
 
 Hygiene jobs catch their own exceptions and continue. A failed job appends a `<job>: <ExceptionType>: <message>` entry to the chain's `errors` list rather than aborting the run; the chain finishes the remaining jobs, and the completion toast switches from `success` to `warning` with the same summary line.
@@ -178,6 +205,7 @@ Hygiene jobs catch their own exceptions and continue. A failed job appends a `<j
 **Audit tables (recoverable history).** Two tables retain merge history across runs:
 
 - **`person_merges`** — one row per [Job 9](#job-9--consolidate-persons-by-shared-source-id) merge, with `(winner_person_id, loser_person_id, reason='consolidate_by_source_id', source, source_id, moved_links, loser_canonical_name, merged_at)`. Sufficient to reconstruct what merged into what and via which source-ID anchor; restoring a merged-away person means re-inserting the row from your `seshat.db` backup and repointing the `moved_links` count of `author_links` rows back at it. This is why the Job 9 pre-flight asks for the backup.
+- **`person_merges` with `reason='unmerge_name_mismatch'`** — one row per [Job 14](#job-14--person-un-merge) split. The same table, read in the opposite direction: `winner_person_id` is the person that now **holds** the detached links, `loser_person_id` is the person that gave them up (and, unlike a merge, still exists), `source_id` carries the detached author's display name. To reverse a split: `UPDATE author_links SET person_id=<loser> WHERE person_id=<winner>`, then delete the now-empty winner person.
 - **`book_merges`** — analogous shape for book-level merges (used by Job 4's identifier-keyed dedup at the per-library level; recorded on the per-library DB).
 
 **When a job's counter looks wrong.** Re-run the chain. Every job is idempotent, so a second click is the cheapest way to confirm whether a non-zero count is real ongoing work or a one-time catch-up. If counts don't drop to zero on the second run, that's a signal worth opening an issue with — paste the per-job lines from `seshat.discovery.hygiene` and the `hygiene: run_all complete:` summary.

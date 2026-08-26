@@ -85,12 +85,13 @@ async def _read_image(slug: str, aid: int) -> dict:
 def test_job_catalogue_positions():
     """ADR-0016 slice 05 inserts Job 11 between Prune-orphans (Job 10)
     and Soft-delete (now Job 12). v3.10.0 / ADR-0021 appends Job 13
-    (non-roster cleanup) at the end. TOTAL_JOBS = 13."""
-    assert hygiene.TOTAL_JOBS == 13
+    (non-roster cleanup), then Job 14 (person un-merge). TOTAL_JOBS = 14."""
+    assert hygiene.TOTAL_JOBS == 14
     assert hygiene.JOB_NAMES[9] == "Prune orphan author links"
     assert hygiene.JOB_NAMES[10] == "Image URL health check"
     assert hygiene.JOB_NAMES[11] == "Soft-delete retention sweep"
     assert hygiene.JOB_NAMES[12] == "Non-roster author cleanup"
+    assert hygiene.JOB_NAMES[13] == "Person un-merge"
 
 
 # ─── 2. Substring blacklist — /books/-path clears ────────────
