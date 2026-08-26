@@ -188,6 +188,58 @@ async def test_empty_allow_list_still_admits_library_authors(discovery_db):
     assert r.admits("Owner", 1) is True
 
 
+async def test_allow_list_half_read_from_pipeline_db(discovery_db, monkeypatch):
+    """The allow-list half must actually be read when a pipeline DB exists,
+    and must be keyed on the FILTER normalizer."""
+    import aiosqlite
+    from app import config as app_config
+    from app.discovery.database import get_db
+    from app.discovery.roster import load_roster
+    from app.filter.normalize import normalize_author
+
+    monkeypatch.setattr(app_config, "DATA_DIR", discovery_db)
+    pdb_path = discovery_db / "seshat.db"
+    con = await aiosqlite.connect(str(pdb_path))
+    try:
+        await con.execute(
+            "CREATE TABLE authors_allowed (name TEXT, normalized TEXT, source TEXT)")
+        await con.execute("CREATE TABLE authors_ignored (name TEXT, normalized TEXT)")
+        await con.execute(
+            "INSERT INTO authors_allowed VALUES (?,?,'manual')",
+            ("Terry Brooks", normalize_author("Terry Brooks")),
+        )
+        await con.commit()
+    finally:
+        await con.close()
+
+    db = await get_db()
+    try:
+        r = await load_roster(db, slug="test", force=True)
+    finally:
+        await db.close()
+    assert r.may_mint("Terry Brooks") is True
+    assert r.may_mint("Clive Barker") is False
+
+
+async def test_missing_pipeline_db_degrades_to_owned_only(discovery_db, monkeypatch):
+    """A tmp DATA_DIR with no seshat.db must NOT fall back to the real
+    production database, and must not create a stray one."""
+    from app import config as app_config
+    from app.discovery.database import get_db
+    from app.discovery.roster import load_roster
+
+    monkeypatch.setattr(app_config, "DATA_DIR", discovery_db)
+    await _seed([(1, "Owner", 1)])
+    db = await get_db()
+    try:
+        r = await load_roster(db, slug="test", force=True)
+    finally:
+        await db.close()
+    assert r.allowed_names == frozenset()
+    assert 1 in r.owned_author_ids
+    assert not (discovery_db / "seshat.db").exists()  # nothing created
+
+
 async def test_cache_is_ttl_scoped_and_invalidatable(discovery_db):
     from app.discovery.database import get_db
     from app.discovery import roster as roster_mod

@@ -124,15 +124,34 @@ async def load_roster(
             return hit[1]
 
     # --- allow-list half (global pipeline DB) ---
+    #
+    # Resolve the path LAZILY off `app.config.DATA_DIR` rather than importing
+    # `app.database.APP_DB_PATH`: that constant is bound at import time, so a
+    # test that monkeypatches DATA_DIR would still be pointed at the real
+    # `seshat.db` — silently reading the developer's live allow list into a
+    # unit test, or creating a stray empty DB at the production path.
+    # Opened read-only (`mode=ro`) so a missing file errors instead of being
+    # created.
     allowed: frozenset[str] = frozenset()
     try:
-        from app.database import get_db as _get_pipeline_db
+        import aiosqlite
+        from app import config as _config
         from app.storage.authors import load_normalized_sets
-        pdb = await _get_pipeline_db()
+
+        db_path = _config.DATA_DIR / "seshat.db"
+        if not db_path.exists():
+            # No pipeline DB (fresh install, or a unit test with a tmp
+            # DATA_DIR). Owned-only admission is the correct, safe answer.
+            logger.debug("roster: no pipeline DB at %s; owned-only", db_path)
+            raise FileNotFoundError(db_path)
+        pdb = await aiosqlite.connect(f"file:{db_path}?mode=ro", uri=True)
         try:
+            pdb.row_factory = aiosqlite.Row
             allowed, _ignored = await load_normalized_sets(pdb)
         finally:
             await pdb.close()
+    except FileNotFoundError:
+        pass
     except Exception:
         # Never break a scan on the roster read. An empty allow list is
         # SAFE-BY-CONSTRUCTION here: the owned half still admits every
@@ -158,6 +177,44 @@ async def load_roster(
         slug, len(allowed), len(owned),
     )
     return roster
+
+
+async def scan_eligible_authors(
+    db, cutoff: float, slug: Optional[str] = None,
+) -> list:
+    """Authors due for a source scan AND in the roster, oldest-first.
+
+    The single source of truth for "who gets scanned" — both the scan loop
+    (`lookup.run_full_lookup`) and the pre-flight due-count in the scan
+    router call this, so the count the operator sees can never disagree
+    with what the loop actually visits.
+
+    Two filters compose:
+
+      - **due + non-orphan** (SQL): ``last_lookup_at`` older than `cutoff`,
+        and the author has at least one `book_authors` row. Orphan authors
+        have nothing to merge into, so scanning them is wasted budget.
+      - **roster** (Python): the allow list lives in a different database
+        than `authors`, so this half can't be expressed in the same query.
+
+    The roster filter is what stops a pre-ADR-0021 install from continuing
+    to cascade: junk rows already on disk stay on disk, but go inert.
+    """
+    roster = await load_roster(db, slug)
+    rows = await (await db.execute(
+        "SELECT id, name FROM authors "
+        "WHERE COALESCE(last_lookup_at,0) < ? "
+        "AND id IN (SELECT DISTINCT author_id FROM book_authors) "
+        "ORDER BY COALESCE(last_lookup_at,0) ASC",
+        (cutoff,),
+    )).fetchall()
+    eligible = [r for r in rows if roster.is_scan_eligible(r["name"], r["id"])]
+    if len(eligible) != len(rows):
+        logger.info(
+            "roster: %d of %d due authors are scan-eligible (%d non-roster "
+            "skipped)", len(eligible), len(rows), len(rows) - len(eligible),
+        )
+    return eligible
 
 
 def invalidate(slug: Optional[str] = None) -> None:
