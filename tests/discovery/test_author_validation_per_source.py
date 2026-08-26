@@ -118,3 +118,93 @@ async def test_matching_source_still_merges_when_already_confirmed(monkeypatch):
     )
     assert merged["called"] is True
     assert n == 3
+
+
+# ─── retraction of a rejected source's stored rows ───────────
+
+
+@pytest.fixture
+async def discovery_db(tmp_path, monkeypatch):
+    from app import config as app_config
+    from app.discovery import database as disco_db
+    monkeypatch.setattr(app_config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(disco_db, "DATA_DIR", tmp_path)
+    disco_db.set_active_library("test")
+    await disco_db.init_db("test")
+    yield tmp_path
+    disco_db.set_active_library(None)
+
+
+async def _seed(rows):
+    """rows = [(title, source, owned, [author_ids])]"""
+    from app.discovery.database import get_db
+    db = await get_db()
+    try:
+        for aid, nm in ((1, "Nick Adams"), (2, "Other Author")):
+            await db.execute(
+                "INSERT OR IGNORE INTO authors (id,name,sort_name,normalized_name) "
+                "VALUES (?,?,?,?)", (aid, nm, nm, nm.lower()))
+        for title, source, owned, aids in rows:
+            cur = await db.execute(
+                "INSERT INTO books (title,source,owned) VALUES (?,?,?)",
+                (title, source, owned))
+            for pos, aid in enumerate(aids):
+                await db.execute(
+                    "INSERT INTO book_authors (book_id,author_id,position) "
+                    "VALUES (?,?,?)", (cur.lastrowid, aid, pos))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def _titles():
+    from app.discovery.database import get_db
+    db = await get_db()
+    try:
+        return sorted(r[0] for r in await (await db.execute(
+            "SELECT title FROM books")).fetchall())
+    finally:
+        await db.close()
+
+
+async def test_retraction_removes_only_the_failing_sources_unowned_rows(discovery_db):
+    from app.discovery.lookup import _retract_source_books
+
+    await _seed([
+        ("The Medusa Fold",   "calibre",     1, [1]),   # owned -> keep
+        ("Retaking America",  "openlibrary", 0, [1]),   # junk  -> delete
+        ("Trump and Churchill","openlibrary",0, [1]),   # junk  -> delete
+        ("The Loom Fold",     "hardcover",   0, [1]),   # other source -> keep
+    ])
+    n = await _retract_source_books(1, "openlibrary")
+    assert n == 2
+    assert await _titles() == ["The Loom Fold", "The Medusa Fold"]
+
+
+async def test_retraction_never_touches_owned_rows(discovery_db):
+    from app.discovery.lookup import _retract_source_books
+    await _seed([("An Owned OL Book", "openlibrary", 1, [1])])
+    assert await _retract_source_books(1, "openlibrary") == 0
+    assert await _titles() == ["An Owned OL Book"]
+
+
+async def test_co_authored_book_is_unlinked_not_deleted(discovery_db):
+    """A book crediting a validated author too must survive — only the
+    rejected author's link goes."""
+    from app.discovery.database import get_db
+    from app.discovery.lookup import _retract_source_books
+
+    await _seed([("Shared Anthology", "openlibrary", 0, [1, 2])])
+    n = await _retract_source_books(1, "openlibrary")
+    assert n == 0                              # nothing deleted
+    assert await _titles() == ["Shared Anthology"]
+
+    db = await get_db()
+    try:
+        rows = await (await db.execute(
+            "SELECT author_id, position FROM book_authors ORDER BY position"
+        )).fetchall()
+    finally:
+        await db.close()
+    # author 1 unlinked; author 2 renumbered to position 0 (ADR-0012)
+    assert [(r[0], r[1]) for r in rows] == [(2, 0)]

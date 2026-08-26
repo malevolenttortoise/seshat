@@ -893,6 +893,96 @@ def _is_audiobook(title: str) -> bool:
     return False
 
 
+async def _retract_source_books(
+    author_id: int, source_name: str,
+    linked_author_ids: Optional[list[int]] = None,
+) -> int:
+    """Remove UNOWNED rows a now-rejected source previously created here.
+
+    Called only when live `_validate_author` fails for `source_name`, so
+    the deletion is backed by the same authoritative check that rejects
+    the incoming catalogue — never by a guess about stored data.
+
+    Rules:
+
+    - **Owned rows are never touched.** `owned=1` is the user's library.
+    - A book whose contributors are *all* within this author's linked set
+      is deleted outright — nothing else refers to it.
+    - A book that ALSO credits an author outside this set keeps existing;
+      only this author's link is dropped. A co-authored book shouldn't
+      vanish for its other (validated) author just because one source got
+      this author wrong.
+    - The ADR-0012 position-0 invariant is restored for any book that
+      lost its primary, and series rows orphaned by the deletions are
+      swept — the same cascade repairs Hygiene Job 13 needs.
+
+    Returns the number of book rows deleted (unlinks aren't counted).
+    """
+    ids = list({int(x) for x in (linked_author_ids or []) if x} | {int(author_id)})
+    db = await get_db()
+    try:
+        ph = ",".join("?" * len(ids))
+        cands = [r[0] for r in await (await db.execute(
+            f"SELECT DISTINCT b.id FROM books b "  # nosec B608
+            f"JOIN book_authors ba ON ba.book_id = b.id "
+            f"WHERE b.owned = 0 AND b.source = ? "
+            f"AND ba.author_id IN ({ph})",
+            (source_name, *ids),
+        )).fetchall()]
+        if not cands:
+            return 0
+
+        deleted, unlinked = [], []
+        for bid in cands:
+            contribs = {r[0] for r in await (await db.execute(
+                "SELECT author_id FROM book_authors WHERE book_id = ?", (bid,),
+            )).fetchall()}
+            (deleted if contribs <= set(ids) else unlinked).append(bid)
+
+        if deleted:
+            dph = ",".join("?" * len(deleted))
+            await db.execute(
+                f"DELETE FROM book_authors WHERE book_id IN ({dph})", deleted)  # nosec B608
+            try:
+                await db.execute(
+                    f"DELETE FROM book_series_suggestions "  # nosec B608
+                    f"WHERE book_id IN ({dph})", deleted)
+            except Exception:
+                pass
+            await db.execute(
+                f"DELETE FROM books WHERE id IN ({dph})", deleted)  # nosec B608
+        for bid in unlinked:
+            await db.execute(
+                f"DELETE FROM book_authors WHERE book_id = ? "  # nosec B608
+                f"AND author_id IN ({ph})", (bid, *ids))
+
+        # cascade repairs (mirrors hygiene Job 13)
+        await db.execute(
+            "UPDATE books SET series_id = NULL WHERE series_id IS NOT NULL "
+            "AND series_id NOT IN (SELECT id FROM series)")
+        await db.execute(
+            "DELETE FROM series WHERE id NOT IN "
+            "(SELECT DISTINCT series_id FROM books WHERE series_id IS NOT NULL)")
+        for bid in [r[0] for r in await (await db.execute(
+            "SELECT b.id FROM books b "
+            "WHERE EXISTS (SELECT 1 FROM book_authors ba WHERE ba.book_id=b.id) "
+            "AND NOT EXISTS (SELECT 1 FROM book_authors ba "
+            "                WHERE ba.book_id=b.id AND ba.position=0)"
+        )).fetchall()]:
+            links = await (await db.execute(
+                "SELECT author_id, role FROM book_authors WHERE book_id=? "
+                "ORDER BY position", (bid,))).fetchall()
+            await db.execute("DELETE FROM book_authors WHERE book_id=?", (bid,))
+            for pos, r in enumerate(links):
+                await db.execute(
+                    "INSERT INTO book_authors (book_id, author_id, position, role) "
+                    "VALUES (?,?,?,?)", (bid, r["author_id"], pos, r["role"]))
+        await db.commit()
+        return len(deleted)
+    finally:
+        await db.close()
+
+
 async def _validate_author(author_name: str, our_titles: list[str], result: AuthorResult) -> bool:
     """Validate found author by checking if ANY of our books fuzzy-match their catalog."""
     if not our_titles: return True
@@ -3577,6 +3667,35 @@ async def _try_source(source, author_name, author_id, our_titles, languages, sou
                 "we have; likely a different person with the same name)",
                 source_name, author_name, total_src, len(our_titles),
             )
+            # v3.10.0 — retract what this source contributed on earlier
+            # scans. The same evidence that rejects the catalogue now
+            # condemns the rows it created while validation was disarmed:
+            # if OpenLibrary's "Nick Adams" doesn't match our owned Fold
+            # novels today, the 30 rows it wrote yesterday are the same
+            # wrong person.
+            #
+            # Deliberately driven by the LIVE validation result, not a
+            # heuristic over stored data. A retro-heuristic can't work
+            # here: stored discovered rows exclude the books we own by
+            # construction, so "shares no title with your owned books" is
+            # the normal case — a token-overlap sweep over the reference
+            # install flagged Rachel Aukes' "Fringe Runner" and R J
+            # Barker's "Age of Assassins", both genuine.
+            try:
+                removed = await _retract_source_books(
+                    author_id, source_name, linked_author_ids,
+                )
+                if removed:
+                    logger.info(
+                        "  [%s] retracted %d previously-discovered book(s) "
+                        "for %r from this source",
+                        source_name, removed, author_name,
+                    )
+            except Exception:
+                logger.exception(
+                    "  [%s] retraction failed for %r (non-fatal)",
+                    source_name, author_name,
+                )
             return 0
 
         n, u = await _merge_result(author_id, full, source_name, languages, full_scan=full_scan, owned_only=owned_only, series_collector=series_collector, on_new_book=on_new_book, exclude_audiobooks=exclude_audiobooks, linked_author_ids=linked_author_ids, link_type_by_id=link_type_by_id)
