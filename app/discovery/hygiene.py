@@ -183,7 +183,16 @@ async def job_non_roster_cleanup(stats: dict, libs: list[dict]) -> None:
       - not library-sourced (`calibre_id` / `audiobookshelf_id` both NULL)
         — a Calibre/ABS author is real even when off the allow list, and
         deleting them would contradict ADR-0021's "library sync keeps the
-        full byline".
+        full byline", and
+      - **not a cross-library mirror row** — no book under that normalized
+        name in ANY library. The v2.12.1 dual-row pattern deliberately
+        stubs each author into every OTHER library with zero books so the
+        cross-format "Scan Audiobooks / Scan Ebooks" buttons can reach
+        them. Those stubs look exactly like junk from inside one library
+        (no source id, no books, not allow-listed). Job 1 already carries
+        this guard because omitting it silently wiped 93 ABS mirror rows
+        in UAT 2026-05-17 — Job 13 reuses the same
+        `_load_cross_library_book_names` set rather than re-deriving it.
 
     **Owned books are structurally safe.** Every contributor of an owned
     book owns that book, so they're in the roster's owned half by
@@ -208,21 +217,44 @@ async def job_non_roster_cleanup(stats: dict, libs: list[dict]) -> None:
     """
     from app.discovery.database import get_db as get_lib_db
     from app.discovery.roster import load_roster
+    from app.metadata.author_names import normalize_author_name
+
+    # Cross-library mirror guard — see the docstring.
+    #
+    # ⚠️ Must mean "has books in some OTHER library", so the per-library
+    # sets are built separately and the CURRENT library is excluded when
+    # the union is taken. Job 1 can safely include itself because it only
+    # ever considers authors with zero books here; Job 13 considers
+    # authors that DO have (unowned) books here, so including self would
+    # protect every one of them and make the job a no-op.
+    names_by_slug: dict[str, frozenset[str]] = {}
+    for _lib in libs:
+        _slug = _lib.get("slug")
+        if _slug:
+            names_by_slug[_slug] = await _load_cross_library_book_names([_lib])
 
     for lib in libs:
         slug = lib["slug"]
+        cross_lib_names: set[str] = set()
+        for _slug, _names in names_by_slug.items():
+            if _slug != slug:
+                cross_lib_names |= _names
         db = await get_lib_db(slug)
         try:
             await db.execute("PRAGMA foreign_keys=OFF")
             roster = await load_roster(db, slug, force=True)
             rows = await (await db.execute(
-                "SELECT id, name FROM authors "
+                "SELECT id, name, normalized_name FROM authors "
                 "WHERE calibre_id IS NULL AND audiobookshelf_id IS NULL"
             )).fetchall()
-            doomed = [
-                r["id"] for r in rows
-                if not roster.admits(r["name"], r["id"])
-            ]
+            doomed = []
+            for r in rows:
+                if roster.admits(r["name"], r["id"]):
+                    continue
+                norm = r["normalized_name"] or normalize_author_name(r["name"] or "")
+                if norm and norm in cross_lib_names:
+                    continue  # mirror row for an author with books elsewhere
+                doomed.append(r["id"])
             if not doomed:
                 continue
 

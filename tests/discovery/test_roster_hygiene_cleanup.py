@@ -281,3 +281,42 @@ async def test_job_is_registered_as_job_13(libs):
     from app.discovery.hygiene import JOB_NAMES, TOTAL_JOBS
     assert TOTAL_JOBS == 13
     assert JOB_NAMES[12] == "Non-roster author cleanup"
+
+
+async def test_cross_library_mirror_rows_are_preserved(libs, monkeypatch):
+    """v2.12.1 dual-row pattern: an author is stubbed into every OTHER
+    library with zero books so cross-format scans can reach them. Those
+    stubs look identical to junk from inside one library. Job 1 already
+    guards them -- omitting the guard wiped 93 ABS mirror rows in UAT
+    2026-05-17, and the live dry-run showed Job 13 would have repeated it
+    (Michael Anderle, Jeff Grubb, Jason Lambright).
+    """
+    from app.discovery.database import get_db
+    from app.discovery import hygiene
+
+    db = await get_db("test")
+    try:
+        # zero books, no source id, not allow-listed -> looks like junk
+        await _author(db, 1, "Michael Anderle")
+        await db.commit()
+    finally:
+        await db.close()
+
+    # ...but they have books in ANOTHER library. Simulate a second
+    # library reporting the name; the guard must union only the OTHER
+    # libraries' sets, never the current one.
+    async def _fake_cross(one_lib):
+        slug = one_lib[0].get("slug")
+        return frozenset({"michael anderle"}) if slug == "otherlib" else frozenset()
+    monkeypatch.setattr(hygiene, "_load_cross_library_book_names", _fake_cross)
+
+    st = _stats()
+    await hygiene.job_non_roster_cleanup(st, LIBS + [{"slug": "otherlib"}])
+    assert st["non_roster_authors_deleted"] == 0
+
+    db = await get_db("test")
+    try:
+        n = (await (await db.execute("SELECT COUNT(*) FROM authors")).fetchone())[0]
+    finally:
+        await db.close()
+    assert n == 1
