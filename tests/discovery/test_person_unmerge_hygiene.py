@@ -439,5 +439,5 @@ async def test_audit_row_supports_reversal(env):
 
 
 def test_job_is_registered_as_job_14():
-    assert hygiene.TOTAL_JOBS == 14
+    assert hygiene.TOTAL_JOBS == 16
     assert hygiene.JOB_NAMES[13] == "Person un-merge"

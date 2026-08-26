@@ -370,4 +370,4 @@ def test_job_listed_in_catalogue():
     # — it runs LAST so earlier dedup/retrolink jobs settle first), then
     # to 14 ("Person un-merge" at 13 — the inverse of THIS job, appended
     # after Job 13 so one pass converges instead of the two trading links).
-    assert hygiene.TOTAL_JOBS == 14
+    assert hygiene.TOTAL_JOBS == 16

@@ -62,9 +62,15 @@ from app.discovery.database import (
     get_db as get_library_db,
     set_active_library,
 )
+from app.discovery.language import is_foreign, normalize_language
 from app.metadata.author_names import authors_match, normalize_author_name
 
 logger = logging.getLogger("seshat.discovery.hygiene")
+
+# Hardcover books per batched language query. 100 keeps the GraphQL
+# payload well inside the server's limit while making a 2,407-row
+# backlog ~25 calls instead of 2,407.
+_HC_LANG_BATCH = 100
 
 
 JOB_NAMES = (
@@ -94,6 +100,12 @@ JOB_NAMES = (
     # bad ID so Job 9 doesn't re-merge them on the next pass. Runs LAST so
     # a single hygiene run converges.
     "Person un-merge",
+    # v3.10.0 — `4cedbfa` persists language going forward only, leaving
+    # 99.3% of existing unowned rows NULL and the sweep below inert.
+    # Job 15 backfills from the cheapest bulk endpoint each source has;
+    # Job 16 then hides what parses as non-English.
+    "Language backfill",
+    "Foreign-language sweep",
 )
 TOTAL_JOBS = len(JOB_NAMES)
 
@@ -139,6 +151,11 @@ def _zero_stats() -> dict[str, Any]:
         "unmerge_links_detached": 0,
         "unmerge_source_ids_cleared": 0,
         "unmerge_norms_repaired": 0,
+        # v3.10.0 — Jobs 15/16 language backfill + foreign sweep.
+        "language_backfilled": 0,
+        "language_backfill_attempted": 0,
+        "language_backfill_skipped": 0,
+        "foreign_books_hidden": 0,
         "errors": [],
     }
 
@@ -1993,6 +2010,331 @@ async def job_person_unmerge(stats: dict[str, Any]) -> None:
         stats["errors"].append(msg)
 
 
+async def _hc_languages_for(src, book_ids: list[str]) -> dict[str, str]:
+    """Batched Hardcover lookup: ``{book_id: language}`` for `book_ids`.
+
+    Hardcover files language on the **edition**, not the book, so a book
+    with a German and an English edition carries both. English-among-many
+    counts as English — the same rule
+    `sources/openlibrary.py::_extract_language` settled on, and for the
+    same reason: a work published in several languages is not a
+    translation to filter, it's a work you can get in English.
+
+    Books absent from the response, or with no language on any edition,
+    are simply absent from the returned dict — callers treat absence as
+    "don't write", never as "unknown language, overwrite with NULL".
+    """
+    numeric = []
+    for b in book_ids:
+        try:
+            numeric.append(int(str(b).strip()))
+        except (TypeError, ValueError):
+            continue
+    if not numeric:
+        return {}
+
+    query = """
+    query BookLanguages($ids: [Int!]!) {
+      books(where: {id: {_in: $ids}}) {
+        id
+        editions { language { code3 } }
+      }
+    }
+    """
+    data = await src._query(query, {"ids": numeric})
+    out: dict[str, str] = {}
+    for book in ((data.get("data") or {}).get("books") or []):
+        if not isinstance(book, dict):
+            continue
+        bid = str(book.get("id") or "").strip()
+        if not bid:
+            continue
+        codes = []
+        for ed in (book.get("editions") or []):
+            if not isinstance(ed, dict):
+                continue
+            lang = ed.get("language") or {}
+            code = (lang.get("code3") if isinstance(lang, dict) else "") or ""
+            norm = normalize_language(code)
+            if norm:
+                codes.append(norm)
+        if not codes:
+            continue
+        out[bid] = "en" if "en" in codes else codes[0]
+    return out
+
+
+async def job_language_backfill(slug: str, stats: dict[str, Any]) -> None:
+    """Job 15 (v3.10.0) — fill `books.language` on existing unowned rows.
+
+    `4cedbfa` made all eight sources persist language, but only going
+    FORWARD: the column fills on insert, or fill-if-empty when a re-scan
+    re-matches an existing row. On the reference install that left
+    **4,878 of 4,912 unowned rows (99.3%) with language NULL**, which
+    makes the foreign-language sweep (Job 16) inert — it measured 0 rows.
+    This backfills the history so the sweep has something to act on.
+
+    Deliberately **not** a full re-scan. A re-scan would re-walk every
+    source's whole catalogue, cost the full rate budget, and re-expose
+    the install to the wrong-author merges the rest of v3.10.0 exists to
+    prevent. This asks each source only "what language is the book I
+    already have an ID for", using the cheapest bulk endpoint each one
+    offers:
+
+      - **OpenLibrary** (1,306 rows) — `search.json?author_key=` returns
+        language for ALL of an author's works in one request per 100
+        works, so a whole author costs 1–2 calls. Rows are matched by
+        the work key stored in `books.openlibrary_id`.
+      - **Hardcover** (2,407 rows) — one batched GraphQL call per
+        `_HC_LANG_BATCH` books, matched by `books.hardcover_id`.
+
+    Together that's 76% of the backlog. Amazon (863) is deliberately
+    excluded: it has no cheap bulk path and is the source most prone to
+    soft-blocking, so paying its budget for a display field is a bad
+    trade. Those rows stay NULL and are simply never swept — the
+    fail-open contract in `app.discovery.language` means unknown is
+    never treated as foreign.
+
+    **Fill-if-empty only.** A non-empty language is never overwritten;
+    the value already there came from the source that actually found the
+    book. Values are normalized through `normalize_language` on the way
+    in, so the backfill doesn't reintroduce the "en" / "eng" / "English"
+    split it exists to resolve.
+
+    ADR-0005 attempted-set: book ids are recorded as attempted before the
+    call, so a source that returns nothing for a batch can't be re-asked
+    on a later iteration of the same run. Without it, rows a source
+    simply has no language for would be retried every pass — the shape
+    that burned ~5,800 calls in the v2.13.x backfill.
+
+    Stats: ``language_backfilled``, ``language_backfill_attempted``,
+    ``language_backfill_skipped``.
+    """
+    from app.discovery.database import get_db as get_lib_db
+
+    filled = attempted_total = 0
+    db = await get_lib_db(slug)
+    try:
+        rows = [dict(r) for r in await (await db.execute(
+            "SELECT id, source, openlibrary_id, hardcover_id "
+            "FROM books "
+            "WHERE owned = 0 AND (language IS NULL OR TRIM(language) = '')"
+        )).fetchall()]
+        if not rows:
+            logger.info(
+                "hygiene[%s] language-backfill: nothing to fill", slug)
+            return
+
+        attempted: set[int] = set()
+
+        # ── OpenLibrary, grouped by author (bulk per author key) ──
+        ol_rows = [r for r in rows
+                   if (r.get("openlibrary_id") or "").strip()]
+        if ol_rows:
+            try:
+                from app.discovery.sources.openlibrary import OpenLibrarySource
+                ol = OpenLibrarySource()
+                # book id -> author OL key, via book_authors → authors
+                by_author: dict[str, list[dict]] = {}
+                for r in ol_rows:
+                    arow = await (await db.execute(
+                        "SELECT a.openlibrary_id FROM authors a "
+                        "JOIN book_authors ba ON ba.author_id = a.id "
+                        "WHERE ba.book_id = ? "
+                        "AND a.openlibrary_id IS NOT NULL "
+                        "AND TRIM(a.openlibrary_id) <> '' "
+                        "ORDER BY ba.position LIMIT 1",
+                        (r["id"],),
+                    )).fetchone()
+                    if arow and (arow["openlibrary_id"] or "").strip():
+                        by_author.setdefault(
+                            arow["openlibrary_id"].strip(), []).append(r)
+
+                for akey, members in by_author.items():
+                    fresh = [m for m in members if m["id"] not in attempted]
+                    if not fresh:
+                        continue
+                    for m in fresh:
+                        attempted.add(m["id"])
+                    attempted_total += len(fresh)
+                    try:
+                        lang_map = await ol._fetch_work_languages(akey)
+                    except Exception as e:
+                        logger.warning(
+                            "hygiene[%s] language-backfill: OL author %s "
+                            "failed (%s) — leaving %d row(s) NULL",
+                            slug, akey, type(e).__name__, len(fresh))
+                        continue
+                    for m in fresh:
+                        codes = lang_map.get(
+                            (m.get("openlibrary_id") or "").strip()) or []
+                        mapped = [normalize_language(c) for c in codes]
+                        mapped = [c for c in mapped if c]
+                        if not mapped:
+                            continue
+                        value = "en" if "en" in mapped else mapped[0]
+                        await db.execute(
+                            "UPDATE books SET language = ? WHERE id = ? "
+                            "AND (language IS NULL OR TRIM(language) = '')",
+                            (value, m["id"]),
+                        )
+                        filled += 1
+                    await db.commit()
+            except Exception as e:
+                msg = (f"language-backfill ({slug}) openlibrary: "
+                       f"{type(e).__name__}: {e}")
+                logger.exception(msg)
+                stats["errors"].append(msg)
+
+        # ── Hardcover, batched by book id ──
+        hc_rows = [r for r in rows
+                   if (r.get("hardcover_id") or "").strip()
+                   and r["id"] not in attempted]
+        if hc_rows:
+            settings = load_settings()
+            api_key = (settings.get("hardcover_api_key") or "").strip()
+            if not api_key:
+                try:
+                    from app.secrets import get_secret
+                    api_key = (
+                        await get_secret("hardcover_api_key") or "").strip()
+                except Exception:
+                    api_key = ""
+            if not api_key:
+                logger.info(
+                    "hygiene[%s] language-backfill: no Hardcover API key "
+                    "— skipping %d row(s)", slug, len(hc_rows))
+            else:
+                try:
+                    from app.discovery.sources.hardcover import HardcoverSource
+                    src = HardcoverSource(api_key=api_key)
+                    for i in range(0, len(hc_rows), _HC_LANG_BATCH):
+                        batch = hc_rows[i:i + _HC_LANG_BATCH]
+                        for m in batch:
+                            attempted.add(m["id"])
+                        attempted_total += len(batch)
+                        try:
+                            langs = await _hc_languages_for(
+                                src, [m["hardcover_id"] for m in batch])
+                        except Exception as e:
+                            logger.warning(
+                                "hygiene[%s] language-backfill: Hardcover "
+                                "batch failed (%s) — leaving %d row(s) NULL",
+                                slug, type(e).__name__, len(batch))
+                            continue
+                        for m in batch:
+                            value = langs.get(
+                                str(m["hardcover_id"]).strip())
+                            if not value:
+                                continue
+                            await db.execute(
+                                "UPDATE books SET language = ? "
+                                "WHERE id = ? AND (language IS NULL "
+                                "OR TRIM(language) = '')",
+                                (value, m["id"]),
+                            )
+                            filled += 1
+                        # Commit per batch — the writer lock must not be
+                        # held across the next network call.
+                        await db.commit()
+                except Exception as e:
+                    msg = (f"language-backfill ({slug}) hardcover: "
+                           f"{type(e).__name__}: {e}")
+                    logger.exception(msg)
+                    stats["errors"].append(msg)
+
+        await db.commit()
+        stats["language_backfilled"] = (
+            stats.get("language_backfilled", 0) + filled)
+        stats["language_backfill_attempted"] = (
+            stats.get("language_backfill_attempted", 0) + attempted_total)
+        stats["language_backfill_skipped"] = (
+            stats.get("language_backfill_skipped", 0)
+            + max(len(rows) - attempted_total, 0))
+        logger.info(
+            "hygiene[%s] language-backfill: filled=%d attempted=%d "
+            "no-resolvable-id=%d",
+            slug, filled, attempted_total,
+            max(len(rows) - attempted_total, 0))
+    except Exception as e:
+        msg = f"language-backfill ({slug}): {type(e).__name__}: {e}"
+        logger.exception(msg)
+        stats["errors"].append(msg)
+    finally:
+        await db.close()
+
+
+async def job_foreign_language_sweep(slug: str, stats: dict[str, Any]) -> None:
+    """Job 16 (v3.10.0) — hide unowned books in a non-English language.
+
+    Foreign editions reach the missing list from several sources, not
+    just OpenLibrary: a source that files each translation as its own
+    work will happily report *Die Spiderwick Geheimnisse* as a book you
+    don't own. Once Job 15 has filled `language`, they're identifiable
+    without guessing.
+
+    **Hides, never deletes.** `hidden = 1` takes a book out of the
+    missing list while keeping it on the Hidden page, so a mistake is one
+    click to undo. That matters more than usual here: this is the first
+    sweep in the codebase driven by a *source-reported* field rather than
+    an internal invariant, and a source that mislabels language would
+    otherwise destroy rows. Job 13's delete semantics are appropriate for
+    rows that provably shouldn't exist; a real book in the wrong language
+    is not that.
+
+    **`is_foreign`, not `not is_english`.** The predicate fires only on a
+    language that parses to a known non-English code. Unknown, empty and
+    unparseable values are left alone — on the reference install that is
+    99.3% of unowned rows, and treating them as foreign would hide the
+    entire backlog.
+
+    Owned books are never touched.
+
+    **An operator un-hide sticks.** The sweep stamps `language_swept_at`
+    on every row it hides and skips anything already carrying it,
+    whatever that row's current `hidden` value. Filtering on `hidden = 0`
+    alone would make the predicate stateless: un-hide a foreign-language
+    book you actually want, and the next hygiene run hides it again,
+    forever. The marker is what turns "hide once, let the operator
+    overrule" into the actual behaviour.
+
+    Stats: ``foreign_books_hidden``.
+    """
+    from app.discovery.database import get_db as get_lib_db
+
+    hidden = 0
+    db = await get_lib_db(slug)
+    try:
+        rows = [dict(r) for r in await (await db.execute(
+            "SELECT id, title, source, language FROM books "
+            "WHERE owned = 0 AND hidden = 0 AND language_swept_at IS NULL "
+            "AND language IS NOT NULL AND TRIM(language) <> ''"
+        )).fetchall()]
+        for r in rows:
+            if not is_foreign(r["language"]):
+                continue
+            await db.execute(
+                "UPDATE books SET hidden = 1, "
+                "language_swept_at = strftime('%s','now') WHERE id = ?",
+                (r["id"],))
+            hidden += 1
+            logger.info(
+                "hygiene[%s] foreign-sweep: hid %r (language=%r, source=%s)",
+                slug, r["title"], r["language"], r["source"])
+        await db.commit()
+        stats["foreign_books_hidden"] = (
+            stats.get("foreign_books_hidden", 0) + hidden)
+        logger.info(
+            "hygiene[%s] foreign-sweep: hid %d of %d row(s) carrying a "
+            "language", slug, hidden, len(rows))
+    except Exception as e:
+        msg = f"foreign-language-sweep ({slug}): {type(e).__name__}: {e}"
+        logger.exception(msg)
+        stats["errors"].append(msg)
+    finally:
+        await db.close()
+
+
 async def job_prune_orphan_links(stats: dict[str, Any]) -> None:
     from app.discovery import author_identity
     try:
@@ -2418,6 +2760,48 @@ async def run_all() -> dict[str, Any]:
             "unmerge_links_detached":     stats["unmerge_links_detached"],
             "unmerge_source_ids_cleared": stats["unmerge_source_ids_cleared"],
             "unmerge_norms_repaired":     stats["unmerge_norms_repaired"],
+        })
+
+        # Job 15 — Language backfill (v3.10.0). Per-library, and the only
+        # network-bound job in the chain besides Job 2 / Job 11, so it
+        # runs after every structural repair has settled — there is no
+        # point paying API budget for rows Job 13 was about to delete.
+        for lib in libs:
+            _slug = lib.get("slug")
+            if not _slug:
+                continue
+            _set_phase(14, library=_slug)
+            await job_language_backfill(_slug, stats)
+        logger.info(
+            "hygiene: %s complete: filled=%d attempted=%d no-id=%d",
+            JOB_NAMES[14],
+            stats["language_backfilled"],
+            stats["language_backfill_attempted"],
+            stats["language_backfill_skipped"],
+        )
+        state._hygiene_progress["jobs"].append({
+            "name": JOB_NAMES[14],
+            "language_backfilled":         stats["language_backfilled"],
+            "language_backfill_attempted": stats["language_backfill_attempted"],
+            "language_backfill_skipped":   stats["language_backfill_skipped"],
+        })
+
+        # Job 16 — Foreign-language sweep (v3.10.0). Strictly after Job
+        # 15: it can only act on rows that have a language, and Job 15 is
+        # what puts one there. Hides rather than deletes.
+        for lib in libs:
+            _slug = lib.get("slug")
+            if not _slug:
+                continue
+            _set_phase(15, library=_slug)
+            await job_foreign_language_sweep(_slug, stats)
+        logger.info(
+            "hygiene: %s complete: hidden=%d",
+            JOB_NAMES[15], stats["foreign_books_hidden"],
+        )
+        state._hygiene_progress["jobs"].append({
+            "name": JOB_NAMES[15],
+            "foreign_books_hidden": stats["foreign_books_hidden"],
         })
 
         state._hygiene_progress.update({

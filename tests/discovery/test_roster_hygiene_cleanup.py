@@ -281,7 +281,7 @@ async def test_job_is_registered_as_job_13(libs):
     from app.discovery.hygiene import JOB_NAMES, TOTAL_JOBS
     # v3.10.0 appended Job 14 (person un-merge) after this one; Job 13
     # keeps its index because Job 14 was appended, not inserted.
-    assert TOTAL_JOBS == 14
+    assert TOTAL_JOBS == 16
     assert JOB_NAMES[12] == "Non-roster author cleanup"
 
 
