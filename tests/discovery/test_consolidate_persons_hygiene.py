@@ -365,5 +365,7 @@ def test_job_listed_in_catalogue():
     # Prune orphan author links).
     assert hygiene.JOB_NAMES[8] == "Consolidate persons by shared source ID"
     # TOTAL_JOBS bumped to 12 in ADR-0016 slice 05 (new "Image URL
-    # health check" at index 10; soft-delete sweep pushed to 11).
-    assert hygiene.TOTAL_JOBS == 12
+    # health check" at index 10; soft-delete sweep pushed to 11), then to
+    # 13 in v3.10.0 / ADR-0021 ("Non-roster author cleanup" appended at 12
+    # — it runs LAST so earlier dedup/retrolink jobs settle first).
+    assert hygiene.TOTAL_JOBS == 13

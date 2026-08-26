@@ -85,6 +85,10 @@ JOB_NAMES = (
     # via mirror_image_url's rank-aware overwrite).
     "Image URL health check",
     "Soft-delete retention sweep",
+    # v3.10.0 (ADR-0021) — retro-cleanup for installs polluted BEFORE the
+    # roster gate existed. The gate stops new junk; this removes what's
+    # already there. Inert on clean installs.
+    "Non-roster author cleanup",
 )
 TOTAL_JOBS = len(JOB_NAMES)
 
@@ -120,6 +124,11 @@ def _zero_stats() -> dict[str, Any]:
         "soft_deletes_kept": 0,
         "soft_deletes_malformed": 0,
         "soft_deletes_errors": 0,
+        # v3.10.0 (ADR-0021) — Job 13 non-roster cleanup.
+        "non_roster_authors_deleted": 0,
+        "non_roster_books_deleted": 0,
+        "non_roster_books_renumbered": 0,
+        "non_roster_series_unlinked": 0,
         "errors": [],
     }
 
@@ -157,6 +166,161 @@ async def _load_allowed_norms() -> frozenset[str]:
     finally:
         await db.close()
     return allowed
+
+
+async def job_non_roster_cleanup(stats: dict, libs: list[dict]) -> None:
+    """Job 13 (v3.10.0, ADR-0021) — remove authors the roster gate would
+    never have created, and the discovered books left behind with them.
+
+    ADR-0021 stops the bleeding for NEW scans. This is the retro-clean for
+    installs that already ran a source scan under the old rules — on the
+    reference install that meant 6,303 junk author rows and ~5,000 unowned
+    books from a single weekend.
+
+    Deletion predicate, per library. An author goes when ALL hold:
+
+      - not in the **roster** (not allow-listed, owns no book here), and
+      - not library-sourced (`calibre_id` / `audiobookshelf_id` both NULL)
+        — a Calibre/ABS author is real even when off the allow list, and
+        deleting them would contradict ADR-0021's "library sync keeps the
+        full byline".
+
+    **Owned books are structurally safe.** Every contributor of an owned
+    book owns that book, so they're in the roster's owned half by
+    definition and can never be selected here. There is a test asserting
+    it rather than leaving it as a comment.
+
+    Then the three cascade repairs — each one a bug found while cleaning
+    the reference install by hand, and each silent if skipped:
+
+      1. Books left with **no contributor at all** and `owned=0` are
+         deleted (an unowned book with no author is unreachable).
+      2. Deleting `series` rows by `author_id` strands surviving books
+         pointing at them → `books.series_id` is NULLed where dangling
+         (151 rows on the reference install).
+      3. Books that lose their **position-0** contributor are densely
+         renumbered, restoring the "exactly one position 0" invariant
+         (ADR-0012) that the v3.7.0 contributor-removal work also upholds
+         (528 rows on the reference install).
+
+    Plus `book_series_suggestions` rows orphaned by deleted books (76 on
+    the reference install), and series left with no books at all.
+    """
+    from app.discovery.database import get_db as get_lib_db
+    from app.discovery.roster import load_roster
+
+    for lib in libs:
+        slug = lib["slug"]
+        db = await get_lib_db(slug)
+        try:
+            await db.execute("PRAGMA foreign_keys=OFF")
+            roster = await load_roster(db, slug, force=True)
+            rows = await (await db.execute(
+                "SELECT id, name FROM authors "
+                "WHERE calibre_id IS NULL AND audiobookshelf_id IS NULL"
+            )).fetchall()
+            doomed = [
+                r["id"] for r in rows
+                if not roster.admits(r["name"], r["id"])
+            ]
+            if not doomed:
+                continue
+
+            await db.execute("DROP TABLE IF EXISTS _doomed")
+            await db.execute("CREATE TEMP TABLE _doomed (id INTEGER PRIMARY KEY)")
+            await db.executemany(
+                "INSERT INTO _doomed (id) VALUES (?)", [(i,) for i in doomed],
+            )
+
+            # (1) unowned books whose every contributor is doomed
+            dead_books = [r[0] for r in await (await db.execute(
+                "SELECT b.id FROM books b WHERE b.owned = 0 "
+                "AND EXISTS (SELECT 1 FROM book_authors ba WHERE ba.book_id=b.id) "
+                "AND NOT EXISTS (SELECT 1 FROM book_authors ba WHERE ba.book_id=b.id "
+                "                AND ba.author_id NOT IN (SELECT id FROM _doomed))"
+            )).fetchall()]
+            if dead_books:
+                await db.execute("DROP TABLE IF EXISTS _deadbooks")
+                await db.execute(
+                    "CREATE TEMP TABLE _deadbooks (id INTEGER PRIMARY KEY)")
+                await db.executemany(
+                    "INSERT INTO _deadbooks (id) VALUES (?)",
+                    [(i,) for i in dead_books],
+                )
+                await db.execute(
+                    "DELETE FROM book_authors "
+                    "WHERE book_id IN (SELECT id FROM _deadbooks)")
+                try:
+                    await db.execute(
+                        "DELETE FROM book_series_suggestions "
+                        "WHERE book_id IN (SELECT id FROM _deadbooks)")
+                except Exception:
+                    pass  # table is optional across schema versions
+                await db.execute(
+                    "DELETE FROM books WHERE id IN (SELECT id FROM _deadbooks)")
+
+            await db.execute(
+                "DELETE FROM book_authors "
+                "WHERE author_id IN (SELECT id FROM _doomed)")
+            for tbl, col in (
+                ("series", "author_id"),
+                ("pen_name_links", "canonical_author_id"),
+                ("pen_name_links", "alias_author_id"),
+            ):
+                try:
+                    await db.execute(
+                        f"DELETE FROM {tbl} "  # nosec B608
+                        f"WHERE {col} IN (SELECT id FROM _doomed)")
+                except Exception:
+                    pass
+            await db.execute(
+                "DELETE FROM authors WHERE id IN (SELECT id FROM _doomed)")
+
+            # (2) dangling series pointers on SURVIVING books
+            cur = await db.execute(
+                "UPDATE books SET series_id = NULL WHERE series_id IS NOT NULL "
+                "AND series_id NOT IN (SELECT id FROM series)")
+            stats["non_roster_series_unlinked"] += cur.rowcount or 0
+            await db.execute(
+                "DELETE FROM series WHERE id NOT IN "
+                "(SELECT DISTINCT series_id FROM books WHERE series_id IS NOT NULL)")
+
+            # (3) restore the exactly-one-position-0 invariant
+            orphaned_pos0 = [r[0] for r in await (await db.execute(
+                "SELECT b.id FROM books b "
+                "WHERE EXISTS (SELECT 1 FROM book_authors ba WHERE ba.book_id=b.id) "
+                "AND NOT EXISTS (SELECT 1 FROM book_authors ba "
+                "                WHERE ba.book_id=b.id AND ba.position=0)"
+            )).fetchall()]
+            for bid in orphaned_pos0:
+                links = await (await db.execute(
+                    "SELECT author_id, role FROM book_authors "
+                    "WHERE book_id=? ORDER BY position", (bid,),
+                )).fetchall()
+                await db.execute(
+                    "DELETE FROM book_authors WHERE book_id=?", (bid,))
+                for pos, r in enumerate(links):
+                    await db.execute(
+                        "INSERT INTO book_authors (book_id, author_id, position, role) "
+                        "VALUES (?,?,?,?)", (bid, r["author_id"], pos, r["role"]),
+                    )
+            stats["non_roster_books_renumbered"] += len(orphaned_pos0)
+            stats["non_roster_authors_deleted"] += len(doomed)
+            stats["non_roster_books_deleted"] += len(dead_books)
+            await db.commit()
+            logger.info(
+                "hygiene[%s]: non-roster cleanup removed %d authors, "
+                "%d books; renumbered %d, unlinked %d series refs",
+                slug, len(doomed), len(dead_books), len(orphaned_pos0),
+                stats["non_roster_series_unlinked"],
+            )
+        except Exception as e:
+            logger.exception("hygiene: non-roster cleanup failed for %s", slug)
+            stats["errors"].append(
+                f"non_roster_cleanup[{slug}]: {type(e).__name__}: {e}"
+            )
+        finally:
+            await db.close()
 
 
 async def _load_cross_library_book_names(libs: list[dict]) -> frozenset[str]:
@@ -1833,6 +1997,30 @@ async def run_all() -> dict[str, Any]:
             "soft_deletes_kept":      stats["soft_deletes_kept"],
             "soft_deletes_malformed": stats["soft_deletes_malformed"],
             "soft_deletes_errors":    stats["soft_deletes_errors"],
+        })
+
+        # Job 13 — Non-roster author cleanup (v3.10.0, ADR-0021). Runs LAST
+        # so it operates on a DB the earlier jobs have already deduped and
+        # re-linked — otherwise it could delete an author that Job 4's book
+        # dedup or Job 7's orphan retrolink was about to give a book to.
+        # Inert on installs that never scanned under the pre-roster rules.
+        _set_phase(12, library="(cross-library)")
+        await job_non_roster_cleanup(stats, libs)
+        logger.info(
+            "hygiene: %s complete: authors=%d books=%d renumbered=%d "
+            "series_unlinked=%d",
+            JOB_NAMES[12],
+            stats["non_roster_authors_deleted"],
+            stats["non_roster_books_deleted"],
+            stats["non_roster_books_renumbered"],
+            stats["non_roster_series_unlinked"],
+        )
+        state._hygiene_progress["jobs"].append({
+            "name": JOB_NAMES[12],
+            "non_roster_authors_deleted":  stats["non_roster_authors_deleted"],
+            "non_roster_books_deleted":    stats["non_roster_books_deleted"],
+            "non_roster_books_renumbered": stats["non_roster_books_renumbered"],
+            "non_roster_series_unlinked":  stats["non_roster_series_unlinked"],
         })
 
         state._hygiene_progress.update({
