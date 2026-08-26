@@ -1,10 +1,10 @@
 # Hygiene jobs
 
-Data Hygiene is a single operator-triggered chain that runs twelve maintenance jobs against every configured library. It lives on the unified Dashboard as the **Data Hygiene** button in the Command Center; clicking it opens a confirmation modal listing the jobs, and once confirmed the chain spawns as a background task and reports its progress on the same banner that surfaces source scans and library syncs.
+Data Hygiene is a single operator-triggered chain that runs thirteen maintenance jobs against every configured library. It lives on the unified Dashboard as the **Data Hygiene** button in the Command Center; clicking it opens a confirmation modal listing the jobs, and once confirmed the chain spawns as a background task and reports its progress on the same banner that surfaces source scans and library syncs.
 
-The chain is **manually triggered only** — no scheduled or on-startup run. Each click runs all twelve jobs in order across every library; there is no per-job toggle. Every job is **idempotent**: re-running back-to-back drops every counter to zero once a steady state is reached, so an operator who's worried after a click can safely click again to see what's stable.
+The chain is **manually triggered only** — no scheduled or on-startup run. Each click runs all thirteen jobs in order across every library; there is no per-job toggle. Every job is **idempotent**: re-running back-to-back drops every counter to zero once a steady state is reached, so an operator who's worried after a click can safely click again to see what's stable.
 
-The progress banner shows `N of 12: <job name> — <library>` while a job runs. The job name strings in this chapter match the trigger-time confirm modal (what you see before clicking "Run"). The progress banner labels them slightly differently in two places — noted inline where it matters.
+The progress banner shows `N of 13: <job name> — <library>` while a job runs. The job name strings in this chapter match the trigger-time confirm modal (what you see before clicking "Run"). The progress banner labels them slightly differently in two places — noted inline where it matters.
 
 Throughout this chapter, "Seshat-only" means a write that lands in Seshat's own working DBs (`seshat.db` + per-library `seshat_<slug>.db`) and never reaches the authoritative Calibre `metadata.db` or Audiobookshelf API. "Canonical-state writes" mean the opposite — the chain does not currently make any. Hygiene reads from Calibre/ABS via the same paths a normal scan uses, but it does not write back to them.
 
@@ -141,6 +141,31 @@ This is **local-clear-only**: clears the per-library row in place; does **not** 
 **Pre-flight notes.** See [Active replacement](./active-replacement.md) for the soft-delete model — that chapter documents the quality-scoring inputs, the per-library opt-in, and the `.seshat-replaced/<ts>/` layout. **This sweeper deletes irreversibly outside the retention window**; if a recently-replaced book is one you want to roll back, run Hygiene only after restoring it.
 
 > **Numbering note (v3.2.0).** Job 12 was Job 11 prior to v3.2.0. Adding the image URL health check at slot 11 pushed soft-delete down one position; `TOTAL_JOBS` rose from 11 to 12.
+
+## Job 13 — Non-roster author cleanup
+
+**What it does.** Retro-cleanup for installs that ran a source scan *before* v3.10.0's roster gate existed ([ADR-0021](../adr/0021-roster-gates-discovery-author-creation.md)). Deletes per-library author rows that are neither in the **roster** (allow-listed, or owning a book in that library) nor library-sourced, along with the unowned discovered books left behind with no contributor at all.
+
+Before v3.10.0, a source scan created an author row for *every* contributor a source reported — and a new row instantly qualified as a scan target, so scanning it produced more strangers. One 20-contributor anthology could add 20 authors, each of whom then pulled in their own catalogue. On the install that motivated the fix this produced **6,303 unwanted authors and roughly 5,000 unowned books in about 36 hours**.
+
+**When it runs.** Manual, cross-library, **last** in the chain — after the dedup and retrolink jobs have settled, so it can't delete an author that Job 4 or Job 7 was about to attach a book to.
+
+**What it will never touch:**
+
+- **Library authors.** Anything with a `calibre_id` or `audiobookshelf_id` is real even if it's not on your allow list. v3.10.0 keeps library bylines exactly as Calibre/ABS report them; those authors are offered for allow-list review instead (see below).
+- **Owned books.** Every contributor of an owned book owns that book, which puts them in the roster by definition — so no owned book can lose a byline, even with an empty allow list.
+
+**Side effects.** Deletes from `authors`, `book_authors`, `books` (unowned + contributor-less only), `series`, `book_series_suggestions` and `pen_name_links`. It also performs three repairs that the deletions make necessary, each of which is silently corrupting if skipped:
+
+1. Unowned books left with no contributor are removed (an unowned book with no author is unreachable in the UI).
+2. Books still pointing at a deleted series get `series_id` set to NULL.
+3. Books that lose their **position-0** contributor are densely renumbered, restoring the "exactly one primary author" invariant ([ADR-0012](../adr/0012-drop-books-author-id-position-0-canonical.md)).
+
+Per-job stats: `non_roster_authors_deleted`, `non_roster_books_deleted`, `non_roster_books_renumbered`, `non_roster_series_unlinked`.
+
+**Pre-flight notes.** This is the only hygiene job that deletes author and book rows in bulk, so **back up `seshat.db` and the per-library `seshat_<slug>.db` files before the first run** (same recipe as Job 9). It is idempotent and inert on installs that never scanned under the old rules — a clean install reports all zeros. If the counts look higher than you expect, the usual cause is a sparse allow list: authors you *do* want are admitted either by being allow-listed or by owning a book, so promoting them from **Authors → tentative review** before running Hygiene will protect them.
+
+> **Related.** Library authors that aren't on your allow list are pushed into the tentative-review list at the end of each Calibre/ABS sync (capped at 250 per sync), so you can promote them to allowed or ignored from the Authors page.
 
 ## What to do if a job fails
 
