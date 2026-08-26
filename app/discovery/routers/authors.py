@@ -3286,3 +3286,199 @@ async def unlink_pen_names(link_id: int):
             finally:
                 await gdb.close()
     return {"status": "ok"}
+
+
+# ─── v3.10.0 — source-record evidence + operator blacklist ──────────
+
+
+@router.get("/authors/{aid}/source-breakdown")
+async def author_source_breakdown(aid: int, slug: Optional[str] = None):
+    """Per-source evidence for one author, for the "is this source
+    reporting the right person?" panel.
+
+    Reports **evidence, not a score**, and the distinction is load-bearing.
+    A collapsed source record cannot be detected automatically (see
+    `app.discovery.source_blacklist`), so a confidence percentage would
+    dress a judgement call up as a measurement.
+
+    Two signals were tried and **rejected by measurement** — recorded
+    here so they don't get re-added:
+
+      - **"few of the source's books match your owned titles."** Useless:
+        stored discovered rows exclude owned books *by construction*, so
+        this count is ~always 0 for every author, genuine or not.
+      - **"no corroboration = suspect."** Fires on the innocent.
+        OpenLibrary corroborates at 1% across this whole library, so
+        "many OL books, none corroborated" describes every prolific
+        author's genuine OL record — measured, it flagged Terry Brooks
+        (149), Jim Butcher (50) and Holly Black (118) alongside the one
+        actually-collapsed record.
+
+    So what's returned is the counted facts plus **a sample of the
+    titles**, because the titles are what actually make a collapsed
+    record obvious: "Trump and Churchill", "Kenny the Koala Comes to the
+    USA" and "Practical clinical endodontics" listed under a sci-fi
+    author is instantly legible to a human and to nothing else.
+
+      - ``books`` — unowned rows this source contributed here.
+      - ``corroborated`` — how many ALSO carry an id from a different
+        **disambiguating** source. `kobo`, `google_books` and `ibdb` use
+        the author's NAME as their external id and do no author-entity
+        resolution, so their agreement carries no identity information.
+        On the reference install every one of OpenLibrary's 14
+        "corroborated" Nick Adams rows was corroborated by google_books
+        alone — unweighted, this number would have argued FOR the junk.
+      - ``sample_titles`` — up to 8 of what would be retracted.
+
+    `flag` is `review` or `none`, and `review` means only "large
+    contribution, nothing else confirms it — worth your eyes", not
+    "wrong". Nothing here changes data; only an explicit blacklist POST
+    does.
+    """
+    from app.discovery.database import get_db as get_lib_db, get_active_library
+    from app.discovery.source_blacklist import DISAMBIGUATING_SOURCES
+    from app.discovery import source_blacklist
+
+    lib = slug or get_active_library()
+    id_cols = sorted(MIRRORABLE_SOURCE_ID_COLUMNS)
+    db = await get_lib_db(lib)
+    try:
+        arow = await (await db.execute(
+            "SELECT name FROM authors WHERE id = ?", (aid,))).fetchone()
+        if not arow:
+            raise HTTPException(404, "author not found")
+
+        author_source_ids = dict(await (await db.execute(
+            f"SELECT {', '.join(id_cols)} FROM authors WHERE id = ?",  # nosec B608
+            (aid,))).fetchone())
+
+        rows = [dict(r) for r in await (await db.execute(
+            f"SELECT b.id, b.title, b.owned, b.source, "  # nosec B608
+            f"       {', '.join('b.' + c for c in id_cols)} "
+            f"FROM books b JOIN book_authors ba ON ba.book_id = b.id "
+            f"WHERE ba.author_id = ?", (aid,))).fetchall()]
+    finally:
+        await db.close()
+
+    def _norm_title(t: str) -> str:
+        import re
+        t = (t or "").lower()
+        t = re.sub(r"\(.*?\)", " ", t)
+        t = re.sub(r"[^a-z0-9 ]", " ", t)
+        return re.sub(r"\s+", " ", t).strip()
+
+    owned_titles = {_norm_title(r["title"]) for r in rows if r["owned"]}
+
+    by_source: dict[str, dict] = {}
+    for r in rows:
+        if r["owned"]:
+            continue
+        src = (r["source"] or "").strip() or "unknown"
+        own_col = f"{src}_id"
+        d = by_source.setdefault(src, {
+            "source": src,
+            "books": 0, "corroborated": 0,
+            "sample_titles": [],
+            "disambiguating": src in DISAMBIGUATING_SOURCES,
+            "source_author_id": author_source_ids.get(own_col),
+        })
+        d["books"] += 1
+        others = [
+            c for c in id_cols
+            if c != own_col and r.get(c) and str(r[c]).strip()
+            and c[: -len("_id")] in DISAMBIGUATING_SOURCES
+        ]
+        if others:
+            d["corroborated"] += 1
+        if len(d["sample_titles"]) < 8:
+            d["sample_titles"].append(r["title"])
+
+    out = []
+    for d in by_source.values():
+        n, corr = d["books"], d["corroborated"]
+        # `review` is "worth your eyes", NOT "wrong" — see the docstring
+        # for the two stronger-sounding rules that measurement rejected.
+        if n >= 10 and corr == 0:
+            d["flag"] = "review"
+            d["note"] = (
+                f"{n} books and nothing else confirms any of them. That is "
+                f"normal for a deep catalogue, so check the titles below "
+                f"before acting — if they aren't all the same person, "
+                f"blacklist the record."
+            )
+        else:
+            d["flag"] = "none"
+            d["note"] = (
+                f"{n} books, {corr} also known to another identifying "
+                f"source."
+            )
+        d["blacklisted"] = bool(
+            d["source_author_id"]
+            and await source_blacklist.is_blacklisted(
+                d["source"], d["source_author_id"])
+        )
+        out.append(d)
+
+    out.sort(key=lambda d: (-d["books"], d["source"]))
+    return {
+        "author_id": aid, "author_name": arow["name"], "slug": lib,
+        "owned_books": len(owned_titles), "sources": out,
+    }
+
+
+@router.get("/source-blacklist")
+async def list_source_blacklist():
+    from app.discovery import source_blacklist
+    return {"entries": await source_blacklist.list_all()}
+
+
+@router.post("/source-blacklist")
+async def add_source_blacklist(payload: dict = Body(...)):
+    """Blacklist a source author record and retract what it contributed.
+
+    Two effects, in this order: the record is recorded so every future
+    scan skips it before walking any catalogue, and the rows it already
+    wrote for this author are retracted through the same
+    `_retract_source_books` path the validation-failure branch uses — so
+    co-authored books are UNLINKED rather than deleted, owned rows are
+    never touched, and the ADR-0012 position-0 invariant is restored.
+    """
+    source = (payload.get("source") or "").strip()
+    source_author_id = (payload.get("source_author_id") or "").strip()
+    if not source or not source_author_id:
+        raise HTTPException(400, "source and source_author_id are required")
+
+    author_id = payload.get("author_id")
+    retracted = 0
+    if author_id:
+        try:
+            from app.discovery.lookup import _retract_source_books
+            linked = [a["id"] for a in await linked_authors(
+                payload.get("slug") or "", int(author_id))] \
+                if payload.get("slug") else None
+            retracted = await _retract_source_books(
+                int(author_id), source, linked)
+        except Exception:
+            logger.exception(
+                "source-blacklist: retraction failed for author_id=%s "
+                "source=%s (non-fatal — the blacklist still applies)",
+                author_id, source)
+
+    from app.discovery import source_blacklist
+    entry_id = await source_blacklist.add(
+        source, source_author_id,
+        author_name=payload.get("author_name"),
+        reason=payload.get("reason"),
+        books_retracted=retracted,
+    )
+    return {"status": "ok", "id": entry_id, "books_retracted": retracted}
+
+
+@router.delete("/source-blacklist/{entry_id}")
+async def remove_source_blacklist(entry_id: int):
+    """Un-blacklist a record. Retracted books are not resurrected — the
+    next scan of that author re-imports them naturally."""
+    from app.discovery import source_blacklist
+    if not await source_blacklist.remove(entry_id):
+        raise HTTPException(404, "blacklist entry not found")
+    return {"status": "ok"}

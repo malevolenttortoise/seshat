@@ -29,6 +29,7 @@ import {
   type PersonSearchResponse,
 } from "../lib/authorDetail";
 import { SourceBadgeRow } from "../components/SourceBadgeRow";
+import { SourceBreakdownPanel } from "../components/SourceBreakdownPanel";
 import { AuthorCacheStatusBadge } from "../components/AuthorCacheStatusBadge";
 import { GoodreadsAuthorCacheStatusBadge } from "../components/GoodreadsAuthorCacheStatusBadge";
 import { useViewport } from "../hooks/useViewport";
@@ -1454,6 +1455,18 @@ function DesktopAuthorDetailPage({
           onUpdate={() => loadA()}
         />
       ) : null}
+
+      {/* v3.10.0 — per-source evidence + operator blacklist. Self-hides
+          when there is nothing unowned to report, and only auto-opens
+          when a source looks like a collapsed record (many books, no
+          corroboration from an identifying source, no overlap with the
+          library). This is the surface for the OpenLibrary "Nick Adams"
+          class of failure, which no automated check can catch. */}
+      <SourceBreakdownPanel
+        authorId={authorId}
+        slug={a.active_library_slug}
+        onChanged={() => loadA()}
+      />
 
       {/* v2.21.0 Phase F tier 3 + v3.6.0 frontend parity —
           per-author cache status for each metadata source. Renders

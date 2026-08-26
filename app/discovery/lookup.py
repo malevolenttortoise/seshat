@@ -3585,6 +3585,38 @@ async def _try_source(source, author_name, author_id, our_titles, languages, sou
                 f"{len(found.series)} series pre-populated)"
             )
 
+        # v3.10.0 — operator blacklist. Checked here, immediately after
+        # the source resolves an author record and BEFORE any catalogue
+        # is walked, so a blacklisted record costs no further requests.
+        #
+        # This is the escape hatch for a source record that collapses
+        # several real people into one entity (OpenLibrary's OL2719653A:
+        # a sci-fi author's Fold novels next to "Trump and Churchill" and
+        # "Kenny the Koala"). `_validate_author` cannot reject it — the
+        # record genuinely contains books the user owns, so any-owned vs
+        # any-catalogue matches and validation passes honestly. The
+        # ambiguity is inside the record, so no automated signal resolves
+        # it; an operator verdict is the only correct input.
+        if found.external_id:
+            try:
+                from app.discovery import source_blacklist
+                if await source_blacklist.is_blacklisted(
+                        source_name, found.external_id):
+                    logger.info(
+                        "  [%s] author record %s is BLACKLISTED for %r — "
+                        "skipping %d book(s) without importing",
+                        source_name, found.external_id, author_name,
+                        len(found.books) + sum(
+                            len(s.books) for s in found.series),
+                    )
+                    return 0
+            except Exception:
+                # Fail open — a blacklist read error must never suppress
+                # a source silently.
+                logger.exception(
+                    "  [%s] blacklist check failed — continuing",
+                    source_name)
+
         if has_data:
             full = found
         else:
