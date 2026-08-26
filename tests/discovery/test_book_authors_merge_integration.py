@@ -25,16 +25,68 @@ from app.discovery.sources.base import (
 )
 
 
+# v3.10.0 (ADR-0021) — the recurring cast of these tests, allow-listed by
+# the fixture below.
+#
+# From ADR-0021 a source-scan contributor is only linked when it's in the
+# ROSTER (allow-listed, or owning a book in this library). These tests
+# predate that gate and exist to prove contributor *mechanics* — source
+# order, role filtering, never-orphan, union-on-heal — not roster policy.
+# Seeding the allow list keeps them testing what they were written to test.
+#
+# Deliberately NOT listed: "Totally Unknown Person", "Some Illustrator",
+# "Some Translator" — every test using those asserts they are excluded, so
+# allow-listing them would mask the behavior under test.
+#
+# The gate itself is covered in test_roster_gate_linking.py, plus
+# `test_non_roster_coauthor_dropped_through_merge` at the bottom of this
+# file for the integration-level assertion.
+_ALLOW_LISTED_CAST = (
+    "J.N. Chaney", "Jason Anspach",
+    "Misty Vixen", "Marcus Sloss", "Michael Dalton", "Neil Bimbeau",
+    "Adam Lance", "Eric Vall", "Aaron Crash",
+)
+
+
+async def _seed_allow_list(data_dir, names):
+    """Create the pipeline DB's allow list — the roster's first half."""
+    import aiosqlite
+    from app.filter.normalize import normalize_author
+
+    con = await aiosqlite.connect(str(data_dir / "seshat.db"))
+    try:
+        await con.execute(
+            "CREATE TABLE IF NOT EXISTS authors_allowed "
+            "(name TEXT, normalized TEXT UNIQUE, source TEXT)"
+        )
+        await con.execute(
+            "CREATE TABLE IF NOT EXISTS authors_ignored "
+            "(name TEXT, normalized TEXT UNIQUE)"
+        )
+        for n in names:
+            await con.execute(
+                "INSERT OR IGNORE INTO authors_allowed (name, normalized, source) "
+                "VALUES (?,?,'test')", (n, normalize_author(n)),
+            )
+        await con.commit()
+    finally:
+        await con.close()
+
+
 @pytest.fixture
 async def discovery_db(tmp_path, monkeypatch):
     from app import config as app_config
     from app.discovery import database as disco_db
+    from app.discovery import roster as roster_mod
 
     monkeypatch.setattr(app_config, "DATA_DIR", tmp_path)
     monkeypatch.setattr(disco_db, "DATA_DIR", tmp_path)
     disco_db.set_active_library("test")
     await disco_db.init_db("test")
+    await _seed_allow_list(tmp_path, _ALLOW_LISTED_CAST)
+    roster_mod.invalidate()
     yield tmp_path
+    roster_mod.invalidate()
     disco_db.set_active_library(None)
 
 
@@ -631,3 +683,55 @@ async def test_heal_recomputes_series_author_mode(discovery_db):
         (0, "Jason Anspach"), (1, "J.N. Chaney"),
     ]
     assert await _series_author_mode(sid) == "multi_author"
+
+
+# ─── ADR-0021 roster gate (integration level) ────────────────
+
+
+async def test_non_roster_coauthor_dropped_through_merge(discovery_db):
+    """The incident shape, end-to-end through the real merge: a trusted
+    source returns an anthology whose co-author is neither allow-listed nor
+    owned. Pre-ADR-0021 this MINTED a row, which then became a scan target
+    and cascaded. Now the book is created with only its roster contributor.
+    """
+    chaney_id = await _insert_author("J.N. Chaney")
+
+    new, _ = await _merge_result(
+        author_id=chaney_id,
+        result=_scan(
+            "hardcover",
+            Contributor(name="J.N. Chaney"),      # allow-listed → linked
+            Contributor(name="Clive Barker"),      # stranger → dropped
+            Contributor(name="Ray Bradbury"),      # stranger → dropped
+        ),
+        source_name="hardcover",
+        languages=["English"],
+    )
+
+    assert new == 1  # the book is still discovered — only the byline narrows
+    assert await _book_authors_for("Ruins of the Galaxy") == [(0, "J.N. Chaney")]
+    assert await _author_count() == 1  # nothing minted
+
+
+async def test_owned_coauthor_admitted_through_merge_without_allow_list(discovery_db):
+    """The owned half of the roster works end-to-end: a co-author who owns
+    a book here is linked even though they're not on the allow list."""
+    chaney_id = await _insert_author("J.N. Chaney")
+    owner_id = await _insert_author("Owned Coauthor")   # NOT allow-listed
+    await _seed_book("Their Own Book", [owner_id], owned=1)
+
+    await _merge_result(
+        author_id=chaney_id,
+        result=_scan(
+            "hardcover",
+            Contributor(name="J.N. Chaney"),
+            Contributor(name="Owned Coauthor"),
+        ),
+        source_name="hardcover",
+        languages=["English"],
+    )
+
+    assert await _book_authors_for("Ruins of the Galaxy") == [
+        (0, "J.N. Chaney"), (1, "Owned Coauthor"),
+    ]
+    assert await _author_count() == 2  # linked the existing row, minted none
