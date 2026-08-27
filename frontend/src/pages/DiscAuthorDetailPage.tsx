@@ -12,6 +12,7 @@ import type { Theme } from "../theme";
 import { api, slugQuery } from "../api";
 import { Ic } from "../icons";
 import { usePersist } from "../hooks/usePersist";
+import { useAuthorWalk } from "../hooks/useAuthorWalk";
 import { Btn } from "../components/Btn";
 import { ClearMenu } from "../components/ClearMenu";
 import { Spin } from "../components/Spin";
@@ -29,6 +30,7 @@ import {
   type PersonSearchResponse,
 } from "../lib/authorDetail";
 import { SourceBadgeRow } from "../components/SourceBadgeRow";
+import { SourceBreakdownPanel } from "../components/SourceBreakdownPanel";
 import { AuthorCacheStatusBadge } from "../components/AuthorCacheStatusBadge";
 import { GoodreadsAuthorCacheStatusBadge } from "../components/GoodreadsAuthorCacheStatusBadge";
 import { useViewport } from "../hooks/useViewport";
@@ -546,6 +548,10 @@ function DesktopAuthorDetailPage({
   })();
   const authorIdNum = parsed.id;
   const authorSlug = parsed.slug;
+
+  // Prev/next within the list the user came from. Keyed on the RAW
+  // `authorId` because that's the nav-arg form the list snapshotted.
+  const walk = useAuthorWalk(authorId);
 
   const [penLinks, setPenLinks] = useState<PenNameLink[]>([]);
   const [penQ, setPenQ] = useState("");
@@ -1096,19 +1102,80 @@ function DesktopAuthorDetailPage({
           padding: "12px 0",
         }}
       >
-        <Btn
-          onClick={() => onNav("disc-authors")}
+        <div
           style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
             marginBottom: 12,
-            background: t.bg4,
-            border: `1px solid ${t.border}`,
-            borderRadius: 8,
-            padding: "8px 16px",
-            fontSize: 14,
           }}
         >
-          ← Back to Authors
-        </Btn>
+          <Btn
+            onClick={() => onNav("disc-authors")}
+            style={{
+              background: t.bg4,
+              border: `1px solid ${t.border}`,
+              borderRadius: 8,
+              padding: "8px 16px",
+              fontSize: 14,
+            }}
+          >
+            ← Back to Authors
+          </Btn>
+
+          {/* v3.10.0 — walk the list you came from. Renders only when a
+              snapshot exists AND this author is in it, so a deep link or
+              a cross-library jump shows nothing rather than offering
+              navigation to an unrelated author. */}
+          {walk.total > 0 ? (
+            <div
+              style={{
+                marginLeft: "auto",
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
+              <span style={{ fontSize: 13, color: t.tm }}>
+                {walk.index} of {walk.total}
+              </span>
+              <Btn
+                disabled={!walk.prev}
+                onClick={() =>
+                  walk.prev && onNav("disc-author-detail", walk.prev)
+                }
+                style={{
+                  background: t.bg4,
+                  border: `1px solid ${t.border}`,
+                  borderRadius: 8,
+                  padding: "8px 14px",
+                  fontSize: 14,
+                  opacity: walk.prev ? 1 : 0.4,
+                  cursor: walk.prev ? "pointer" : "default",
+                }}
+              >
+                ← Prev
+              </Btn>
+              <Btn
+                disabled={!walk.next}
+                onClick={() =>
+                  walk.next && onNav("disc-author-detail", walk.next)
+                }
+                style={{
+                  background: t.bg4,
+                  border: `1px solid ${t.border}`,
+                  borderRadius: 8,
+                  padding: "8px 14px",
+                  fontSize: 14,
+                  opacity: walk.next ? 1 : 0.4,
+                  cursor: walk.next ? "pointer" : "default",
+                }}
+              >
+                Next →
+              </Btn>
+            </div>
+          ) : null}
+        </div>
         <div
           className="author-header"
           style={{ display: "flex", gap: 20, alignItems: "flex-start" }}
@@ -1454,6 +1521,22 @@ function DesktopAuthorDetailPage({
           onUpdate={() => loadA()}
         />
       ) : null}
+
+      {/* v3.10.0 — per-source evidence + operator blacklist. Self-hides
+          when there is nothing unowned to report, and only auto-opens
+          when a source looks like a collapsed record (many books, no
+          corroboration from an identifying source, no overlap with the
+          library). This is the surface for the OpenLibrary "Nick Adams"
+          class of failure, which no automated check can catch. */}
+      {/* ⚠️ `authorIdNum` / `authorSlug`, NOT the raw `authorId` prop —
+          that can be the composite "slug:id" form (a cross-library row
+          arrives as "calibre-library:619"), which the endpoint's `int`
+          path param rejects with a 422. */}
+      <SourceBreakdownPanel
+        authorId={authorIdNum}
+        slug={authorSlug || a.active_library_slug}
+        onChanged={() => loadA()}
+      />
 
       {/* v2.21.0 Phase F tier 3 + v3.6.0 frontend parity —
           per-author cache status for each metadata source. Renders

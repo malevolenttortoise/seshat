@@ -33,7 +33,11 @@ mutagen==1.47.0
 # pinning here makes the runtime contract explicit. ~3MB on the slim
 # image. Validated 2026-05-09 against 16 image pairs (right-Possibles
 # cluster at distance 0-6, wrong-matches at 28-36).
-Pillow==12.2.0
+# 12.3.0 clears 13 Dependabot advisories open against 12.2.0 (decoder
+# overflow / DoS classes reachable only from untrusted image bytes —
+# cover_hash.py feeds it remote cover URLs, so they are in scope here).
+# Patch bump; the only API used is Image.open + UnidentifiedImageError.
+Pillow==12.3.0
 ImageHash==4.3.2
 
 # Metadata scraper HTML parsing (Goodreads, Amazon, etc.).
@@ -67,6 +71,6 @@ curl_cffi>=0.7.0
 # bundle a vulnerable OpenSSL; 49.0.0 ships a patched one. We only use
 # Fernet (symmetric AES/HMAC) — no untrusted TLS/X.509 through this lib,
 # so practical exposure was low, but a runtime dep is worth keeping clean.
-# Fernet wire format + API are unchanged across 46→49 — no code impact,
+# Fernet wire format + API are unchanged across 46→50 — no code impact,
 # and existing encrypted secrets decrypt as-is.
-cryptography==49.0.0
+cryptography==50.0.0

@@ -103,28 +103,56 @@ _OL_LANGUAGE_MAP = {
 }
 
 
-def _extract_language(work: dict) -> Optional[str]:
-    """Pick the first known language from an OL work entry.
+def _extract_language(
+    work: dict, lang_map: Optional[dict] = None,
+) -> Optional[str]:
+    """Resolve an OL work's language.
 
-    OL exposes work-level language as `[{"key": "/languages/eng"}, ...]`
-    on the works.json response. Returns ISO 639-1 (2-letter) when
-    mappable; None otherwise (downstream `_lang_ok` treats None as
-    "unknown, let it through" — so populating this field is what
-    actually drives the language filter for OL-sourced books).
+    Returns a mapped language name, or None meaning "unknown" — which
+    `_lang_ok` treats as "let it through", so a None here is permissive,
+    never a silent drop.
+
+    Two sources, in order:
+
+    1. `work["languages"]` — the shape `/works/{id}.json` uses
+       (`[{"key": "/languages/eng"}]`). ⚠️ The **author works feed**
+       (`/authors/{key}/works.json`) that discovery actually walks does
+       NOT include this field: measured 0 of 60 on Holly Black. The
+       v2.11.0 code relied on it alone, which is why every OL book landed
+       with language=None and translations bypassed the filter entirely.
+    2. `lang_map` — the bulk `work_key -> [codes]` map from
+       `_fetch_work_languages` (search.json), which does carry it.
+
+    **English-among-many counts as English.** OL lists every language a
+    work has been published in, so *The Cruel Prince* is
+    `['eng','dut','heb']` while the Spanish translation is filed as its
+    own work, `El rey malvado` → `['spa']`. Picking "the first code"
+    would reject *The Cruel Prince* whenever OL happened to order Dutch
+    first. Presence of English is what matters; only a work with NO
+    English edition is a translation we should filter.
     """
-    codes = work.get("languages") or []
-    for entry in codes:
+    def _map(raw: str) -> Optional[str]:
+        return _OL_LANGUAGE_MAP.get(str(raw).rsplit("/", 1)[-1].lower())
+
+    codes: list[str] = []
+    for entry in (work.get("languages") or []):
         if isinstance(entry, dict):
-            raw = entry.get("key") or entry.get("name") or ""
-            raw = raw.rsplit("/", 1)[-1]
+            codes.append(entry.get("key") or entry.get("name") or "")
         elif isinstance(entry, str):
-            raw = entry
-        else:
-            continue
-        mapped = _OL_LANGUAGE_MAP.get(raw.lower())
-        if mapped:
-            return mapped
-    return None
+            codes.append(entry)
+    if not codes and lang_map:
+        key = (work.get("key") or "").rsplit("/", 1)[-1]
+        codes = list(lang_map.get(key) or [])
+    if not codes:
+        return None
+
+    mapped = [m for m in (_map(c) for c in codes) if m]
+    if not mapped:
+        return None
+    for m in mapped:
+        if m.lower().startswith("en"):
+            return m
+    return mapped[0]
 
 
 def _extract_series_from_title(title: str) -> tuple[Optional[str], Optional[float], str]:
@@ -287,7 +315,14 @@ class OpenLibrarySource(BaseSource):
                 "  OpenLibrary: author %s '%s' → %d works",
                 primary_key, author_name, len(all_works),
             )
-        return self._build_result(author_name, primary_key, all_works)
+        # v3.10.0 — works.json carries no language; pull it in bulk from
+        # search.json so `_lang_ok` can actually filter translations.
+        lang_map: dict[str, list[str]] = {}
+        for _k in ol_keys:
+            lang_map.update(await self._fetch_work_languages(_k))
+        return self._build_result(
+            author_name, primary_key, all_works, lang_map=lang_map,
+        )
 
     async def get_author_books(
         self, author_id: str, **_kw,
@@ -487,17 +522,77 @@ class OpenLibrarySource(BaseSource):
             offset += PAGE_SIZE
         return all_works
 
+    async def _fetch_work_languages(self, author_key: str) -> dict[str, list[str]]:
+        """Bulk map of `work_key -> [MARC lang codes]` for one author.
+
+        ⚠️ Why this exists: `/authors/{key}/works.json` does **not** carry a
+        `languages` field at all — language lives on *editions*, not works.
+        Measured against Holly Black's author feed: 0 of 60 works had it.
+        The v2.11.0 code assumed the works response exposed
+        `[{"key": "/languages/eng"}]`, so `_extract_language` returned None
+        for every OL book, `_lang_ok` treated that as "unknown, allow", and
+        every translation OL files as its own work sailed through the
+        language filter. On the reference install that put German, Spanish,
+        French and Hebrew editions into the missing list — "Die Spiderwick
+        Geheimnisse", "EL LEGADO ROBADO", "L'Héritier trahi".
+
+        `search.json` DOES return language, in bulk, for all of an author's
+        works — one request per 100 works instead of one per work (an
+        editions fetch per work would be ~60 extra requests for a single
+        mid-sized author). Rate-limited through the same `_get`.
+
+        Returns `{}` on any failure — callers must treat that as "unknown"
+        and fall back to the existing behavior rather than filtering
+        everything out.
+        """
+        bare = author_key.rsplit("/", 1)[-1]
+        PAGE = 100
+        MAX_PAGES = 10  # 1000 works; beyond that language filtering is moot
+        out: dict[str, list[str]] = {}
+        for page in range(MAX_PAGES):
+            try:
+                resp = await self._get(
+                    f"{BASE}/search.json",
+                    params={
+                        "author_key": bare,
+                        "fields": "key,language",
+                        "limit": PAGE,
+                        "offset": page * PAGE,
+                    },
+                )
+                docs = (resp.json() or {}).get("docs") or []
+            except Exception as e:
+                logger.debug(
+                    "  OpenLibrary: language bulk-fetch failed at page=%d: %s",
+                    page, e,
+                )
+                break
+            if not docs:
+                break
+            for d in docs:
+                key = (d.get("key") or "").rsplit("/", 1)[-1]
+                langs = d.get("language") or []
+                if key and isinstance(langs, list) and langs:
+                    out[key] = [str(x).lower() for x in langs]
+            if len(docs) < PAGE:
+                break
+        logger.debug(
+            "  OpenLibrary: bulk languages for %s -> %d works", bare, len(out),
+        )
+        return out
+
     # ── Result assembly ────────────────────────────────────────────
 
     def _build_result(
         self, author_name: str, ol_key: str, works: list[dict],
+        lang_map: Optional[dict] = None,
     ) -> AuthorResult:
         """Convert OL work entries into BookResult/SeriesResult shape."""
         series_map: dict[str, SeriesResult] = {}
         standalone: list[BookResult] = []
 
         for w in works:
-            br = self._work_to_book_result(w)
+            br = self._work_to_book_result(w, lang_map)
             if br is None:
                 continue
             if br.series_name:
@@ -516,7 +611,9 @@ class OpenLibrarySource(BaseSource):
             series=list(series_map.values()),
         )
 
-    def _work_to_book_result(self, work: dict) -> Optional[BookResult]:
+    def _work_to_book_result(
+        self, work: dict, lang_map: Optional[dict] = None,
+    ) -> Optional[BookResult]:
         title_raw = (work.get("title") or "").strip()
         if not title_raw:
             return None
@@ -581,7 +678,7 @@ class OpenLibrarySource(BaseSource):
         # work landed with language=None, which `_lang_ok` treats as
         # "unknown, assume ok" → non-English entries bypassed the
         # user's language filter and polluted the review queue.
-        language = _extract_language(work)
+        language = _extract_language(work, lang_map)
 
         return BookResult(
             title=cleaned_title,

@@ -684,6 +684,14 @@ MIGRATIONS = [
     # have NULL source treated as lowest rank (any new source can
     # upgrade them).
     "ALTER TABLE authors ADD COLUMN image_url_source TEXT",
+    # ── v3.10.0: foreign-language sweep marker (Hygiene Job 16) ──
+    # Epoch seconds, stamped when the sweep hides a book for being in a
+    # non-English language. The sweep SKIPS any row that already carries
+    # it, whatever its current `hidden` state — that is what makes an
+    # operator's un-hide stick. Without the marker the predicate is
+    # stateless and the next hygiene run silently re-hides the book the
+    # operator just said they wanted.
+    "ALTER TABLE books ADD COLUMN language_swept_at REAL",
 ]
 
 

@@ -420,6 +420,99 @@ async def search_authors(
         await db.close()
 
 
+# ⚠️ MUST stay registered BEFORE `/authors/{aid}` — FastAPI matches in
+# registration order, so a literal path that looks like an id segment is
+# otherwise swallowed by the parameterised route and 422s on
+# aid="source-review". Same ordering rule as the v2.22.4
+# /persons/source-id-conflicts fix.
+@router.get("/authors/source-review")
+async def authors_needing_source_review(slug: Optional[str] = None):
+    """Author ids whose sources include at least one `review`-flagged
+    record — the worklist behind the authors page's "Needs review" tab.
+
+    Same rule as `author_source_breakdown` via `_source_flag`, so the
+    filter can't disagree with the page it links to.
+
+    **One pass, not N.** Walking every author and calling the per-author
+    breakdown would be ~900 round trips of the same joins; this pulls
+    the unowned rows once (~4,900 on the reference install) and
+    aggregates in memory. Cheap enough to call on every list load.
+
+    Keys are the frontend's `authorKey` form — **`"slug:id"`**, not a bare
+    id. An `authors.id` is only unique within its library, and the list
+    page's cross-library "All" tab shows rows from every library at once,
+    so matching on the integer alone would attach one library's flag to a
+    different library's author with the same id. Same class of bug as the
+    composite-id 422; keyed properly it can't happen.
+
+    Omit `slug` to sweep every library (what the "All" tab needs); pass
+    one to restrict.
+
+    Returns `{"author_keys": [...], "counts": {key: n_flagged}}`.
+    """
+    from app.discovery.source_blacklist import DISAMBIGUATING_SOURCES
+    from app.discovery.database import get_db as get_lib_db
+    from app.discovery import cross_library
+
+    # ⚠️ `get_lib_db`, not `author_identity._open_per_library` — the
+    # latter binds DATA_DIR at import time, so it reads the REAL data
+    # directory even when a test has patched it. Same trap ADR-0021's
+    # roster.py documents.
+    if slug:
+        slugs = [slug]
+    else:
+        slugs = [l["slug"] for l in cross_library.libraries_for("all")
+                 if l.get("slug")]
+    id_cols = sorted(MIRRORABLE_SOURCE_ID_COLUMNS)
+
+    counts: dict[str, int] = {}
+    for lib in slugs:
+        try:
+            db = await get_lib_db(lib)
+        except Exception:
+            continue
+        try:
+            has_books = await (await db.execute(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type='table' AND name='books' LIMIT 1"
+            )).fetchone()
+            if not has_books:
+                continue
+            rows = await (await db.execute(
+                f"SELECT ba.author_id AS aid, b.source AS source, "  # nosec B608
+                f"       {', '.join('b.' + c for c in id_cols)} "
+                f"FROM books b JOIN book_authors ba ON ba.book_id = b.id "
+                f"WHERE b.owned = 0"
+            )).fetchall()
+        except Exception:
+            continue
+        finally:
+            await db.close()
+
+        agg: dict[tuple[int, str], list[int]] = {}
+        for r in rows:
+            src = (r["source"] or "").strip() or "unknown"
+            own_col = f"{src}_id"
+            slot = agg.setdefault((r["aid"], src), [0, 0])
+            slot[0] += 1
+            for c in id_cols:
+                if (c != own_col and r[c] and str(r[c]).strip()
+                        and c[: -len("_id")] in DISAMBIGUATING_SOURCES):
+                    slot[1] += 1
+                    break
+
+        for (aid, _src), (n, corr) in agg.items():
+            if _source_flag(n, corr) == "review":
+                key = f"{lib}:{aid}"
+                counts[key] = counts.get(key, 0) + 1
+
+    return {
+        "slugs": slugs,
+        "author_keys": sorted(counts),
+        "counts": counts,
+    }
+
+
 @router.get("/authors/{aid}")
 async def get_author(aid: int, include_cross_library: bool = False, slug: Optional[str] = None):
     """Return an author's detail (series + standalone + stats).
@@ -3285,4 +3378,237 @@ async def unlink_pen_names(link_id: int):
                 await gdb.commit()
             finally:
                 await gdb.close()
+    return {"status": "ok"}
+
+
+# ─── v3.10.0 — source-record evidence + operator blacklist ──────────
+
+
+# The review rule, in ONE place. Both the per-author panel and the
+# authors-list "needs review" filter call this — two copies would drift,
+# and the symptom would be a filter that disagrees with the page it
+# links to.
+#
+# `review` means "large contribution, nothing else confirms it — worth
+# your eyes", NOT "wrong". Two stronger rules were tried and rejected by
+# measurement; see `author_source_breakdown` for what and why.
+_REVIEW_MIN_BOOKS = 10
+
+
+def _source_flag(books: int, corroborated: int) -> str:
+    return "review" if books >= _REVIEW_MIN_BOOKS and corroborated == 0 else "none"
+
+
+@router.get("/authors/{aid}/source-breakdown")
+async def author_source_breakdown(aid: int, slug: Optional[str] = None):
+    """Per-source evidence for one author, for the "is this source
+    reporting the right person?" panel.
+
+    Reports **evidence, not a score**, and the distinction is load-bearing.
+    A collapsed source record cannot be detected automatically (see
+    `app.discovery.source_blacklist`), so a confidence percentage would
+    dress a judgement call up as a measurement.
+
+    Two signals were tried and **rejected by measurement** — recorded
+    here so they don't get re-added:
+
+      - **"few of the source's books match your owned titles."** Useless:
+        stored discovered rows exclude owned books *by construction*, so
+        this count is ~always 0 for every author, genuine or not.
+      - **"no corroboration = suspect."** Fires on the innocent.
+        OpenLibrary corroborates at 1% across this whole library, so
+        "many OL books, none corroborated" describes every prolific
+        author's genuine OL record — measured, it flagged Terry Brooks
+        (149), Jim Butcher (50) and Holly Black (118) alongside the one
+        actually-collapsed record.
+
+    So what's returned is the counted facts plus **a sample of the
+    titles**, because the titles are what actually make a collapsed
+    record obvious: "Trump and Churchill", "Kenny the Koala Comes to the
+    USA" and "Practical clinical endodontics" listed under a sci-fi
+    author is instantly legible to a human and to nothing else.
+
+      - ``books`` — unowned rows this source contributed here.
+      - ``corroborated`` — how many ALSO carry an id from a different
+        **disambiguating** source. `kobo`, `google_books` and `ibdb` use
+        the author's NAME as their external id and do no author-entity
+        resolution, so their agreement carries no identity information.
+        On the reference install every one of OpenLibrary's 14
+        "corroborated" Nick Adams rows was corroborated by google_books
+        alone — unweighted, this number would have argued FOR the junk.
+      - ``sample_titles`` — up to 8 of what would be retracted.
+
+    `flag` is `review` or `none`, and `review` means only "large
+    contribution, nothing else confirms it — worth your eyes", not
+    "wrong". Nothing here changes data; only an explicit blacklist POST
+    does.
+    """
+    from app.discovery.database import get_db as get_lib_db, get_active_library
+    from app.discovery.source_blacklist import DISAMBIGUATING_SOURCES
+    from app.discovery import source_blacklist
+
+    lib = slug or get_active_library()
+    id_cols = sorted(MIRRORABLE_SOURCE_ID_COLUMNS)
+    db = await get_lib_db(lib)
+    try:
+        arow = await (await db.execute(
+            "SELECT name FROM authors WHERE id = ?", (aid,))).fetchone()
+        if not arow:
+            raise HTTPException(404, "author not found")
+
+        author_source_ids = dict(await (await db.execute(
+            f"SELECT {', '.join(id_cols)} FROM authors WHERE id = ?",  # nosec B608
+            (aid,))).fetchone())
+
+        rows = [dict(r) for r in await (await db.execute(
+            f"SELECT b.id, b.title, b.owned, b.source, "  # nosec B608
+            f"       {', '.join('b.' + c for c in id_cols)} "
+            f"FROM books b JOIN book_authors ba ON ba.book_id = b.id "
+            f"WHERE ba.author_id = ?", (aid,))).fetchall()]
+    finally:
+        await db.close()
+
+    def _norm_title(t: str) -> str:
+        import re
+        t = (t or "").lower()
+        t = re.sub(r"\(.*?\)", " ", t)
+        t = re.sub(r"[^a-z0-9 ]", " ", t)
+        return re.sub(r"\s+", " ", t).strip()
+
+    owned_titles = {_norm_title(r["title"]) for r in rows if r["owned"]}
+
+    by_source: dict[str, dict] = {}
+    for r in rows:
+        if r["owned"]:
+            continue
+        src = (r["source"] or "").strip() or "unknown"
+        own_col = f"{src}_id"
+        d = by_source.setdefault(src, {
+            "source": src,
+            "books": 0, "corroborated": 0,
+            "sample_titles": [],
+            "disambiguating": src in DISAMBIGUATING_SOURCES,
+            "source_author_id": author_source_ids.get(own_col),
+        })
+        d["books"] += 1
+        others = [
+            c for c in id_cols
+            if c != own_col and r.get(c) and str(r[c]).strip()
+            and c[: -len("_id")] in DISAMBIGUATING_SOURCES
+        ]
+        if others:
+            d["corroborated"] += 1
+        if len(d["sample_titles"]) < 8:
+            d["sample_titles"].append(r["title"])
+
+    out = []
+    for d in by_source.values():
+        n, corr = d["books"], d["corroborated"]
+        d["flag"] = _source_flag(n, corr)
+        if d["flag"] == "review":
+            d["note"] = (
+                f"{n} books and nothing else confirms any of them. That is "
+                f"normal for a deep catalogue, so check the titles below "
+                f"before acting — if they aren't all the same person, "
+                f"blacklist the record."
+            )
+        else:
+            d["note"] = (
+                f"{n} books, {corr} also known to another identifying "
+                f"source."
+            )
+        d["blacklisted"] = bool(
+            d["source_author_id"]
+            and await source_blacklist.is_blacklisted(
+                d["source"], d["source_author_id"])
+        )
+        out.append(d)
+
+    out.sort(key=lambda d: (-d["books"], d["source"]))
+    return {
+        "author_id": aid, "author_name": arow["name"], "slug": lib,
+        "owned_books": len(owned_titles), "sources": out,
+    }
+
+
+@router.get("/source-blacklist")
+async def list_source_blacklist():
+    from app.discovery import source_blacklist
+    return {"entries": await source_blacklist.list_all()}
+
+
+@router.post("/source-blacklist")
+async def add_source_blacklist(payload: dict = Body(...)):
+    """Blacklist a source author record and retract what it contributed.
+
+    Two effects, in this order: the record is recorded so every future
+    scan skips it before walking any catalogue, and the rows it already
+    wrote for this author are retracted through the same
+    `_retract_source_books` path the validation-failure branch uses — so
+    co-authored books are UNLINKED rather than deleted, owned rows are
+    never touched, and the ADR-0012 position-0 invariant is restored.
+    """
+    source = (payload.get("source") or "").strip()
+    source_author_id = (payload.get("source_author_id") or "").strip()
+    if not source or not source_author_id:
+        raise HTTPException(400, "source and source_author_id are required")
+
+    from app.discovery.database import get_db as get_lib_db, get_active_library
+
+    author_id = payload.get("author_id")
+    lib = (payload.get("slug") or "").strip() or get_active_library()
+    retracted = 0
+    if author_id:
+        try:
+            from app.discovery.lookup import _retract_source_books
+
+            # Same linked set the scan path builds: pen-name AND
+            # co-author links, which are PER-LIBRARY `authors.id` values
+            # from this library's `pen_name_links`.
+            #
+            # ⚠️ NOT `author_identity.linked_authors()` — that takes a
+            # person_id and returns cross-library (slug, author_id)
+            # tuples. Passing those here would feed author ids from
+            # another library into a query against this one, where the
+            # same integer is a different person.
+            linked: list[int] = []
+            ldb = await get_lib_db(lib)
+            try:
+                for pr in await (await ldb.execute(
+                    "SELECT canonical_author_id, alias_author_id "
+                    "FROM pen_name_links "
+                    "WHERE canonical_author_id = ? OR alias_author_id = ?",
+                    (int(author_id), int(author_id)),
+                )).fetchall():
+                    for col in ("canonical_author_id", "alias_author_id"):
+                        if pr[col] and pr[col] != int(author_id):
+                            linked.append(pr[col])
+            finally:
+                await ldb.close()
+
+            retracted = await _retract_source_books(
+                int(author_id), source, linked or None, slug=lib)
+        except Exception:
+            logger.exception(
+                "source-blacklist: retraction failed for author_id=%s "
+                "source=%s (non-fatal — the blacklist still applies)",
+                author_id, source)
+
+    from app.discovery import source_blacklist
+    entry_id = await source_blacklist.add(
+        source, source_author_id,
+        author_name=payload.get("author_name"),
+        reason=payload.get("reason"),
+        books_retracted=retracted,
+    )
+    return {"status": "ok", "id": entry_id, "books_retracted": retracted}
+
+
+@router.delete("/source-blacklist/{entry_id}")
+async def remove_source_blacklist(entry_id: int):
+    """Un-blacklist a record. Retracted books are not resurrected — the
+    next scan of that author re-imports them naturally."""
+    from app.discovery import source_blacklist
+    if not await source_blacklist.remove(entry_id):
+        raise HTTPException(404, "blacklist entry not found")
     return {"status": "ok"}

@@ -62,9 +62,15 @@ from app.discovery.database import (
     get_db as get_library_db,
     set_active_library,
 )
-from app.metadata.author_names import normalize_author_name
+from app.discovery.language import is_foreign, normalize_language
+from app.metadata.author_names import authors_match, normalize_author_name
 
 logger = logging.getLogger("seshat.discovery.hygiene")
+
+# Hardcover books per batched language query. 100 keeps the GraphQL
+# payload well inside the server's limit while making a 2,407-row
+# backlog ~25 calls instead of 2,407.
+_HC_LANG_BATCH = 100
 
 
 JOB_NAMES = (
@@ -85,6 +91,21 @@ JOB_NAMES = (
     # via mirror_image_url's rank-aware overwrite).
     "Image URL health check",
     "Soft-delete retention sweep",
+    # v3.10.0 (ADR-0021) — retro-cleanup for installs polluted BEFORE the
+    # roster gate existed. The gate stops new junk; this removes what's
+    # already there. Inert on clean installs.
+    "Non-roster author cleanup",
+    # v3.10.0 — the inverse of Job 9. Splits persons that Job 9 merged on
+    # a mis-stamped source ID (the v3.6.2 incident class) and strips the
+    # bad ID so Job 9 doesn't re-merge them on the next pass. Runs LAST so
+    # a single hygiene run converges.
+    "Person un-merge",
+    # v3.10.0 — `4cedbfa` persists language going forward only, leaving
+    # 99.3% of existing unowned rows NULL and the sweep below inert.
+    # Job 15 backfills from the cheapest bulk endpoint each source has;
+    # Job 16 then hides what parses as non-English.
+    "Language backfill",
+    "Foreign-language sweep",
 )
 TOTAL_JOBS = len(JOB_NAMES)
 
@@ -120,6 +141,21 @@ def _zero_stats() -> dict[str, Any]:
         "soft_deletes_kept": 0,
         "soft_deletes_malformed": 0,
         "soft_deletes_errors": 0,
+        # v3.10.0 (ADR-0021) — Job 13 non-roster cleanup.
+        "non_roster_authors_deleted": 0,
+        "non_roster_books_deleted": 0,
+        "non_roster_books_renumbered": 0,
+        "non_roster_series_unlinked": 0,
+        # v3.10.0 — Job 14 person un-merge.
+        "persons_unmerged": 0,
+        "unmerge_links_detached": 0,
+        "unmerge_source_ids_cleared": 0,
+        "unmerge_norms_repaired": 0,
+        # v3.10.0 — Jobs 15/16 language backfill + foreign sweep.
+        "language_backfilled": 0,
+        "language_backfill_attempted": 0,
+        "language_backfill_skipped": 0,
+        "foreign_books_hidden": 0,
         "errors": [],
     }
 
@@ -157,6 +193,193 @@ async def _load_allowed_norms() -> frozenset[str]:
     finally:
         await db.close()
     return allowed
+
+
+async def job_non_roster_cleanup(stats: dict, libs: list[dict]) -> None:
+    """Job 13 (v3.10.0, ADR-0021) — remove authors the roster gate would
+    never have created, and the discovered books left behind with them.
+
+    ADR-0021 stops the bleeding for NEW scans. This is the retro-clean for
+    installs that already ran a source scan under the old rules — on the
+    reference install that meant 6,303 junk author rows and ~5,000 unowned
+    books from a single weekend.
+
+    Deletion predicate, per library. An author goes when ALL hold:
+
+      - not in the **roster** (not allow-listed, owns no book here), and
+      - not library-sourced (`calibre_id` / `audiobookshelf_id` both NULL)
+        — a Calibre/ABS author is real even when off the allow list, and
+        deleting them would contradict ADR-0021's "library sync keeps the
+        full byline", and
+      - **not a cross-library mirror row** — no book under that normalized
+        name in ANY library. The v2.12.1 dual-row pattern deliberately
+        stubs each author into every OTHER library with zero books so the
+        cross-format "Scan Audiobooks / Scan Ebooks" buttons can reach
+        them. Those stubs look exactly like junk from inside one library
+        (no source id, no books, not allow-listed). Job 1 already carries
+        this guard because omitting it silently wiped 93 ABS mirror rows
+        in UAT 2026-05-17 — Job 13 reuses the same
+        `_load_cross_library_book_names` set rather than re-deriving it.
+
+    **Owned books are structurally safe.** Every contributor of an owned
+    book owns that book, so they're in the roster's owned half by
+    definition and can never be selected here. There is a test asserting
+    it rather than leaving it as a comment.
+
+    Then the three cascade repairs — each one a bug found while cleaning
+    the reference install by hand, and each silent if skipped:
+
+      1. Books left with **no contributor at all** and `owned=0` are
+         deleted (an unowned book with no author is unreachable).
+      2. Deleting `series` rows by `author_id` strands surviving books
+         pointing at them → `books.series_id` is NULLed where dangling
+         (151 rows on the reference install).
+      3. Books that lose their **position-0** contributor are densely
+         renumbered, restoring the "exactly one position 0" invariant
+         (ADR-0012) that the v3.7.0 contributor-removal work also upholds
+         (528 rows on the reference install).
+
+    Plus `book_series_suggestions` rows orphaned by deleted books (76 on
+    the reference install), and series left with no books at all.
+    """
+    from app.discovery.database import get_db as get_lib_db
+    from app.discovery.roster import load_roster
+    from app.metadata.author_names import normalize_author_name
+
+    # Cross-library mirror guard — see the docstring.
+    #
+    # ⚠️ Must mean "has books in some OTHER library", so the per-library
+    # sets are built separately and the CURRENT library is excluded when
+    # the union is taken. Job 1 can safely include itself because it only
+    # ever considers authors with zero books here; Job 13 considers
+    # authors that DO have (unowned) books here, so including self would
+    # protect every one of them and make the job a no-op.
+    names_by_slug: dict[str, frozenset[str]] = {}
+    for _lib in libs:
+        _slug = _lib.get("slug")
+        if _slug:
+            names_by_slug[_slug] = await _load_cross_library_book_names([_lib])
+
+    for lib in libs:
+        slug = lib["slug"]
+        cross_lib_names: set[str] = set()
+        for _slug, _names in names_by_slug.items():
+            if _slug != slug:
+                cross_lib_names |= _names
+        db = await get_lib_db(slug)
+        try:
+            await db.execute("PRAGMA foreign_keys=OFF")
+            roster = await load_roster(db, slug, force=True)
+            rows = await (await db.execute(
+                "SELECT id, name, normalized_name FROM authors "
+                "WHERE calibre_id IS NULL AND audiobookshelf_id IS NULL"
+            )).fetchall()
+            doomed = []
+            for r in rows:
+                if roster.admits(r["name"], r["id"]):
+                    continue
+                norm = r["normalized_name"] or normalize_author_name(r["name"] or "")
+                if norm and norm in cross_lib_names:
+                    continue  # mirror row for an author with books elsewhere
+                doomed.append(r["id"])
+            if not doomed:
+                continue
+
+            await db.execute("DROP TABLE IF EXISTS _doomed")
+            await db.execute("CREATE TEMP TABLE _doomed (id INTEGER PRIMARY KEY)")
+            await db.executemany(
+                "INSERT INTO _doomed (id) VALUES (?)", [(i,) for i in doomed],
+            )
+
+            # (1) unowned books whose every contributor is doomed
+            dead_books = [r[0] for r in await (await db.execute(
+                "SELECT b.id FROM books b WHERE b.owned = 0 "
+                "AND EXISTS (SELECT 1 FROM book_authors ba WHERE ba.book_id=b.id) "
+                "AND NOT EXISTS (SELECT 1 FROM book_authors ba WHERE ba.book_id=b.id "
+                "                AND ba.author_id NOT IN (SELECT id FROM _doomed))"
+            )).fetchall()]
+            if dead_books:
+                await db.execute("DROP TABLE IF EXISTS _deadbooks")
+                await db.execute(
+                    "CREATE TEMP TABLE _deadbooks (id INTEGER PRIMARY KEY)")
+                await db.executemany(
+                    "INSERT INTO _deadbooks (id) VALUES (?)",
+                    [(i,) for i in dead_books],
+                )
+                await db.execute(
+                    "DELETE FROM book_authors "
+                    "WHERE book_id IN (SELECT id FROM _deadbooks)")
+                try:
+                    await db.execute(
+                        "DELETE FROM book_series_suggestions "
+                        "WHERE book_id IN (SELECT id FROM _deadbooks)")
+                except Exception:
+                    pass  # table is optional across schema versions
+                await db.execute(
+                    "DELETE FROM books WHERE id IN (SELECT id FROM _deadbooks)")
+
+            await db.execute(
+                "DELETE FROM book_authors "
+                "WHERE author_id IN (SELECT id FROM _doomed)")
+            for tbl, col in (
+                ("series", "author_id"),
+                ("pen_name_links", "canonical_author_id"),
+                ("pen_name_links", "alias_author_id"),
+            ):
+                try:
+                    await db.execute(
+                        f"DELETE FROM {tbl} "  # nosec B608
+                        f"WHERE {col} IN (SELECT id FROM _doomed)")
+                except Exception:
+                    pass
+            await db.execute(
+                "DELETE FROM authors WHERE id IN (SELECT id FROM _doomed)")
+
+            # (2) dangling series pointers on SURVIVING books
+            cur = await db.execute(
+                "UPDATE books SET series_id = NULL WHERE series_id IS NOT NULL "
+                "AND series_id NOT IN (SELECT id FROM series)")
+            stats["non_roster_series_unlinked"] += cur.rowcount or 0
+            await db.execute(
+                "DELETE FROM series WHERE id NOT IN "
+                "(SELECT DISTINCT series_id FROM books WHERE series_id IS NOT NULL)")
+
+            # (3) restore the exactly-one-position-0 invariant
+            orphaned_pos0 = [r[0] for r in await (await db.execute(
+                "SELECT b.id FROM books b "
+                "WHERE EXISTS (SELECT 1 FROM book_authors ba WHERE ba.book_id=b.id) "
+                "AND NOT EXISTS (SELECT 1 FROM book_authors ba "
+                "                WHERE ba.book_id=b.id AND ba.position=0)"
+            )).fetchall()]
+            for bid in orphaned_pos0:
+                links = await (await db.execute(
+                    "SELECT author_id, role FROM book_authors "
+                    "WHERE book_id=? ORDER BY position", (bid,),
+                )).fetchall()
+                await db.execute(
+                    "DELETE FROM book_authors WHERE book_id=?", (bid,))
+                for pos, r in enumerate(links):
+                    await db.execute(
+                        "INSERT INTO book_authors (book_id, author_id, position, role) "
+                        "VALUES (?,?,?,?)", (bid, r["author_id"], pos, r["role"]),
+                    )
+            stats["non_roster_books_renumbered"] += len(orphaned_pos0)
+            stats["non_roster_authors_deleted"] += len(doomed)
+            stats["non_roster_books_deleted"] += len(dead_books)
+            await db.commit()
+            logger.info(
+                "hygiene[%s]: non-roster cleanup removed %d authors, "
+                "%d books; renumbered %d, unlinked %d series refs",
+                slug, len(doomed), len(dead_books), len(orphaned_pos0),
+                stats["non_roster_series_unlinked"],
+            )
+        except Exception as e:
+            logger.exception("hygiene: non-roster cleanup failed for %s", slug)
+            stats["errors"].append(
+                f"non_roster_cleanup[{slug}]: {type(e).__name__}: {e}"
+            )
+        finally:
+            await db.close()
 
 
 async def _load_cross_library_book_names(libs: list[dict]) -> frozenset[str]:
@@ -1457,6 +1680,661 @@ async def job_consolidate_persons_by_source_id(
         stats["errors"].append(msg)
 
 
+def _surname(name: str) -> str:
+    """Last meaningful token of a normalized author name (``""`` if none)."""
+    parts = normalize_author_name(name).split()
+    return parts[-1] if parts else ""
+
+
+def _is_name_mismatch(library_name: str, canonical_name: str) -> bool:
+    """True if `library_name` should be DETACHED from a person whose
+    ``canonical_name`` is given — the Job 14 split predicate.
+
+    Keeps the link when either:
+
+      - ``authors_match()`` — normalized-equal or ≥0.92 fuzzy, the same
+        test the rest of the identity code uses; or
+      - **the surnames are equal** — the deliberate widening. Fuzzy alone
+        scores `"Tyler Burnworth"` vs `"Tyler E. C. Burnworth"` below
+        threshold and would UNDO Mark's hand-merge from 2026-05-23.
+        Surname equality also rescues `Aaron Bunce ~ Aaron S. Bunce`
+        (~0.917, just under the line), `Kevin White ~ W. Penn White` and
+        `Talia Beckett ~ Talia Becket`. All four are regression-tested.
+    """
+    if not library_name or not canonical_name:
+        return False
+    if authors_match(library_name, canonical_name):
+        return False
+    sa, sb = _surname(library_name), _surname(canonical_name)
+    if sa and sb and sa == sb:
+        return False
+    return True
+
+
+async def job_person_unmerge(stats: dict[str, Any]) -> None:
+    """Job 14 (v3.10.0) — split persons that Job 9 over-merged, and strip
+    the mis-stamped source IDs that caused the merge.
+
+    **The inverse of Job 9.** Job 9 merges persons sharing a
+    ``(source, source_id)``. When a wrong Goodreads ID got stamped onto a
+    co-authored seed book's author row (the v3.6.2 incident class), Job 9
+    faithfully merged two genuinely different authors into one person.
+    v3.6.2 fixed the *stamping*; the persons already fused stayed fused.
+    Symptom on the reference install: person 699 "Jon Del Arroz" held FOUR
+    links — his own Calibre+ABS pair *plus Stick Swinger's entire pair* —
+    so the cross-library author page rendered Stick Swinger's co-authored
+    "Crazy Girls" under Del Arroz and the header read 5 owned/14 series
+    instead of 4/12. Measured scope there: **57 mismatched links of 1,797,
+    29 over-linked persons**; this job detaches 50 links across 25 persons.
+
+    Split predicate is `_is_name_mismatch` (see its docstring). Three
+    structural rules, each one measured rather than assumed:
+
+    1. **An anchor is required.** If *every* link mismatches, there is no
+       trustworthy identity to keep, so the person is left alone. That is
+       a different pathology (a wrong `canonical_name`), and splitting on
+       it would strand all links on fresh persons.
+    2. **`link_source='manual'` is never auto-split.** An operator merge is
+       a deliberate act; only `auto` links are in scope.
+    3. **Detached links group by normalized name and land on ONE person.**
+       All 25 groups on the reference install are exactly a Calibre+ABS
+       pair, and splitting them onto two persons would immediately
+       re-create the v2.20.0 split-person bug this codebase already fixed.
+
+    `persons.normalized_name` is UNIQUE, so placement is reuse-or-create,
+    never a blind INSERT. **7 of the 25 groups collide with the person
+    being split** — those rows carry a stale `normalized_name` from the
+    loser side of the old merge (person 699 was `canonical_name='Jon Del
+    Arroz'` but `normalized_name='stick swinger'`). The fix is to repair
+    the source person's `normalized_name` from its own `canonical_name`
+    first, which frees the name for the detached group and heals the drift
+    in one step. All 7 repairs were verified collision-free.
+
+    **Stripping the shared source IDs is not optional.** Every one of the
+    25 groups still shares at least one source ID between the detached and
+    retained rows — Job 9 would re-merge all of them on the very next
+    hygiene run, and the two jobs would fight forever. A source's author ID
+    identifies exactly one author, so a value present on both sides is
+    provably wrong on one of them; the retained rows match the person's
+    canonical name, so the detached copy is the wrong one and is NULLed.
+    IDs unique to the detached row are left alone — they may well be that
+    author's own, and the next scan re-resolves anything missing.
+
+    Ordering: runs LAST, after Job 9 has merged and Job 13 has cleaned, so
+    a single pass converges — Job 9 finds no shared IDs to act on next run.
+
+    Audit: one `person_merges` row per group with
+    ``reason='unmerge_name_mismatch'``, where `winner_person_id` is the
+    person that now HOLDS the links and `loser_person_id` is the person
+    that gave them up (note: unlike a merge, that person still exists).
+    `source`/`source_id` carry the evidence (`'name_mismatch'` + the
+    detached display name). The split reverses as
+    ``UPDATE author_links SET person_id=loser WHERE person_id=winner``.
+
+    Stats: ``persons_unmerged``, ``unmerge_links_detached``,
+    ``unmerge_source_ids_cleared``, ``unmerge_norms_repaired``.
+    """
+    from app.database import get_db as get_global_db
+    from app.discovery.author_identity import (
+        MIRRORABLE_SOURCE_ID_COLUMNS, _open_per_library,
+    )
+
+    id_cols = sorted(MIRRORABLE_SOURCE_ID_COLUMNS)
+    persons_split = 0
+    links_detached = 0
+    ids_cleared = 0
+    norms_repaired = 0
+
+    try:
+        libs = cross_library.libraries_for("all")
+        slugs = [l["slug"] for l in libs if l.get("slug")]
+
+        # Per-library author rows: (slug, id) -> {name, <source ids>}.
+        lib_rows: dict[tuple[str, int], dict[str, Any]] = {}
+        cols_sql = ", ".join(["id", "name"] + id_cols)
+        for slug in slugs:
+            try:
+                per_lib = await _open_per_library(slug)
+            except Exception:
+                continue
+            try:
+                has_authors = await (await per_lib.execute(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type='table' AND name='authors' LIMIT 1"
+                )).fetchone()
+                if not has_authors:
+                    continue
+                cur = await per_lib.execute(
+                    f"SELECT {cols_sql} FROM authors"  # nosec B608
+                )
+                for r in await cur.fetchall():
+                    lib_rows[(slug, r["id"])] = dict(r)
+            finally:
+                await per_lib.close()
+
+        gdb = await get_global_db()
+        try:
+            persons: dict[int, dict[str, Any]] = {
+                r["id"]: dict(r)
+                for r in await (await gdb.execute(
+                    "SELECT id, canonical_name, normalized_name FROM persons"
+                )).fetchall()
+            }
+            taken_norms = {
+                p["normalized_name"]: pid for pid, p in persons.items()
+            }
+
+            by_person: dict[int, list[dict[str, Any]]] = {}
+            for r in await (await gdb.execute(
+                "SELECT person_id, library_slug, author_id, link_source "
+                "FROM author_links"
+            )).fetchall():
+                by_person.setdefault(r["person_id"], []).append(dict(r))
+
+            for pid, links in sorted(by_person.items()):
+                person = persons.get(pid)
+                if not person or len(links) < 2:
+                    continue
+                canonical = person["canonical_name"] or ""
+
+                moving, staying = [], []
+                for link in links:
+                    row = lib_rows.get(
+                        (link["library_slug"], link["author_id"])
+                    )
+                    if row is None:
+                        continue  # Job 10 prunes orphan links
+                    name = row["name"] or ""
+                    if (link.get("link_source") == "manual"
+                            or not _is_name_mismatch(name, canonical)):
+                        staying.append((link, row))
+                    else:
+                        moving.append((link, row))
+
+                # Rule 1 — no anchor, no split.
+                if not moving or not staying:
+                    continue
+
+                # Source IDs held by the rows that keep the person.
+                retained_ids: set[tuple[str, str]] = set()
+                for _, row in staying:
+                    for c in id_cols:
+                        v = row.get(c)
+                        if v and str(v).strip():
+                            retained_ids.add((c, str(v).strip()))
+
+                # Rule 3 — group detached links by normalized name.
+                groups: dict[str, list[tuple[dict, dict]]] = {}
+                for link, row in moving:
+                    groups.setdefault(
+                        normalize_author_name(row["name"] or ""), []
+                    ).append((link, row))
+
+                did_split = False
+                for norm, members in sorted(groups.items()):
+                    if not norm:
+                        continue
+                    display = members[0][1]["name"] or norm
+
+                    # Self-collision: the person being split still carries
+                    # the detached group's normalized_name from the old
+                    # merge. Repair it from its own canonical_name first.
+                    if taken_norms.get(norm) == pid:
+                        repaired = normalize_author_name(canonical)
+                        if not repaired or (
+                            taken_norms.get(repaired) not in (None, pid)
+                        ):
+                            logger.warning(
+                                "hygiene: person-unmerge: cannot free %r "
+                                "from person_id=%d (repair target %r taken) "
+                                "— skipping group",
+                                norm, pid, repaired,
+                            )
+                            continue
+                        await gdb.execute(
+                            "UPDATE persons SET normalized_name = ? "
+                            "WHERE id = ?",
+                            (repaired, pid),
+                        )
+                        taken_norms.pop(norm, None)
+                        taken_norms[repaired] = pid
+                        persons[pid]["normalized_name"] = repaired
+                        norms_repaired += 1
+                        logger.info(
+                            "hygiene: person-unmerge: repaired stale "
+                            "normalized_name on person_id=%d: %r -> %r",
+                            pid, norm, repaired,
+                        )
+
+                    target = taken_norms.get(norm)
+                    if target is None:
+                        cur = await gdb.execute(
+                            "INSERT INTO persons (canonical_name, "
+                            "normalized_name) VALUES (?, ?)",
+                            (display, norm),
+                        )
+                        target = cur.lastrowid
+                        taken_norms[norm] = target
+                        persons[target] = {
+                            "id": target,
+                            "canonical_name": display,
+                            "normalized_name": norm,
+                        }
+
+                    moved = 0
+                    for link, row in members:
+                        await gdb.execute(
+                            "UPDATE author_links SET person_id = ? "
+                            "WHERE library_slug = ? AND author_id = ?",
+                            (target, link["library_slug"],
+                             link["author_id"]),
+                        )
+                        moved += 1
+
+                        # Strip the mis-stamped IDs so Job 9 stays quiet.
+                        stale = [
+                            c for c in id_cols
+                            if row.get(c)
+                            and (c, str(row[c]).strip()) in retained_ids
+                        ]
+                        if stale:
+                            try:
+                                per_lib = await _open_per_library(
+                                    link["library_slug"]
+                                )
+                            except Exception:
+                                per_lib = None
+                            if per_lib is not None:
+                                try:
+                                    sets = ", ".join(
+                                        f"{c} = NULL" for c in stale
+                                    )
+                                    await per_lib.execute(
+                                        f"UPDATE authors SET {sets} "  # nosec B608
+                                        f"WHERE id = ?",
+                                        (link["author_id"],),
+                                    )
+                                    await per_lib.commit()
+                                    ids_cleared += len(stale)
+                                    logger.info(
+                                        "hygiene: person-unmerge: cleared "
+                                        "%s on %s#%d (%r) — belonged to "
+                                        "person_id=%d (%r)",
+                                        ", ".join(stale),
+                                        link["library_slug"],
+                                        link["author_id"], display,
+                                        pid, canonical,
+                                    )
+                                finally:
+                                    await per_lib.close()
+
+                    links_detached += moved
+                    did_split = True
+                    await gdb.execute(
+                        "INSERT INTO person_merges "
+                        "(winner_person_id, loser_person_id, reason, "
+                        " source, source_id, moved_links, "
+                        " loser_canonical_name) "
+                        "VALUES (?, ?, 'unmerge_name_mismatch', "
+                        "        'name_mismatch', ?, ?, ?)",
+                        (target, pid, display, moved, canonical),
+                    )
+                    logger.info(
+                        "hygiene: person-unmerge: detached %d link(s) for "
+                        "%r from person_id=%d (%r) onto person_id=%d",
+                        moved, display, pid, canonical, target,
+                    )
+
+                if did_split:
+                    persons_split += 1
+
+            await gdb.commit()
+        finally:
+            await gdb.close()
+
+        stats["persons_unmerged"] = (
+            stats.get("persons_unmerged", 0) + persons_split
+        )
+        stats["unmerge_links_detached"] = (
+            stats.get("unmerge_links_detached", 0) + links_detached
+        )
+        stats["unmerge_source_ids_cleared"] = (
+            stats.get("unmerge_source_ids_cleared", 0) + ids_cleared
+        )
+        stats["unmerge_norms_repaired"] = (
+            stats.get("unmerge_norms_repaired", 0) + norms_repaired
+        )
+    except Exception as e:
+        msg = f"person-unmerge: {type(e).__name__}: {e}"
+        logger.exception(msg)
+        stats["errors"].append(msg)
+
+
+async def _hc_languages_for(src, book_ids: list[str]) -> dict[str, str]:
+    """Batched Hardcover lookup: ``{book_id: language}`` for `book_ids`.
+
+    Hardcover files language on the **edition**, not the book, so a book
+    with a German and an English edition carries both. English-among-many
+    counts as English — the same rule
+    `sources/openlibrary.py::_extract_language` settled on, and for the
+    same reason: a work published in several languages is not a
+    translation to filter, it's a work you can get in English.
+
+    Books absent from the response, or with no language on any edition,
+    are simply absent from the returned dict — callers treat absence as
+    "don't write", never as "unknown language, overwrite with NULL".
+    """
+    numeric = []
+    for b in book_ids:
+        try:
+            numeric.append(int(str(b).strip()))
+        except (TypeError, ValueError):
+            continue
+    if not numeric:
+        return {}
+
+    query = """
+    query BookLanguages($ids: [Int!]!) {
+      books(where: {id: {_in: $ids}}) {
+        id
+        editions { language { code3 } }
+      }
+    }
+    """
+    data = await src._query(query, {"ids": numeric})
+    out: dict[str, str] = {}
+    for book in ((data.get("data") or {}).get("books") or []):
+        if not isinstance(book, dict):
+            continue
+        bid = str(book.get("id") or "").strip()
+        if not bid:
+            continue
+        codes = []
+        for ed in (book.get("editions") or []):
+            if not isinstance(ed, dict):
+                continue
+            lang = ed.get("language") or {}
+            code = (lang.get("code3") if isinstance(lang, dict) else "") or ""
+            norm = normalize_language(code)
+            if norm:
+                codes.append(norm)
+        if not codes:
+            continue
+        out[bid] = "en" if "en" in codes else codes[0]
+    return out
+
+
+async def job_language_backfill(slug: str, stats: dict[str, Any]) -> None:
+    """Job 15 (v3.10.0) — fill `books.language` on existing unowned rows.
+
+    `4cedbfa` made all eight sources persist language, but only going
+    FORWARD: the column fills on insert, or fill-if-empty when a re-scan
+    re-matches an existing row. On the reference install that left
+    **4,878 of 4,912 unowned rows (99.3%) with language NULL**, which
+    makes the foreign-language sweep (Job 16) inert — it measured 0 rows.
+    This backfills the history so the sweep has something to act on.
+
+    Deliberately **not** a full re-scan. A re-scan would re-walk every
+    source's whole catalogue, cost the full rate budget, and re-expose
+    the install to the wrong-author merges the rest of v3.10.0 exists to
+    prevent. This asks each source only "what language is the book I
+    already have an ID for", using the cheapest bulk endpoint each one
+    offers:
+
+      - **OpenLibrary** (1,306 rows) — `search.json?author_key=` returns
+        language for ALL of an author's works in one request per 100
+        works, so a whole author costs 1–2 calls. Rows are matched by
+        the work key stored in `books.openlibrary_id`.
+      - **Hardcover** (2,407 rows) — one batched GraphQL call per
+        `_HC_LANG_BATCH` books, matched by `books.hardcover_id`.
+
+    Together that's 76% of the backlog. Amazon (863) is deliberately
+    excluded: it has no cheap bulk path and is the source most prone to
+    soft-blocking, so paying its budget for a display field is a bad
+    trade. Those rows stay NULL and are simply never swept — the
+    fail-open contract in `app.discovery.language` means unknown is
+    never treated as foreign.
+
+    **Fill-if-empty only.** A non-empty language is never overwritten;
+    the value already there came from the source that actually found the
+    book. Values are normalized through `normalize_language` on the way
+    in, so the backfill doesn't reintroduce the "en" / "eng" / "English"
+    split it exists to resolve.
+
+    ADR-0005 attempted-set: book ids are recorded as attempted before the
+    call, so a source that returns nothing for a batch can't be re-asked
+    on a later iteration of the same run. Without it, rows a source
+    simply has no language for would be retried every pass — the shape
+    that burned ~5,800 calls in the v2.13.x backfill.
+
+    Stats: ``language_backfilled``, ``language_backfill_attempted``,
+    ``language_backfill_skipped``.
+    """
+    from app.discovery.database import get_db as get_lib_db
+
+    filled = attempted_total = 0
+    db = await get_lib_db(slug)
+    try:
+        rows = [dict(r) for r in await (await db.execute(
+            "SELECT id, source, openlibrary_id, hardcover_id "
+            "FROM books "
+            "WHERE owned = 0 AND (language IS NULL OR TRIM(language) = '')"
+        )).fetchall()]
+        if not rows:
+            logger.info(
+                "hygiene[%s] language-backfill: nothing to fill", slug)
+            return
+
+        attempted: set[int] = set()
+
+        # ── OpenLibrary, grouped by author (bulk per author key) ──
+        ol_rows = [r for r in rows
+                   if (r.get("openlibrary_id") or "").strip()]
+        if ol_rows:
+            try:
+                from app.discovery.sources.openlibrary import OpenLibrarySource
+                ol = OpenLibrarySource()
+                # book id -> author OL key, via book_authors → authors
+                by_author: dict[str, list[dict]] = {}
+                for r in ol_rows:
+                    arow = await (await db.execute(
+                        "SELECT a.openlibrary_id FROM authors a "
+                        "JOIN book_authors ba ON ba.author_id = a.id "
+                        "WHERE ba.book_id = ? "
+                        "AND a.openlibrary_id IS NOT NULL "
+                        "AND TRIM(a.openlibrary_id) <> '' "
+                        "ORDER BY ba.position LIMIT 1",
+                        (r["id"],),
+                    )).fetchone()
+                    if arow and (arow["openlibrary_id"] or "").strip():
+                        by_author.setdefault(
+                            arow["openlibrary_id"].strip(), []).append(r)
+
+                for akey, members in by_author.items():
+                    fresh = [m for m in members if m["id"] not in attempted]
+                    if not fresh:
+                        continue
+                    for m in fresh:
+                        attempted.add(m["id"])
+                    attempted_total += len(fresh)
+                    try:
+                        lang_map = await ol._fetch_work_languages(akey)
+                    except Exception as e:
+                        logger.warning(
+                            "hygiene[%s] language-backfill: OL author %s "
+                            "failed (%s) — leaving %d row(s) NULL",
+                            slug, akey, type(e).__name__, len(fresh))
+                        continue
+                    for m in fresh:
+                        codes = lang_map.get(
+                            (m.get("openlibrary_id") or "").strip()) or []
+                        mapped = [normalize_language(c) for c in codes]
+                        mapped = [c for c in mapped if c]
+                        if not mapped:
+                            continue
+                        value = "en" if "en" in mapped else mapped[0]
+                        await db.execute(
+                            "UPDATE books SET language = ? WHERE id = ? "
+                            "AND (language IS NULL OR TRIM(language) = '')",
+                            (value, m["id"]),
+                        )
+                        filled += 1
+                    await db.commit()
+            except Exception as e:
+                msg = (f"language-backfill ({slug}) openlibrary: "
+                       f"{type(e).__name__}: {e}")
+                logger.exception(msg)
+                stats["errors"].append(msg)
+
+        # ── Hardcover, batched by book id ──
+        hc_rows = [r for r in rows
+                   if (r.get("hardcover_id") or "").strip()
+                   and r["id"] not in attempted]
+        if hc_rows:
+            settings = load_settings()
+            api_key = (settings.get("hardcover_api_key") or "").strip()
+            if not api_key:
+                try:
+                    from app.secrets import get_secret
+                    api_key = (
+                        await get_secret("hardcover_api_key") or "").strip()
+                except Exception:
+                    api_key = ""
+            if not api_key:
+                logger.info(
+                    "hygiene[%s] language-backfill: no Hardcover API key "
+                    "— skipping %d row(s)", slug, len(hc_rows))
+            else:
+                try:
+                    from app.discovery.sources.hardcover import HardcoverSource
+                    src = HardcoverSource(api_key=api_key)
+                    for i in range(0, len(hc_rows), _HC_LANG_BATCH):
+                        batch = hc_rows[i:i + _HC_LANG_BATCH]
+                        for m in batch:
+                            attempted.add(m["id"])
+                        attempted_total += len(batch)
+                        try:
+                            langs = await _hc_languages_for(
+                                src, [m["hardcover_id"] for m in batch])
+                        except Exception as e:
+                            logger.warning(
+                                "hygiene[%s] language-backfill: Hardcover "
+                                "batch failed (%s) — leaving %d row(s) NULL",
+                                slug, type(e).__name__, len(batch))
+                            continue
+                        for m in batch:
+                            value = langs.get(
+                                str(m["hardcover_id"]).strip())
+                            if not value:
+                                continue
+                            await db.execute(
+                                "UPDATE books SET language = ? "
+                                "WHERE id = ? AND (language IS NULL "
+                                "OR TRIM(language) = '')",
+                                (value, m["id"]),
+                            )
+                            filled += 1
+                        # Commit per batch — the writer lock must not be
+                        # held across the next network call.
+                        await db.commit()
+                except Exception as e:
+                    msg = (f"language-backfill ({slug}) hardcover: "
+                           f"{type(e).__name__}: {e}")
+                    logger.exception(msg)
+                    stats["errors"].append(msg)
+
+        await db.commit()
+        stats["language_backfilled"] = (
+            stats.get("language_backfilled", 0) + filled)
+        stats["language_backfill_attempted"] = (
+            stats.get("language_backfill_attempted", 0) + attempted_total)
+        stats["language_backfill_skipped"] = (
+            stats.get("language_backfill_skipped", 0)
+            + max(len(rows) - attempted_total, 0))
+        logger.info(
+            "hygiene[%s] language-backfill: filled=%d attempted=%d "
+            "no-resolvable-id=%d",
+            slug, filled, attempted_total,
+            max(len(rows) - attempted_total, 0))
+    except Exception as e:
+        msg = f"language-backfill ({slug}): {type(e).__name__}: {e}"
+        logger.exception(msg)
+        stats["errors"].append(msg)
+    finally:
+        await db.close()
+
+
+async def job_foreign_language_sweep(slug: str, stats: dict[str, Any]) -> None:
+    """Job 16 (v3.10.0) — hide unowned books in a non-English language.
+
+    Foreign editions reach the missing list from several sources, not
+    just OpenLibrary: a source that files each translation as its own
+    work will happily report *Die Spiderwick Geheimnisse* as a book you
+    don't own. Once Job 15 has filled `language`, they're identifiable
+    without guessing.
+
+    **Hides, never deletes.** `hidden = 1` takes a book out of the
+    missing list while keeping it on the Hidden page, so a mistake is one
+    click to undo. That matters more than usual here: this is the first
+    sweep in the codebase driven by a *source-reported* field rather than
+    an internal invariant, and a source that mislabels language would
+    otherwise destroy rows. Job 13's delete semantics are appropriate for
+    rows that provably shouldn't exist; a real book in the wrong language
+    is not that.
+
+    **`is_foreign`, not `not is_english`.** The predicate fires only on a
+    language that parses to a known non-English code. Unknown, empty and
+    unparseable values are left alone — on the reference install that is
+    99.3% of unowned rows, and treating them as foreign would hide the
+    entire backlog.
+
+    Owned books are never touched.
+
+    **An operator un-hide sticks.** The sweep stamps `language_swept_at`
+    on every row it hides and skips anything already carrying it,
+    whatever that row's current `hidden` value. Filtering on `hidden = 0`
+    alone would make the predicate stateless: un-hide a foreign-language
+    book you actually want, and the next hygiene run hides it again,
+    forever. The marker is what turns "hide once, let the operator
+    overrule" into the actual behaviour.
+
+    Stats: ``foreign_books_hidden``.
+    """
+    from app.discovery.database import get_db as get_lib_db
+
+    hidden = 0
+    db = await get_lib_db(slug)
+    try:
+        rows = [dict(r) for r in await (await db.execute(
+            "SELECT id, title, source, language FROM books "
+            "WHERE owned = 0 AND hidden = 0 AND language_swept_at IS NULL "
+            "AND language IS NOT NULL AND TRIM(language) <> ''"
+        )).fetchall()]
+        for r in rows:
+            if not is_foreign(r["language"]):
+                continue
+            await db.execute(
+                "UPDATE books SET hidden = 1, "
+                "language_swept_at = strftime('%s','now') WHERE id = ?",
+                (r["id"],))
+            hidden += 1
+            logger.info(
+                "hygiene[%s] foreign-sweep: hid %r (language=%r, source=%s)",
+                slug, r["title"], r["language"], r["source"])
+        await db.commit()
+        stats["foreign_books_hidden"] = (
+            stats.get("foreign_books_hidden", 0) + hidden)
+        logger.info(
+            "hygiene[%s] foreign-sweep: hid %d of %d row(s) carrying a "
+            "language", slug, hidden, len(rows))
+    except Exception as e:
+        msg = f"foreign-language-sweep ({slug}): {type(e).__name__}: {e}"
+        logger.exception(msg)
+        stats["errors"].append(msg)
+    finally:
+        await db.close()
+
+
 async def job_prune_orphan_links(stats: dict[str, Any]) -> None:
     from app.discovery import author_identity
     try:
@@ -1833,6 +2711,97 @@ async def run_all() -> dict[str, Any]:
             "soft_deletes_kept":      stats["soft_deletes_kept"],
             "soft_deletes_malformed": stats["soft_deletes_malformed"],
             "soft_deletes_errors":    stats["soft_deletes_errors"],
+        })
+
+        # Job 13 — Non-roster author cleanup (v3.10.0, ADR-0021). Runs LAST
+        # so it operates on a DB the earlier jobs have already deduped and
+        # re-linked — otherwise it could delete an author that Job 4's book
+        # dedup or Job 7's orphan retrolink was about to give a book to.
+        # Inert on installs that never scanned under the pre-roster rules.
+        _set_phase(12, library="(cross-library)")
+        await job_non_roster_cleanup(stats, libs)
+        logger.info(
+            "hygiene: %s complete: authors=%d books=%d renumbered=%d "
+            "series_unlinked=%d",
+            JOB_NAMES[12],
+            stats["non_roster_authors_deleted"],
+            stats["non_roster_books_deleted"],
+            stats["non_roster_books_renumbered"],
+            stats["non_roster_series_unlinked"],
+        )
+        state._hygiene_progress["jobs"].append({
+            "name": JOB_NAMES[12],
+            "non_roster_authors_deleted":  stats["non_roster_authors_deleted"],
+            "non_roster_books_deleted":    stats["non_roster_books_deleted"],
+            "non_roster_books_renumbered": stats["non_roster_books_renumbered"],
+            "non_roster_series_unlinked":  stats["non_roster_series_unlinked"],
+        })
+
+        # Job 14 — Person un-merge (v3.10.0). The inverse of Job 9, and
+        # deliberately LAST: Job 9 has already merged by shared source ID
+        # earlier in this pass, so splitting now (and clearing the
+        # mis-stamped IDs that anchored those merges) lets one run
+        # converge instead of the two jobs trading the same links back
+        # and forth on alternating runs.
+        _set_phase(13, library="(cross-library)")
+        await job_person_unmerge(stats)
+        logger.info(
+            "hygiene: %s complete: persons=%d links_detached=%d "
+            "source_ids_cleared=%d norms_repaired=%d",
+            JOB_NAMES[13],
+            stats["persons_unmerged"],
+            stats["unmerge_links_detached"],
+            stats["unmerge_source_ids_cleared"],
+            stats["unmerge_norms_repaired"],
+        )
+        state._hygiene_progress["jobs"].append({
+            "name": JOB_NAMES[13],
+            "persons_unmerged":           stats["persons_unmerged"],
+            "unmerge_links_detached":     stats["unmerge_links_detached"],
+            "unmerge_source_ids_cleared": stats["unmerge_source_ids_cleared"],
+            "unmerge_norms_repaired":     stats["unmerge_norms_repaired"],
+        })
+
+        # Job 15 — Language backfill (v3.10.0). Per-library, and the only
+        # network-bound job in the chain besides Job 2 / Job 11, so it
+        # runs after every structural repair has settled — there is no
+        # point paying API budget for rows Job 13 was about to delete.
+        for lib in libs:
+            _slug = lib.get("slug")
+            if not _slug:
+                continue
+            _set_phase(14, library=_slug)
+            await job_language_backfill(_slug, stats)
+        logger.info(
+            "hygiene: %s complete: filled=%d attempted=%d no-id=%d",
+            JOB_NAMES[14],
+            stats["language_backfilled"],
+            stats["language_backfill_attempted"],
+            stats["language_backfill_skipped"],
+        )
+        state._hygiene_progress["jobs"].append({
+            "name": JOB_NAMES[14],
+            "language_backfilled":         stats["language_backfilled"],
+            "language_backfill_attempted": stats["language_backfill_attempted"],
+            "language_backfill_skipped":   stats["language_backfill_skipped"],
+        })
+
+        # Job 16 — Foreign-language sweep (v3.10.0). Strictly after Job
+        # 15: it can only act on rows that have a language, and Job 15 is
+        # what puts one there. Hides rather than deletes.
+        for lib in libs:
+            _slug = lib.get("slug")
+            if not _slug:
+                continue
+            _set_phase(15, library=_slug)
+            await job_foreign_language_sweep(_slug, stats)
+        logger.info(
+            "hygiene: %s complete: hidden=%d",
+            JOB_NAMES[15], stats["foreign_books_hidden"],
+        )
+        state._hygiene_progress["jobs"].append({
+            "name": JOB_NAMES[15],
+            "foreign_books_hidden": stats["foreign_books_hidden"],
         })
 
         state._hygiene_progress.update({

@@ -988,6 +988,34 @@ MIGRATIONS: list[str] = [
     # by `mirror_image_url`. Nullable; pre-ADR-0016 rows have NULL source
     # treated as lowest rank (any new source can upgrade them).
     "ALTER TABLE persons ADD COLUMN image_url_source TEXT",
+    # ── v3.10.0: blacklisted source author records ───────────────
+    # Some sources collapse several real people into ONE author record.
+    # OpenLibrary's OL2719653A holds a sci-fi author's Fold novels next
+    # to a political commentator's "Trump and Churchill" and a children's
+    # author's "Kenny the Koala". Per-source author validation can't
+    # reject it, because the record legitimately DOES contain books the
+    # user owns — `_validate_author` matches any-owned against
+    # any-catalogue and passes honestly.
+    #
+    # No automated signal fixes that: the ambiguity is INSIDE one record,
+    # so no cross-source agreement can resolve it (measured — the only
+    # sources corroborating that record's junk were google_books and
+    # kobo, which use the author NAME as their id and do no
+    # author-entity resolution at all). So this is an operator verdict,
+    # recorded per (source, source_author_id) and applied on every
+    # future scan.
+    """CREATE TABLE IF NOT EXISTS source_author_blacklist (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        source           TEXT NOT NULL,
+        source_author_id TEXT NOT NULL,
+        author_name      TEXT,
+        reason           TEXT,
+        books_retracted  INTEGER NOT NULL DEFAULT 0,
+        created_at       REAL NOT NULL DEFAULT (strftime('%s', 'now')),
+        UNIQUE(source, source_author_id)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_source_author_blacklist_lookup "
+    "ON source_author_blacklist(source, source_author_id)",
 ]
 
 

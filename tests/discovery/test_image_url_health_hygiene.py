@@ -84,11 +84,21 @@ async def _read_image(slug: str, aid: int) -> dict:
 
 def test_job_catalogue_positions():
     """ADR-0016 slice 05 inserts Job 11 between Prune-orphans (Job 10)
-    and Soft-delete (now Job 12). TOTAL_JOBS = 12."""
-    assert hygiene.TOTAL_JOBS == 12
+    and Soft-delete (now Job 12). v3.10.0 then APPENDS four: Job 13
+    (non-roster cleanup), 14 (person un-merge), 15 (language backfill)
+    and 16 (foreign-language sweep). Appending rather than inserting is
+    why every index below is unchanged. TOTAL_JOBS = 16."""
+    assert hygiene.TOTAL_JOBS == 16
     assert hygiene.JOB_NAMES[9] == "Prune orphan author links"
     assert hygiene.JOB_NAMES[10] == "Image URL health check"
     assert hygiene.JOB_NAMES[11] == "Soft-delete retention sweep"
+    assert hygiene.JOB_NAMES[12] == "Non-roster author cleanup"
+    assert hygiene.JOB_NAMES[13] == "Person un-merge"
+    assert hygiene.JOB_NAMES[14] == "Language backfill"
+    assert hygiene.JOB_NAMES[15] == "Foreign-language sweep"
+    # Job 16 can only act on rows Job 15 gave a language to.
+    assert hygiene.JOB_NAMES.index("Language backfill") < \
+        hygiene.JOB_NAMES.index("Foreign-language sweep")
 
 
 # ─── 2. Substring blacklist — /books/-path clears ────────────

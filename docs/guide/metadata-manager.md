@@ -346,7 +346,8 @@ grabbed torrents — including the full role-aware authorlist for
 co-authored works — and would be the single strongest signal for an
 authors proposal. It's excluded from v3.3.0 because MAM doesn't flow
 through `_merge_result` for owned books; threading it requires a
-separate trigger off grab completion (`pipeline.py:train_authors_from_blob`),
+separate trigger off grab completion
+(`app/orchestrator/auto_train.py:train_authors_from_blob`),
 which is held for v5.x. The payload shape and the rest of the chain
 don't change — only the trigger point is new work.
 

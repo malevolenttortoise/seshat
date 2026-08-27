@@ -4,6 +4,7 @@ import { useTheme } from "../theme";
 import type { Theme } from "../theme";
 import { api } from "../api";
 import { usePersist } from "../hooks/usePersist";
+import { saveAuthorWalk } from "../hooks/useAuthorWalk";
 import { Btn } from "../components/Btn";
 import { ClearMenu } from "../components/ClearMenu";
 import { Load } from "../components/Load";
@@ -129,11 +130,54 @@ function DesktopAuthorsPage({ onNav }: { onNav: NavFn }) {
     setSel(new Set());
   }, [letter, q, sort, sortDir, fmt]);
 
-  // Filter by letter
+  // Globally-unique key per merged author. The `library_slug:id` form
+  // is unique because each library's IDs are unique within that library
+  // — different libraries can share numeric ids but different (slug, id)
+  // pairs are always distinct authors.
+  const authorKey = (a: Pick<Author, "id" | "library_slug">): string =>
+    a.library_slug ? `${a.library_slug}:${a.id}` : String(a.id);
+
+  // v3.10.0 — ids whose sources include a `review`-flagged record. One
+  // request for the whole library (the endpoint aggregates in a single
+  // pass), refreshed alongside the list so blacklisting an author drops
+  // them out of the worklist on the next load.
+  // Keyed by `authorKey` ("slug:id"), NOT bare id — an authors.id is
+  // only unique within its library, and the "All" tab mixes libraries,
+  // so integer keying would attach one library's flag to another
+  // library's author with the same id.
+  const [reviewIds, setReviewIds] = useState<Set<string>>(new Set());
+  const [reviewOnly, setReviewOnly] = usePersist<boolean>("ap_review", false);
+
+  useEffect(() => {
+    const c = new AbortController();
+    api
+      .get<{ author_keys: string[] }>(
+        "/discovery/authors/source-review",
+        c.signal,
+      )
+      .then((d) => setReviewIds(new Set(d.author_keys || [])))
+      .catch((e) => {
+        // Non-fatal: the tab just won't appear. Logged rather than
+        // swallowed — a silently-absent control is undebuggable.
+        if (!api.isAbort(e)) console.error("source-review failed", e);
+      });
+    return () => c.abort();
+  }, [fmt]);
+
+  // Filter by letter, then by the review worklist. Applied in that order
+  // so the "Needs review" count reflects the letter you're looking at.
   const filtered = useMemo(() => {
-    if (!letter) return aus;
-    return aus.filter((a) => getLetterKey(a.name) === letter);
-  }, [aus, letter]);
+    let out = aus;
+    if (letter) out = out.filter((a) => getLetterKey(a.name) === letter);
+    // `reviewOnly` persists across sessions but the toggle is hidden
+    // when nothing is flagged — so guard on the set being non-empty, or
+    // clearing the last flagged author strands the user on a blank list
+    // with no visible control to turn the filter back off.
+    if (reviewOnly && reviewIds.size > 0) {
+      out = out.filter((a) => reviewIds.has(authorKey(a)));
+    }
+    return out;
+  }, [aus, letter, reviewOnly, reviewIds]);
 
   // Letter counts for sidebar badges
   const letterCounts = useMemo(() => {
@@ -151,12 +195,6 @@ function DesktopAuthorsPage({ onNav }: { onNav: NavFn }) {
   const page = Math.min(pg, totalPages);
   const visible = filtered.slice((page - 1) * perPage, page * perPage);
 
-  // Globally-unique key per merged author. The `library_slug:id` form
-  // is unique because each library's IDs are unique within that library
-  // — different libraries can share numeric ids but different (slug, id)
-  // pairs are always distinct authors.
-  const authorKey = (a: Pick<Author, "id" | "library_slug">): string =>
-    a.library_slug ? `${a.library_slug}:${a.id}` : String(a.id);
 
   const toggleSel = (a: Author) =>
     setSel((p) => {
@@ -449,6 +487,15 @@ function DesktopAuthorsPage({ onNav }: { onNav: NavFn }) {
   const navArg = (a: Author): string | number =>
     a.library_slug ? `${a.library_slug}:${a.id}` : a.id;
 
+  // v3.10.0 — hand the detail page the order it should walk. Snapshot
+  // `filtered`, NOT `visible`: prev/next should cross page boundaries,
+  // otherwise "next" dead-ends every `perPage` authors. Taken at click
+  // time so it reflects the filters in force when you left the list.
+  const openAuthor = (a: Author) => {
+    saveAuthorWalk(filtered.map(navArg));
+    onNav("disc-author-detail", navArg(a));
+  };
+
   return (
     <div style={{ display: "flex", gap: 0 }}>
       {/* ── Alphabet Sidebar — hidden on mobile via .seshat-alphabet
@@ -576,6 +623,40 @@ function DesktopAuthorsPage({ onNav }: { onNav: NavFn }) {
                 <span>{tab.label}</span>
               </button>
             ))}
+
+            {/* v3.10.0 — "Needs review" worklist. Orthogonal to the
+                format tabs (it narrows whatever they selected), so it's
+                a separate toggle rather than a fourth tab. Hidden when
+                nothing is flagged, so it never nags on a clean library. */}
+            {reviewIds.size > 0 ? (
+              <button
+                onClick={() => {
+                  setReviewOnly(!reviewOnly);
+                  setPg(1);
+                }}
+                title={
+                  "Authors where a source contributed a lot of books that " +
+                  "nothing else confirms — worth checking the titles."
+                }
+                style={{
+                  marginLeft: 8,
+                  background: reviewOnly ? t.ylwb : "transparent",
+                  color: reviewOnly ? t.ylwt : t.tm,
+                  border: `1px solid ${reviewOnly ? t.ylw : "transparent"}`,
+                  borderRadius: 6,
+                  padding: "4px 12px",
+                  fontSize: 13,
+                  fontWeight: reviewOnly ? 600 : 500,
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 5,
+                }}
+              >
+                <span>⚠</span>
+                <span>Needs review {reviewIds.size}</span>
+              </button>
+            ) : null}
           </div>
           <div
             className="page-header-row"
@@ -935,11 +1016,7 @@ function DesktopAuthorsPage({ onNav }: { onNav: NavFn }) {
                 a={a}
                 t={t}
                 selected={sel.has(authorKey(a))}
-                onClick={() =>
-                  selMode
-                    ? toggleSel(a)
-                    : onNav("disc-author-detail", navArg(a))
-                }
+                onClick={() => (selMode ? toggleSel(a) : openAuthor(a))}
               />
             ))}
           </div>
@@ -954,11 +1031,7 @@ function DesktopAuthorsPage({ onNav }: { onNav: NavFn }) {
                   a={a}
                   t={t}
                   selected={sel.has(authorKey(a))}
-                  onClick={() =>
-                    selMode
-                      ? toggleSel(a)
-                      : onNav("disc-author-detail", navArg(a))
-                  }
+                  onClick={() => (selMode ? toggleSel(a) : openAuthor(a))}
                 />
               </div>
             ))}

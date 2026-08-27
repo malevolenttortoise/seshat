@@ -2140,6 +2140,14 @@ const HYGIENE_JOBS: { name: string; blurb: string }[] = [
     name: "Image URL health check",
     blurb: "Substring-clears author images under `/books/` (book-cover-as-photo regression — historically the John-Birmingham row) or containing `nophoto` (Goodreads placeholders), then HEAD-verifies remaining populated rows and clears any non-200. Local-clear-only — the next discovery scan refills the slot via the rank-aware mirror.",
   },
+  {
+    name: "Soft-delete retention sweep",
+    blurb: "Filesystem-only. Walks each library's .seshat-replaced/<ts>/ folders and purges anything older than the active-replacement retention window (default 30 days). Idempotent — a near-no-op once steady state is reached.",
+  },
+  {
+    name: "Non-roster author cleanup",
+    blurb: "Removes authors a source scan created that are neither on your allow list nor own a book in the library, plus the unowned books left with no contributor. Repairs the fallout: re-points dangling series links, and renumbers any book that lost its primary author. Library (Calibre/ABS) authors are never touched, and owned books can't lose a byline. Inert unless this install ran a source scan before v3.10.0.",
+  },
 ];
 
 function HygieneConfirmModal({

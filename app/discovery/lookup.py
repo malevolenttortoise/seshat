@@ -119,8 +119,27 @@ _RX_FOREIGN_ACCENTS = re.compile(
     r'[àáâãäåæçèéêëìíîïðñòóôõöùúûüýþÿąćęłńóśźżšžřůďťňĺľŕäöüß]',
     re.I,
 )
+# Non-Latin scripts. An English-language edition never renders its title
+# in any of these, so a hit is proof of a translation \u2014 no false-positive
+# risk, unlike the Latin-script heuristics below.
+#
+# v3.10.0: Greek + Hebrew were missing, which is how "DUNE: \u039f\u03af\u03ba\u03bf\u03c2 \u03c4\u03c9\u03bd
+# \u0391\u03c4\u03c1\u03b5\u03b9\u03b4\u03ce\u03bd" and "\u05e9\u05d9\u05e9\u05d4 \u05e2\u05d5\u05e8\u05d1\u05d9\u05dd" reached the live missing list (13 rows, from
+# openlibrary + hardcover). Added the other common scripts at the same
+# time rather than waiting to be surprised by each one in turn.
 _RX_FOREIGN_UNICODE = re.compile(
-    r'[\u0400-\u04ff\u3000-\u9fff\u0600-\u06ff\uac00-\ud7af]'
+    r'[\u0370-\u03ff'   # Greek and Coptic          (NEW v3.10.0)
+    r'\u1f00-\u1fff'    # Greek Extended            (NEW v3.10.0)
+    r'\u0400-\u04ff'    # Cyrillic
+    r'\u0500-\u052f'    # Cyrillic Supplement       (NEW v3.10.0)
+    r'\u0590-\u05ff'    # Hebrew                    (NEW v3.10.0)
+    r'\u0600-\u06ff'    # Arabic
+    r'\u0900-\u097f'    # Devanagari                (NEW v3.10.0)
+    r'\u0e00-\u0e7f'    # Thai                      (NEW v3.10.0)
+    r'\u0530-\u058f'    # Armenian                  (NEW v3.10.0)
+    r'\u10a0-\u10ff'    # Georgian                  (NEW v3.10.0)
+    r'\u3000-\u9fff'    # CJK (incl. kana)
+    r'\uac00-\ud7af]'   # Hangul
 )
 _RX_SERIES_REF_TITLE = re.compile(r'^.+\s+#\d+\s*$')
 
@@ -874,6 +893,103 @@ def _is_audiobook(title: str) -> bool:
     return False
 
 
+async def _retract_source_books(
+    author_id: int, source_name: str,
+    linked_author_ids: Optional[list[int]] = None,
+    slug: Optional[str] = None,
+) -> int:
+    """Remove UNOWNED rows a now-rejected source previously created here.
+
+    Called only when live `_validate_author` fails for `source_name`, so
+    the deletion is backed by the same authoritative check that rejects
+    the incoming catalogue — never by a guess about stored data.
+
+    Rules:
+
+    - **Owned rows are never touched.** `owned=1` is the user's library.
+    - A book whose contributors are *all* within this author's linked set
+      is deleted outright — nothing else refers to it.
+    - A book that ALSO credits an author outside this set keeps existing;
+      only this author's link is dropped. A co-authored book shouldn't
+      vanish for its other (validated) author just because one source got
+      this author wrong.
+    - The ADR-0012 position-0 invariant is restored for any book that
+      lost its primary, and series rows orphaned by the deletions are
+      swept — the same cascade repairs Hygiene Job 13 needs.
+
+    `slug` selects the library. The scan path leaves it None because it
+    is already operating inside the active library, but the blacklist
+    endpoint acts on whichever library the operator was looking at, which
+    is not necessarily the active one — and `author_id` is per-library,
+    so retracting against the wrong DB would target an unrelated author.
+
+    Returns the number of book rows deleted (unlinks aren't counted).
+    """
+    ids = list({int(x) for x in (linked_author_ids or []) if x} | {int(author_id)})
+    db = await get_db(slug)
+    try:
+        ph = ",".join("?" * len(ids))
+        cands = [r[0] for r in await (await db.execute(
+            f"SELECT DISTINCT b.id FROM books b "  # nosec B608
+            f"JOIN book_authors ba ON ba.book_id = b.id "
+            f"WHERE b.owned = 0 AND b.source = ? "
+            f"AND ba.author_id IN ({ph})",
+            (source_name, *ids),
+        )).fetchall()]
+        if not cands:
+            return 0
+
+        deleted, unlinked = [], []
+        for bid in cands:
+            contribs = {r[0] for r in await (await db.execute(
+                "SELECT author_id FROM book_authors WHERE book_id = ?", (bid,),
+            )).fetchall()}
+            (deleted if contribs <= set(ids) else unlinked).append(bid)
+
+        if deleted:
+            dph = ",".join("?" * len(deleted))
+            await db.execute(
+                f"DELETE FROM book_authors WHERE book_id IN ({dph})", deleted)  # nosec B608
+            try:
+                await db.execute(
+                    f"DELETE FROM book_series_suggestions "  # nosec B608
+                    f"WHERE book_id IN ({dph})", deleted)
+            except Exception:
+                pass
+            await db.execute(
+                f"DELETE FROM books WHERE id IN ({dph})", deleted)  # nosec B608
+        for bid in unlinked:
+            await db.execute(
+                f"DELETE FROM book_authors WHERE book_id = ? "  # nosec B608
+                f"AND author_id IN ({ph})", (bid, *ids))
+
+        # cascade repairs (mirrors hygiene Job 13)
+        await db.execute(
+            "UPDATE books SET series_id = NULL WHERE series_id IS NOT NULL "
+            "AND series_id NOT IN (SELECT id FROM series)")
+        await db.execute(
+            "DELETE FROM series WHERE id NOT IN "
+            "(SELECT DISTINCT series_id FROM books WHERE series_id IS NOT NULL)")
+        for bid in [r[0] for r in await (await db.execute(
+            "SELECT b.id FROM books b "
+            "WHERE EXISTS (SELECT 1 FROM book_authors ba WHERE ba.book_id=b.id) "
+            "AND NOT EXISTS (SELECT 1 FROM book_authors ba "
+            "                WHERE ba.book_id=b.id AND ba.position=0)"
+        )).fetchall()]:
+            links = await (await db.execute(
+                "SELECT author_id, role FROM book_authors WHERE book_id=? "
+                "ORDER BY position", (bid,))).fetchall()
+            await db.execute("DELETE FROM book_authors WHERE book_id=?", (bid,))
+            for pos, r in enumerate(links):
+                await db.execute(
+                    "INSERT INTO book_authors (book_id, author_id, position, role) "
+                    "VALUES (?,?,?,?)", (bid, r["author_id"], pos, r["role"]))
+        await db.commit()
+        return len(deleted)
+    finally:
+        await db.close()
+
+
 async def _validate_author(author_name: str, our_titles: list[str], result: AuthorResult) -> bool:
     """Validate found author by checking if ANY of our books fuzzy-match their catalog."""
     if not our_titles: return True
@@ -889,7 +1005,22 @@ async def _validate_author(author_name: str, our_titles: list[str], result: Auth
     return False
 
 
-async def _link_discovered_contributors(db, book_id: int, scanned_author_id: int, bk, source_name: str) -> None:
+def _note_non_roster_skip(stats: dict | None, name: str) -> None:
+    """Tally an ADR-0021 roster rejection for the end-of-scan log line.
+
+    Skips are deliberately NOT surfaced as review rows: the incident that
+    motivated ADR-0021 would have produced 6,303 of them in ~36h, which is
+    the same flood relocated to another table. Counted + logged only.
+    """
+    if stats is None:
+        return
+    stats["non_roster_skipped"] = stats.get("non_roster_skipped", 0) + 1
+    names = stats.setdefault("non_roster_names", [])
+    if len(names) < 10 and name not in names:
+        names.append(name)
+
+
+async def _link_discovered_contributors(db, book_id: int, scanned_author_id: int, bk, source_name: str, roster=None, stats: dict | None = None) -> None:
     """v3.0.0 Phase 3 — populate ``book_authors`` for a freshly-inserted
     discovered book from the source's contributor list.
 
@@ -900,7 +1031,13 @@ async def _link_discovered_contributors(db, book_id: int, scanned_author_id: int
       - trusted-create gate (`TRUSTED_CREATE_SOURCES` keyed on
         ``source_name`` — Goodreads/Amazon/Hardcover/Audible/MAM may
         MINT an unmatched co-author; OpenLibrary/Google Books resolve
-        link-only), then
+        link-only),
+      - **roster gate** (v3.10.0, ADR-0021) — minting additionally
+        requires the name to be on the allow list, and linking to an
+        existing row requires that row to be allow-listed or to own a
+        book here. Non-roster contributors are dropped silently and
+        tallied into ``stats``. Pass ``roster=None`` to disable the gate
+        (unit tests / direct callers), then
       - `write_book_authors` records the ordered set
         (position 0 = the source's primary).
 
@@ -920,7 +1057,7 @@ async def _link_discovered_contributors(db, book_id: int, scanned_author_id: int
     through to the never-orphan append below → one row, scanned author
     at position 0.
     """
-    allow_create = source_name in TRUSTED_CREATE_SOURCES
+    trusted = source_name in TRUSTED_CREATE_SOURCES
     # v3.x (ADR-0016 slice 03) — resolve once for the contributor loop's
     # co-author image fill-if-empty path; passed as `db=db` to the helper
     # so it writes the caller's own per-library row through the same
@@ -931,6 +1068,13 @@ async def _link_discovered_contributors(db, book_id: int, scanned_author_id: int
     for c in bk.contributors:
         if not contributor_is_author(c.role):
             continue
+        # v3.10.0 (ADR-0021) — the roster gate. Minting now requires the
+        # name to be on the allow list ON TOP of the trusted-create check:
+        # trusted-create says "this source's role data is clean enough to
+        # believe", which was never the same question as "is this an author
+        # we want to track". Conflating them is what let one 20-contributor
+        # anthology promote 20 strangers to scan targets.
+        allow_create = trusted and (roster is None or roster.may_mint(c.name))
         # v3.x (ADR-0015 slice 01) — thread the captured per-contributor
         # source_author_id so resolve_or_create_author can persist it
         # (fill-if-empty on match; written on mint; case-4 conflict
@@ -940,32 +1084,46 @@ async def _link_discovered_contributors(db, book_id: int, scanned_author_id: int
             db, c.name, allow_create=allow_create,
             source=source_name, source_id=c.source_author_id,
         )
-        if aid is not None:
-            ordered.append(aid)
-            # v3.x (ADR-0016 slice 03) — captured co-author image fills
-            # NULL slots via the strict fill-if-empty co_author path (the
-            # silent-drop fix for the v3.0.0 Phase 3.4 Amazon byline
-            # widget captures that nothing was consuming). LC byline
-            # never upgrades cross-source regardless of source rank.
-            if c.image_url and active_slug:
-                try:
-                    from app.discovery.author_identity import mirror_image_url
-                    await mirror_image_url(
-                        active_slug, aid, source_name, c.image_url,
-                        trust="co_author", db=db,
-                    )
-                except Exception as exc:
-                    logger.debug(
-                        "mirror_image_url(co_author) failed for "
-                        "author_id=%d source=%s: %s",
-                        aid, source_name, exc,
-                    )
+        if aid is None:
+            # `trusted` means we WOULD have minted pre-ADR-0021, so this
+            # is a genuine roster rejection. A link-only source (google
+            # books / openlibrary) missing is the pre-existing behavior
+            # and is not tallied.
+            if trusted:
+                _note_non_roster_skip(stats, c.name)
+            continue
+        # Resolved to a real row — but resolution alone isn't admission.
+        # On an install polluted before ADR-0021 the name may match a junk
+        # author row that owns nothing, and linking it would keep that row
+        # alive as a scan target.
+        if roster is not None and not roster.admits(c.name, aid):
+            _note_non_roster_skip(stats, c.name)
+            continue
+        ordered.append(aid)
+        # v3.x (ADR-0016 slice 03) — captured co-author image fills
+        # NULL slots via the strict fill-if-empty co_author path (the
+        # silent-drop fix for the v3.0.0 Phase 3.4 Amazon byline
+        # widget captures that nothing was consuming). LC byline
+        # never upgrades cross-source regardless of source rank.
+        if c.image_url and active_slug:
+            try:
+                from app.discovery.author_identity import mirror_image_url
+                await mirror_image_url(
+                    active_slug, aid, source_name, c.image_url,
+                    trust="co_author", db=db,
+                )
+            except Exception as exc:
+                logger.debug(
+                    "mirror_image_url(co_author) failed for "
+                    "author_id=%d source=%s: %s",
+                    aid, source_name, exc,
+                )
     if scanned_author_id not in ordered:
         ordered.append(scanned_author_id)
     await write_book_authors(db, book_id, ordered)
 
 
-async def _heal_contributors(db, book_id: int, bk, source_name: str) -> bool:
+async def _heal_contributors(db, book_id: int, bk, source_name: str, roster=None, stats: dict | None = None) -> bool:
     """v3.0.1 (ADR-0014) — heal an UNOWNED discovered book's contributor
     set on scan-convergence (the MATCH path), UNIONING the source's
     role-filtered authors into the existing ``book_authors``, existing-first.
@@ -995,9 +1153,16 @@ async def _heal_contributors(db, book_id: int, bk, source_name: str) -> bool:
         )).fetchall()
     ]
     existing_set = set(existing_ids)
-    allow_create = source_name in TRUSTED_CREATE_SOURCES
+    trusted = source_name in TRUSTED_CREATE_SOURCES
     added: list[int] = []
     for c in author_contribs:
+        # v3.10.0 (ADR-0021) — same roster gate as the link path. ADR-0014
+        # is AMENDED, not reversed: heal-on-convergence still unions the
+        # source's contributors into unowned rows under its owned-guard,
+        # delta-only and append-only rules — it just unions roster members
+        # only. This is the same `resolve_or_create_author` call that the
+        # incident flowed through, so gating it here is load-bearing.
+        allow_create = trusted and (roster is None or roster.may_mint(c.name))
         # v3.x (ADR-0015 slice 01) — same persistence threading as the
         # _link_discovered_contributors path: a heal that mints a new
         # co-author should carry that author's source_author_id too,
@@ -1007,7 +1172,14 @@ async def _heal_contributors(db, book_id: int, bk, source_name: str) -> bool:
             db, c.name, allow_create=allow_create,
             source=source_name, source_id=c.source_author_id,
         )
-        if aid is not None and aid not in existing_set and aid not in added:
+        if aid is None:
+            if trusted:
+                _note_non_roster_skip(stats, c.name)
+            continue
+        if roster is not None and not roster.admits(c.name, aid):
+            _note_non_roster_skip(stats, c.name)
+            continue
+        if aid not in existing_set and aid not in added:
             added.append(aid)
     if not added:
         return False
@@ -1146,6 +1318,13 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
         # co-author healed in on convergence this scan; recomputed once at
         # end-of-scan (the heal is inert for the series taxonomy without it).
         healed_series_ids: set[int] = set()
+        # v3.10.0 (ADR-0021) — load the roster once for this source's merge
+        # (cached behind a TTL, so the ~3 calls per author are one read).
+        # `roster_stats` accumulates non-roster rejections for the
+        # end-of-merge log line; skips are counted, never surfaced as rows.
+        from app.discovery.roster import load_roster
+        roster = await load_roster(db)
+        roster_stats: dict = {}
         # Update author metadata. `image_url` is now the sole responsibility
         # of `mirror_image_url` below (ADR-0016 slice 02); the legacy
         # COALESCE-fill here was removed because it wrote `image_url`
@@ -1262,7 +1441,7 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
             f"SELECT id, title, source_url, series_id, series_index, source, "
             f"pub_date, expected_date, description, isbn, "
             f"(SELECT author_id FROM book_authors WHERE book_id=books.id AND position=0) AS author_id, "
-            f"is_omnibus, hidden, owned "
+            f"is_omnibus, hidden, owned, language "
             f"FROM books WHERE id IN "
             f"(SELECT book_id FROM book_authors WHERE author_id IN ({id_ph}))",
             all_author_ids,
@@ -1650,6 +1829,21 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
             # apply the new rule to it too since users may swap covers
             # between sources.
             queue_rows: list[tuple] = []
+            # v3.10.0 — fill `language` if we don't have it yet. Strict
+            # fill-if-empty and deliberately NOT a REVIEW_FIELDS entry:
+            # language is source-reported provenance, not user-editable
+            # metadata, so a disagreement shouldn't cost the operator a
+            # review-queue row. Runs on every match (not just full_scan)
+            # so rows discovered before language was persisted acquire it
+            # on the next ordinary scan instead of staying NULL forever.
+            if bk.language:
+                try:
+                    _cur_lang = matched_row["language"]
+                except (IndexError, KeyError):
+                    _cur_lang = None
+                if _cur_lang is None or not str(_cur_lang).strip():
+                    sets.append("language=?")
+                    vals.append(bk.language)
             if full_scan:
                 REVIEW_FIELDS = (
                     ("description", bk.description),
@@ -1934,7 +2128,7 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                     # Calibre/ABS-authoritative). Flag the series for a
                     # one-shot author_mode recompute only on a real delta.
                     if not matched_row["owned"]:
-                        if await _heal_contributors(db, matched_row["id"], bk, source_name) and sid_use is not None:
+                        if await _heal_contributors(db, matched_row["id"], bk, source_name, roster=roster, stats=roster_stats) and sid_use is not None:
                             healed_series_ids.add(sid_use)
                     else:
                         # v3.3.0 (ADR-0017) — the OWNED counterpart: instead
@@ -2005,10 +2199,10 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                 # scanned author + co-authors are written to book_authors by
                 # _link_discovered_contributors below (always-links the
                 # scanned author at position 0).
-                _ins_cur = await db.execute(f"INSERT OR IGNORE INTO books (title,series_id,series_index,isbn,cover_url,pub_date,expected_date,is_unreleased,description,page_count,source,source_url,owned,is_new,is_omnibus,{source_name}_id,amazon_format_asins{_x_col_sql}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,1,?,?,?{_x_q_sql})",
-                    (bk.title, sid_use, s_idx, bk.isbn, bk.cover_url, bk.pub_date, bk.expected_date, 1 if bk.is_unreleased else 0, bk.description, bk.page_count, source_name, initial_urls, 1 if omnibus else 0, bk.external_id, bk.amazon_format_asins, *_xvals))
+                _ins_cur = await db.execute(f"INSERT OR IGNORE INTO books (title,series_id,series_index,isbn,cover_url,pub_date,expected_date,is_unreleased,description,page_count,source,source_url,language,owned,is_new,is_omnibus,{source_name}_id,amazon_format_asins{_x_col_sql}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,1,?,?,?{_x_q_sql})",
+                    (bk.title, sid_use, s_idx, bk.isbn, bk.cover_url, bk.pub_date, bk.expected_date, 1 if bk.is_unreleased else 0, bk.description, bk.page_count, source_name, initial_urls, bk.language, 1 if omnibus else 0, bk.external_id, bk.amazon_format_asins, *_xvals))
                 if _ins_cur.rowcount and _ins_cur.lastrowid:
-                    await _link_discovered_contributors(db, _ins_cur.lastrowid, author_id, bk, source_name)
+                    await _link_discovered_contributors(db, _ins_cur.lastrowid, author_id, bk, source_name, roster=roster, stats=roster_stats)
                 existing.add(norm); new_books += 1
                 if on_new_book:
                     on_new_book()
@@ -2123,7 +2317,7 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                         db, matched_row["id"], bk, source_name,
                     )
                 if not matched_row["owned"]:
-                    if await _heal_contributors(db, matched_row["id"], bk, source_name) and matched_row["series_id"] is not None:
+                    if await _heal_contributors(db, matched_row["id"], bk, source_name, roster=roster, stats=roster_stats) and matched_row["series_id"] is not None:
                         healed_series_ids.add(matched_row["series_id"])
                 # Record `(None, None)` — this source thinks the book
                 # is a standalone. Surfacing "Source A says series X,
@@ -2157,10 +2351,10 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
             _x_q_sql = ("," + ",".join(["?"] * len(_xcols))) if _xcols else ""
             # v3.0.0 Phase 9 (ADR-0012): no books.author_id — contributors
             # written to book_authors by _link_discovered_contributors below.
-            _ins_cur = await db.execute(f"INSERT OR IGNORE INTO books (title,isbn,cover_url,pub_date,expected_date,is_unreleased,description,page_count,source,source_url,owned,is_new,is_omnibus,{source_name}_id,amazon_format_asins{_x_col_sql}) VALUES (?,?,?,?,?,?,?,?,?,?,0,1,?,?,?{_x_q_sql})",
-                (bk.title, bk.isbn, bk.cover_url, bk.pub_date, bk.expected_date, 1 if bk.is_unreleased else 0, bk.description, bk.page_count, source_name, initial_urls, 1 if omnibus else 0, bk.external_id, bk.amazon_format_asins, *_xvals))
+            _ins_cur = await db.execute(f"INSERT OR IGNORE INTO books (title,isbn,cover_url,pub_date,expected_date,is_unreleased,description,page_count,source,source_url,language,owned,is_new,is_omnibus,{source_name}_id,amazon_format_asins{_x_col_sql}) VALUES (?,?,?,?,?,?,?,?,?,?,?,0,1,?,?,?{_x_q_sql})",
+                (bk.title, bk.isbn, bk.cover_url, bk.pub_date, bk.expected_date, 1 if bk.is_unreleased else 0, bk.description, bk.page_count, source_name, initial_urls, bk.language, 1 if omnibus else 0, bk.external_id, bk.amazon_format_asins, *_xvals))
             if _ins_cur.rowcount and _ins_cur.lastrowid:
-                await _link_discovered_contributors(db, _ins_cur.lastrowid, author_id, bk, source_name)
+                await _link_discovered_contributors(db, _ins_cur.lastrowid, author_id, bk, source_name, roster=roster, stats=roster_stats)
             existing.add(norm); new_books += 1
             if on_new_book:
                 on_new_book()
@@ -2197,6 +2391,18 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
         if healed_series_ids:
             from app.discovery.routers.series import _recompute_series_author
             await _recompute_series_author(db, healed_series_ids)
+        # v3.10.0 (ADR-0021) — the only visibility non-roster skips get.
+        # Deliberately a log line and not review rows: the motivating
+        # incident would have generated 6,303 rows in ~36h. A sample of
+        # names is included so an operator who expected an author to be
+        # picked up can see why it wasn't (usually: not on the allow list).
+        if roster_stats.get("non_roster_skipped"):
+            logger.info(
+                "  roster: skipped %d non-roster contributor link(s) from "
+                "%s (sample: %s)",
+                roster_stats["non_roster_skipped"], source_name,
+                ", ".join(roster_stats.get("non_roster_names") or []) or "—",
+            )
         await db.commit()
         return new_books, updated_books
     finally:
@@ -3386,6 +3592,38 @@ async def _try_source(source, author_name, author_id, our_titles, languages, sou
                 f"{len(found.series)} series pre-populated)"
             )
 
+        # v3.10.0 — operator blacklist. Checked here, immediately after
+        # the source resolves an author record and BEFORE any catalogue
+        # is walked, so a blacklisted record costs no further requests.
+        #
+        # This is the escape hatch for a source record that collapses
+        # several real people into one entity (OpenLibrary's OL2719653A:
+        # a sci-fi author's Fold novels next to "Trump and Churchill" and
+        # "Kenny the Koala"). `_validate_author` cannot reject it — the
+        # record genuinely contains books the user owns, so any-owned vs
+        # any-catalogue matches and validation passes honestly. The
+        # ambiguity is inside the record, so no automated signal resolves
+        # it; an operator verdict is the only correct input.
+        if found.external_id:
+            try:
+                from app.discovery import source_blacklist
+                if await source_blacklist.is_blacklisted(
+                        source_name, found.external_id):
+                    logger.info(
+                        "  [%s] author record %s is BLACKLISTED for %r — "
+                        "skipping %d book(s) without importing",
+                        source_name, found.external_id, author_name,
+                        len(found.books) + sum(
+                            len(s.books) for s in found.series),
+                    )
+                    return 0
+            except Exception:
+                # Fail open — a blacklist read error must never suppress
+                # a source silently.
+                logger.exception(
+                    "  [%s] blacklist check failed — continuing",
+                    source_name)
+
         if has_data:
             full = found
         else:
@@ -3435,11 +3673,68 @@ async def _try_source(source, author_name, author_id, our_titles, languages, sou
             return 0
         logger.info(f"  [{source_name}] Retrieved {total_src} books ({len(full.series)} series, {len(full.books)} standalone)")
 
-        # Validate: skip if author already confirmed from previous scans
-        if existing_titles and len(existing_titles) > 0:
-            logger.debug(f"  [{source_name}] Author already confirmed ({len(existing_titles)} known books)")
-        elif not await _validate_author(author_name, our_titles, full):
-            logger.info(f"  [{source_name}] Author validation failed — skipping (likely wrong author)")
+        # Validate the source really found OUR author — EVERY source, EVERY
+        # scan.
+        #
+        # v3.10.0: this used to be skipped entirely whenever the author had
+        # any previously-known books ("already confirmed"). That made the
+        # wrong-author guard a one-shot: the first source to validate
+        # successfully disarmed it for every source that ran afterwards.
+        #
+        # Live consequence — "Nick Adams". Hardcover legitimately matched the
+        # owned Fold novels on scan one, so from then on OpenLibrary, Amazon
+        # and Goodreads were never checked, and OpenLibrary's name-collapsed
+        # author entity (OL2719653A — 41 works spanning a political
+        # commentator, a children's author and a sci-fi author) merged
+        # wholesale. "Trump and Churchill" and "Kenny the Koala Comes to the
+        # USA" became missing books for a sci-fi author.
+        #
+        # Validating against `our_titles` (OWNED books only) is deliberate.
+        # The broader `existing_titles` set includes previously-DISCOVERED
+        # rows, so validating against it would let a source that polluted
+        # this author on a past scan match its own junk and pass forever —
+        # self-reinforcing. Owned books are ground truth; discovered ones
+        # are the thing under suspicion.
+        #
+        # `_validate_author` returns True when `our_titles` is empty, so
+        # discovered-only authors (allow-listed, nothing owned yet) are
+        # unaffected — there is simply nothing to validate against.
+        if not await _validate_author(author_name, our_titles, full):
+            logger.info(
+                "  [%s] Author validation FAILED for %r — skipping %d books "
+                "(source's catalogue shares no title with the %d owned book(s) "
+                "we have; likely a different person with the same name)",
+                source_name, author_name, total_src, len(our_titles),
+            )
+            # v3.10.0 — retract what this source contributed on earlier
+            # scans. The same evidence that rejects the catalogue now
+            # condemns the rows it created while validation was disarmed:
+            # if OpenLibrary's "Nick Adams" doesn't match our owned Fold
+            # novels today, the 30 rows it wrote yesterday are the same
+            # wrong person.
+            #
+            # Deliberately driven by the LIVE validation result, not a
+            # heuristic over stored data. A retro-heuristic can't work
+            # here: stored discovered rows exclude the books we own by
+            # construction, so "shares no title with your owned books" is
+            # the normal case — a token-overlap sweep over the reference
+            # install flagged Rachel Aukes' "Fringe Runner" and R J
+            # Barker's "Age of Assassins", both genuine.
+            try:
+                removed = await _retract_source_books(
+                    author_id, source_name, linked_author_ids,
+                )
+                if removed:
+                    logger.info(
+                        "  [%s] retracted %d previously-discovered book(s) "
+                        "for %r from this source",
+                        source_name, removed, author_name,
+                    )
+            except Exception:
+                logger.exception(
+                    "  [%s] retraction failed for %r (non-fatal)",
+                    source_name, author_name,
+                )
             return 0
 
         n, u = await _merge_result(author_id, full, source_name, languages, full_scan=full_scan, owned_only=owned_only, series_collector=series_collector, on_new_book=on_new_book, exclude_audiobooks=exclude_audiobooks, linked_author_ids=linked_author_ids, link_type_by_id=link_type_by_id)
@@ -4120,7 +4415,13 @@ async def run_full_lookup(on_progress=None):
         # secondary co-authors of multi-author Calibre entries — see
         # routers/authors.py:get_authors() docstring. Scanning them
         # wastes time on a lookup that has no books to merge into.
-        rows = await (await db.execute("SELECT id, name FROM authors WHERE COALESCE(last_lookup_at,0) < ? AND id IN (SELECT DISTINCT author_id FROM book_authors) ORDER BY COALESCE(last_lookup_at,0) ASC", (time.time() - cache_sec,))).fetchall()
+        # v3.10.0 (ADR-0021) — "due + non-orphan" is no longer sufficient.
+        # A row minted as an anthology co-author satisfied both conditions
+        # instantly, which is what turned one scan into a cascade. The
+        # roster filter is applied inside `scan_eligible_authors` so this
+        # loop and the router's pre-flight due-count can't disagree.
+        from app.discovery.roster import scan_eligible_authors
+        rows = await scan_eligible_authors(db, time.time() - cache_sec)
         authors = list(rows)
         total = 0; checked = 0
         timeouts: dict[str, list[str]] = {}

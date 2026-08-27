@@ -143,17 +143,15 @@ async def trigger_sync_alias():
 async def _count_due_authors(cutoff: float) -> int:
     """Count authors in the currently-active library due for a source scan.
 
-    Mirrors the iteration inside `run_full_lookup` — skip orphan authors
-    with no linked books so the pre-flight "due count" doesn't overstate
-    what the scan loop will actually visit.
+    Delegates to the same `scan_eligible_authors` helper the scan loop uses
+    so the pre-flight count can never overstate what the loop will visit —
+    it skips orphan authors with no linked books, and (v3.10.0, ADR-0021)
+    authors outside the roster.
     """
     db = await get_db()
     try:
-        row = await (await db.execute(
-            "SELECT COUNT(*) c FROM authors WHERE COALESCE(last_lookup_at,0) < ? AND id IN (SELECT DISTINCT author_id FROM book_authors)",
-            (cutoff,),
-        )).fetchone()
-        return row["c"] if row else 0
+        from app.discovery.roster import scan_eligible_authors
+        return len(await scan_eligible_authors(db, cutoff))
     finally:
         await db.close()
 

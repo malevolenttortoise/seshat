@@ -681,6 +681,8 @@ const MOBILE_HYGIENE_JOBS = [
   "Consolidate persons by shared source ID",
   "Prune orphan author_links",
   "Image URL health check",
+  "Soft-delete retention sweep",
+  "Non-roster author cleanup",
 ];
 
 interface MobileHygieneConfirmProps {

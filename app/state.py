@@ -361,6 +361,15 @@ async def refresh_filter_authors() -> None:
         allowed_authors=allowed,
         ignored_authors=ignored,
     )
+    # ADR-0021 — the discovery roster is keyed on the same allow list, so
+    # every mutation site that refreshes the filter must also drop the
+    # cached roster. Without this, an author approved mid-scan stays
+    # un-mintable until the roster's TTL expires.
+    try:
+        from app.discovery import roster as _roster
+        _roster.invalidate()
+    except Exception:
+        _log.debug("refresh_filter_authors: roster invalidate failed", exc_info=True)
     _log.debug(
         f"refresh_filter_authors: allowed={len(allowed)} ignored={len(ignored)}"
     )
