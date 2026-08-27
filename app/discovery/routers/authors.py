@@ -420,6 +420,99 @@ async def search_authors(
         await db.close()
 
 
+# ⚠️ MUST stay registered BEFORE `/authors/{aid}` — FastAPI matches in
+# registration order, so a literal path that looks like an id segment is
+# otherwise swallowed by the parameterised route and 422s on
+# aid="source-review". Same ordering rule as the v2.22.4
+# /persons/source-id-conflicts fix.
+@router.get("/authors/source-review")
+async def authors_needing_source_review(slug: Optional[str] = None):
+    """Author ids whose sources include at least one `review`-flagged
+    record — the worklist behind the authors page's "Needs review" tab.
+
+    Same rule as `author_source_breakdown` via `_source_flag`, so the
+    filter can't disagree with the page it links to.
+
+    **One pass, not N.** Walking every author and calling the per-author
+    breakdown would be ~900 round trips of the same joins; this pulls
+    the unowned rows once (~4,900 on the reference install) and
+    aggregates in memory. Cheap enough to call on every list load.
+
+    Keys are the frontend's `authorKey` form — **`"slug:id"`**, not a bare
+    id. An `authors.id` is only unique within its library, and the list
+    page's cross-library "All" tab shows rows from every library at once,
+    so matching on the integer alone would attach one library's flag to a
+    different library's author with the same id. Same class of bug as the
+    composite-id 422; keyed properly it can't happen.
+
+    Omit `slug` to sweep every library (what the "All" tab needs); pass
+    one to restrict.
+
+    Returns `{"author_keys": [...], "counts": {key: n_flagged}}`.
+    """
+    from app.discovery.source_blacklist import DISAMBIGUATING_SOURCES
+    from app.discovery.database import get_db as get_lib_db
+    from app.discovery import cross_library
+
+    # ⚠️ `get_lib_db`, not `author_identity._open_per_library` — the
+    # latter binds DATA_DIR at import time, so it reads the REAL data
+    # directory even when a test has patched it. Same trap ADR-0021's
+    # roster.py documents.
+    if slug:
+        slugs = [slug]
+    else:
+        slugs = [l["slug"] for l in cross_library.libraries_for("all")
+                 if l.get("slug")]
+    id_cols = sorted(MIRRORABLE_SOURCE_ID_COLUMNS)
+
+    counts: dict[str, int] = {}
+    for lib in slugs:
+        try:
+            db = await get_lib_db(lib)
+        except Exception:
+            continue
+        try:
+            has_books = await (await db.execute(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type='table' AND name='books' LIMIT 1"
+            )).fetchone()
+            if not has_books:
+                continue
+            rows = await (await db.execute(
+                f"SELECT ba.author_id AS aid, b.source AS source, "  # nosec B608
+                f"       {', '.join('b.' + c for c in id_cols)} "
+                f"FROM books b JOIN book_authors ba ON ba.book_id = b.id "
+                f"WHERE b.owned = 0"
+            )).fetchall()
+        except Exception:
+            continue
+        finally:
+            await db.close()
+
+        agg: dict[tuple[int, str], list[int]] = {}
+        for r in rows:
+            src = (r["source"] or "").strip() or "unknown"
+            own_col = f"{src}_id"
+            slot = agg.setdefault((r["aid"], src), [0, 0])
+            slot[0] += 1
+            for c in id_cols:
+                if (c != own_col and r[c] and str(r[c]).strip()
+                        and c[: -len("_id")] in DISAMBIGUATING_SOURCES):
+                    slot[1] += 1
+                    break
+
+        for (aid, _src), (n, corr) in agg.items():
+            if _source_flag(n, corr) == "review":
+                key = f"{lib}:{aid}"
+                counts[key] = counts.get(key, 0) + 1
+
+    return {
+        "slugs": slugs,
+        "author_keys": sorted(counts),
+        "counts": counts,
+    }
+
+
 @router.get("/authors/{aid}")
 async def get_author(aid: int, include_cross_library: bool = False, slug: Optional[str] = None):
     """Return an author's detail (series + standalone + stats).
@@ -3291,6 +3384,21 @@ async def unlink_pen_names(link_id: int):
 # ─── v3.10.0 — source-record evidence + operator blacklist ──────────
 
 
+# The review rule, in ONE place. Both the per-author panel and the
+# authors-list "needs review" filter call this — two copies would drift,
+# and the symptom would be a filter that disagrees with the page it
+# links to.
+#
+# `review` means "large contribution, nothing else confirms it — worth
+# your eyes", NOT "wrong". Two stronger rules were tried and rejected by
+# measurement; see `author_source_breakdown` for what and why.
+_REVIEW_MIN_BOOKS = 10
+
+
+def _source_flag(books: int, corroborated: int) -> str:
+    return "review" if books >= _REVIEW_MIN_BOOKS and corroborated == 0 else "none"
+
+
 @router.get("/authors/{aid}/source-breakdown")
 async def author_source_breakdown(aid: int, slug: Optional[str] = None):
     """Per-source evidence for one author, for the "is this source
@@ -3396,10 +3504,8 @@ async def author_source_breakdown(aid: int, slug: Optional[str] = None):
     out = []
     for d in by_source.values():
         n, corr = d["books"], d["corroborated"]
-        # `review` is "worth your eyes", NOT "wrong" — see the docstring
-        # for the two stronger-sounding rules that measurement rejected.
-        if n >= 10 and corr == 0:
-            d["flag"] = "review"
+        d["flag"] = _source_flag(n, corr)
+        if d["flag"] == "review":
             d["note"] = (
                 f"{n} books and nothing else confirms any of them. That is "
                 f"normal for a deep catalogue, so check the titles below "
@@ -3407,7 +3513,6 @@ async def author_source_breakdown(aid: int, slug: Optional[str] = None):
                 f"blacklist the record."
             )
         else:
-            d["flag"] = "none"
             d["note"] = (
                 f"{n} books, {corr} also known to another identifying "
                 f"source."

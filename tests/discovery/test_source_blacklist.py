@@ -293,3 +293,114 @@ async def test_endpoint_without_author_id_only_records(full_env):
     })
     assert res["books_retracted"] == 0
     assert await source_blacklist.is_blacklisted("openlibrary", "OL999X")
+
+
+# ─── The review filter + its route ordering ───────────────────
+
+
+def test_source_review_route_is_registered_before_the_aid_route():
+    """FastAPI matches in registration order, so `/authors/source-review`
+    must come BEFORE `/authors/{aid}` or the parameterised route swallows
+    it and 422s on aid="source-review". Same rule as the v2.22.4
+    /persons/source-id-conflicts fix — and it WAS shadowed when first
+    appended to the end of the module."""
+    from app.discovery.routers.authors import router
+    paths = [r.path for r in router.routes]
+    assert paths.index("/api/discovery/authors/source-review") < paths.index(
+        "/api/discovery/authors/{aid}")
+
+
+def test_review_rule_is_shared_between_panel_and_filter():
+    """One rule, one place. Two copies would let the 'Needs review' tab
+    disagree with the page it links to."""
+    from app.discovery.routers import authors as mod
+    assert mod._source_flag(30, 0) == "review"
+    assert mod._source_flag(9, 0) == "none"      # under the size floor
+    assert mod._source_flag(30, 1) == "none"     # something confirms it
+    assert mod._source_flag(0, 0) == "none"
+
+
+async def test_source_review_lists_only_flagged_authors(full_env):
+    from app.discovery.database import get_db
+    from app.discovery.routers.authors import authors_needing_source_review
+
+    db = await get_db("test")
+    try:
+        for aid, name in [(1, "Collapsed Record"), (2, "Small Contribution")]:
+            await db.execute(
+                "INSERT INTO authors (id, name, sort_name, normalized_name) "
+                "VALUES (?,?,?,?)", (aid, name, name, name.lower()))
+        # author 1: 12 solo OpenLibrary rows -> flagged
+        for i in range(12):
+            c = await db.execute(
+                "INSERT INTO books (title, owned, source) VALUES (?,0,?)",
+                (f"Solo {i}", "openlibrary"))
+            await db.execute(
+                "INSERT INTO book_authors (book_id, author_id, position) "
+                "VALUES (?,1,0)", (c.lastrowid,))
+        # author 2: 3 rows -> under the floor
+        for i in range(3):
+            c = await db.execute(
+                "INSERT INTO books (title, owned, source) VALUES (?,0,?)",
+                (f"Few {i}", "openlibrary"))
+            await db.execute(
+                "INSERT INTO book_authors (book_id, author_id, position) "
+                "VALUES (?,2,0)", (c.lastrowid,))
+        await db.commit()
+    finally:
+        await db.close()
+
+    res = await authors_needing_source_review(slug="test")
+    assert res["author_keys"] == ["test:1"]
+    assert res["counts"]["test:1"] == 1
+
+
+async def test_corroboration_by_a_disambiguating_source_clears_the_flag(
+        full_env):
+    """12 OpenLibrary rows that Hardcover also knows are not suspicious."""
+    from app.discovery.database import get_db
+    from app.discovery.routers.authors import authors_needing_source_review
+
+    db = await get_db("test")
+    try:
+        await db.execute(
+            "INSERT INTO authors (id, name, sort_name, normalized_name) "
+            "VALUES (1,'Real Author','Real Author','real author')")
+        for i in range(12):
+            c = await db.execute(
+                "INSERT INTO books (title, owned, source, hardcover_id) "
+                "VALUES (?,0,?,?)", (f"B{i}", "openlibrary", f"hc{i}"))
+            await db.execute(
+                "INSERT INTO book_authors (book_id, author_id, position) "
+                "VALUES (?,1,0)", (c.lastrowid,))
+        await db.commit()
+    finally:
+        await db.close()
+
+    assert (await authors_needing_source_review(slug="test"))["author_keys"] == []
+
+
+async def test_name_as_id_sources_do_not_count_as_corroboration(full_env):
+    """google_books' author id is the author's NAME, so its agreement
+    carries no identity information — 12 OL rows it also knows must still
+    flag. This is the measured Nick Adams shape."""
+    from app.discovery.database import get_db
+    from app.discovery.routers.authors import authors_needing_source_review
+
+    db = await get_db("test")
+    try:
+        await db.execute(
+            "INSERT INTO authors (id, name, sort_name, normalized_name) "
+            "VALUES (1,'Nick Adams','Nick Adams','nick adams')")
+        for i in range(12):
+            c = await db.execute(
+                "INSERT INTO books (title, owned, source, google_books_id) "
+                "VALUES (?,0,?,?)", (f"B{i}", "openlibrary", "Nick Adams"))
+            await db.execute(
+                "INSERT INTO book_authors (book_id, author_id, position) "
+                "VALUES (?,1,0)", (c.lastrowid,))
+        await db.commit()
+    finally:
+        await db.close()
+
+    assert (await authors_needing_source_review(slug="test"))["author_keys"] == ["test:1"]

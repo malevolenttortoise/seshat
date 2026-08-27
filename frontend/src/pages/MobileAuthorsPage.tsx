@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import { useTheme } from "../theme";
 import { usePersist } from "../hooks/usePersist";
+import { saveAuthorWalk } from "../hooks/useAuthorWalk";
 import { Ic } from "../icons";
 import {
   MobileInput,
@@ -79,11 +80,17 @@ export default function MobileAuthorsPage({ onNav }: { onNav: NavFn }) {
   const sortLabel =
     SORT_OPTIONS.find((o) => o.value === sort)?.label || "Name (A-Z)";
 
-  const navToAuthor = (a: Author) => {
+  const navArg = (a: Author): string | number =>
     // The desktop page builds a "slug:id" arg when library_slug is
     // present so cross-library authors resolve in the right library.
-    const arg = a.library_slug ? `${a.library_slug}:${a.id}` : a.id;
-    onNav("disc-author-detail", arg);
+    a.library_slug ? `${a.library_slug}:${a.id}` : a.id;
+
+  const navToAuthor = (a: Author) => {
+    // v3.10.0 — snapshot the full list (`aus`), not the page slice, so
+    // prev/next on the detail page crosses page boundaries. Mobile has
+    // no letter filter, so `aus` IS the filtered set here.
+    saveAuthorWalk(aus.map(navArg));
+    onNav("disc-author-detail", navArg(a));
   };
 
   return (

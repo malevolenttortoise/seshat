@@ -18,6 +18,7 @@ import {
 } from "../lib/authorDetail";
 import { SourceBadgeRow } from "../components/SourceBadgeRow";
 import { SourceBreakdownPanel } from "../components/SourceBreakdownPanel";
+import { useAuthorWalk } from "../hooks/useAuthorWalk";
 import { AuthorCacheStatusBadge } from "../components/AuthorCacheStatusBadge";
 import { GoodreadsAuthorCacheStatusBadge } from "../components/GoodreadsAuthorCacheStatusBadge";
 import {
@@ -307,6 +308,10 @@ export default function MobileAuthorDetailPage({
   })();
   const authorIdNum = parsed.id;
   const authorSlug = parsed.slug;
+
+  // Prev/next within the list the user came from. Keyed on the RAW
+  // `authorId` because that's the nav-arg form the list snapshotted.
+  const walk = useAuthorWalk(authorId);
 
   const loadA = useCallback(
     (signal?: AbortSignal) => {
@@ -802,6 +807,51 @@ export default function MobileAuthorDetailPage({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <MobileBackButton to="disc-authors" label="Authors" />
+
+      {/* v3.10.0 — walk the list you came from, at parity with desktop.
+          Full-width tap targets rather than the desktop's compact
+          buttons; hidden entirely when there's no snapshot. */}
+      {walk.total > 0 ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button
+            disabled={!walk.prev}
+            onClick={() => walk.prev && onNav("disc-author-detail", walk.prev)}
+            style={{
+              flex: 1,
+              padding: "10px 12px",
+              background: t.bg3,
+              color: walk.prev ? t.text : t.tg,
+              border: `1px solid ${t.border}`,
+              borderRadius: 8,
+              fontSize: 14,
+              fontWeight: 600,
+              cursor: walk.prev ? "pointer" : "default",
+            }}
+          >
+            ← Prev
+          </button>
+          <span style={{ fontSize: 13, color: t.tm, whiteSpace: "nowrap" }}>
+            {walk.index} / {walk.total}
+          </span>
+          <button
+            disabled={!walk.next}
+            onClick={() => walk.next && onNav("disc-author-detail", walk.next)}
+            style={{
+              flex: 1,
+              padding: "10px 12px",
+              background: t.bg3,
+              color: walk.next ? t.text : t.tg,
+              border: `1px solid ${t.border}`,
+              borderRadius: 8,
+              fontSize: 14,
+              fontWeight: 600,
+              cursor: walk.next ? "pointer" : "default",
+            }}
+          >
+            Next →
+          </button>
+        </div>
+      ) : null}
       {/* Hero card */}
       <div
         style={{
