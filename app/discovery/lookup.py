@@ -896,6 +896,7 @@ def _is_audiobook(title: str) -> bool:
 async def _retract_source_books(
     author_id: int, source_name: str,
     linked_author_ids: Optional[list[int]] = None,
+    slug: Optional[str] = None,
 ) -> int:
     """Remove UNOWNED rows a now-rejected source previously created here.
 
@@ -916,10 +917,16 @@ async def _retract_source_books(
       lost its primary, and series rows orphaned by the deletions are
       swept — the same cascade repairs Hygiene Job 13 needs.
 
+    `slug` selects the library. The scan path leaves it None because it
+    is already operating inside the active library, but the blacklist
+    endpoint acts on whichever library the operator was looking at, which
+    is not necessarily the active one — and `author_id` is per-library,
+    so retracting against the wrong DB would target an unrelated author.
+
     Returns the number of book rows deleted (unlinks aren't counted).
     """
     ids = list({int(x) for x in (linked_author_ids or []) if x} | {int(author_id)})
-    db = await get_db()
+    db = await get_db(slug)
     try:
         ph = ",".join("?" * len(ids))
         cands = [r[0] for r in await (await db.execute(

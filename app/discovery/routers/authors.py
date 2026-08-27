@@ -3448,16 +3448,41 @@ async def add_source_blacklist(payload: dict = Body(...)):
     if not source or not source_author_id:
         raise HTTPException(400, "source and source_author_id are required")
 
+    from app.discovery.database import get_db as get_lib_db, get_active_library
+
     author_id = payload.get("author_id")
+    lib = (payload.get("slug") or "").strip() or get_active_library()
     retracted = 0
     if author_id:
         try:
             from app.discovery.lookup import _retract_source_books
-            linked = [a["id"] for a in await linked_authors(
-                payload.get("slug") or "", int(author_id))] \
-                if payload.get("slug") else None
+
+            # Same linked set the scan path builds: pen-name AND
+            # co-author links, which are PER-LIBRARY `authors.id` values
+            # from this library's `pen_name_links`.
+            #
+            # ⚠️ NOT `author_identity.linked_authors()` — that takes a
+            # person_id and returns cross-library (slug, author_id)
+            # tuples. Passing those here would feed author ids from
+            # another library into a query against this one, where the
+            # same integer is a different person.
+            linked: list[int] = []
+            ldb = await get_lib_db(lib)
+            try:
+                for pr in await (await ldb.execute(
+                    "SELECT canonical_author_id, alias_author_id "
+                    "FROM pen_name_links "
+                    "WHERE canonical_author_id = ? OR alias_author_id = ?",
+                    (int(author_id), int(author_id)),
+                )).fetchall():
+                    for col in ("canonical_author_id", "alias_author_id"):
+                        if pr[col] and pr[col] != int(author_id):
+                            linked.append(pr[col])
+            finally:
+                await ldb.close()
+
             retracted = await _retract_source_books(
-                int(author_id), source, linked)
+                int(author_id), source, linked or None, slug=lib)
         except Exception:
             logger.exception(
                 "source-blacklist: retraction failed for author_id=%s "
