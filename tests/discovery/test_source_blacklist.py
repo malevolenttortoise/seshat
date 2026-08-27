@@ -117,3 +117,44 @@ def test_name_as_id_sources_are_not_disambiguating():
         assert weak not in d, weak
     for strong in ("goodreads", "hardcover", "amazon", "openlibrary"):
         assert strong in d, strong
+
+
+# ─── Regression: the composite-id 422 ─────────────────────────
+
+
+async def test_breakdown_route_takes_a_bare_int_not_a_composite_id():
+    """The author-detail page's `authorId` prop can be the composite
+    "slug:id" form ("calibre-library:619") for a cross-library row. The
+    panel shipped passing that straight through, so every request came
+    back 422 and — because a failed load rendered nothing — the panel
+    silently did not exist on the page. Six 422s in the live logs before
+    anyone noticed.
+
+    The contract is: this route takes the NUMERIC per-library id, exactly
+    like the neighbouring /authors/{aid}/pen-names route, and callers
+    split the composite themselves (`authorIdNum` / `authorSlug`).
+    """
+    import inspect
+    from app.discovery.routers.authors import author_source_breakdown
+
+    sig = inspect.signature(author_source_breakdown)
+    assert sig.parameters["aid"].annotation is int, (
+        "widening this to str would paper over the caller bug rather than "
+        "fix it, and would diverge from every other author route"
+    )
+
+
+def test_frontend_passes_the_numeric_id_to_the_panel():
+    """Guards the actual regression at the call site — the type system
+    can't, because the page's own prop is legitimately `number | string`."""
+    from pathlib import Path
+    page = Path(__file__).resolve().parents[2] / (
+        "frontend/src/pages/DiscAuthorDetailPage.tsx")
+    src = page.read_text()
+    idx = src.find("<SourceBreakdownPanel")
+    assert idx != -1, "panel not mounted on the author detail page"
+    block = src[idx:idx + 400]
+    assert "authorId={authorIdNum}" in block, (
+        "must pass the parsed numeric id, not the raw composite prop"
+    )
+    assert "authorId={authorId}" not in block

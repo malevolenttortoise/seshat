@@ -17,6 +17,7 @@ import {
   type PersonSearchResponse,
 } from "../lib/authorDetail";
 import { SourceBadgeRow } from "../components/SourceBadgeRow";
+import { SourceBreakdownPanel } from "../components/SourceBreakdownPanel";
 import { AuthorCacheStatusBadge } from "../components/AuthorCacheStatusBadge";
 import { GoodreadsAuthorCacheStatusBadge } from "../components/GoodreadsAuthorCacheStatusBadge";
 import {
@@ -1031,6 +1032,16 @@ export default function MobileAuthorDetailPage({
           />
         </MobileSection>
       ) : null}
+
+      {/* v3.10.0 — per-source evidence + operator blacklist, at parity
+          with the desktop page. ⚠️ `authorIdNum`, NOT the raw `authorId`
+          prop: the composite "slug:id" form 422s the endpoint, and a
+          failed load used to render nothing at all. */}
+      <SourceBreakdownPanel
+        authorId={authorIdNum}
+        slug={authorSlug || a.active_library_slug}
+        onChanged={() => loadA()}
+      />
 
       {/* Bio */}
       {a.bio && (

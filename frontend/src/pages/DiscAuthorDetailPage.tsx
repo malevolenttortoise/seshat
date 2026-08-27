@@ -1462,9 +1462,13 @@ function DesktopAuthorDetailPage({
           corroboration from an identifying source, no overlap with the
           library). This is the surface for the OpenLibrary "Nick Adams"
           class of failure, which no automated check can catch. */}
+      {/* ⚠️ `authorIdNum` / `authorSlug`, NOT the raw `authorId` prop —
+          that can be the composite "slug:id" form (a cross-library row
+          arrives as "calibre-library:619"), which the endpoint's `int`
+          path param rejects with a 422. */}
       <SourceBreakdownPanel
-        authorId={authorId}
-        slug={a.active_library_slug}
+        authorId={authorIdNum}
+        slug={authorSlug || a.active_library_slug}
         onChanged={() => loadA()}
       />
 

@@ -63,18 +63,22 @@ export function SourceBreakdownPanel({
   slug,
   onChanged,
 }: {
-  // `number | string` to match AuthorDetailPageProps — the router hands
-  // this page a number on the canonical nav path and a string via URL
-  // params, and every other consumer on the page takes it as-is.
-  authorId: number | string;
+  // ⚠️ The NUMERIC per-library author id. The author-detail page's own
+  // `authorId` prop may be the composite "slug:id" form
+  // ("calibre-library:619") — passing that straight through made every
+  // request 422, and because a failed load used to render nothing, the
+  // panel silently didn't exist. Callers pass `authorIdNum`.
+  authorId: number;
   slug?: string;
   onChanged?: () => void;
 }) {
   const theme = useTheme();
   const [data, setData] = useState<Breakdown | null>(null);
+  const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    if (!authorId) return;
     try {
       // `api.*` auto-prefixes `/api`, so the path carries `/discovery`
       // (the router's own prefix) but NOT `/api` — doubling it yields a
@@ -83,8 +87,14 @@ export function SourceBreakdownPanel({
         `/discovery/authors/${authorId}/source-breakdown${slugQuery(slug)}`,
       );
       setData(d);
-    } catch {
+      setErr(null);
+    } catch (e) {
+      // Deliberately NOT silent. Swallowing this is what hid the 422
+      // above: the panel simply wasn't on the page, with nothing in the
+      // console and nothing on screen to explain why.
+      console.error("source-breakdown failed", e);
       setData(null);
+      setErr(e instanceof Error ? e.message : String(e));
     }
   }, [authorId, slug]);
 
@@ -92,6 +102,15 @@ export function SourceBreakdownPanel({
     load();
   }, [load]);
 
+  if (err) {
+    return (
+      <Section title="Source records" defaultOpen={false} count="unavailable">
+        <div style={{ color: theme.err, fontSize: 13 }}>
+          Couldn't load source breakdown: {err}
+        </div>
+      </Section>
+    );
+  }
   if (!data || data.sources.length === 0) return null;
 
   const tone = (f: SourceRow["flag"]) =>
@@ -167,6 +186,10 @@ export function SourceBreakdownPanel({
   };
 
   const flagged = data.sources.filter((s) => s.flag === "review").length;
+  // Open when something is flagged. This is the surface for acting on a
+  // bad source record, so on the ~13% of authors that have one it should
+  // be visible without a click; everywhere else it stays folded away.
+  const openByDefault = flagged > 0;
 
   return (
     <Section
@@ -182,7 +205,7 @@ export function SourceBreakdownPanel({
           `${data.sources.length} sources`
         )
       }
-      defaultOpen={false}
+      defaultOpen={openByDefault}
     >
       <div style={{ display: "grid", gap: 10 }}>
         {data.sources.map((r) => (
