@@ -126,7 +126,7 @@ async def _retry_grab(
     the torrent has since been removed from MAM).
     """
     fetch_result: GrabResult = await deps.fetch_torrent(
-        grab.mam_torrent_id, deps.mam_token
+        grab.mam_torrent_id, deps.live_mam_token()
     )
 
     if not fetch_result.success:

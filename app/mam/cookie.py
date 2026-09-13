@@ -144,7 +144,7 @@ def set_current_token(token: str) -> None:
     Called by `main.py`'s lifespan right after `load_settings()`. Any
     subsequent `_do_get`/`_do_post` call that doesn't pass an explicit
     token will use this value, and successful responses will update
-    it automatically via `_handle_response_cookie()`.
+    it automatically via `handle_response_cookie()`.
     """
     global _current_token
     _current_token = token
@@ -225,7 +225,7 @@ def _extract_mam_id_from_response(response: httpx.Response) -> Optional[str]:
     return response.cookies.get("mam_id")
 
 
-async def _handle_response_cookie(response: httpx.Response) -> None:
+async def handle_response_cookie(response: httpx.Response) -> None:
     """Check a MAM HTTP response for a rotated cookie and apply it.
 
     Called from `_do_get` and `_do_post` after every successful
@@ -320,7 +320,7 @@ async def aclose_session() -> None:
             _client = None
 
 
-def _resolve_token(explicit: Optional[str]) -> str:
+def resolve_token(explicit: Optional[str]) -> str:
     """Pick the token to use for a request.
 
     If the caller passed an explicit token (validation probe, test
@@ -328,6 +328,15 @@ def _resolve_token(explicit: Optional[str]) -> str:
     `_current_token` which is kept fresh by the rotation handler.
     Empty string is returned if neither is set — callers are expected
     to treat that as "no auth" and let MAM reject the request.
+
+    PUBLIC because `app.discovery.sources.mam` routes its own HTTP
+    layer through this. Until v3.10.1 that module kept a PARALLEL
+    `_current_token` global with the priority INVERTED (stale global
+    beat the explicit argument), and nothing ever re-seeded it on a
+    credential save. A cookie pasted into Settings therefore never
+    reached discovery searches, which 403'd until the container was
+    restarted while MAM Status — reading this module — showed green.
+    One token authority only; don't reintroduce a second.
     """
     if explicit:
         return explicit
@@ -340,7 +349,7 @@ async def _do_get(
     """Async GET to a MAM endpoint with the standard auth header set.
 
     Automatically rotates the in-memory token if the response carries
-    a new `mam_id` cookie — see `_handle_response_cookie`. The rotation
+    a new `mam_id` cookie — see `handle_response_cookie`. The rotation
     fires BEFORE the response is returned to the caller so that if the
     caller immediately uses the rotated token for another request
     (e.g. a grab followed by a validation check), it sees the fresh
@@ -357,11 +366,11 @@ async def _do_get(
         raise ValueError(
             f"_do_get refuses non-MAM URL (cookie would leak): {url!r}"
         )
-    effective_token = _resolve_token(token)
+    effective_token = resolve_token(token)
     response = await get_client().get(
         url, headers=build_headers(effective_token), timeout=timeout
     )
-    await _handle_response_cookie(response)
+    await handle_response_cookie(response)
     return response
 
 
@@ -384,14 +393,14 @@ async def _do_post(
     Automatically rotates the in-memory token if the response carries
     a new `mam_id` cookie.
     """
-    effective_token = _resolve_token(token)
+    effective_token = resolve_token(token)
     response = await get_client().post(
         url,
         headers=build_headers(effective_token),
         content=payload,
         timeout=timeout,
     )
-    await _handle_response_cookie(response)
+    await handle_response_cookie(response)
     return response
 
 

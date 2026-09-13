@@ -299,7 +299,7 @@ async def _resubmit_queued_grab(
         return False
 
     fetch_result: GrabResult = await deps.fetch_torrent(
-        grab.mam_torrent_id, deps.mam_token
+        grab.mam_torrent_id, deps.live_mam_token()
     )
 
     if not fetch_result.success:

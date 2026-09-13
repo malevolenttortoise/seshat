@@ -291,6 +291,33 @@ class DispatcherDeps:
     # Optional: an audit hook for tests / future observability.
     on_event: Optional[Callable[[str, dict], None]] = None
 
+    # ── Live credential accessors ───────────────────────────
+
+    def live_mam_token(self) -> str:
+        """Resolve the MAM session cookie, preferring the live value.
+
+        NEVER read `self.mam_token` directly at a call site that talks
+        to MAM. That field is a snapshot taken when the dispatcher was
+        built, and the long-lived background loops (budget watcher,
+        cookie retry, IRC listener) capture a DispatcherDeps *once* at
+        startup — `main.py`'s `deps_for_loops`. Saving a new cookie in
+        Settings rebuilds `state.dispatcher`, but the running loops go
+        on holding the old object forever, so before v3.10.1 they kept
+        replaying a dead token: grabs and the cookie-retry job failed
+        with HTTP 401 until the container was restarted, even though
+        the cookie had been updated correctly.
+
+        `app.mam.cookie` holds the live token — it is updated both by
+        rotation capture and by the Settings save path — so resolving
+        through it makes every consumer, however stale its deps
+        snapshot, pick the change up on the next tick. The field stays
+        as the fallback for tests and for the window before the first
+        seed.
+        """
+        from app.mam.cookie import get_current_token
+
+        return get_current_token() or self.mam_token
+
 
 # ─── Result type ─────────────────────────────────────────────
 
@@ -805,7 +832,7 @@ async def _dispatch_with_decision(
                 await train_authors_from_torrent_info(
                     db,
                     announce.torrent_id,
-                    token=deps.mam_token,
+                    token=deps.live_mam_token(),
                     fallback_blob=announce.author_blob or "",
                     source="coauthor_train",
                 )
@@ -821,10 +848,10 @@ async def _dispatch_with_decision(
         # Uploader exclusion check. Uses the cached torrent_info (zero
         # extra cost) to see if this torrent was uploaded by someone on
         # the excluded list. Prevents downloading your own uploads.
-        if deps.excluded_uploaders and deps.mam_token and announce.torrent_id:
+        if deps.excluded_uploaders and deps.live_mam_token() and announce.torrent_id:
             try:
                 info = await get_torrent_info(
-                    announce.torrent_id, token=deps.mam_token, ttl=300
+                    announce.torrent_id, token=deps.live_mam_token(), ttl=300
                 )
                 if info.uploader_name and info.uploader_name.lower() in deps.excluded_uploaders:
                     _emit(deps, "excluded_uploader", {
@@ -897,7 +924,7 @@ async def _dispatch_with_decision(
                     db,
                     delayed_path=deps.delayed_torrents_path,
                     fetch_torrent=deps.fetch_torrent,
-                    mam_token=deps.mam_token,
+                    mam_token=deps.live_mam_token(),
                 )
             except Exception:
                 _log.exception("delayed rotation raised (non-fatal)")
@@ -968,7 +995,7 @@ async def _dispatch_with_decision(
         # what the policy engine decided. Either path alone is
         # enough to flip the wedge on.
         fetch_result = await deps.fetch_torrent(
-            announce.torrent_id, deps.mam_token,
+            announce.torrent_id, deps.live_mam_token(),
             use_fl_wedge=policy_decision.use_wedge or force_fl_wedge,
         )
 
@@ -1210,7 +1237,7 @@ async def _build_economic_context(
     # Torrent-info is needed when any gate branches on per-torrent
     # economics OR when the buffer gate needs the torrent size.
     needs_torrent_info = (
-        deps.mam_token
+        deps.live_mam_token()
         and announce.torrent_id
         and (
             deps.policy_config.free_only
@@ -1221,7 +1248,7 @@ async def _build_economic_context(
     )
     if needs_torrent_info:
         try:
-            info = await get_torrent_info(announce.torrent_id, token=deps.mam_token)
+            info = await get_torrent_info(announce.torrent_id, token=deps.live_mam_token())
             ctx_kwargs["torrent_vip"] = info.vip
             ctx_kwargs["torrent_free"] = info.free
             ctx_kwargs["torrent_fl_vip"] = info.fl_vip
@@ -1241,7 +1268,7 @@ async def _build_economic_context(
     # User-status is needed when any gate branches on ratio/wedges
     # OR when the buffer gate needs the upload_buffer.
     needs_user_status = (
-        deps.mam_token
+        deps.live_mam_token()
         and (
             deps.policy_config.use_wedge
             or deps.policy_config.ratio_floor > 0
@@ -1250,7 +1277,7 @@ async def _build_economic_context(
     )
     if needs_user_status:
         try:
-            status = await get_user_status(token=deps.mam_token)
+            status = await get_user_status(token=deps.live_mam_token())
             ctx_kwargs["user_ratio"] = status.ratio
             ctx_kwargs["user_wedges"] = status.wedges
             ctx_kwargs["user_upload_buffer_bytes"] = status.upload_buffer_bytes
@@ -1384,7 +1411,7 @@ async def _fetch_mam_cover_for_skip(
     The cover is stored alongside the tentative/ignored-seen DB row
     so the review UI can show it.
     """
-    if not deps.mam_token or not torrent_id:
+    if not deps.live_mam_token() or not torrent_id:
         return None
     try:
         from pathlib import Path
@@ -1399,7 +1426,7 @@ async def _fetch_mam_cover_for_skip(
             torrent_id,
             dest_dir=cover_dir,
             basename="cover-mam",
-            token=deps.mam_token,
+            token=deps.live_mam_token(),
         )
         return str(path) if path else None
     except Exception:

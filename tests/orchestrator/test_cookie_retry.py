@@ -14,6 +14,7 @@ from typing import Optional
 from app.clients.base import AddResult, TorrentInfo
 from app.database import get_db
 from app.filter.gate import FilterConfig
+from app.mam import cookie as cookie_mod
 from app.mam.grab import GrabResult
 from app.orchestrator.cookie_retry import tick
 from app.orchestrator.dispatch import DispatcherDeps
@@ -193,6 +194,13 @@ class TestSuccessfulRetry:
         assert result.succeeded == 3
 
     async def test_uses_fresh_token(self, temp_db):
+        """The retry fetch uses the live cookie, not the deps snapshot.
+
+        `app.mam.cookie` is the authority for the current mam_id — it
+        is written both by rotation capture and by the Settings save
+        path — so `live_mam_token()` prefers it over the `mam_token`
+        frozen into DispatcherDeps at build time.
+        """
         db = await get_db()
         try:
             await _insert_failed_grab(db)
@@ -202,7 +210,7 @@ class TestSuccessfulRetry:
         fetch = _make_fetch()
         deps = DispatcherDeps(
             filter_config=FilterConfig(allowed_categories=frozenset()),
-            mam_token="brand_new_cookie",
+            mam_token="stale_snapshot_cookie",
             qbit_category="mam-complete",
             budget_cap=200,
             queue_max=100,
@@ -213,9 +221,98 @@ class TestSuccessfulRetry:
             qbit=_FakeQbit(),
         )
 
-        await tick(deps)
-        # Verify the fetch used the fresh token.
+        saved = cookie_mod._current_token
+        try:
+            cookie_mod.set_current_token("brand_new_cookie")
+            await tick(deps)
+        finally:
+            cookie_mod._current_token = saved
+
         assert fetch.calls[0][1] == "brand_new_cookie"
+
+    async def test_falls_back_to_deps_token_when_no_live_token(self, temp_db):
+        """With nothing seeded live, the deps snapshot is still used.
+
+        Keeps the accessor safe for tests and for the window between
+        process start and the first `set_current_token()` seed.
+        """
+        db = await get_db()
+        try:
+            await _insert_failed_grab(db)
+        finally:
+            await db.close()
+
+        fetch = _make_fetch()
+        deps = DispatcherDeps(
+            filter_config=FilterConfig(allowed_categories=frozenset()),
+            mam_token="deps_fallback_cookie",
+            qbit_category="mam-complete",
+            budget_cap=200,
+            queue_max=100,
+            queue_mode_enabled=True,
+            seed_seconds_required=72 * 3600,
+            db_factory=get_db,
+            fetch_torrent=fetch,
+            qbit=_FakeQbit(),
+        )
+
+        saved = cookie_mod._current_token
+        try:
+            cookie_mod._current_token = None
+            await tick(deps)
+        finally:
+            cookie_mod._current_token = saved
+
+        assert fetch.calls[0][1] == "deps_fallback_cookie"
+
+    async def test_cookie_saved_after_loop_started_is_picked_up(self, temp_db):
+        """Regression: v3.10.0 — grabs 401'd until container restart.
+
+        The background loops (`cookie_retry`, `budget_watcher`, the IRC
+        listener) capture ONE DispatcherDeps at startup — `main.py`'s
+        `deps_for_loops`. Saving a new MAM cookie rebuilds
+        `state.dispatcher`, but those already-running loops keep their
+        original object forever, so they went on replaying the dead
+        token and every retry came back `cookie_expired (HTTP 401)`
+        even though the cookie had been updated correctly.
+
+        This reproduces that exact shape: a loop holding a deps object
+        built BEFORE the credential save must still send the new token.
+        """
+        db = await get_db()
+        try:
+            await _insert_failed_grab(db)
+        finally:
+            await db.close()
+
+        fetch = _make_fetch()
+        # Deps as captured at startup, with the since-expired cookie.
+        deps_captured_at_startup = DispatcherDeps(
+            filter_config=FilterConfig(allowed_categories=frozenset()),
+            mam_token="expired_cookie_from_boot",
+            qbit_category="mam-complete",
+            budget_cap=200,
+            queue_max=100,
+            queue_mode_enabled=True,
+            seed_seconds_required=72 * 3600,
+            db_factory=get_db,
+            fetch_torrent=fetch,
+            qbit=_FakeQbit(),
+        )
+
+        saved = cookie_mod._current_token
+        try:
+            # The user pastes a new cookie into Settings. This is what
+            # `app/routers/credentials.py::_apply_credential` does.
+            cookie_mod.set_current_token("cookie_pasted_into_settings")
+
+            # The loop ticks with its stale captured deps.
+            await tick(deps_captured_at_startup)
+        finally:
+            cookie_mod._current_token = saved
+
+        assert fetch.calls[0][1] == "cookie_pasted_into_settings"
+        assert fetch.calls[0][1] != deps_captured_at_startup.mam_token
 
 
 # ─── Failed retry ───────────────────────────────────────────

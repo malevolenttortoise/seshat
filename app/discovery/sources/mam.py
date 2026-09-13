@@ -41,6 +41,7 @@ from urllib.parse import urlencode
 import httpx
 
 from app import state
+from app.mam import cookie as mam_cookie
 from app.metadata.scoring import score_match_with_breakdown
 
 logger = logging.getLogger("seshat.discovery.mam")
@@ -51,7 +52,8 @@ logger = logging.getLogger("seshat.discovery.mam")
 MAM_SEARCH_URL = "https://www.myanonamouse.net/tor/js/loadSearchJSONbasic.php"
 MAM_BROWSE_BASE = "https://www.myanonamouse.net/tor/browse.php"
 MAM_TORRENT_BASE = "https://www.myanonamouse.net/t"
-MAM_DYNIP_URL = "https://t.myanonamouse.net/json/dynamicSeedbox.php"
+# MAM_DYNIP_URL lives in app.mam.cookie now — IP registration delegates
+# there so there is exactly one implementation of the validation probe.
 EBOOK_CATEGORY = "14"
 AUDIOBOOK_CATEGORY = "13"
 
@@ -1037,16 +1039,39 @@ def _build_headers(token: str) -> dict:
 _client: Optional[httpx.AsyncClient] = None
 
 # ── Cookie auto-rotation state ──────────────────────────────
-# MAM rotates the mam_id session cookie on every response via Set-Cookie.
-# Clients that capture and reuse the new cookie get indefinite session
-# lifetime; clients that ignore it eventually expire (~30 days).
+# There is NONE in this module, deliberately. `app.mam.cookie` is the
+# single authority for the live mam_id: it owns the in-memory token,
+# the rotation capture, and the debounced persistence to the encrypted
+# secret store.
 #
-# The pattern: intercept Set-Cookie after every _do_get/_do_post, compare
-# to the in-memory token, and if different, update + fire a callback that
-# debounce-persists to settings.json.
-_current_token: Optional[str] = None
-_rotation_callback: Optional[Callable] = None
-_last_rotation_save: float = 0.0
+# This module used to keep its own parallel `_current_token` +
+# `_rotation_callback` + `_last_rotation_save` trio. That was the root
+# cause of the v3.10.0 "cookie won't apply until I restart the
+# container" bug, and it failed in three compounding ways:
+#
+#   1. The priority was INVERTED relative to app.mam.cookie. This
+#      module resolved `_current_token or token`, so the stale
+#      module-global beat the freshly-resolved token the caller
+#      explicitly passed in. app.mam.cookie does `if explicit:
+#      return explicit`, which is the correct precedence.
+#   2. Nothing in production ever re-seeded it. The local
+#      `set_current_token()` was dead code outside tests, so the only
+#      writer was rotation capture. Once populated it could never be
+#      displaced in-process — pasting a new cookie into Settings
+#      updated app.mam.cookie's global and left this one pinned to a
+#      dead session, 403ing every search until restart.
+#   3. Its `_rotation_callback` was never wired either, so rotations
+#      observed on THIS module's requests were never persisted. The
+#      two modules' views of "the current cookie" drifted apart on
+#      every scan.
+#
+# Net effect for users: MAM Status showed green (it reads
+# app.mam.cookie) while Discovery search returned
+# "HTTP 403 — session rejected", and re-pasting the cookie could not
+# fix it because each new paste invalidated the previous MAM session
+# server-side without ever reaching this module.
+#
+# Do not reintroduce token state here. Route through app.mam.cookie.
 
 # mbsc browser-session cookie state was REMOVED in v2.4.0 after MAM
 # staff confirmed mbsc-based scraping (filelist.php fetches) is not on
@@ -1058,83 +1083,16 @@ _last_rotation_save: float = 0.0
 # project_seshat_filelist_future_reenable.md.
 
 
-def set_current_token(token: str) -> None:
-    """Seed the in-memory token from settings at startup."""
-    global _current_token
-    _current_token = token
-
-
-def get_current_token() -> Optional[str]:
-    """Return the most recently rotated token."""
-    return _current_token
-
-
-def set_rotation_callback(callback: Callable) -> None:
-    """Register a callback for when the token rotates.
-
-    The callback receives the new token string and should persist it
-    to settings.json. Called inline after each response, so it should
-    be fast (the caller handles debouncing).
-    """
-    global _rotation_callback
-    _rotation_callback = callback
-
-
-def _extract_cookie_value(
-    response: httpx.Response, name: str
-) -> Optional[str]:
-    """Extract a cookie value from a MAM response by name.
-
-    Reads through httpx's parsed cookie jar exclusively — the jar
-    correctly honors RFC 6265 expiration semantics (`Max-Age=0`,
-    `Expires=` in the past), so a deletion sentinel like
-    `Set-Cookie: mbsc=deleted; Max-Age=0` does NOT appear here and
-    we won't mistake it for a fresh rotation.
-
-    Earlier versions had a regex fallback against raw Set-Cookie
-    headers for "edge cases where httpx drops cookies due to missing
-    attributes" — defensive code with no real-world trigger. The
-    fallback ignored expiration attributes and captured deletion
-    sentinels as rotations, which on 2026-05-09 corrupted both
-    `_current_token` and `_current_mbsc_token` after MAM served a
-    logout response on a rejected filelist fetch (which then poisoned
-    every subsequent search with HTTP 403). Don't add it back.
-    """
-    return response.cookies.get(name)
-
-
-def _extract_mam_id(response: httpx.Response) -> Optional[str]:
-    """Extract mam_id from a MAM response's Set-Cookie header."""
-    return _extract_cookie_value(response, "mam_id")
-
-
-async def _handle_response_cookie(response: httpx.Response) -> None:
-    """Check response for a rotated mam_id value and update state.
-
-    mam_id rotates on every JSON API call; we capture from Set-Cookie
-    and debounce-persist to settings.json. The mbsc parallel was
-    REMOVED in v2.4.0 along with all browser-tier scraping (TOS).
-    """
-    global _current_token, _last_rotation_save
-    now = time.time()
-
-    new_token = _extract_mam_id(response)
-    if new_token and new_token != _current_token:
-        _current_token = new_token
-        # Don't log token bytes (even a prefix) — an 8-char prefix is
-        # enough entropy to correlate sessions across log files / log
-        # aggregators, and anyone with `docker logs` access is a wider
-        # audience than the people authorized to see the MAM session
-        # token. The fact-of-rotation is the only diagnostic that
-        # matters here.
-        logger.debug("MAM cookie rotated")
-        # Debounced persistence: only save if 60+ seconds since last save
-        if _rotation_callback and (now - _last_rotation_save) >= 60:
-            _last_rotation_save = now
-            try:
-                await _rotation_callback(new_token)
-            except Exception as e:
-                logger.warning(f"Cookie rotation callback failed: {e}")
+# Rotation capture is app.mam.cookie's job. Re-exported here under the
+# name this module's callers/tests already use, so every request made
+# through `_do_get`/`_do_post` below feeds the ONE shared token slot and
+# the ONE debounced persistence path.
+#
+# app.mam.cookie's version is strictly better than the local one it
+# replaced: its debounce cancels-and-reschedules (last rotation always
+# lands) rather than hard-gating on a 60s window, which silently DROPPED
+# any rotation arriving inside the window.
+_handle_response_cookie = mam_cookie.handle_response_cookie
 
 
 def _get_client() -> httpx.AsyncClient:
@@ -1176,8 +1134,10 @@ async def aclose_session() -> None:
 
 async def _do_get(url: str, token: str, timeout: int = 15) -> httpx.Response:
     """Async GET to a MAM endpoint with standard headers + cookie rotation."""
-    # Use the rotated token if available, fall back to explicit token
-    effective = _current_token or token
+    # Explicit token wins; fall back to app.mam.cookie's live rotated
+    # value. Reversing these two is the v3.10.0 stale-cookie bug — see
+    # the "Cookie auto-rotation state" note above.
+    effective = mam_cookie.resolve_token(token)
     resp = await _get_client().get(
         url, headers=_build_headers(effective), timeout=timeout
     )
@@ -1193,7 +1153,8 @@ async def _do_post(url: str, token: str, payload: str, timeout: int = 20) -> htt
     header for why `data=<dict>` and `json=<dict>` both break the search
     API in subtle ways.
     """
-    effective = _current_token or token
+    # Explicit token wins — see `_do_get`.
+    effective = mam_cookie.resolve_token(token)
     resp = await _get_client().post(
         url, headers=_build_headers(effective), content=payload, timeout=timeout
     )
@@ -1201,111 +1162,28 @@ async def _do_post(url: str, token: str, payload: str, timeout: int = 20) -> htt
     return resp
 
 
+# ── Connection validation ───────────────────────────────────
+#
+# These three used to be full re-implementations, character-for-
+# character equivalent to app.mam.cookie's. Two copies of the same
+# probe against the same endpoint is how "MAM Status is green but
+# Discovery search 403s" became possible in the first place: the
+# copies could (and did) resolve different tokens.
+#
+# They are now thin delegations. The Discovery-facing message prefix
+# is preserved because the Settings panel labels this "search auth",
+# but the probe itself is app.mam.cookie's — one implementation, one
+# token, so the two surfaces cannot disagree again.
+
+
 async def register_ip(session_id: str, skip_ip_update: bool = True) -> dict:
-    """
-    Ping MAM's dynamic seedbox endpoint to register this server's IP.
-    Returns {"success": bool, "message": str}
-
-    skip_ip_update defaults to True because IP registration is only needed
-    for non-ASN-locked sessions, and the rest of the codebase always passes
-    True. The default exists so any new caller that forgets to specify gets
-    the safer behavior automatically.
-    """
-    if skip_ip_update:
-        return {"success": True, "message": "Skipped IP registration (ASN-locked session)"}
-
-    logger.info("Registering server IP with MAM...")
-
-    try:
-        resp = await _do_get(MAM_DYNIP_URL, session_id)
-        body = resp.text.strip()
-        logger.debug(f"IP registration response: {body}")
-
-        # MAM dynamicSeedbox.php returns JSON like:
-        #   {"Success": true, "msg": "Completed", "ip": "...", "ASN": 12345, "AS": "..."}
-        # On failure msg may be "No Session Cookie", "Incorrect session type - ...",
-        # "Invalid session - IP mismatch", "Last Change too recent", etc.
-        try:
-            data = resp.json()
-        except Exception:
-            if "<html" in body.lower():
-                return {"success": False, "message": "Got HTML login page — token wrong or expired"}
-            return {"success": False, "message": f"Non-JSON response: {body[:200]}"}
-
-        msg = str(data.get("msg", "")).strip()
-        if data.get("Success"):
-            logger.info(f"IP registration OK ({msg or 'no message'})")
-            return {
-                "success": True,
-                "message": msg or "OK",
-                "ip": data.get("ip"),
-                "asn": data.get("ASN"),
-                "as_org": data.get("AS"),
-            }
-
-        # Success=false branch — interpret known msg values
-        msg_l = msg.lower()
-        if "incorrect session type" in msg_l:
-            logger.warning("ASN-locked session — IP registration not needed")
-            return {"success": True, "message": "ASN-locked session — IP registration not needed"}
-        if "no session cookie" in msg_l or "invalid cookie" in msg_l:
-            return {"success": False, "message": "Token not recognised by MAM"}
-        if "ip mismatch" in msg_l or "asn mismatch" in msg_l:
-            return {"success": False, "message": f"Session locked to a different network: {msg}"}
-        if "too recent" in msg_l:
-            return {"success": False, "message": f"IP change rate-limited by MAM: {msg}"}
-        return {"success": False, "message": msg or f"Unexpected response: {body[:200]}"}
-    except asyncio.TimeoutError:
-        return {"success": False, "message": "Timeout connecting to MAM"}
-    except Exception:
-        # Log the full traceback server-side but return a generic message:
-        # exception details can leak library versions, internal hostnames,
-        # or stack frame paths through the API response body.
-        logger.exception("MAM IP-registration network error")
-        return {
-            "success": False,
-            "message": "Network error connecting to MAM dynamic seedbox endpoint",
-        }
+    """Register this server's IP with MAM. Delegates to app.mam.cookie."""
+    return await mam_cookie.register_ip(session_id, skip_ip_update)
 
 
 async def verify_search_auth(session_id: str) -> dict:
-    """Verify MAM search API access with a test query."""
-    logger.info("Verifying MAM search API access...")
-
-    # Auth probe only — always English, regardless of user language settings.
-    test_payload = json.dumps({
-        "tor": {
-            "text": "test",
-            "srchIn": {"title": "true"},
-            "searchType": "active",
-            "searchIn": "torrents",
-            "main_cat": [EBOOK_CATEGORY],
-            "browse_lang": [_ENGLISH_LANG_ID],
-            "startNumber": "0",
-        },
-        "perpage": 5,
-    })
-
-    try:
-        resp = await _do_post(MAM_SEARCH_URL, session_id, test_payload, 15)
-        if resp.status_code == 200 and len(resp.text) > 0:
-            logger.info("MAM search auth OK")
-            return {"success": True, "message": "Connection successful"}
-        elif resp.status_code == 200 and len(resp.text) == 0:
-            return {"success": False, "message": "HTTP 200 but empty response — token may be invalid or expired"}
-        elif resp.status_code == 403:
-            return {"success": False,
-                    "message": "HTTP 403 — session rejected. Check token is valid for this server's IP/ASN."}
-        else:
-            return {"success": False, "message": f"Unexpected HTTP {resp.status_code}"}
-    except Exception:
-        # Same rationale as register_ip's handler: full traceback to logs,
-        # generic message in the API response.
-        logger.exception("MAM search-auth network error")
-        return {
-            "success": False,
-            "message": "Network error verifying MAM search access",
-        }
+    """Probe the MAM search endpoint. Delegates to app.mam.cookie."""
+    return await mam_cookie.verify_session(session_id)
 
 
 async def validate_connection(session_id: str, skip_ip_update: bool = True) -> dict:
@@ -1313,20 +1191,15 @@ async def validate_connection(session_id: str, skip_ip_update: bool = True) -> d
 
     See register_ip() for why skip_ip_update defaults to True.
     """
-    ip_result = await register_ip(session_id, skip_ip_update)
-    if not ip_result["success"]:
-        return {
-            "success": False,
-            "message": f"IP registration failed: {ip_result['message']}",
-            "ip_result": ip_result, "search_result": None,
-        }
-    search_result = await verify_search_auth(session_id)
-    return {
-        "success": search_result["success"],
-        "message": search_result["message"] if search_result["success"]
-                   else f"Search auth failed: {search_result['message']}",
-        "ip_result": ip_result, "search_result": search_result,
-    }
+    result = await mam_cookie.validate(session_id, skip_ip_update)
+    search_result = result.get("search_result")
+    # Re-label the failure with this surface's wording. app.mam.cookie
+    # says "Session verify failed"; the Discovery panel has always said
+    # "Search auth failed" and users' bug reports quote that string.
+    if search_result is not None and not result["success"]:
+        result = dict(result)
+        result["message"] = f"Search auth failed: {search_result['message']}"
+    return result
 
 
 # ---------------------------------------------------------------------------
