@@ -17,6 +17,49 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _isolated_data_dir(tmp_path_factory):
+    """Keep the whole suite off the developer's real app database.
+
+    `app.config.DATA_DIR` resolves to a per-user OS location
+    (`$XDG_DATA_HOME/seshat` on Linux), and `app.database.get_db()` reads
+    the module-level `APP_DB_PATH` bound from it at import time. Any test
+    that does NOT take the `temp_db` fixture therefore fell through to
+    that real file.
+
+    On a machine that has ever run Seshat -- or just run this suite
+    before, since a stray `init_db()` creates the schema there -- the
+    tables happen to exist and those tests pass. On a clean checkout they
+    fail with `no such table: secrets` / `no such table: book_grab_links`.
+    That is exactly what the first CI run caught: 17 failures here, zero
+    locally, with no difference but accumulated state on disk.
+
+    Pointing DATA_DIR at a throwaway directory and initializing the
+    schema once per session makes the two environments agree, and means
+    a test can no longer read or write the developer's real data.
+
+    `temp_db` still overrides this per-test; this is only the default
+    for everything that doesn't ask.
+    """
+    import asyncio
+
+    from app import config, database
+
+    data_dir = tmp_path_factory.mktemp("seshat-data")
+    db_path = data_dir / "seshat.db"
+
+    mp = pytest.MonkeyPatch()
+    mp.setattr(config, "DATA_DIR", data_dir)
+    mp.setattr(config, "APP_DB_PATH", db_path)
+    mp.setattr(database, "APP_DB_PATH", db_path)
+
+    asyncio.run(database.init_db())
+    try:
+        yield data_dir
+    finally:
+        mp.undo()
+
+
 @pytest.fixture
 async def fake_mam():
     """Install a programmable fake MAM HTTP server for the test.

@@ -30,6 +30,18 @@ and adds the CI job that will keep it honest.
   roster cache is module-global, keyed by library slug with a 60s TTL,
   so a `cal`/`abs` roster could otherwise outlive the `tmp_path` DB it
   was built from.
+- **17 tests were silently reading the developer's real app database.**
+  `app.config.DATA_DIR` resolves to a per-user OS location and
+  `app.database.get_db()` reads the `APP_DB_PATH` bound from it at
+  import, so any test not taking the `temp_db` fixture fell through to
+  that real file. On a machine that had ever run Seshat (or this suite,
+  since a stray `init_db()` creates the schema there) the tables existed
+  and the tests passed; on a clean checkout they failed with `no such
+  table: secrets` / `no such table: book_grab_links`. The first CI run
+  caught all 17. A session-scoped autouse fixture in `tests/conftest.py`
+  now points `DATA_DIR`/`APP_DB_PATH` at a throwaway directory and
+  initializes the schema once, so a test can no longer read or write
+  real user data.
 
 ### Added
 
