@@ -9,3 +9,9 @@
 # (`pytest<9`) blocked the security patch.
 pytest==9.0.3
 pytest-asyncio==1.3.0
+
+# httpx request mocking, used by tests/discovery/test_covers.py and
+# test_image_url_health_hygiene.py. It was missing from this file until
+# the CI test job was added: it lived only in the dev venv, so a clean
+# checkout could not collect the suite.
+respx==0.23.1
