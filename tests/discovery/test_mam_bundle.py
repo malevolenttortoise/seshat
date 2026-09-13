@@ -242,12 +242,15 @@ class TestDeletionSentinelNotRotated:
     """
 
     async def test_mam_id_deletion_does_not_rotate(self):
-        from app.discovery.sources import mam as mam_mod
-        saved_token = mam_mod._current_token
-        saved_save = mam_mod._last_rotation_save
+        # The token slot this asserts on lives in app.mam.cookie. As of
+        # v3.10.1 this module no longer keeps a parallel copy — that
+        # duplication was itself a bug (see the "Cookie auto-rotation
+        # state" note in app/discovery/sources/mam.py), so the discovery
+        # request path and the rest of Seshat now share one slot.
+        from app.mam import cookie as cookie_mod
+        saved_token = cookie_mod._current_token
         try:
-            mam_mod._current_token = "VALID_OLD_MAM_ID"
-            mam_mod._last_rotation_save = 0.0
+            cookie_mod._current_token = "VALID_OLD_MAM_ID"
 
             resp = _make_response([(
                 "set-cookie",
@@ -256,10 +259,9 @@ class TestDeletionSentinelNotRotated:
             )])
             await _handle_response_cookie(resp)
 
-            assert mam_mod._current_token == "VALID_OLD_MAM_ID"
+            assert cookie_mod._current_token == "VALID_OLD_MAM_ID"
         finally:
-            mam_mod._current_token = saved_token
-            mam_mod._last_rotation_save = saved_save
+            cookie_mod._current_token = saved_token
 
 
 # ─── Description-based bundle verification ─────────────────────

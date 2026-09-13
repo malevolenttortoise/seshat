@@ -87,6 +87,16 @@ async def _apply_credential(key: str, value: str) -> None:
 
     For MAM cookie: update the in-memory token so the next API call
     uses it. For qBit: rebuild the dispatcher. For others: rebuild.
+
+    The MAM branch below is the ONLY thing that makes a pasted cookie
+    take effect without a container restart, because the dispatcher
+    rebuild further down does NOT reach the long-lived background
+    loops — they captured a DispatcherDeps at startup and hold it for
+    the life of the process (`main.py`'s `deps_for_loops`). Those loops
+    reach the new value by resolving through `app.mam.cookie` at call
+    time via `DispatcherDeps.live_mam_token()`; seeding that slot here
+    is what feeds them. See the v3.10.1 notes in `dispatch.py` and
+    `app/discovery/sources/mam.py`.
     """
     if key == "mam_session_id":
         try:

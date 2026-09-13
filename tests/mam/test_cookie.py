@@ -16,7 +16,6 @@ import pytest
 from app.mam.cookie import (
     _do_get,
     _extract_mam_id_from_response,
-    _handle_response_cookie,
     build_headers,
     get_current_token,
     register_ip,
