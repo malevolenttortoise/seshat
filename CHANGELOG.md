@@ -7,6 +7,47 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [3.10.2] — 2026-09-13
+
+Patch. No application code changes — this release fixes the test suite
+and adds the CI job that will keep it honest.
+
+### Fixed
+
+- **Two `tests/discovery/test_trigger_lookup.py` tests had been failing
+  since v3.10.0.** `25c2855` (ADR-0021 slice 3) routed the scan router's
+  pre-flight due-count through `scan_eligible_authors`, which admits an
+  author only if they are allow-listed or own ≥1 book in-library. The
+  fixtures still seeded books the pre-ADR-0021 way — `INSERT INTO books
+  (title)`, and `books.owned` defaults to `0` — so the seeded authors
+  were outside the roster, the due-count came back `0`, and
+  `POST /api/discovery/sync/lookup` returned early with `{"status":
+  "ok", "due": 0}` without ever creating `state._lookup_task`. The
+  fixtures now seed owned books, matching the convention already used in
+  `test_roster_scan_eligibility.py`. Production behaviour was correct
+  throughout; only the fixtures were stale.
+- The same fixture now calls `roster.invalidate()` around each test. The
+  roster cache is module-global, keyed by library slug with a 60s TTL,
+  so a `cal`/`abs` roster could otherwise outlive the `tmp_path` DB it
+  was built from.
+
+### Added
+
+- **`.github/workflows/tests.yml` — pytest now runs in CI**, on pushes
+  to `main`/`development` and on PRs into either. Nothing in CI had ever
+  run the suite; the only workflow builds and publishes images. That is
+  precisely how two broken tests survived both v3.10.0 and v3.10.1. The
+  matrix covers Python 3.12 (what `python:3.12-slim` ships) and 3.13
+  (what the dev venv runs).
+- `respx==0.23.1` declared in `requirements-dev.txt`. Two test modules
+  import it, but it existed only in the local dev venv — a clean
+  checkout could not collect the suite. Found by building the CI
+  environment from the requirements files alone.
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v3.10.2
+
+---
+
 ## [3.10.1] — 2026-09-13
 
 Patch. Fixes a user-reported bug: **a MAM session cookie saved in
