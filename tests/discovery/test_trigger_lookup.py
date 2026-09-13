@@ -18,6 +18,7 @@ from fastapi import FastAPI
 async def discovery_db(tmp_path, monkeypatch):
     from app import config as app_config
     from app.discovery import database as disco_db
+    from app.discovery import roster as roster_mod
 
     monkeypatch.setattr(app_config, "DATA_DIR", tmp_path)
     monkeypatch.setattr(disco_db, "DATA_DIR", tmp_path)
@@ -26,7 +27,11 @@ async def discovery_db(tmp_path, monkeypatch):
     # pre-flight can hit them.
     await disco_db.init_db("cal")
     await disco_db.init_db("abs")
+    # The roster cache is module-global and keyed by slug, so a prior
+    # test's "cal"/"abs" roster would otherwise outlive its tmp_path db.
+    roster_mod.invalidate()
     yield tmp_path
+    roster_mod.invalidate()
     disco_db.set_active_library(None)
 
 
@@ -58,7 +63,13 @@ async def client(discovery_db, monkeypatch):
 
 
 async def _seed_due_author(slug: str, name: str = "Author"):
-    """Insert an author + one book into `slug`'s db so it counts as 'due'."""
+    """Insert an author + one OWNED book into `slug`'s db so it counts as 'due'.
+
+    The book must be `owned=1`: since ADR-0021 the due-count pre-flight runs
+    through `scan_eligible_authors`, which admits an author only if they are
+    allow-listed by name or own >=1 book in this library. An unowned book
+    would leave the author out of the roster and the scan would never start.
+    """
     from app.discovery.database import get_db
     db = await get_db(slug)
     try:
@@ -68,7 +79,8 @@ async def _seed_due_author(slug: str, name: str = "Author"):
         )
         aid = cur.lastrowid
         cur = await db.execute(
-            "INSERT INTO books (title) VALUES (?)", ("T",),
+            "INSERT INTO books (title, owned, source) VALUES (?, ?, ?)",
+            ("T", 1, "calibre"),
         )
         bid = cur.lastrowid
         await db.execute(
