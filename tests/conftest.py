@@ -43,7 +43,11 @@ def _isolated_data_dir(tmp_path_factory):
     """
     import asyncio
 
-    from app import config, database
+    from app import auth_db, auth_secret, config, database, runtime, secrets
+    from app.discovery import author_identity
+    from app.discovery import database as disco_database
+    from app.discovery import metadata_cache as disco_metadata_cache
+    from app.metadata import id_cache
 
     data_dir = tmp_path_factory.mktemp("seshat-data")
     db_path = data_dir / "seshat.db"
@@ -53,7 +57,34 @@ def _isolated_data_dir(tmp_path_factory):
     mp.setattr(config, "APP_DB_PATH", db_path)
     mp.setattr(database, "APP_DB_PATH", db_path)
 
-    asyncio.run(database.init_db())
+    # The AUTH db (which is where the `secrets` table lives) resolves its
+    # path through `runtime.get_data_dir()` at CALL time, not through
+    # `config.DATA_DIR` -- and `get_data_dir()` does not consult the
+    # DATA_DIR env var either, so neither the patches above nor
+    # `DATA_DIR=... pytest` redirect it. Each consumer did
+    # `from app.runtime import get_data_dir`, so it holds its own
+    # reference and has to be patched by name.
+    mp.setattr(runtime, "get_data_dir", lambda: data_dir)
+    mp.setattr(auth_db, "get_data_dir", lambda: data_dir)
+    mp.setattr(auth_secret, "get_data_dir", lambda: data_dir)
+
+    mp.setattr(config, "SETTINGS_PATH", data_dir / "settings.json")
+    mp.setattr(config, "AUTH_SECRET_PATH", data_dir / "auth_secret")
+
+    # Four modules do `from app.config import DATA_DIR`, binding their own
+    # copy at import time -- patching `config.DATA_DIR` alone leaves them
+    # pointed at the real directory. These are what wrote per-library
+    # `seshat_<slug>.db` files and `metadata_cache_amazon.db` into the
+    # developer's data dir on every run.
+    for _mod in (disco_database, disco_metadata_cache, author_identity, id_cache):
+        mp.setattr(_mod, "DATA_DIR", data_dir)
+
+    async def _init():
+        await database.init_db()
+        await auth_db.init_auth_db()
+        await secrets.init_secrets_table()
+
+    asyncio.run(_init())
     try:
         yield data_dir
     finally:

@@ -39,9 +39,18 @@ and adds the CI job that will keep it honest.
   and the tests passed; on a clean checkout they failed with `no such
   table: secrets` / `no such table: book_grab_links`. The first CI run
   caught all 17. A session-scoped autouse fixture in `tests/conftest.py`
-  now points `DATA_DIR`/`APP_DB_PATH` at a throwaway directory and
+  now redirects the whole data dir to a throwaway directory and
   initializes the schema once, so a test can no longer read or write
-  real user data.
+  real user data. Three separate path mechanisms had to be covered:
+  `config.DATA_DIR`/`APP_DB_PATH`; the **auth** DB (where the `secrets`
+  table lives), which resolves through `runtime.get_data_dir()` at call
+  time and ignores the `DATA_DIR` env var entirely; and four modules
+  that bind their own `DATA_DIR` copy at import
+  (`discovery.database`, `discovery.metadata_cache`,
+  `discovery.author_identity`, `metadata.id_cache`) — the ones that had
+  been writing per-library `seshat_<slug>.db` and
+  `metadata_cache_amazon.db` files into the developer's data dir on
+  every test run.
 
 ### Added
 
