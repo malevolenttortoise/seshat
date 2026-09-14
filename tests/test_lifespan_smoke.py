@@ -170,12 +170,32 @@ class TestEndToEndPipeline:
             #   → ledger.record_grab
             fake_irc.feed_line(_REAL_ANNOUNCE_PRIVMSG)
 
-            # Wait for the dispatcher to record the grab. The fake-MAM
-            # round trip is in-process so it should be fast — give
-            # it ~50 polls of 20ms = 1 second.
-            for _ in range(50):
-                if qbit.add_calls:
-                    break
+            # Wait for the dispatcher to finish recording the grab.
+            #
+            # `qbit.add_calls` is NOT a safe signal to break on, even
+            # though it is the most obvious one. `add_torrent` is
+            # awaited at `dispatch.py:1115`, but the grab row only
+            # reaches STATE_SUBMITTED at :1181 and the ledger row lands
+            # at :1186 — and `set_state` / `record_grab` each commit
+            # separately. Breaking as soon as `add_calls` is populated
+            # therefore races every write asserted on below.
+            #
+            # That race is invisible on a fast machine (the writes land
+            # inside the next 20ms tick) and real on a loaded one: this
+            # test passed locally, on the PR runner and on py3.12, then
+            # failed the py3.13 leg of the `main` push with
+            # `assert 'fetched' == 'submitted'` on a runner that took
+            # 16m24s instead of the usual ~7m.
+            #
+            # The ledger insert is the LAST commit in the dispatch path,
+            # so observing it implies the state write landed too.
+            for _ in range(250):  # 250 x 20ms = 5s ceiling
+                _db = await get_db()
+                try:
+                    if await ledger_mod.count_active(_db) >= 1:
+                        break
+                finally:
+                    await _db.close()
                 await asyncio.sleep(0.02)
 
             # ── Assertions: the WHOLE pipeline ran ──────────

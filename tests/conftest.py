@@ -42,6 +42,7 @@ def _isolated_data_dir(tmp_path_factory):
     for everything that doesn't ask.
     """
     import asyncio
+    import json
 
     from app import auth_db, auth_secret, config, database, runtime, secrets
     from app.discovery import author_identity
@@ -79,6 +80,28 @@ def _isolated_data_dir(tmp_path_factory):
     for _mod in (disco_database, disco_metadata_cache, author_identity, id_cache):
         mp.setattr(_mod, "DATA_DIR", data_dir)
 
+    # Disable the qBit add stagger suite-wide. `_stagger_qbit_add()`
+    # sleeps `qbit_add_stagger_s` (DEFAULT_SETTINGS: 2.0) +/- jitter
+    # before EVERY qBit add. That is deliberate tracker-announce spacing
+    # in production and pure dead time here -- it cost ~2.2s in every
+    # test that reaches the submit path (36.8s in
+    # tests/orchestrator/test_dispatch.py alone).
+    #
+    # tests/orchestrator/test_dispatch_stagger.py is the one place that
+    # actually exercises the stagger, and it patches `load_settings`
+    # itself, so it is unaffected by this default.
+    (data_dir / "settings.json").write_text(
+        json.dumps({
+            "qbit_add_stagger_s": 0,
+            "qbit_add_stagger_jitter_s": 0,
+        })
+    )
+    # `load_settings` is mtime-cached and may already hold an entry read
+    # from the REAL settings path during collection; drop it so the
+    # first call inside the suite re-reads from the isolated dir.
+    config._settings_cache["data"] = None
+    config._settings_cache["mtime"] = None
+
     async def _init():
         await database.init_db()
         await auth_db.init_auth_db()
@@ -88,6 +111,8 @@ def _isolated_data_dir(tmp_path_factory):
     try:
         yield data_dir
     finally:
+        config._settings_cache["data"] = None
+        config._settings_cache["mtime"] = None
         mp.undo()
 
 

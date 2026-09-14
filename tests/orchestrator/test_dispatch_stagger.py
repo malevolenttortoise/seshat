@@ -138,9 +138,30 @@ async def test_negative_jitter_does_not_underflow(monkeypatch):
     comparison.
     """
     _patch_settings(monkeypatch, stagger_s=0.1, jitter_s=10.0)
-    # 100 calls in a tight loop — with that much jitter at least one
+
+    # Do NOT sleep for real here. With jitter_s=10 the clamped gap
+    # averages ~2.5s, so 50 live iterations burned ~147s — by a wide
+    # margin the slowest test in the suite — to verify a `max(0.0, …)`.
+    #
+    # Stubbing the sleep also makes the assertion stricter rather than
+    # weaker: the docstring's actual claim is "we don't pass a negative
+    # number to asyncio.sleep", and this now checks the value the helper
+    # PASSES, not just the value it returns.
+    slept_args: list[float] = []
+
+    async def _fake_sleep(seconds):
+        slept_args.append(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", _fake_sleep)
+
+    # 50 calls in a tight loop — with that much jitter at least one
     # iteration is guaranteed to land on a negative pre-clamp value.
     # The function should not raise.
     for _ in range(50):
         slept = await dispatch_mod._stagger_qbit_add()
         assert slept >= 0.0
+
+    assert slept_args, "expected at least one real sleep at this jitter"
+    assert all(x >= 0.0 for x in slept_args), (
+        f"negative duration reached asyncio.sleep: {slept_args}"
+    )
