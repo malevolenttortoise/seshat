@@ -7,10 +7,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
-## [3.10.2] — 2026-09-13
+## [Unreleased]
 
-Patch. No application code changes — this release fixes the test suite
-and adds the CI job that will keep it honest.
+Test-suite and CI work only — no application code changes, and no
+version tag. These changes are on `main` but were deliberately not
+released: burning a version number on a build that is functionally
+identical to v3.10.1 buys nothing. The next release folds them in.
 
 ### Fixed
 
@@ -64,8 +66,6 @@ and adds the CI job that will keep it honest.
   import it, but it existed only in the local dev venv — a clean
   checkout could not collect the suite. Found by building the CI
   environment from the requirements files alone.
-
-Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v3.10.2
 
 ---
 
