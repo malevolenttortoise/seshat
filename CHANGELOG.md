@@ -32,6 +32,17 @@ identical to v3.10.1 buys nothing. The next release folds them in.
   roster cache is module-global, keyed by library slug with a 60s TTL,
   so a `cal`/`abs` roster could otherwise outlive the `tmp_path` DB it
   was built from.
+- **A latent race in `tests/test_lifespan_smoke.py`.**
+  `test_real_announce_flows_through_to_qbit_and_ledger` waited for
+  `qbit.add_calls` to be populated, then asserted on writes that happen
+  *after* it: `add_torrent` is awaited at `dispatch.py:1115`, but the
+  grab row only reaches `STATE_SUBMITTED` at :1181 and the ledger row
+  lands at :1186, each with its own commit. Invisible on a fast machine,
+  real on a loaded one — it passed locally, on the PR runner and on
+  py3.12, then failed the py3.13 leg of the `main` push with
+  `assert 'fetched' == 'submitted'` on a runner that took 16m24s instead
+  of the usual ~7m. The wait now polls the ledger insert, which is the
+  last commit in the dispatch path.
 - **17 tests were silently reading the developer's real app database.**
   `app.config.DATA_DIR` resolves to a per-user OS location and
   `app.database.get_db()` reads the `APP_DB_PATH` bound from it at
