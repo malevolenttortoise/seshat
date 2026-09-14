@@ -1,0 +1,78 @@
+name: Tests
+
+# Until now nothing in CI ran pytest — the only workflow here builds and
+# publishes images. That is why two tests in
+# `tests/discovery/test_trigger_lookup.py` could break in 25c2855
+# (ADR-0021 slice 3) and survive both the v3.10.0 and v3.10.1 releases
+# unnoticed. This workflow is the gate that would have caught them.
+on:
+  push:
+    branches: [main, development]
+  pull_request:
+    branches: [main, development]
+  workflow_dispatch:
+
+# Tags are deliberately NOT a trigger: a `vX.Y.Z` tag points at a commit
+# already tested by its push to `main`, so running the suite again buys
+# nothing and just burns a slot during the three-push release sequence.
+#
+# Unlike docker-publish.yml, `cancel-in-progress` is TRUE here. That
+# workflow must never cancel (a cancelled run means an image that was
+# never published — see its concurrency comment); a cancelled test run
+# just means a superseded commit stopped being checked, and the run for
+# the newer commit supersedes it. Keying on `github.ref` still keeps
+# main / development / each PR in independent groups.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    name: pytest (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    # The suite is ~6.5 min locally; two tests dominate it
+    # (`test_negative_jitter_does_not_underflow` ~147s and
+    # `test_resolver_never_hits_goodreads_search` ~92s, both real
+    # backoff/jitter sleeps rather than I/O). 30 min leaves generous
+    # headroom on a slower hosted runner without hanging a stuck run
+    # for the full 6-hour default.
+    timeout-minutes: 30
+
+    strategy:
+      # Don't let one version's failure cancel the other — knowing
+      # whether a break is version-specific is the whole point of the
+      # matrix.
+      fail-fast: false
+      matrix:
+        # 3.12 is what SHIPS (`python:3.12-slim` in both Dockerfiles),
+        # so it is the version that actually gates a release. 3.13 is
+        # what the dev venv runs (~/.cache/seshat-venv), so testing it
+        # too stops "passes locally, red in CI" (and the reverse) from
+        # being a mystery.
+        python-version: ['3.12', '3.13']
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        # requirements-dev.txt already `-r requirements.txt`, but naming
+        # both is explicit and survives that line being dropped.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Run test suite
+        # No `-q`: on a failure the CI log is the only artifact, so the
+        # short traceback and the `-ra` summary are what make a red run
+        # diagnosable without re-running locally.
+        run: pytest tests/ --tb=short -ra --durations=10

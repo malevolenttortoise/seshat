@@ -7,7 +7,480 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
-## [2.25.0] — UNRELEASED (development branch)
+## [Unreleased]
+
+Test-suite and CI work only — no application code changes, and no
+version tag. These changes are on `main` but were deliberately not
+released: burning a version number on a build that is functionally
+identical to v3.10.1 buys nothing. The next release folds them in.
+
+### Fixed
+
+- **Two `tests/discovery/test_trigger_lookup.py` tests had been failing
+  since v3.10.0.** `25c2855` (ADR-0021 slice 3) routed the scan router's
+  pre-flight due-count through `scan_eligible_authors`, which admits an
+  author only if they are allow-listed or own ≥1 book in-library. The
+  fixtures still seeded books the pre-ADR-0021 way — `INSERT INTO books
+  (title)`, and `books.owned` defaults to `0` — so the seeded authors
+  were outside the roster, the due-count came back `0`, and
+  `POST /api/discovery/sync/lookup` returned early with `{"status":
+  "ok", "due": 0}` without ever creating `state._lookup_task`. The
+  fixtures now seed owned books, matching the convention already used in
+  `test_roster_scan_eligibility.py`. Production behaviour was correct
+  throughout; only the fixtures were stale.
+- The same fixture now calls `roster.invalidate()` around each test. The
+  roster cache is module-global, keyed by library slug with a 60s TTL,
+  so a `cal`/`abs` roster could otherwise outlive the `tmp_path` DB it
+  was built from.
+- **17 tests were silently reading the developer's real app database.**
+  `app.config.DATA_DIR` resolves to a per-user OS location and
+  `app.database.get_db()` reads the `APP_DB_PATH` bound from it at
+  import, so any test not taking the `temp_db` fixture fell through to
+  that real file. On a machine that had ever run Seshat (or this suite,
+  since a stray `init_db()` creates the schema there) the tables existed
+  and the tests passed; on a clean checkout they failed with `no such
+  table: secrets` / `no such table: book_grab_links`. The first CI run
+  caught all 17. A session-scoped autouse fixture in `tests/conftest.py`
+  now redirects the whole data dir to a throwaway directory and
+  initializes the schema once, so a test can no longer read or write
+  real user data. Three separate path mechanisms had to be covered:
+  `config.DATA_DIR`/`APP_DB_PATH`; the **auth** DB (where the `secrets`
+  table lives), which resolves through `runtime.get_data_dir()` at call
+  time and ignores the `DATA_DIR` env var entirely; and four modules
+  that bind their own `DATA_DIR` copy at import
+  (`discovery.database`, `discovery.metadata_cache`,
+  `discovery.author_identity`, `metadata.id_cache`) — the ones that had
+  been writing per-library `seshat_<slug>.db` and
+  `metadata_cache_amazon.db` files into the developer's data dir on
+  every test run.
+
+### Added
+
+- **`.github/workflows/tests.yml` — pytest now runs in CI**, on pushes
+  to `main`/`development` and on PRs into either. Nothing in CI had ever
+  run the suite; the only workflow builds and publishes images. That is
+  precisely how two broken tests survived both v3.10.0 and v3.10.1. The
+  matrix covers Python 3.12 (what `python:3.12-slim` ships) and 3.13
+  (what the dev venv runs).
+- `respx==0.23.1` declared in `requirements-dev.txt`. Two test modules
+  import it, but it existed only in the local dev venv — a clean
+  checkout could not collect the suite. Found by building the CI
+  environment from the requirements files alone.
+
+---
+
+## [3.10.1] — 2026-09-13
+
+Patch. Fixes a user-reported bug: **a MAM session cookie saved in
+Settings did not take effect until the container was restarted.**
+
+The report contained its own diagnosis — MAM Status showed the cookie
+healthy and buying upload credit worked, while Discovery searches
+returned `HTTP 403 — session rejected` and grabs failed with
+`cookie_expired (HTTP 401)`. One MAM surface healthy while two others
+reject the same credential is the signature of two caches of one
+credential.
+
+### Fixed — three independent staleness bugs
+
+- **Discovery kept a parallel token global with the precedence
+  inverted.** `app/discovery/sources/mam.py` resolved
+  `_current_token or token`, so a stale module global beat the freshly
+  resolved token the caller passed in. Nothing in production re-seeded
+  it, and its rotation callback was never wired, so rotations observed
+  on search requests were never persisted. The module now owns no token
+  state and routes through `app.mam.cookie`.
+- **Background loops hold a startup `DispatcherDeps` forever.** The
+  budget watcher, cookie-retry job and IRC listener close over one deps
+  object captured at startup; a credential save rebuilds
+  `state.dispatcher` but never reaches them. Every MAM call site now
+  resolves through `DispatcherDeps.live_mam_token()`.
+- **Discovery's validation was a character-for-character copy** of
+  `app.mam.cookie`'s, which is what made "Status green, search 403"
+  representable at all. Now a thin delegation.
+
+### Changed
+
+- `resolve_token` / `handle_response_cookie` promoted to public API.
+- Dropped a hard 60s rotation-persist gate that could silently drop a
+  rotation arriving inside the window.
+- New `CLAUDE.md` convention: live credentials are resolved per-call,
+  with exactly one authority per credential.
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v3.10.1
+
+---
+
+## [3.10.0] — 2026-08-27
+
+Discovery-quality release. Every change traces back to one question:
+*why is the missing-books list full of books by people I don't read?*
+Four separate mechanisms, three of them invisible. Two additive
+migrations. Hygiene jobs 13 → 16.
+
+### Added — the roster gate (ADR-0021)
+
+Source scans had taken one library from 896 → 7,214 authors in ~36
+hours; 6,305 of the 6,318 new authors were not allow-listed.
+`_link_discovered_contributors` minted an author row for every
+author-role contributor a source reported, and a minted row instantly
+qualified for the scan-due query, which minted more. The **roster** is
+now one predicate at two sites — allow-listed **or** owning ≥1 book
+in-library — gating both minting and scan eligibility. Job 13 is the
+retro-clean for already-polluted installs.
+
+### Fixed — wrong-author books
+
+`_try_source` skipped validation whenever an author already had known
+books, so the first source to validate disarmed the guard for every
+source after it. Validation now runs for every source, every scan,
+against owned titles only; a rejected source's previously-stored
+unowned rows are retracted.
+
+### Fixed — foreign-language books
+
+`_RX_FOREIGN_UNICODE` was missing Greek and Hebrew, and `books.language`
+was NULL on all unowned rows. OpenLibrary's `works.json` carries no
+language at all — it now resolves in bulk via `search.json`. Jobs 15/16
+backfill and sweep existing data.
+
+### Added — Hygiene Job 14 (person un-merge) and operator blacklist
+
+Job 14 is Job 9's inverse, for persons fused by a wrong Goodreads ID.
+The operator blacklist handles genuinely name-collapsed source records,
+which no automated signal can separate — the UI shows evidence, not a
+score.
+
+### Added — prev/next author walking, "Needs review" worklist
+
+### Security — 35 Dependabot alerts cleared (5 packages)
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v3.10.0
+
+---
+
+## [3.9.0] — 2026-08-14
+
+### Fixed — MAM's new multi-category announce format
+
+MAM changed the IRC announce grammar on 2026-08-11, which broke
+parsing and stopped autograb. Reworked for the multi-category form.
+
+### Fixed — grabs whose torrent vanished from qBit
+
+Grabs left stranded when their torrent disappeared from the client are
+now retired rather than retried forever.
+
+### Added — ADR-0020: unified Calibre ingest + hardlink delivery
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v3.9.0
+
+---
+
+## [3.8.3] — 2026-06-27
+
+### Fixed
+
+- Navbar collapses to compact chrome on narrow desktop windows.
+
+### Changed
+
+- Docs clarify the Seshat-vs-Readarr framing; dashboard screenshot
+  refreshed.
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v3.8.3
+
+---
+
+## [3.8.2] — 2026-06-25
+
+### Security
+
+- `@babel/core` → 7.29.7 (Dependabot #18).
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v3.8.2
+
+---
+
+## [3.8.1] — 2026-06-25
+
+### Security
+
+- `cryptography` → 49.0.0, `vite` → 6.4.3 (Dependabot).
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v3.8.1
+
+---
+
+## [3.8.0] — 2026-06-06
+
+### Added — Amazon worker circuit breaker
+
+The metadata-cache Amazon worker gains a circuit breaker plus a
+heartbeat-fresh loop sleep, so a sustained upstream block backs off
+instead of hammering.
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v3.8.0
+
+---
+
+## [3.7.0] — 2026-06-04
+
+### Added — remove/replace a contributor on a book's byline
+
+Backend + frontend surface for correcting a byline directly, rather
+than waiting for a re-scan to converge.
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v3.7.0
+
+---
+
+## [3.6.2] — 2026-06-02
+
+### Fixed
+
+- Goodreads cache Phase 1 name-matching.
+- Sync-end queue catch-up.
+- Hygiene Jobs 9–12 gain log visibility.
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v3.6.2
+
+---
+
+## [3.6.1] — 2026-06-02
+
+### Fixed
+
+- Goodreads hard-404 responses now write a stub rather than retrying.
+- `book_authors` orphan cleanup in hygiene.
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v3.6.1
+
+---
+
+## [3.6.0] — 2026-05-31
+
+### Added — Goodreads cache parity
+
+Startup backfill plus frontend visibility for the GR cache, closing
+the gaps left by the v3.4.0 foundation. Dashboard gains a GR cache
+rail; the Amazon recent-finds list is retired.
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v3.6.0
+
+---
+
+## [3.4.1] — 2026-05-31
+
+### Changed — operator guide
+
+Seven operator chapters landed under `docs/guide/`, with a guide index
+and a README/DEPLOY refresh.
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v3.4.1
+
+---
+
+## [3.4.0] — 2026-05-30
+
+### Added — Goodreads list-page cache (ADR-0018)
+
+Six slices: cache foundation, retirement of the list-page
+`(translator)`/`(contributor)` substring filter, a list-page worker, a
+hybrid cache reader wired into `lookup.py`, scheduler telemetry with a
+budget-exhaust counter, and a Metadata Sources panel section.
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v3.4.0
+
+---
+
+## [3.3.0] — 2026-05-30
+
+### Added — authors push-back (ADR-0017)
+
+Owned-book authors raise a proposed change at scan-convergence, with
+inline re-sync and a list-diff variant, plus a field-type chip filter
+row in the Metadata Manager.
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v3.3.0
+
+---
+
+## [3.2.0] — 2026-05-30
+
+### Added — author images (ADR-0016)
+
+`image_url_source` + a `mirror_image_url` helper, image writes through
+`_merge_result`, co-author fill-if-empty, a repaired Goodreads
+author-photo selector, Hygiene Job 11 (image URL health check, retiring
+Job 8), and avatars on the Persons Manager page.
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v3.2.0
+
+---
+
+## [3.1.0] — 2026-05-30
+
+### Added — ID-first identity matching (ADR-0015)
+
+Five slices: co-author source IDs persisted at link time, ID-first
+matching in `resolve_or_create_author` and `get_or_create_person`, a
+source-ID conflict surface on the Persons & IDs panel, and a
+consolidate-persons-by-source-id hygiene job.
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v3.1.0
+
+---
+
+## [3.0.1] — 2026-05-28
+
+### Fixed — heal unowned books' contributors (ADR-0014)
+
+Unowned discovered books now have their contributors healed at
+scan-convergence, closing the upgrade gap left by v3.0.0.
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v3.0.1
+
+---
+
+## [3.0.0] — 2026-05-28
+
+**Major — multi-author rework.** Ten phases. `book_authors` becomes the
+authoritative author↔book relation on reads, and the legacy
+`books.author_id` column is dropped.
+
+### Added — `book_authors` join table (Phases 1–4)
+
+Schema, backfill from snapshot `authors_json`, dual-write from
+owned-library writers, and the read-path swap (ADR-0008).
+
+### Added — contributor plumbing across sources (Phase 3.x)
+
+Goodreads, Hardcover, Amazon (`byLine` with roles + ids), Audnexus and
+Google Books all emit contributors. OpenLibrary and MAM scoped out —
+MAM is a matching/enrichment source, never discovery.
+
+### Added — merge, series and UI (Phases 5–8)
+
+Merge unions contributors and prunes matches by overlap; series gains
+an `author_mode` taxonomy; multi-author UI brings bylines,
+owner-vs-incidental distinction and a 3-way series label (ADR-0011);
+Series browse + detail pages and a Series Manager rename.
+
+### Changed — position 0 is the sole primary author (Phase 9)
+
+`books.author_id` removed; dense renumbering rules in ADR-0012.
+
+### Added — MAM `author_info` autotrain (Phase 10)
+
+Contributor-aware claim-for-owned (ADR-0013).
+
+### Note for test authors
+
+Tests that exercise author/series reads or the merge/recompute paths
+must seed `book_authors`; an `author_id`-only `books` row silently falls
+out of those queries.
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v3.0.0
+
+---
+
+## [2.31.0] — 2026-05-25
+
+### Added — Amazon Tier 3 Author Store storefront fallback
+
+A storefront fallback for enrichments the earlier tiers miss.
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v2.31.0
+
+---
+
+## [2.30.1] — 2026-05-25
+
+### Fixed
+
+- Volume-conflict guard on the exact-normalized match path.
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v2.30.1
+
+---
+
+## [2.30.0] — 2026-05-24
+
+### Added
+
+- Per-source-ID filter chips on the Persons & IDs page.
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v2.30.0
+
+---
+
+## [2.29.0] — 2026-05-24
+
+### Added — Amazon cache-first enrichment
+
+Cache-first lookup with enqueue-on-miss, a cheap-source short-circuit
+gate via `is_cheap_for`, retry-next-candidate when a search returns an
+audiobook, and enricher routing with a target `library_slug` +
+`amazon_author_id`.
+
+### Fixed
+
+- Cache-backed Amazon hits bypassed the `accept_confidence` merge gate.
+- Cache-first hits now populate authors so the enricher rescore accepts
+  them.
+- The re-enrich endpoint plumbs `library_slug` + `amazon_author_id`.
+- A cache-first volume-agreement tiebreaker disambiguates series
+  siblings.
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v2.29.0
+
+---
+
+## [2.28.0] — 2026-05-24
+
+### Added — notification taxonomy (Bundle B.2)
+
+A 21-event registry with dotted event names, per-event routing and
+quiet hours — the second half of the Bundle B work begun in v2.24.0.
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v2.28.0
+
+---
+
+## [2.27.0] — 2026-05-24
+
+### Added — active library replacement (Bundle A, Phase 5b)
+
+Six phases: schema + settings + auto-enact gate, sink-inverse helpers
+(`CalibreSink`/`CWASink`/`ABSSink` `.remove`), `enact_opportunity` +
+`restore_enactment` orchestration, an HTTP surface for enact + restore,
+UI for enact/restore/auto-enact/retention, and a retention sweeper.
+
+### Fixed
+
+- `CWAClient.delete` verify GET must not follow redirects.
+- MAM category storage used the numeric id instead of `catname`;
+  polluted rows backfilled.
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v2.27.0
+
+---
+
+## [2.26.0] — 2026-05-24
+
+### Added — quality scoring + replacement opportunities (Bundle A)
+
+Multi-axis quality scoring with per-library overrides, then
+replacement-opportunity detection with a safety layer, then the UI and
+API surface. Consumes the `torrent_quality_metadata` rows that v2.25.0
+started collecting.
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v2.26.0
+
+---
+
+## [2.25.0] — 2026-05-23
 
 Quality-metadata extraction layer — the data foundation for the
 deferred Bundle A (quality scoring + active library replacement).
@@ -131,6 +604,8 @@ v2.18.2 probe missed.
 
 ---
 
+---
+
 ## [2.24.0] — 2026-05-23
 
 Bundle B partial — credential split only. The full notification-taxonomy
@@ -187,6 +662,8 @@ username-without-password-falls-through, endpoint-strips-inline,
 resolve-auth-helper-isolation. 24 existing tests still pass.
 
 [backlog]: https://github.com/malevolenttortoise/seshat/blob/main/CHANGELOG.md
+
+---
 
 ---
 
@@ -249,6 +726,8 @@ or "✗ class: message" summary.
 
 ---
 
+---
+
 ## [2.22.4] — 2026-05-23
 
 ### Fixed — Persons & IDs page failed to load (route ordering)
@@ -268,6 +747,8 @@ returned 422:
 Moved the new endpoint above the parameterized one, alongside
 `GET /persons/search` and `GET /persons/triage`. Added a `Route ORDER`
 note in the docstring so future re-ordering doesn't regress this.
+
+---
 
 ---
 
@@ -292,6 +773,8 @@ Two display layers were still pre-v2.22.0:
   original six. v2.22.0 added jobs 7-9 (Orphan author retrolink +
   Cross-library person backfill + Prune orphan author_links).
   Dialog now lists all nine.
+
+---
 
 ---
 
@@ -327,6 +810,8 @@ continue to validate the contradiction and agreement paths.
 
 ---
 
+---
+
 ## [2.22.1] — 2026-05-23
 
 ### Fixed — `link_confidence` flags now recomputed at end of Hygiene Job 8
@@ -355,6 +840,8 @@ After deploying v2.22.0 + running Hygiene, operators clicking
 "Recompute consolidation" on Author Triage observed the count
 collapse from ~100+ flags down to single digits. v2.22.1 makes
 that step automatic.
+
+---
 
 ---
 
@@ -457,6 +944,8 @@ queued for v3.x.
 
 ---
 
+---
+
 ## [2.21.2] — 2026-05-23
 
 ### Fixed — `dry_run` and `mam_irc_enabled` are now real kill switches
@@ -510,6 +999,8 @@ If you've been bitten by this and have grabs in flight you didn't
 intend, the new gates take effect on the next announce after this
 upgrade. The legacy "restart Seshat to actually apply the toggle"
 workaround still works as a belt-and-suspenders.
+
+---
 
 ---
 
@@ -570,6 +1061,8 @@ WHERE state='failed_unknown'
 The completion watcher will then pick them up on its next sweep
 (qBit already has the torrent + the hash matches Seshat's
 `qbit_hash` column).
+
+---
 
 ---
 
@@ -704,6 +1197,8 @@ though qBit was granting access on every request.
 
 ---
 
+---
+
 ## [2.20.3] — 2026-05-22
 
 Three Phase-A hotfixes bundled ahead of the v2.21.0 Amazon cache
@@ -744,6 +1239,8 @@ operator-raised value.
 
 ---
 
+---
+
 ## [2.20.2] — 2026-05-21
 
 ### Fixed — Amazon CAPTCHA-shim cooldown detection
@@ -761,6 +1258,8 @@ didn't engage, leaving the door open for cascade.
 
 ---
 
+---
+
 ## [2.20.1] — 2026-05-21
 
 ### Fixed — `mirror_source_id` self-deadlock against the caller
@@ -772,6 +1271,8 @@ logged a cascade of DEBUG-level "database is locked" errors (one
 per resolved source ID). Caller is expected to have pre-written
 its own row; the mirror only propagates to OTHER libraries. The
 PATCH endpoint updated to pre-write the entry row explicitly.
+
+---
 
 ---
 
@@ -805,6 +1306,8 @@ mirror it across.
 Per-author header now shows pill badges for each resolved external
 ID (`amz`, `gr`, `hc`, `cwa`) with a tooltip showing the value.
 Click → open the canonical source URL.
+
+---
 
 ---
 
@@ -891,6 +1394,97 @@ assertions inverted to reflect this.
 
 ---
 
+---
+
+## [2.18.2] — 2026-05-20
+
+Closes the same-day v2.17.7 → v2.18.2 arc.
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v2.18.2
+
+---
+
+## [2.18.1] — 2026-05-20
+
+### Security — bounded `text_clean` regex quantifiers
+
+Closes CodeQL `py/polynomial-redos` #45/#46/#47 against
+`app/metadata/text_clean.py`. Three regexes had unbounded quantifiers
+allowing quadratic backtracking on adversarial input from scraped
+sources: `_BBCODE_TAG` (`[^\]]*` → `[^\]]{0,200}`), `_HTML_BR`
+(redundant adjacent `\s*`), and `_HTML_TAG` (`[^>]+` → `[^>]{1,1000}`).
+Also added a defensive 50K-char input cap.
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v2.18.1
+
+---
+
+## [2.18.0] — 2026-05-20
+
+### Added — claim MAM torrent for an owned book
+
+Closes the duplicate-download path for books already owned in
+Calibre/ABS whose owned row carries no confirmed MAM URL, because the
+book had not been uploaded to MAM when MAM-scan last ran. When the
+upload finally appeared, the autograbber downloaded a duplicate and
+left the owned row stranded at `mam_status=not_found`.
+
+Three coordinated paths — announce-time
+(`orchestrator/owned_announce_claim.py`, running before format-dedup),
+review, and sync. Matching uses canonical `match_key` +
+`normalize_author_name`, with a format gate via library `content_type`.
+A single unambiguous match writes the MAM linkage and skips the grab.
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v2.18.0
+
+---
+
+## [2.17.7] — 2026-05-20
+
+### Fixed — author `goodreads_id` lookup matches on `normalized_name`
+
+`author_lookup.get_goodreads_id_for_author` used exact `WHERE name = ?`.
+MAM announces routinely drop punctuation (`St Arkham`) where Calibre
+preserves it (`St. Arkham`), so the lookup missed and the enricher
+proceeded with an empty `author_goodreads_id`, collapsing the Goodreads
+T4/T5 resolver tiers to `no_result` on obscure books that also lack
+ISBN/ASIN seeds.
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v2.17.7
+
+---
+
+## [2.17.6] — 2026-05-20
+
+Patch in the v2.17.x hotfix run.
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v2.17.6
+
+---
+
+## [2.17.5] — 2026-05-20
+
+Patch in the v2.17.x hotfix run.
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v2.17.5
+
+---
+
+## [2.17.4] — 2026-05-19
+
+Patch in the v2.17.x hotfix run. No release notes were published for
+this tag.
+
+---
+
+## [2.17.3] — 2026-05-19
+
+Patch in the v2.17.x hotfix run.
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v2.17.3
+
+---
+
 ## [2.17.2] — 2026-05-18
 
 UAT-caught: Authors list now sorts by last name (matching the
@@ -916,6 +1510,8 @@ Both layers agree on placement now.
 One new test (`test_authors_list_sorts_by_last_name`) feeds a
 mixed-convention set and asserts the order matches last-name
 collation.
+
+---
 
 ---
 
@@ -945,6 +1541,8 @@ Two new tests
 (`test_authors_list_counts_are_global_on_every_tab` +
 `test_authors_list_audiobook_only_excluded_from_ebook_tab`) pin
 the new shape.
+
+---
 
 ---
 
@@ -1046,6 +1644,8 @@ actually works now.
 
 ---
 
+---
+
 ## [2.16.3] — 2026-05-18
 
 UAT follow-up: bound the Hygiene Job 3 Phase-2 sweep.
@@ -1071,6 +1671,8 @@ library wall-time even on first-run.
 One new test (`TestJob3LimitCap.test_passes_non_none_limit`)
 pins the kwarg so future refactors don't silently re-introduce
 the unbounded path.
+
+---
 
 ---
 
@@ -1113,6 +1715,8 @@ case fix; a follow-up (v2.17.x candidate) will add a per-library
 
 ---
 
+---
+
 ## [2.16.1] — 2026-05-17
 
 UAT-caught hotfix to v2.16.0's Data Hygiene Job 1.
@@ -1149,6 +1753,8 @@ so re-runs are observable. Three new tests pin the rule
 log-line check should now include `kept_by_cross_library` and the
 spot-check should confirm `V. E. Schwab` (or any known cross-library
 author) still has rows in BOTH per-library DBs after the run.
+
+---
 
 ---
 
@@ -1248,6 +1854,8 @@ known.
 
 ---
 
+---
+
 ## [2.15.1] — 2026-05-16
 
 Follow-up to v2.15.0 #B: two pieces of polish surfaced during UAT.
@@ -1321,6 +1929,8 @@ activation — acceptable cost for the wider search reach.
   prop lets call sites add them per field, but no fields have been
   retro-fitted; this is a future polish pass once we know which
   keys users actually search by.
+
+---
 
 ---
 
@@ -1422,6 +2032,8 @@ search scoped to the current section. ⌘K is the bridge.
 
 ---
 
+---
+
 ## [2.14.2] — 2026-05-16
 
 Hotfix for v2.14.1 Database Manager rework. UAT 2026-05-16 surfaced
@@ -1464,6 +2076,8 @@ Both traced to the same family of bugs:
 Both fixes are frontend-only (DatabasePage.tsx). No backend or
 schema changes; v2.14.1's sort + numeric-search behavior is
 unchanged.
+
+---
 
 ---
 
@@ -1544,6 +2158,8 @@ Frontend (`frontend/src/pages/DatabasePage.tsx`):
 Mobile DatabasePage is unchanged. It uses cards (not a table) so
 it has no horizontal-overflow or sort-by-column issue. Numeric
 search comes through for free since both pages share the same API.
+
+---
 
 ---
 
@@ -1630,6 +2246,8 @@ completes. Backlog items #A, #C, #D from the v2.14.x candidate list.
   discovery source writes to them, so no badge needed. FantasticFiction
   was dropped from the schema in an earlier migration; Fictiondb
   remains an empty column reserved for a future source.
+
+---
 
 ---
 
@@ -1750,6 +2368,8 @@ Suite: targeted slices passing (47 Goodreads + 33 enricher + 16 pipeline
 
 ---
 
+---
+
 ## [2.13.1] — 2026-05-14
 
 Priority promotion: Goodreads restored to #2 (ebook) / #3 (audiobook)
@@ -1781,6 +2401,8 @@ back to the desired custom order if they change their mind).
   new ordering (Goodreads at slot 2).
 
 Suite: 2604 passed / 7 skipped (unchanged from v2.13.0).
+
+---
 
 ---
 
@@ -1966,6 +2588,95 @@ Final suite: **2604 passed / 7 skipped**. New coverage:
 
 ---
 
+---
+
+## [2.12.2] — 2026-05-14
+
+Closes the v2.12.x scope-unification arc.
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v2.12.2
+
+---
+
+## [2.12.1] — 2026-05-14
+
+Patch in the v2.12.x arc. No release notes were published for this
+tag.
+
+---
+
+## [2.12.0] — 2026-05-14
+
+### Added — scope unification + audiobook UX
+
+Unifies the scope model across the discovery surfaces and reworks the
+audiobook UX.
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v2.12.0
+
+---
+
+## [2.11.2] — 2026-05-14
+
+### Fixed
+
+- `_spawn_lookup_task` import pointed at the wrong module.
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v2.11.2
+
+---
+
+## [2.11.1] — 2026-05-14
+
+### Added
+
+- Sort-options expansion, direction toggle and tile author.
+- Amazon audiobook discovery via the Author-Store `/juvec` filter.
+- `mediaMatrix` cross-refs persisted to `books.amazon_format_asins`.
+- Reset-to-defaults button on Metadata Sources.
+- Kobo parallel-scan concurrency exposed in settings.
+
+### Fixed
+
+- Per-event ntfy toggles honoured at every call site.
+- Scan-complete toast fired on API ack rather than completion.
+- Source badges fall back to ID-column URL derivation.
+- Metadata Sources PUT reloads discovery source singletons.
+- Rate field label corrected to seconds.
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v2.11.1
+
+---
+
+## [2.11.0] — 2026-05-13
+
+### Added — Amazon Author-Store discovery
+
+Six-part build: schema + settings groundwork, widget parser,
+two-tier author-store ID resolver, `JuvecClient` for pagination, an
+`AmazonAuthorStoreSource` rewrite as a workflow orchestrator, and
+Settings UI format/language dropdowns.
+
+### Added — Akamai bypass via `curl_cffi`
+
+Chrome 120 TLS impersonation. Bulk discovery defaults to disabled, with
+a 30s rate and proportional jitter.
+
+### Added — universal URL-paste import
+
+Amazon / OpenLibrary / Google Books / Kobo / IBDB.
+
+### Fixed
+
+- OpenLibrary resolver coverage, language extraction, and stripping of
+  edition decorations from titles.
+- Expanded foreign-keyword list.
+- Kobo parallel detail fetches via semaphore.
+
+Full notes: https://github.com/malevolenttortoise/seshat/releases/tag/v2.11.0
+
+---
+
 ## [2.10.10] — 2026-05-13
 
 Security + reliability hygiene patch as the deck-clearing first step
@@ -2041,6 +2752,8 @@ Suite: **2283 passing, 7 skipped** (up from 2272).
 
 ---
 
+---
+
 ## [2.10.9] — 2026-05-13
 
 Hotfix for the bug v2.10.8 surfaced — Open Library was running for
@@ -2091,6 +2804,8 @@ Suite: **2272 passing, 7 skipped** (+5 from v2.10.8's 2267).
 - `app/metadata/sources/openlibrary.py` — a per-book MetaSource
   for Open Library so the enricher can use it for review-queue
   enrichment (currently OL only contributes via discovery scans).
+
+---
 
 ---
 
@@ -2177,6 +2892,8 @@ the dispatcher does after a scan completes.
 
 ---
 
+---
+
 ## [2.10.7] — 2026-05-13
 
 Phase 3 of the v2.11.0 metadata-source overhaul: wires the Google
@@ -2232,6 +2949,8 @@ returned `200 OK` with full payload. The same call without the key
 returned `429 Quota exceeded` — confirming the keyed endpoint has
 its own (much larger) quota allocation distinct from the throttled
 anonymous bucket.
+
+---
 
 ---
 
@@ -2353,6 +3072,8 @@ Suite: **2252 passing, 7 skipped** (+51 from v2.10.5's 2201).
 
 ---
 
+---
+
 ## [2.10.5] — 2026-05-13
 
 Rewrites `HardcoverSource` to use a direct two-phase author-id
@@ -2470,6 +3191,8 @@ reflect this.
 
 ---
 
+---
+
 ## [2.10.4] — 2026-05-13
 
 Phase 1 + 1.5 (tier 1+3) of the v2.11.0 metadata-source overhaul,
@@ -2582,6 +3305,8 @@ Suite: **2187 passing, 7 skipped** (up from 2174 at v2.10.3
 
 ---
 
+---
+
 ## [2.10.3] — 2026-05-12
 
 CWA delivery throttle to work around a CWA cps wedge, plus a UI
@@ -2654,6 +3379,8 @@ Suite: **2174 passing, 7 skipped** (up from 2164 at v2.10.2).
 
 ---
 
+---
+
 ## [2.10.2] — 2026-05-12
 
 `_resolve_position_collision` now routes through `merge_books`
@@ -2698,6 +3425,8 @@ loser's identity fields and writes an audit row.
 
 ---
 
+---
+
 ## [2.10.1] — 2026-05-12
 
 End-of-sync legacy-duplicate heal pass — closes a v2.10.0 gap
@@ -2729,6 +3458,8 @@ that surfaced during Mark's UAT.
   that pre-stages the duplicate state Mark hit, then runs a sync
   with `_read_calibre_db` mocked to return 0 books (the exact
   incremental-quiet scenario), and asserts the pair heals.
+
+---
 
 ---
 
@@ -2822,6 +3553,8 @@ Two complementary paths now resolve these:
 
 ---
 
+---
+
 ## [2.9.1] — 2026-05-12
 
 Reingest matcher hardening. Two interacting flaws in
@@ -2878,6 +3611,8 @@ tier (5 shared tokens / 8 in union = 0.625 ≥ 0.6).
   new integration case that plants the actual Ghost Academy +
   Warhammer fixture and asserts the Bacon file appears as a
   candidate while the `collection/2/` Iron Company files do not.
+
+---
 
 ---
 
@@ -3086,6 +3821,8 @@ Suite: **2135 passing, 7 skipped** (up from 2063 / 7 at v2.8.1).
 
 ---
 
+---
+
 ## [2.8.1] — 2026-05-11
 
 Same-day polish + bugfix release on v2.8.0. Three issues surfaced
@@ -3154,6 +3891,8 @@ during Mark's reingest UAT, all in `app/orchestrator/reingest.py`.
   manually is unchanged.
 
 Suite: **2063 passing, 7 skipped** (up from 2059 / 7 at v2.8.0).
+
+---
 
 ---
 
@@ -3290,6 +4029,8 @@ Suite: **2059 passing, 7 skipped** (up from 2039 / 7 at v2.7.1).
 
 ---
 
+---
+
 ## [2.7.1] — 2026-05-11
 
 Same-day hotfix on v2.7.0. The v2.7.0 SCHEMA block declared a new
@@ -3332,6 +4073,8 @@ the future, also add a new test to that file that pre-creates the
 prior-version shape and asserts `init_db()` lands cleanly.
 
 Suite: **2039 passing, 7 skipped** (up from 2037 / 7 at v2.7.0).
+
+---
 
 ---
 
@@ -3519,6 +4262,8 @@ Suite: **2037 passing, 7 skipped** (up from 2016 / 7 at v2.6.1).
 
 ---
 
+---
+
 ## [2.6.1] — 2026-05-11
 
 Same-day patch closing the CodeQL alert that surfaced from v2.6.0's
@@ -3540,6 +4285,8 @@ permanent fix is to drop the regex entirely.
   `test_many_spaces_then_paren_no_redos`) pin the new behavior.
 
 Suite: **2016 passing, 7 skipped** (up from 2014 / 7 at v2.6.0).
+
+---
 
 ---
 
@@ -3737,6 +4484,8 @@ Suite: **2014 passing, 7 skipped.** Up from 1996 / 7 at v2.5.0.
 
 ---
 
+---
+
 ## [2.5.0] — 2026-05-11
 
 MAM URL confidence — v2.4 follow-up arc. Across two days, ~458
@@ -3924,6 +4673,8 @@ Three tightenings to address overshoot in pre-arc author matching:
 
 ---
 
+---
+
 ## [2.4.0] — 2026-05-09
 
 Part C — cover-image perceptual-hash MAM URL verification, end-to-end.
@@ -4042,6 +4793,8 @@ previously-stored Cohort C tid 174640.
 
 ---
 
+---
+
 ## [2.3.7.1] — 2026-05-08
 
 Feature-completing fast-follow on v2.3.7. Adds the third leg of the
@@ -4071,6 +4824,8 @@ one author's detail page and bulk-N/A-ing only the selected subset.
   bulk endpoint's flip behavior + empty-payload rejection.
 
 Suite: 1593 passing.
+
+---
 
 ---
 
@@ -4212,6 +4967,8 @@ Suite: 1591 passing.
 
 ---
 
+---
+
 ## [2.3.6.1] — 2026-05-08
 
 Hotfix on top of v2.3.6.
@@ -4241,6 +4998,8 @@ behavior that this whole gate was added for.
 the flip, the no-op for already-`found` rows, the no-op for
 `not_found` rows with stored search URLs (the v2.2.6 case), and
 the Remove flow. Suite: 1574 passing.
+
+---
 
 ---
 
@@ -4287,6 +5046,8 @@ so the predicate has one canonical home.
 The widening applies to both ebooks and audiobooks (single
 unified `books` table) and to every scan path: scheduled tick,
 manual `/scan`, single-author scan, full library scan.
+
+---
 
 ---
 
@@ -4396,6 +5157,8 @@ on the live container.
 
 ---
 
+---
+
 ## [2.3.4.5] — 2026-05-07
 
 CI-only release. No code changes from v2.3.4.4 — this exists to
@@ -4426,6 +5189,8 @@ branch-push run.
 
 Suite total: **1536 passing** (unchanged from v2.3.4.4 — no code
 deltas).
+
+---
 
 ---
 
@@ -4546,6 +5311,8 @@ Suite total: **1536 passing** (was 1531 on v2.3.4.3).
 
 ---
 
+---
+
 ## [2.3.4.3] — 2026-05-07
 
 UAT polish — bulk-action toast grammar + Hidden page owned filter.
@@ -4582,6 +5349,8 @@ surfaces them directly so they can be un-hidden.
 4 new in `test_hidden_owned_filter.py` (default returns all hidden;
 owned=true narrows; owned=false narrows; combined with search).
 Suite total: **1531 passing**.
+
+---
 
 ---
 
@@ -4667,6 +5436,8 @@ total: **1527 passing** (was 1522 on v2.3.4.1).
 
 ---
 
+---
+
 ## [2.3.4.1] — 2026-05-07
 
 Fast-follow patch — scheduled syncs weren't catching new books on
@@ -4729,6 +5500,8 @@ a single re-sync that stores the new format. Self-healing.
   lastUpdate float.
 
 Suite total: **1522 passing** (was 1514 on v2.3.4).
+
+---
 
 ---
 
@@ -4927,6 +5700,8 @@ Suite total: **1514 passing** (was 1460 on v2.3.3).
 
 ---
 
+---
+
 ## [2.3.3] — 2026-05-07
 
 The "Series Manager UX rebuild" release. The Series Manager page no
@@ -5068,6 +5843,8 @@ Suite total: **1460 passing** (was 1432 on v2.3.2).
 
 ---
 
+---
+
 ## [2.3.2] — 2026-05-06
 
 The "scan-quality" release. Two user-visible improvements + one
@@ -5200,6 +5977,8 @@ value. No code changes required.
 
 ---
 
+---
+
 ## [2.3.1] — 2026-05-06
 
 Two fast-follow fixes after Mark's v2.2.14 rollout surfaced them.
@@ -5259,6 +6038,8 @@ Suggestions, surfaces all three review queues) move to v2.3.2.
 Source-scan write rule + sidebar edit UI populating
 `user_edited_fields` move with them. Push-back to Calibre/ABS
 moves to v2.3.3.
+
+---
 
 ---
 
@@ -5375,6 +6156,8 @@ passing.
 
 ---
 
+---
+
 ## [2.2.14] — 2026-05-06
 
 Halo regression fix + forward-compatible schema groundwork for the
@@ -5437,6 +6220,8 @@ ids stay per-author, legacy collapse). Full suite 1359 passing.
 
 See `docs/v23_metadata_design.md` for the v2.3 design spec these
 foundations support.
+
+---
 
 ---
 
@@ -5525,6 +6310,8 @@ of the Savarovsky series will not re-merge.
 
 ---
 
+---
+
 ## [2.2.12] — 2026-05-06
 
 Two discovery-correctness fixes from Mark's continuing UAT. Both
@@ -5609,6 +6396,8 @@ in Calibre is now safe to undo.
 
 ---
 
+---
+
 ## [2.2.11] — 2026-05-05
 
 Repo owner rename. The GitHub account hosting Seshat moved from
@@ -5638,6 +6427,8 @@ No code changes, no data migration, identical container behavior.
   the calibredb diagnostic.
 - `LICENSE` + `NOTICE` copyright holder updated (same legal
   entity, new pseudonym).
+
+---
 
 ---
 
@@ -5677,6 +6468,8 @@ hardening of input-validation and resource-handling paths.
 
 ---
 
+---
+
 ## [2.2.9] — 2026-05-05
 
 Documentation and licensing release ahead of public visibility. No
@@ -5697,6 +6490,8 @@ runtime behavior changes — the image is functionally identical to
   size badges (slim + full) replace the static placeholders. The
   static `tests-625_passing` badge was removed in favor of the live
   build status, which won't go stale as the test count grows.
+
+---
 
 ---
 
@@ -5744,6 +6539,8 @@ silently blanks the stranded plaintext copy in your `settings.json`
 and the affected endpoints start using the live rotated cookie. The
 Hermes widget will repopulate within a few seconds of the next status
 poll.
+
+---
 
 ---
 
@@ -5842,6 +6639,8 @@ splits; this fix is forward-only.
 
 ---
 
+---
+
 ## [2.2.6] — 2026-05-03
 
 UAT-driven fix surfaced after v2.2.5 stabilized the container. Mark
@@ -5882,6 +6681,8 @@ why.
 
 ---
 
+---
+
 ## [2.2.5] — 2026-05-03
 
 Hot-fix release. v2.2.4 left a latent crash on the
@@ -5918,6 +6719,8 @@ empty/whitespace `series_index` to `None` before writing. Stops new
 bad rows from going in and matches every other code path
 (`lookup.py`, `calibre_sync.py`, source modules) that already
 treats absent series-position as NULL.
+
+---
 
 ---
 
@@ -5970,6 +6773,8 @@ A new `author_omnibus_count` is also returned per series so the
 IS count badge can show "Omnibus" instead of a misleading "0/0"
 when this author's only contribution to the series is a collection.
 The mobile author detail section gets the same treatment.
+
+---
 
 ---
 
@@ -6049,6 +6854,8 @@ and mobile authors pages. The `Math.min(pg, totalPages)` clamp at
 the read site handles stale stored pages (e.g. dataset shrunk
 between visits). Existing reset-to-1 hooks on filter / sort / query
 changes still fire normally.
+
+---
 
 ---
 
@@ -6139,6 +6946,8 @@ Touko Amekawa was filtered out. Fix: hoist the per-library SQL
 upfront so `total_tasks` is the sum of actual matched authors.
 Response also returns a `requested` field so the UI can show
 "Scanning N of M authors" if there's a delta.
+
+---
 
 ---
 
@@ -6238,6 +7047,8 @@ narrower (only fired on canonical-side linked authors).
 
 ---
 
+---
+
 ## [2.2.0] — 2026-04-30
 
 Minor release. One omnibus correctness fix, two UI ergonomic
@@ -6307,6 +7118,8 @@ size reduction on the default image plus an opt-in
   if you ingest via the CWA, ABS, or file-folder sinks. The full
   and slim variants build from the same commit via a workflow
   matrix; switching is a `docker pull` away.
+
+---
 
 ---
 
@@ -6392,6 +7205,8 @@ historical residue.
   position pairs deduped on first run against the live DB,
   including the originally-reported Bainin "Paths of Akashic 5:
   The Expanse" / "The Expanse (Paths of Akashic #5)" collision.
+
+---
 
 ---
 
@@ -6515,6 +7330,8 @@ plus a transitive-dependency security patch.
   live events). Both shipped and UAT-passed in 2.0.0; the plans no
   longer match the current code and were removed. History
   preserves them at `6662b51` (Tier 2) and `d5c92a6` (Tier 1).
+
+---
 
 ---
 
@@ -6973,6 +7790,8 @@ into 2.0.0 — these never shipped under a separate version tag.
 
 ---
 
+---
+
 ## [1.3.0] — 2026-04-15
 
 Closes the v1.2 backlog. One new feature + polish across the board.
@@ -7025,6 +7844,8 @@ Closes the v1.2 backlog. One new feature + polish across the board.
   v1.1.2 when credential editing moved inline to SettingsPage
   via `CredField`. Never imported in `App.tsx`.
 
+---
+
 ## [1.2.4] — 2026-04-15
 
 ### Fixed
@@ -7047,6 +7868,8 @@ Closes the v1.2 backlog. One new feature + polish across the board.
   extract `image.url` when image is a dict (tolerate either
   shape with `isinstance()`), and type-guard `description` /
   `language` against non-string values landing in scalar slots.
+
+---
 
 ## [1.2.3] — 2026-04-14
 
@@ -7096,6 +7919,8 @@ Closes the v1.2 backlog. One new feature + polish across the board.
   it there. The pipeline treats an empty return as "couldn't
   introspect" and falls through to the legacy name-match.
 
+---
+
 ## [1.2.2] — 2026-04-14
 
 ### Fixed
@@ -7130,6 +7955,8 @@ Closes the v1.2 backlog. One new feature + polish across the board.
   schema change needed — the column has always existed; pre-v1.1.5
   AS clients still work (empty string fallback).
 
+---
+
 ## [1.2.1] — 2026-04-14
 
 Follow-up to the v1.2.0 review-edit workflow. Two issues the user
@@ -7160,6 +7987,8 @@ hit after the first release:
   - **Language** — small input (defaults to `en`)
   `patch_epub_metadata` gained a `description` parameter so the
   `<dc:description>` element in the OPF gets the edit too.
+
+---
 
 ## [1.2.0] — 2026-04-14
 
@@ -7198,6 +8027,8 @@ container.
     reassign the dependent rows first") instead of the raw
     sqlite3 error.
 
+---
+
 ## [1.1.4] — 2026-04-14
 
 ### Fixed
@@ -7213,6 +8044,8 @@ container.
   populates it from its own `books.title` row. Absent-title payloads
   from pre-v1.1.4 AthenaScout clients still work — they just keep
   the old placeholder behavior.
+
+---
 
 ## [1.1.3] — 2026-04-14
 
@@ -7258,6 +8091,8 @@ bug that's been silent since v1.0.
   observable. (Timeouts and exceptions were already WARNING /
   ERROR; this only changes the silent-None case.)
 
+---
+
 ## [1.1.2] — 2026-04-14
 
 ### Fixed
@@ -7273,6 +8108,8 @@ bug that's been silent since v1.0.
   value pre-save) and surfaced the new key inside Settings → API
   Keys & Sink. The orphaned `CredentialsPage.tsx` is left as-is —
   harmless dead code, flagged for cleanup in v1.2.
+
+---
 
 ## [1.1.1] — 2026-04-14
 
@@ -7332,6 +8169,8 @@ integration.
   tightened from `minmax(170px, 1fr)` to `minmax(150px, 1fr)` to
   reduce asymmetry when the tile count doesn't evenly divide the
   row width.
+
+---
 
 ## [1.1.0] — 2026-04-14
 
@@ -7455,6 +8294,8 @@ tooling.
 - `app/storage/grabs.py` adds a thin `get_source_metadata(db,
   grab_id)` helper so the one consumer (pipeline._prepare_book)
   doesn't drag the column through the GrabRow dataclass.
+
+---
 
 ---
 
