@@ -65,6 +65,27 @@ identical to v3.10.1 buys nothing. The next release folds them in.
   `metadata_cache_amazon.db` files into the developer's data dir on
   every test run.
 
+### Changed
+
+- **Test suite runtime cut ~43%: 6m43s → 3m50s.** Two fixed sleeps
+  accounted for nearly all of it, neither of which was testing anything
+  about timing:
+  - `_stagger_qbit_add()` sleeps `qbit_add_stagger_s` (default **2.0s**
+    ± 0.5 jitter) before every qBit add — deliberate tracker-announce
+    spacing in production, pure dead time in tests, charged to every
+    test reaching the submit path. Now disabled suite-wide via the
+    isolated `settings.json`. `test_dispatch_stagger.py` is the one
+    place that actually exercises the stagger and patches
+    `load_settings` itself, so it is unaffected.
+  - `test_negative_jitter_does_not_underflow` did 50 *real* sleeps
+    averaging ~2.5s (~147s, by a wide margin the slowest test in the
+    suite) to verify a `max(0.0, …)`. It now stubs the sleep and
+    asserts on the value passed to it — a stricter check than the old
+    assertion on the return value.
+
+  Together: `test_dispatch.py` + `test_dispatch_stagger.py` went from
+  ~185s to 8.13s.
+
 ### Added
 
 - **`.github/workflows/tests.yml` — pytest now runs in CI**, on pushes
