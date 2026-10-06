@@ -373,3 +373,35 @@ class TestInjectWedgeFlags:
             assert rows[0].outcome == economy_audit.OUTCOME_FAILURE
         finally:
             state.dispatcher = None
+
+    async def test_a_successful_buy_marks_the_grab_free(self, temp_db, monkeypatch):
+        """MAM's search API lags 5-20 min on personal_freeleech, so the
+        buy's own result is what tells the dispatcher the grab is free."""
+        from app.routers import inject as inject_mod
+        from app.orchestrator.dispatch import DispatchResult
+
+        outcomes = iter([True, False])
+        seen: list[bool] = []
+
+        async def fake_buy(torrent_id, token):
+            return next(outcomes)
+
+        async def fake_inject(deps, **kwargs):
+            seen.append(kwargs["personal_fl_bought"])
+            return DispatchResult(action="submit", reason="ok", announce_id=1)
+
+        monkeypatch.setattr(inject_mod, "_buy_personal_fl_for_inject", fake_buy)
+        monkeypatch.setattr(inject_mod, "inject_grab", fake_inject)
+        state.dispatcher = _make_deps()
+        try:
+            async with _client(_make_app()) as client:
+                for tid in ("1", "2"):
+                    resp = await client.post(
+                        "/api/v1/grabs/inject",
+                        json={"torrent_id": tid, "buy_personal_fl": True},
+                    )
+                    assert resp.status_code == 200
+                resp = await client.post("/api/v1/grabs/inject", json={"torrent_id": "3"})
+            assert seen == [True, False, False]
+        finally:
+            state.dispatcher = None

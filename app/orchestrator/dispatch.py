@@ -520,6 +520,8 @@ async def inject_grab(
     force_fl_wedge: bool = False,
     apply_format_dedup: bool = True,
     override_mam_snatched: bool = False,
+    apply_claim_for_owned: bool = True,
+    personal_fl_bought: bool = False,
 ) -> DispatchResult:
     """Manually queue a grab by torrent ID.
 
@@ -550,6 +552,16 @@ async def inject_grab(
     user confirmed they want a second download. It never overrides
     `already_grabbed`: a torrent Seshat itself fetched is never
     fetched again.
+
+    `apply_claim_for_owned=False` skips the claim-for-owned gate. Manual
+    Grab passes it (with `apply_format_dedup=False`): its preview already
+    showed the user what they own, so ticking the row is the decision to
+    grab anyway (ADR-0023).
+
+    `personal_fl_bought=True` means the caller just bought personal
+    freeleech for this torrent. MAM's search API takes 5-20 min to report
+    `personal_freeleech`, so the policy engine is told directly: the grab
+    is free (no buffer gate, no wedge).
 
     Live `dry_run` kill-switch (v2.21.2). Unlike the IRC-enabled
     toggle (which doesn't apply here — manual injects are user-
@@ -602,6 +614,8 @@ async def inject_grab(
         force_fl_wedge=force_fl_wedge,
         apply_format_dedup=apply_format_dedup,
         override_mam_snatched=override_mam_snatched,
+        apply_claim_for_owned=apply_claim_for_owned,
+        personal_fl_bought=personal_fl_bought,
     )
 
 
@@ -618,6 +632,8 @@ async def _dispatch_with_decision(
     force_fl_wedge: bool = False,
     apply_format_dedup: bool = True,
     override_mam_snatched: bool = False,
+    apply_claim_for_owned: bool = True,
+    personal_fl_bought: bool = False,
 ) -> DispatchResult:
     """The shared pipeline body used by both handle_announce and
     inject_grab. The only thing they differ on is whether the filter
@@ -628,7 +644,8 @@ async def _dispatch_with_decision(
     inject callers can pass False from a UI override checkbox to
     force a grab regardless of in-flight/owned siblings.
 
-    `override_mam_snatched` — see `inject_grab`.
+    `override_mam_snatched`, `apply_claim_for_owned` and
+    `personal_fl_bought` — see `inject_grab`.
     """
     # Computed once at the top so the dedup gate, the announce row,
     # and (if we reach the grab branch) the grab row all carry the
@@ -746,20 +763,24 @@ async def _dispatch_with_decision(
         # the upload existed on MAM. Runs BEFORE format-dedup so we
         # don't even consider holding/queuing a torrent we don't want
         # the file for. Failure to claim falls through silently.
-        try:
-            from app.orchestrator.owned_announce_claim import (
-                try_claim_announce_for_owned,
-            )
-            claim_result = await try_claim_announce_for_owned(
-                announce=announce,
-            )
-        except Exception:
-            _log.exception(
-                "claim-for-owned: crashed during lookup for tid=%s "
-                "(falling through to normal grab)",
-                announce.torrent_id,
-            )
-            claim_result = None
+        # Manual Grab turns it off: the user saw the owned copy in the
+        # preview and chose to grab anyway (ADR-0023).
+        claim_result = None
+        if apply_claim_for_owned:
+            try:
+                from app.orchestrator.owned_announce_claim import (
+                    try_claim_announce_for_owned,
+                )
+                claim_result = await try_claim_announce_for_owned(
+                    announce=announce,
+                )
+            except Exception:
+                _log.exception(
+                    "claim-for-owned: crashed during lookup for tid=%s "
+                    "(falling through to normal grab)",
+                    announce.torrent_id,
+                )
+                claim_result = None
         if claim_result is not None and claim_result.claimed:
             await grabs_storage.update_announce_decision(
                 db, announce_id=announce_id,
@@ -978,7 +999,9 @@ async def _dispatch_with_decision(
         # context for the policy engine. Start with what we already
         # know from the announce, then enrich with the MAM APIs (both
         # cached, both fail-safe).
-        eco_ctx = await _build_economic_context(deps, announce)
+        eco_ctx = await _build_economic_context(
+            deps, announce, personal_fl_bought=personal_fl_bought,
+        )
 
         policy_decision = evaluate_policy(eco_ctx, deps.policy_config)
 
@@ -1575,7 +1598,10 @@ async def _skip_already_grabbed(
 
 
 async def _build_economic_context(
-    deps: DispatcherDeps, announce: Announce
+    deps: DispatcherDeps,
+    announce: Announce,
+    *,
+    personal_fl_bought: bool = False,
 ) -> EconomicContext:
     """Build the EconomicContext for the policy engine.
 
@@ -1643,6 +1669,12 @@ async def _build_economic_context(
             ctx_kwargs["user_upload_buffer_bytes"] = status.upload_buffer_bytes
         except UserStatusError as e:
             _log.debug("user_status lookup failed: %s", e)
+
+    # A personal-FL buy that just succeeded: MAM's search API lags 5-20
+    # min on `personal_freeleech`, so the lookup above still says False.
+    # Trust the buy, or the grab paid for can be buffer-gated or wedged.
+    if personal_fl_bought:
+        ctx_kwargs["personal_freeleech"] = True
 
     return EconomicContext(**ctx_kwargs)
 

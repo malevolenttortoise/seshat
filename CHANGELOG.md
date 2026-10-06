@@ -9,12 +9,41 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
-Two batches. The test-suite and CI work (2026-09-14) is on `main` but
+Three batches. The test-suite and CI work (2026-09-14) is on `main` but
 was deliberately not tagged: it changed no application code. Phase 0 of
 the 2026-10 roadmap — **snatch safety** — adds the application changes
-on `development`: MAM sees one download per torrent, ever.
+on `development`: MAM sees one download per torrent, ever. Phase 1 —
+**Manual Grab** — adds the "Grab from MAM" page on top of it.
 
 ### Added
+
+- **Grab from MAM** (Manual Grab, ADR-0023). A new page, in the Pipeline
+  nav and the dashboard's Pipeline actions (desktop and mobile): paste a
+  MAM link or torrent ID and Seshat shows what it is — cover, title,
+  authors, narrators, series, format, size, seeders, VIP/FL — plus what
+  you already have, then grabs it when you say so.
+  - A torrent Seshat already grabbed, or one removed from MAM, can't be
+    ticked. One you own, one already on its way, or one your grab policy
+    would skip starts unticked; ticking it is your decision. Manual grabs
+    skip claim-for-owned and format dedup, since the preview already
+    showed you what you own.
+  - A torrent MAM says you already snatched asks first: ticking it opens
+    "Download it from MAM again?", and only *Download again* sets
+    `override_mam_snatched` for that grab (Phase 0's override, now with
+    a UI).
+  - Per-row **Buy personal FL (50k BP)**.
+  - The grab row gets the real title, authors, category, series and
+    format instead of `manual_inject_<id>`, so the review queue,
+    notifications and the post-ingest MAM link-back read properly.
+  - Every MAM request it makes (lookups, covers, FL buys) goes through a
+    pacer at the `rate_mam` gap (default 2s): never a burst.
+  - Grab runs as a server-side job the page polls, so leaving the page
+    doesn't stop it.
+  - Pasting a MAM link into Import / Export now points you to Grab from
+    MAM and carries the link over, instead of failing as a book URL.
+  - API: `POST /api/v1/manual-grab/preview`, `POST /api/v1/manual-grab/grab`
+    (≤30 items, enforced server-side), `GET /api/v1/manual-grab/grab/{job_id}`,
+    `GET /api/v1/manual-grab/cover/{tid}`.
 
 - **Torrent-ID guard on every grab path (snatch safety).** Nothing used
   to stop Seshat fetching the same MAM torrent twice — the
@@ -119,6 +148,17 @@ on `development`: MAM sees one download per torrent, ever.
   ~185s to 8.13s.
 
 ### Fixed
+
+- **A personal-FL buy now actually frees the grab it was bought for.**
+  MAM's search API takes 5–20 min to report a new personal FL, so the
+  grab that re-read it right after the buy still saw a paid torrent: the
+  buffer gate could refuse it, or a wedge could be spent on top. The
+  buy's own result now marks the grab free, on `/api/v1/grabs/inject`,
+  Discovery's send-to-pipeline and Manual Grab. Both older paths also
+  read the live MAM cookie for the buy instead of a startup snapshot.
+- Pasted MAM download links (`download.php?tid=…`) are now accepted
+  wherever a torrent link or ID is (`inject-batch`, send-to-pipeline,
+  Manual Grab); the parser has one home, `app/mam/torrent_id.py`.
 
 - **Auto-train left a write transaction open after losing an insert
   race.** When two grabs trained the same author at once, the loser's

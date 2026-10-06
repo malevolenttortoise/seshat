@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -28,16 +27,13 @@ from pydantic import BaseModel, Field
 
 from app import state
 from app.database import get_db
+from app.mam.torrent_id import extract_torrent_id
 from app.orchestrator.auto_train import train_author
 from app.orchestrator.dispatch import inject_grab
 
 _log = logging.getLogger("seshat.routers.grabs")
 
 router = APIRouter(prefix="/api/v1/grabs", tags=["grabs"])
-
-_MAM_URL_RX = re.compile(r"/t/(\d+)")
-_BARE_ID_RX = re.compile(r"^\d+$")
-
 
 class GrabItem(BaseModel):
     url_or_id: str
@@ -98,14 +94,6 @@ class InjectBatchResponse(BaseModel):
     results: list[GrabResultItem]
 
 
-def _extract_torrent_id(url_or_id: str) -> Optional[str]:
-    s = url_or_id.strip()
-    if _BARE_ID_RX.match(s):
-        return s
-    m = _MAM_URL_RX.search(s)
-    return m.group(1) if m else None
-
-
 @router.post("/inject-batch", response_model=InjectBatchResponse)
 async def inject_batch(body: InjectBatchRequest) -> InjectBatchResponse:
     if state.dispatcher is None:
@@ -116,7 +104,7 @@ async def inject_batch(body: InjectBatchRequest) -> InjectBatchResponse:
     failed = 0
 
     for item in body.items:
-        tid = _extract_torrent_id(item.url_or_id)
+        tid = extract_torrent_id(item.url_or_id)
         if tid is None:
             results.append(
                 GrabResultItem(

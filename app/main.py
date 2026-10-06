@@ -75,6 +75,7 @@ from app.routers.delayed import router as delayed_router
 from app.routers.economy import router as economy_router
 from app.routers.enums import router as enums_router
 from app.routers.inject import router as inject_router
+from app.routers.manual_grab import router as manual_grab_router
 from app.routers.logs import router as logs_router, install_log_handler
 from app.routers.mam import router as mam_router
 from app.routers.qbittorrent import router as qbittorrent_router
@@ -1450,6 +1451,7 @@ app.include_router(delayed_router)
 app.include_router(enums_router)
 app.include_router(economy_router)
 app.include_router(inject_router)
+app.include_router(manual_grab_router)
 app.include_router(logs_router)
 app.include_router(mam_router)
 app.include_router(qbittorrent_router)

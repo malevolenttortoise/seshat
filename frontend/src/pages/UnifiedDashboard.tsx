@@ -1167,6 +1167,10 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
                 label={<><Dot color={t.td} /> Delayed</>}
                 onClick={() => onNav("pipe-delayed")}
               />
+              <QBtn
+                label="⬇ Grab from MAM"
+                onClick={() => onNav("pipe-manual-grab")}
+              />
             </div>
           </div>
           <div

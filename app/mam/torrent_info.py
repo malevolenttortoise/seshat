@@ -98,6 +98,20 @@ def invalidate_cache() -> None:
     _cache.clear()
 
 
+def cached_torrent_info(
+    torrent_id: str, ttl: int = _CACHE_TTL,
+) -> Optional[TorrentInfo]:
+    """The cached result for `torrent_id` if still fresh, else None.
+
+    Lets a paced caller skip the pacer on a cache hit, since a hit
+    costs MAM nothing.
+    """
+    entry = _cache.get(torrent_id)
+    if entry is None or time.monotonic() - entry[0] >= ttl:
+        return None
+    return entry[1]
+
+
 # ─── Public API ─────────────────────────────────────────────
 
 

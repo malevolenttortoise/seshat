@@ -29,6 +29,7 @@ import TentativePage from "./pages/TentativePage";
 import IgnoredWeeklyPage from "./pages/IgnoredWeeklyPage";
 import PipelineAuthorsPage from "./pages/AuthorsPage";
 import DelayedPage from "./pages/DelayedPage";
+import GrabFromMamPage from "./pages/GrabFromMamPage";
 import FiltersPage from "./pages/FiltersPage";
 import MigrationPage from "./pages/MigrationPage";
 import PipelineMamPage from "./pages/MamPage";
@@ -99,6 +100,7 @@ const PIPELINE_NAV = [
   { id: "pipe-ignored",     label: "Weekly Ignored", icon: "📊" },
   { id: "pipe-authors",     label: "Author Lists",  icon: "👤" },
   { id: "pipe-delayed",     label: "Delayed",       icon: "⏳" },
+  { id: "pipe-manual-grab", label: "Grab from MAM", icon: "⬇" },
   { id: "replacement-opportunities", label: "Upgrades", icon: "⬆" },
   { id: "filters",          label: "Filters",       icon: "🎯" },
 ];
@@ -111,7 +113,7 @@ const WIDE_PAGES = new Set([
   "disc-hidden", "disc-importexport", "disc-works",
   "author-triage", "persons-manager",
   "pipe-review", "pipe-tentative", "pipe-ignored", "pipe-authors",
-  "pipe-delayed", "pipe-migration", "replacement-opportunities",
+  "pipe-delayed", "pipe-manual-grab", "pipe-migration", "replacement-opportunities",
   "logs", "database",
 ]);
 
@@ -189,6 +191,7 @@ function renderPage(
     case "pipe-ignored":       return <IgnoredWeeklyPage />;
     case "pipe-authors":       return <PipelineAuthorsPage />;
     case "pipe-delayed":       return <DelayedPage />;
+    case "pipe-manual-grab":   return <GrabFromMamPage initial={pageArg} />;
     case "pipe-migration":     return <MigrationPage />;
     case "pipe-mam":           return <PipelineMamPage />;
 

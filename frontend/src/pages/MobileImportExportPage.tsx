@@ -6,6 +6,7 @@ import { useState } from "react";
 import { api } from "../api";
 import { useTheme } from "../theme";
 import { ExportModal } from "../components/ExportModal";
+import { MamLinkHint, isMamLine } from "../components/manualGrab/MamLinkHint";
 import {
   MobileBtn,
   MobileBadge,
@@ -71,7 +72,7 @@ export default function MobileImportExportPage() {
     const lines = urls
       .split("\n")
       .map((u) => u.trim())
-      .filter((u) => u.startsWith("http"));
+      .filter((u) => u.startsWith("http") && !isMamLine(u));
     if (!lines.length) return;
     setFetching(true);
     setResults(null);
@@ -149,6 +150,7 @@ export default function MobileImportExportPage() {
               resize: "vertical",
             }}
           />
+          <MamLinkHint text={urls} />
           <MobileBtn
             variant="primary"
             primary

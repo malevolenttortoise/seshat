@@ -10,7 +10,6 @@ process.
 """
 import json
 import logging
-import re
 
 from fastapi import APIRouter, Body, HTTPException
 
@@ -18,24 +17,13 @@ from app import state
 from app.config import load_settings
 from app.database import get_db as get_pipeline_db
 from app.discovery.database import get_db as get_discovery_db
+from app.mam.torrent_id import extract_torrent_id
 from app.orchestrator.auto_train import train_author
 from app.orchestrator.dispatch import inject_grab
 
 logger = logging.getLogger("seshat.discovery")
 
 router = APIRouter(prefix="/api/discovery", tags=["pipeline-send"])
-
-_MAM_URL_RX = re.compile(r"/t/(\d+)")
-_BARE_ID_RX = re.compile(r"^\d+$")
-
-
-def _extract_torrent_id(url_or_id: str) -> str | None:
-    s = url_or_id.strip()
-    if _BARE_ID_RX.match(s):
-        return s
-    m = _MAM_URL_RX.search(s)
-    return m.group(1) if m else None
-
 
 @router.post("/send-to-pipeline")
 async def send_to_pipeline(data: dict = Body(...)):
@@ -108,7 +96,7 @@ async def send_to_pipeline(data: dict = Body(...)):
     results = []
 
     for r in found_rows:
-        tid = _extract_torrent_id(str(r["mam_torrent_id"]))
+        tid = extract_torrent_id(str(r["mam_torrent_id"]))
         if tid is None:
             results.append({"torrent_id": str(r["mam_torrent_id"]), "ok": False, "error": "bad torrent ID"})
             failed += 1
@@ -131,11 +119,12 @@ async def send_to_pipeline(data: dict = Body(...)):
         # audited and the grab proceeds anyway. Calls the same helper
         # the manual-inject router uses so the audit row shape stays
         # consistent between the two entry points.
+        fl_bought = False
         if buy_personal_fl:
             try:
                 from app.routers.inject import _buy_personal_fl_for_inject
-                await _buy_personal_fl_for_inject(
-                    tid, state.dispatcher.mam_token or "",
+                fl_bought = await _buy_personal_fl_for_inject(
+                    tid, state.dispatcher.live_mam_token() or "",
                 )
             except Exception:
                 logger.exception(
@@ -168,6 +157,7 @@ async def send_to_pipeline(data: dict = Body(...)):
                 force_fl_wedge=use_wedge_override,
                 apply_format_dedup=not override_format_dedup,
                 override_mam_snatched=override_mam_snatched,
+                personal_fl_bought=fl_bought,
             )
             ok = result.action in ("submit", "queue") and result.error is None
 

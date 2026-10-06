@@ -522,6 +522,12 @@ export default function MobileUnifiedDashboard({ onNav }: Props) {
             leadingIcon="⏳"
             onClick={() => onNav("pipe-delayed")}
           />
+          <MobileRow
+            title="Grab from MAM"
+            subtitle="Paste a MAM link"
+            leadingIcon="⬇"
+            onClick={() => onNav("pipe-manual-grab")}
+          />
         </div>
       </MobileSection>
 

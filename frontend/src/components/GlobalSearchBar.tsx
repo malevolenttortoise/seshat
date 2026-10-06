@@ -64,6 +64,8 @@ const PAGE_INDEX: PageEntry[] = [
   { kind: "page", label: "Author Lists",     page_id: "pipe-authors",      section: "pipeline",  icon: "👤",
     keywords: ["allowed", "ignored"] },
   { kind: "page", label: "Delayed",          page_id: "pipe-delayed",      section: "pipeline",  icon: "⏳" },
+  { kind: "page", label: "Grab from MAM",    page_id: "pipe-manual-grab",  section: "pipeline",  icon: "⬇",
+    keywords: ["torrent", "paste", "link", "manual", "inject", "upload"] },
   { kind: "page", label: "Filters",          page_id: "filters",           section: "pipeline",  icon: "🎯" },
   // Shared right-rail
   { kind: "page", label: "Import / Export",  page_id: "disc-importexport", section: "discovery", icon: "📦",
