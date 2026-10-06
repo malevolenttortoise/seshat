@@ -79,6 +79,11 @@ async def train_author(
     except Exception:
         # IntegrityError from a race condition — another task already
         # added the same author between our check and our insert.
+        # Roll back: the failed INSERT leaves its implicit transaction
+        # (and SQLite's write lock) open on this connection. Holding it
+        # into the dispatcher's grab-claim lock deadlocked two
+        # concurrent grabs of one torrent until busy_timeout (30s).
+        await db.rollback()
         _log.debug("auto-train: %s already exists (race)", author_name)
         return False
 

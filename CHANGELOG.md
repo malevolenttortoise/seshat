@@ -86,6 +86,14 @@ on `development`: MAM sees one download per torrent, ever.
 
 ### Fixed
 
+- **Auto-train left a write transaction open after losing an insert
+  race.** When two grabs trained the same author at once, the loser's
+  `INSERT` hit the UNIQUE constraint, the error was swallowed, and the
+  connection kept SQLite's write lock with no rollback. Harmless until
+  the snatch-safety claim lock: the loser then waited on that lock while
+  holding the write lock the winner needed, a deadlock that ended only
+  at `busy_timeout` (30s) with `database is locked`. Caught by CI on the
+  Python 3.12 leg; `train_author` now rolls back.
 - **The test suite was sending real requests to MAM** — 44 search-API
   POSTs and 6 cover GETs per run, all with a junk `mam_id`, twice per
   CI push. Dispatcher tests passed a non-empty `mam_token` without the

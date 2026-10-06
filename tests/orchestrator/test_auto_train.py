@@ -95,6 +95,34 @@ class TestTrainAuthor:
             await db.close()
 
 
+    async def test_lost_insert_race_leaves_no_open_transaction(
+        self, temp_db, monkeypatch,
+    ):
+        # Another task inserts the author between our existence check and
+        # our INSERT. The failed INSERT must not leave this connection
+        # holding a write transaction (and SQLite's write lock).
+        db = await get_db()
+        other = await get_db()
+        try:
+            real_execute = db.execute
+
+            async def racing_execute(sql, *args, **kwargs):
+                if sql.lstrip().upper().startswith("INSERT INTO AUTHORS_ALLOWED"):
+                    await other.execute(
+                        "INSERT INTO authors_allowed (name, normalized, source) "
+                        "VALUES ('Racer', 'racer', 'test')"
+                    )
+                    await other.commit()
+                return await real_execute(sql, *args, **kwargs)
+
+            monkeypatch.setattr(db, "execute", racing_execute)
+            assert await train_author(db, "Racer") is False
+            assert db.in_transaction is False
+        finally:
+            await db.close()
+            await other.close()
+
+
 class TestTrainAuthorsFromBlob:
     async def test_splits_and_trains(self, temp_db):
         db = await get_db()
