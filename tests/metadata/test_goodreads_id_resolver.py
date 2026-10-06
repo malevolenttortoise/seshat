@@ -45,6 +45,37 @@ def _isolated_id_cache(tmp_path, monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def goodreads_html(monkeypatch):
+    """Tier 5 (the `/author/list/` walk) doesn't use the client a test
+    passes in: it goes through the process-wide GoodreadsSession — real
+    curl_cffi requests to goodreads.com, each behind a rate-limit sleep.
+    Every test that reached Tier 5 did that; the no-/search regression
+    test spent ~92s on it and its assertion never saw those URLs.
+
+    This swaps the session for a fake that records each URL and answers
+    through `box["handler"]` (default 404 — "no such page"), so no test
+    here touches the network and a test can route Tier 5 through the
+    same handler as its other tiers.
+    """
+    from app.metadata import goodreads_session
+
+    box: dict = {"handler": lambda req: httpx.Response(404), "calls": []}
+
+    class _FakeSession:
+        async def get(self, url, **kwargs):
+            box["calls"].append(url)
+            return box["handler"](httpx.Request("GET", url))
+
+    fake = _FakeSession()
+
+    async def fake_get_session(rate_limit=None):
+        return fake
+
+    monkeypatch.setattr(goodreads_session, "get_session", fake_get_session)
+    return box
+
+
 def _make_client(handler: Callable[[httpx.Request], httpx.Response]) -> httpx.AsyncClient:
     transport = httpx.MockTransport(handler)
     return httpx.AsyncClient(transport=transport, timeout=5.0)
@@ -396,7 +427,7 @@ class TestResolverTier3OpenLibrary:
 
 
 class TestResolverNoSearchRegression:
-    async def test_resolver_never_hits_goodreads_search(self):
+    async def test_resolver_never_hits_goodreads_search(self, goodreads_html):
         # Regression-proof the policy: this whole module exists to
         # AVOID `/search` for `*` user-agents (robots-disallowed).
         # Even when every tier misses, no `/search` URL should ever
@@ -408,6 +439,10 @@ class TestResolverNoSearchRegression:
         def handler(req: httpx.Request) -> httpx.Response:
             calls.append(str(req.url))
             return httpx.Response(404)
+
+        # Tier 5's HTML session answers through the same handler, so its
+        # URLs are checked too.
+        goodreads_html["handler"] = handler
 
         async with _make_client(handler) as client:
             await resolve_goodreads_id(
@@ -421,6 +456,9 @@ class TestResolverNoSearchRegression:
                 client=client,
             )
 
+        assert any("/author/list/38550" in url for url in calls), (
+            "Tier 5 never ran — the test no longer covers it"
+        )
         for url in calls:
             assert "goodreads.com/search" not in url, (
                 f"resolver leaked a /search call: {url}"

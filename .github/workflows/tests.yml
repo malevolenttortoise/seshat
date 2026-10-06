@@ -5,37 +5,44 @@ name: Tests
 # `tests/discovery/test_trigger_lookup.py` could break in 25c2855
 # (ADR-0021 slice 3) and survive both the v3.10.0 and v3.10.1 releases
 # unnoticed. This workflow is the gate that would have caught them.
+#
+# Since Phase 0 S3 (2026-10-06) the suite GATES as well as reports:
+#   - Pushes to `main` / `development` run it through docker-publish.yml,
+#     which calls this workflow (`workflow_call`) and builds no image from
+#     a red commit. There is no `push` trigger here any more — it would
+#     run the same suite twice per push.
+#   - PRs into `main` run it here; branch protection on `main` requires
+#     `pytest (py3.12)` and `pytest (py3.13)` to pass before a merge.
 on:
-  push:
-    branches: [main, development]
   pull_request:
     branches: [main, development]
+  workflow_call:
   workflow_dispatch:
 
 # Tags are deliberately NOT a trigger: a `vX.Y.Z` tag points at a commit
 # already tested by its push to `main`, so running the suite again buys
 # nothing and just burns a slot during the three-push release sequence.
 #
-# Unlike docker-publish.yml, `cancel-in-progress` is TRUE here. That
-# workflow must never cancel (a cancelled run means an image that was
-# never published — see its concurrency comment); a cancelled test run
-# just means a superseded commit stopped being checked, and the run for
-# the newer commit supersedes it. Keying on `github.ref` still keeps
-# main / development / each PR in independent groups.
+# Cancel only superseded PR runs. When docker-publish.yml calls this, a
+# cancelled test run would skip that commit's image build — the same
+# "an image that was never published" failure its concurrency comment
+# warns about — so called (`push`) and dispatched runs are never
+# cancelled. Keying on event + ref keeps main / development / each PR in
+# independent groups.
 concurrency:
-  group: tests-${{ github.ref }}
-  cancel-in-progress: true
+  group: tests-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   pytest:
     name: pytest (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
-    # The suite is ~6.5 min locally; two tests dominate it
-    # (`test_negative_jitter_does_not_underflow` ~147s and
-    # `test_resolver_never_hits_goodreads_search` ~92s, both real
-    # backoff/jitter sleeps rather than I/O). 30 min leaves generous
-    # headroom on a slower hosted runner without hanging a stuck run
-    # for the full 6-hour default.
+    # The suite is ~2.5 min locally now that its two slowest tests no
+    # longer sleep for real (`test_negative_jitter_does_not_underflow`
+    # was ~147s, `test_resolver_never_hits_goodreads_search` ~92s of
+    # rate-limit sleeps plus real goodreads.com requests). 30 min leaves
+    # generous headroom on a slower hosted runner without hanging a
+    # stuck run for the full 6-hour default.
     timeout-minutes: 30
 
     strategy:

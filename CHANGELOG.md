@@ -87,6 +87,14 @@ on `development`: MAM sees one download per torrent, ever.
 - The excluded-uploader check now shares the guard's single cached
   torrent-info lookup and runs before co-author auto-train, so a refused
   grab no longer trains its authors.
+- **CI now blocks instead of just reporting.** `docker-publish.yml` runs
+  the test suite first (it calls `tests.yml`) and builds no image from a
+  red commit — before this, a red suite still rolled `:development-slim`,
+  as the first snatch-safety push did. Tag builds skip the suite as
+  before. `tests.yml` dropped its own `push` trigger (it would run the
+  suite twice per push) and only cancels superseded PR runs, never a run
+  an image build is waiting on. `main` is branch-protected: a merge needs
+  `pytest (py3.12)` and `pytest (py3.13)` green, admins included.
 - Queue pops now go through the same qBit add stagger as fresh grabs (a
   multi-pop drain was exactly the burst the stagger exists for), and a
   qBit "duplicate" on a pop is recorded as `duplicate_in_qbit` instead of
@@ -130,6 +138,14 @@ on `development`: MAM sees one download per torrent, ever.
   every request. The same fixture now clears the torrent-info cache and
   the live session token per test; both were module-global and leaked
   across tests, which made two failures depend on test order.
+- **`test_resolver_never_hits_goodreads_search` took ~92s and made real
+  requests to goodreads.com.** Tier 5 (the `/author/list/` walk) goes
+  through the process-wide Goodreads session, not the client the test
+  injects, so every resolver test that reached it made live curl_cffi
+  requests, each behind a rate-limit sleep — and those URLs never reached
+  the test's "no `/search`" assertion. The resolver tests now swap that
+  session for a fake; the regression test routes it through its own
+  handler and asserts Tier 5 actually ran. ~92s → 0.02s.
 - **Two `tests/discovery/test_trigger_lookup.py` tests had been failing
   since v3.10.0.** `25c2855` (ADR-0021 slice 3) routed the scan router's
   pre-flight due-count through `scan_eligible_authors`, which admits an
