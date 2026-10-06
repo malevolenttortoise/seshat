@@ -56,6 +56,7 @@ from app.mam.torrent_info import (
 )
 from app.mam.user_status import UserStatusError, get_user_status
 from app.orchestrator.auto_train import train_authors_from_torrent_info
+from app.orchestrator import torrent_store
 from app.orchestrator.delayed import rotate_oldest_to_delayed
 from app.orchestrator.download_folders import (
     compute_download_folder,
@@ -128,12 +129,27 @@ _grab_claim_locks: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio
 )
 
 
-def _grab_claim_lock() -> asyncio.Lock:
+def grab_claim_lock() -> asyncio.Lock:
     loop = asyncio.get_running_loop()
     lock = _grab_claim_locks.get(loop)
     if lock is None:
         lock = _grab_claim_locks[loop] = asyncio.Lock()
     return lock
+
+
+async def release_write_lock(db: aiosqlite.Connection) -> None:
+    """Commit anything pending on `db` before waiting on the claim lock.
+
+    Whatever is pending would be committed by this connection's next
+    commit anyway; committing now only stops it holding SQLite's write
+    lock while it waits. Every claim-lock site calls this first.
+    """
+    if db.in_transaction:
+        _log.warning(
+            "grab claim: connection had an open transaction before the "
+            "claim lock; committing it so the lock holder can write"
+        )
+        await db.commit()
 
 
 async def _stagger_qbit_add() -> float:
@@ -715,7 +731,7 @@ async def _dispatch_with_decision(
         # already fetched or is fetching. No override — see
         # `find_blocking_grab` for which rows block. Runs first because
         # it's one indexed query and the most specific answer; re-run
-        # under `_grab_claim_lock` just before the grab row is created.
+        # under `grab_claim_lock` just before the grab row is created.
         prior = await grabs_storage.find_blocking_grab(db, announce.torrent_id)
         if prior is not None:
             return await _skip_already_grabbed(
@@ -1021,8 +1037,6 @@ async def _dispatch_with_decision(
                 evicted = await rotate_oldest_to_delayed(
                     db,
                     delayed_path=deps.delayed_torrents_path,
-                    fetch_torrent=deps.fetch_torrent,
-                    mam_token=deps.live_mam_token(),
                 )
             except Exception:
                 _log.exception("delayed rotation raised (non-fatal)")
@@ -1080,7 +1094,11 @@ async def _dispatch_with_decision(
         # string of awaits (MAM lookups, policy, rate limiter), any of
         # which let a concurrent grab of the same ID get this far too.
         # Once the row exists its state blocks every later check.
-        async with _grab_claim_lock():
+        # Never wait on the claim lock holding SQLite's write lock: the
+        # holder of the claim lock needs it for create_grab (a 30s
+        # deadlock in CI, via auto-train's un-rolled-back insert race).
+        await release_write_lock(db)
+        async with grab_claim_lock():
             prior = await grabs_storage.find_blocking_grab(
                 db, announce.torrent_id,
             )
@@ -1159,167 +1177,341 @@ async def _dispatch_with_decision(
                 error=str(e),
             )
 
-        if rate_decision.action == "queue":
-            # Park the grab in the pending queue. The .torrent bytes
-            # ARE NOT persisted to disk in Phase 1 — the queue holds
-            # the grab id; the budget watcher (in a later phase)
-            # re-fetches when popping. This is intentional: keeping
-            # bytes only in memory means a crash loses queued grabs
-            # but never leaves stale .torrent files lying around.
-            # The Phase 2 follow-up will add disk persistence.
-            await queue_mod.enqueue(db, grab_id)
-            await grabs_storage.set_state(
-                db,
-                grab_id,
-                grabs_storage.STATE_PENDING_QUEUE,
-                qbit_hash=qbit_hash,
-            )
-            _emit(deps, "queued", {"grab_id": grab_id})
-            return DispatchResult(
-                action="queue",
-                reason=rate_decision.reason,
-                announce_id=announce_id,
-                grab_id=grab_id,
-                qbit_hash=qbit_hash,
-            )
+        return await _place_torrent(
+            deps, db,
+            grab_id=grab_id,
+            announce_id=announce_id,
+            action=rate_decision.action,
+            rate_reason=rate_decision.reason,
+            torrent_bytes=torrent_bytes,
+            qbit_hash=qbit_hash,
+            torrent_name=announce.torrent_name,
+            author_blob=announce.author_blob,
+            category=announce.category,
+            series_name=announce.series_name,
+            book_title=announce.book_title,
+        )
+    finally:
+        await db.close()
 
-        # Submit path: compute the save path (monthly folder if enabled).
-        # The save_path we send to qBit uses qBit's mount namespace
-        # (e.g. /data/[mam-complete]/[2026-04]). qBit can't auto-create
-        # folders with bracket characters, so we pre-create the folder
-        # using OUR mount namespace (e.g. /downloads/[mam-complete]/...)
-        # before passing the path to qBit.
-        save_path = None
-        if deps.qbit_download_path:
-            save_path = compute_download_folder(
-                deps.qbit_download_path,
-                deps.download_folder_structure,
-                author_name=announce.author_blob,
-                series_name=announce.series_name,
-                book_title=announce.book_title,
-                template=deps.download_folder_template,
-            )
-            if save_path:
-                # Translate qBit-namespace path → local-namespace path,
-                # then create the folder so it exists when qBit tries to use it.
-                local_save_path = translate_path(
-                    save_path, deps.qbit_path_prefix, deps.local_path_prefix
-                )
-                if not ensure_folder_exists(local_save_path):
-                    _log.error(
-                        "failed to pre-create download folder: %s "
-                        "(qBit path: %s) — submission will likely fail",
-                        local_save_path, save_path,
-                    )
 
-        # Space out consecutive qBit adds so MAM's per-IP tracker
-        # throttle doesn't trip on bursts. See `_stagger_qbit_add()`
-        # for the rationale + the 2026-05-22 incident. Disabled by
-        # `qbit_add_stagger_s=0`; read live from settings.
-        stagger_slept = await _stagger_qbit_add()
-        if stagger_slept > 0:
-            _log.info(
-                "staggered qBit add by %.2fs (grab_id=%d)",
-                stagger_slept, grab_id,
-            )
+async def _place_torrent(
+    deps: DispatcherDeps,
+    db: aiosqlite.Connection,
+    *,
+    grab_id: int,
+    announce_id: int,
+    action: str,
+    rate_reason: str,
+    torrent_bytes: bytes,
+    qbit_hash: str,
+    torrent_name: str,
+    author_blob: str,
+    category: str,
+    series_name: str = "",
+    book_title: str = "",
+) -> DispatchResult:
+    """Send .torrent bytes Seshat already holds to qBit, or park them
+    in the queue — the shared tail of every grab once the bytes exist.
 
-        add_result = await deps.qbit.add_torrent(
-            torrent_bytes,
-            category=deps.qbit_category,
-            save_path=save_path,
-            tags=deps.qbit_tags or None,
+    Used by `_dispatch_with_decision` right after the MAM fetch and by
+    `submit_torrent_bytes` (delayed reinject; Manual Grab's upload path
+    next). Nothing here talks to MAM. `action` is the rate limiter's
+    "submit" or "queue".
+
+    Whenever the grab can't reach qBit now, the bytes are saved to
+    `torrent_store` first (snatch safety, ADR-0022) — the budget
+    watcher submits them later without re-fetching.
+    """
+    if action == "queue":
+        return await _queue_with_bytes(
+            deps, db,
+            grab_id=grab_id, announce_id=announce_id,
+            torrent_bytes=torrent_bytes, qbit_hash=qbit_hash,
+            reason=rate_reason,
         )
 
-        if not add_result.success:
-            # If the client is unreachable or auth failed, queue the
-            # grab so it can be retried when the client comes back.
-            # We already fetched the .torrent from MAM — losing it
-            # would waste a snatch. Only permanent failures (rejected,
-            # duplicate) stay as failed.
-            retriable = add_result.failure_kind in ("auth_failed", "network_error")
-            if retriable and deps.queue_mode_enabled:
-                await queue_mod.enqueue(db, grab_id)
-                await grabs_storage.set_state(
-                    db, grab_id, grabs_storage.STATE_PENDING_QUEUE,
-                    qbit_hash=qbit_hash,
-                    failed_reason=f"client unreachable, queued for retry: {add_result.failure_detail}",
-                )
-                _emit(deps, "queued_on_client_failure", {
-                    "grab_id": grab_id, "kind": add_result.failure_kind,
-                })
-                _log.info(
-                    "download client unreachable for grab_id=%d — queued for retry (%s)",
-                    grab_id, add_result.failure_kind,
-                )
-                return DispatchResult(
-                    action="queue",
-                    reason=f"client_unreachable:{add_result.failure_kind}",
-                    announce_id=announce_id,
-                    grab_id=grab_id,
-                    qbit_hash=qbit_hash,
-                    error=add_result.failure_detail,
-                )
+    add_result = await add_to_client(
+        deps,
+        grab_id=grab_id,
+        torrent_bytes=torrent_bytes,
+        author_blob=author_blob,
+        series_name=series_name,
+        book_title=book_title,
+    )
 
-            failed_state = _add_failure_state(add_result)
-            await grabs_storage.set_state(
-                db,
-                grab_id,
-                failed_state,
-                failed_reason=add_result.failure_detail,
-                qbit_hash=qbit_hash,
+    if not add_result.success:
+        # If the client is unreachable or auth failed, queue the
+        # grab so it can be retried when the client comes back.
+        # We already hold the .torrent — losing it would waste a
+        # snatch, and MAM must never serve it twice. Only permanent
+        # failures (rejected, duplicate) stay as failed.
+        retriable = add_result.failure_kind in ("auth_failed", "network_error")
+        if retriable and deps.queue_mode_enabled:
+            _log.info(
+                "download client unreachable for grab_id=%d — queued for retry (%s)",
+                grab_id, add_result.failure_kind,
             )
-            _emit(
-                deps,
-                "client_failed",
-                {
-                    "grab_id": grab_id,
-                    "kind": add_result.failure_kind,
-                    "detail": add_result.failure_detail,
-                },
-            )
-            return DispatchResult(
-                action="submit",
-                reason=f"client_failed:{add_result.failure_kind}",
-                announce_id=announce_id,
-                grab_id=grab_id,
-                qbit_hash=qbit_hash,
+            _emit(deps, "queued_on_client_failure", {
+                "grab_id": grab_id, "kind": add_result.failure_kind,
+            })
+            return await _queue_with_bytes(
+                deps, db,
+                grab_id=grab_id, announce_id=announce_id,
+                torrent_bytes=torrent_bytes, qbit_hash=qbit_hash,
+                reason=f"client_unreachable:{add_result.failure_kind}",
+                failed_reason=(
+                    "client unreachable, queued for retry: "
+                    f"{add_result.failure_detail}"
+                ),
                 error=add_result.failure_detail,
             )
 
-        # qBit accepted it. Record the ledger entry against our
-        # computed hash. The grab is now in the active budget.
+        failed_state = _add_failure_state(add_result)
         await grabs_storage.set_state(
             db,
             grab_id,
-            grabs_storage.STATE_SUBMITTED,
+            failed_state,
+            failed_reason=add_result.failure_detail,
             qbit_hash=qbit_hash,
         )
-        await ledger_mod.record_grab(db, grab_id, qbit_hash)
         _emit(
             deps,
-            "submitted",
-            {"grab_id": grab_id, "qbit_hash": qbit_hash},
+            "client_failed",
+            {
+                "grab_id": grab_id,
+                "kind": add_result.failure_kind,
+                "detail": add_result.failure_detail,
+            },
         )
-
-        try:
-            from app.notifications import bus, events
-            await bus.emit(
-                events.GRAB_SUCCESS,
-                title="New book grabbed",
-                message=(
-                    f"{announce.torrent_name}\n"
-                    f"by {announce.author_blob}\n"
-                    f"{announce.category}"
-                ),
-            )
-        except Exception:
-            _log.exception("grab.success bus emit failed (non-fatal)")
         return DispatchResult(
             action="submit",
-            reason="ok",
+            reason=f"client_failed:{add_result.failure_kind}",
             announce_id=announce_id,
             grab_id=grab_id,
             qbit_hash=qbit_hash,
+            error=add_result.failure_detail,
+        )
+
+    # qBit accepted it. Record the ledger entry against our
+    # computed hash. The grab is now in the active budget.
+    await grabs_storage.set_state(
+        db,
+        grab_id,
+        grabs_storage.STATE_SUBMITTED,
+        qbit_hash=qbit_hash,
+    )
+    await ledger_mod.record_grab(db, grab_id, qbit_hash)
+    _emit(
+        deps,
+        "submitted",
+        {"grab_id": grab_id, "qbit_hash": qbit_hash},
+    )
+
+    try:
+        from app.notifications import bus, events
+        await bus.emit(
+            events.GRAB_SUCCESS,
+            title="New book grabbed",
+            message=(
+                f"{torrent_name}\n"
+                f"by {author_blob}\n"
+                f"{category}"
+            ),
+        )
+    except Exception:
+        _log.exception("grab.success bus emit failed (non-fatal)")
+    return DispatchResult(
+        action="submit",
+        reason="ok",
+        announce_id=announce_id,
+        grab_id=grab_id,
+        qbit_hash=qbit_hash,
+    )
+
+
+async def add_to_client(
+    deps: DispatcherDeps,
+    *,
+    grab_id: int,
+    torrent_bytes: bytes,
+    author_blob: str,
+    series_name: str = "",
+    book_title: str = "",
+) -> AddResult:
+    """Compute + pre-create the save folder, stagger, then add to qBit.
+
+    No state writes: callers own the grab's state transitions. Shared by
+    the dispatcher and the budget watcher's queue drain.
+
+    The save_path we send to qBit uses qBit's mount namespace
+    (e.g. /data/[mam-complete]/[2026-04]). qBit can't auto-create
+    folders with bracket characters, so we pre-create the folder
+    using OUR mount namespace (e.g. /downloads/[mam-complete]/...)
+    before passing the path to qBit.
+    """
+    save_path = None
+    if deps.qbit_download_path:
+        save_path = compute_download_folder(
+            deps.qbit_download_path,
+            deps.download_folder_structure,
+            author_name=author_blob,
+            series_name=series_name,
+            book_title=book_title,
+            template=deps.download_folder_template,
+        )
+        if save_path:
+            # Translate qBit-namespace path → local-namespace path,
+            # then create the folder so it exists when qBit tries to use it.
+            local_save_path = translate_path(
+                save_path, deps.qbit_path_prefix, deps.local_path_prefix
+            )
+            if not ensure_folder_exists(local_save_path):
+                _log.error(
+                    "failed to pre-create download folder: %s "
+                    "(qBit path: %s) — submission will likely fail",
+                    local_save_path, save_path,
+                )
+
+    # Space out consecutive qBit adds so MAM's per-IP tracker
+    # throttle doesn't trip on bursts. See `_stagger_qbit_add()`
+    # for the rationale + the 2026-05-22 incident. Disabled by
+    # `qbit_add_stagger_s=0`; read live from settings.
+    stagger_slept = await _stagger_qbit_add()
+    if stagger_slept > 0:
+        _log.info(
+            "staggered qBit add by %.2fs (grab_id=%d)",
+            stagger_slept, grab_id,
+        )
+
+    return await deps.qbit.add_torrent(
+        torrent_bytes,
+        category=deps.qbit_category,
+        save_path=save_path,
+        tags=deps.qbit_tags or None,
+    )
+
+
+async def _queue_with_bytes(
+    deps: DispatcherDeps,
+    db: aiosqlite.Connection,
+    *,
+    grab_id: int,
+    announce_id: int,
+    torrent_bytes: bytes,
+    qbit_hash: str,
+    reason: str,
+    failed_reason: Optional[str] = None,
+    error: Optional[str] = None,
+) -> DispatchResult:
+    """Save the bytes, then park the grab in the pending queue.
+
+    Save first: the queue must never hold a grab whose bytes aren't on
+    disk, because the only other source is a second MAM download. If
+    the save fails the grab fails loudly instead of queueing.
+    """
+    try:
+        path = torrent_store.save(grab_id, torrent_bytes)
+    except OSError as e:
+        detail = f"could not save the .torrent for the queue: {e}"
+        _log.error("grab %d: %s", grab_id, detail)
+        await grabs_storage.set_state(
+            db, grab_id, grabs_storage.STATE_FAILED_UNKNOWN,
+            failed_reason=detail, qbit_hash=qbit_hash,
+        )
+        await torrent_store.notify_grab_failed(grab_id, detail)
+        return DispatchResult(
+            action="queue",
+            reason="queue_save_failed",
+            announce_id=announce_id,
+            grab_id=grab_id,
+            qbit_hash=qbit_hash,
+            error=detail,
+        )
+    await grabs_storage.set_state(
+        db,
+        grab_id,
+        grabs_storage.STATE_PENDING_QUEUE,
+        qbit_hash=qbit_hash,
+        torrent_file_path=str(path),
+        failed_reason=failed_reason,
+    )
+    await queue_mod.enqueue(db, grab_id)
+    _emit(deps, "queued", {"grab_id": grab_id})
+    return DispatchResult(
+        action="queue",
+        reason=reason,
+        announce_id=announce_id,
+        grab_id=grab_id,
+        qbit_hash=qbit_hash,
+        error=error,
+    )
+
+
+async def submit_torrent_bytes(
+    deps: DispatcherDeps,
+    *,
+    grab_id: int,
+    torrent_bytes: bytes,
+) -> DispatchResult:
+    """Bytes-in grab: place a .torrent Seshat already holds — never
+    touches MAM's download endpoint.
+
+    For an existing grab row whose bytes came from somewhere other than
+    a fresh fetch: the delayed-torrents folder today, Manual Grab's
+    upload next. Runs the same rate limiter as a fetched grab (submit
+    now, or queue with the bytes saved) and honours the live dry_run
+    kill-switch. The caller owns the snatch-safety checks for its source
+    (liveness, `find_blocking_grab`), and should claim the grab row
+    under `grab_claim_lock()` first.
+    """
+    live = _live_kill_switch_state()
+    if live["dry_run"] or deps.dry_run:
+        return DispatchResult(
+            action="skip", reason="dry_run_live", announce_id=0,
+            grab_id=grab_id, error="dry run is on; nothing was submitted",
+        )
+    try:
+        qbit_hash = info_hash(torrent_bytes)
+    except BencodeError as e:
+        return DispatchResult(
+            action="skip", reason="bad_torrent_file", announce_id=0,
+            grab_id=grab_id, error=f"unparseable torrent file: {e}",
+        )
+
+    db = await deps.db_factory()
+    try:
+        grab = await grabs_storage.get_grab(db, grab_id)
+        if grab is None:
+            return DispatchResult(
+                action="skip", reason="grab_not_found", announce_id=0,
+                grab_id=grab_id, error=f"grab #{grab_id} not found",
+            )
+        announce_id = grab.announce_id or 0
+        rate_decision = decide_grab_action(
+            budget_used=await ledger_mod.count_effective(db),
+            budget_cap=deps.budget_cap,
+            queue_size=await queue_mod.size(db),
+            queue_max=deps.queue_max,
+            queue_mode_enabled=deps.queue_mode_enabled,
+        )
+        if rate_decision.action == "drop":
+            return DispatchResult(
+                action="drop", reason=rate_decision.reason,
+                announce_id=announce_id, grab_id=grab_id,
+                error="snatch budget and queue are full; try again later",
+            )
+        return await _place_torrent(
+            deps, db,
+            grab_id=grab_id,
+            announce_id=announce_id,
+            action=rate_decision.action,
+            rate_reason=rate_decision.reason,
+            torrent_bytes=torrent_bytes,
+            qbit_hash=qbit_hash,
+            torrent_name=grab.torrent_name,
+            author_blob=grab.author_blob,
+            category=grab.category,
         )
     finally:
         await db.close()

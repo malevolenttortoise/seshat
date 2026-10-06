@@ -31,7 +31,6 @@ from app.orchestrator import cookie_retry, dispatch
 from app.orchestrator.dispatch import DispatchResult, handle_announce, inject_grab
 from app.storage import grabs as grabs_storage
 from app.storage import tentative as tentative_storage
-from tests.fake_mam import MINIMAL_BENCODED_TORRENT
 from tests.orchestrator.test_dispatch import (
     _FakeQbit,
     _make_announce,
@@ -252,7 +251,7 @@ class TestAlreadyGrabbed:
         # Hold both grabs at the torrent_info lookup — i.e. AFTER the
         # early guard, which both pass because no row exists yet — and
         # release them together. Only the re-check under
-        # `_grab_claim_lock` stands between them and two fetches.
+        # `grab_claim_lock` stands between them and two fetches.
         arrived = 0
         both_here = asyncio.Event()
 
@@ -275,6 +274,47 @@ class TestAlreadyGrabbed:
         assert deps.fetch_torrent.calls == [(TID, "good_token")]  # type: ignore[attr-defined]
         assert sorted(r.reason for r in results) == ["already_grabbed", "ok"]
         assert len(await _grab_ids()) == 1
+
+
+    async def test_concurrent_grabs_training_the_same_author_do_not_deadlock(
+        self, temp_db, monkeypatch,
+    ):
+        # Regression (CI, py3.12): both grabs auto-train the same author;
+        # the loser's INSERT failed without a rollback and it carried
+        # SQLite's write lock into the claim lock the winner held →
+        # deadlock until busy_timeout (30s). Seeded cache = both grabs
+        # see the same authoritative author list.
+        import time
+
+        from app.mam import torrent_info as torrent_info_mod
+
+        torrent_info_mod._cache[TID] = (
+            time.monotonic(), _info(authors={"9": "Shared Author"}),
+        )
+        arrived = 0
+        both_here = asyncio.Event()
+
+        async def barrier_info(torrent_id, token=None, ttl=120):
+            nonlocal arrived
+            arrived += 1
+            if arrived >= 2:
+                both_here.set()
+            await asyncio.wait_for(both_here.wait(), timeout=5)
+            return _info()
+
+        monkeypatch.setattr(dispatch, "get_torrent_info", barrier_info)
+        deps = _make_deps()
+
+        results = await asyncio.wait_for(
+            asyncio.gather(
+                inject_grab(deps, torrent_id=TID),
+                inject_grab(deps, torrent_id=TID),
+            ),
+            timeout=10,
+        )
+
+        assert sorted(r.reason for r in results) == ["already_grabbed", "ok"]
+        assert len(deps.fetch_torrent.calls) == 1  # type: ignore[attr-defined]
 
 
 # ─── already_snatched_on_mam ─────────────────────────────────

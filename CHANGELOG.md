@@ -44,6 +44,28 @@ on `development`: MAM sees one download per torrent, ever.
     by staff, and fetching it would land a torrent that sits at 0%. IRC
     announces still fail open, since a fresh upload can beat the search
     index.
+- **Queued and delayed grabs keep their .torrent bytes; nothing is
+  fetched twice.** Every queued grab used to cost two MAM downloads (the
+  bytes were dropped at queue time and re-fetched at pop), and a delayed
+  grab up to three. Now:
+  - A grab that can't reach qBit yet (budget full, or qBit unreachable)
+    saves the bytes it already has to `<data>/queued-torrents/<grab_id>.torrent`
+    (owner-only; the path is on `grabs.torrent_file_path`). If the save
+    fails the grab fails loudly instead of queueing.
+  - The budget watcher submits those saved bytes. Before each one, a
+    single search-API call checks the torrent is still on MAM: removed →
+    the grab fails as `failed_torrent_gone` instead of landing in qBit at
+    0%; check unreachable → the **whole queue holds** until the next tick.
+    A missing saved file fails the grab loudly — never a re-fetch. qBit
+    unreachable puts the grab back exactly where it was in the queue.
+  - Delayed rotation moves the saved bytes into the delayed folder, and
+    delayed reinject submits the file's own bytes through a new bytes-in
+    path (`submit_torrent_bytes`, which Manual Grab's upload will reuse),
+    after the same liveness check.
+  - A startup sweep deletes saved files whose grab is no longer queued.
+- **`grab.failed` notification** (priority 4, fires during quiet hours)
+  for a grab that can't reach qBit and won't be retried: saved file
+  missing, or the torrent was removed from MAM while queued.
 - **`.github/workflows/tests.yml` — pytest now runs in CI**, on pushes
   to `main`/`development` and on PRs into either. Nothing in CI had ever
   run the suite; the only workflow builds and publishes images. That is
@@ -65,6 +87,10 @@ on `development`: MAM sees one download per torrent, ever.
 - The excluded-uploader check now shares the guard's single cached
   torrent-info lookup and runs before co-author auto-train, so a refused
   grab no longer trains its authors.
+- Queue pops now go through the same qBit add stagger as fresh grabs (a
+  multi-pop drain was exactly the burst the stagger exists for), and a
+  qBit "duplicate" on a pop is recorded as `duplicate_in_qbit` instead of
+  `failed_unknown`.
 - **Test suite runtime cut ~43%: 6m43s → 3m50s.** Two fixed sleeps
   accounted for nearly all of it, neither of which was testing anything
   about timing:
@@ -101,7 +127,9 @@ on `development`: MAM sees one download per torrent, ever.
   module-level client; the tests only passed because lookups fail open.
   An autouse `_no_real_mam` fixture now gives both MAM clients
   (`app.mam.cookie` and the discovery source's) a transport that refuses
-  every request.
+  every request. The same fixture now clears the torrent-info cache and
+  the live session token per test; both were module-global and leaked
+  across tests, which made two failures depend on test order.
 - **Two `tests/discovery/test_trigger_lookup.py` tests had been failing
   since v3.10.0.** `25c2855` (ADR-0021 slice 3) routed the scan router's
   pre-flight due-count through `scan_eligible_authors`, which admits an

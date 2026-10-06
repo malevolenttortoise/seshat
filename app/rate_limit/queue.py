@@ -74,6 +74,34 @@ async def remove(db: aiosqlite.Connection, grab_id: int) -> None:
     await db.commit()
 
 
+async def take(db: aiosqlite.Connection, grab_id: int) -> bool:
+    """Remove one specific grab; True only if THIS call removed it.
+
+    The budget watcher peeks, runs a network liveness check, then takes
+    — and a concurrent delayed-rotation may have evicted the same grab
+    in between. False means someone else got it first: leave it alone.
+    """
+    cursor = await db.execute(
+        "DELETE FROM pending_queue WHERE grab_id = ?",
+        (grab_id,),
+    )
+    await db.commit()
+    return (cursor.rowcount or 0) > 0
+
+
+async def restore(db: aiosqlite.Connection, item: QueuedGrab) -> None:
+    """Put a taken grab back exactly where it was (same priority and
+    queued_at), for a submit that failed transiently."""
+    await db.execute(
+        """
+        INSERT OR REPLACE INTO pending_queue (grab_id, priority, queued_at)
+        VALUES (?, ?, ?)
+        """,
+        (item.grab_id, item.priority, item.queued_at),
+    )
+    await db.commit()
+
+
 # ─── Queries ─────────────────────────────────────────────────
 
 

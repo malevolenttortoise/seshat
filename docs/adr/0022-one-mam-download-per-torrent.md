@@ -27,9 +27,18 @@ Pre-fetch failures (cookie expired, 404 on download, network error — no `qbit_
 
 Every other torrent-info lookup failure fails open: the database guard still covers everything Seshat itself fetched.
 
+**The bytes are kept.** Once MAM has served a `.torrent`, Seshat never asks for it again, so every later step works from the bytes it holds:
+
+- A grab that can't reach qBit yet saves its bytes to `<data>/queued-torrents/<grab_id>.torrent` before it is queued; a failed save fails the grab instead of queueing it.
+- Queue pops, delayed rotation and delayed reinject use those bytes (reinject through the bytes-in path `submit_torrent_bytes`). A missing file fails the grab loudly (`grab.failed`); it is never re-fetched.
+- Before saved bytes go to qBit, one search-API call by ID confirms the torrent is still on MAM. Removed → fail as torrent-gone. Unreachable → hold (the queue stops draining until the next tick; a reinject returns "try again").
+- Files are deleted on submit or any terminal state, and a startup sweep removes any whose grab is no longer queued. They carry the passkey, as the delayed folder always has.
+
 ## Consequences
 
 - A grab that MAM served but that never landed (qBit rejected it, its files were deleted) cannot be re-grabbed through Seshat; the user handles it on MAM directly.
 - A `failed_*` row with a `qbit_hash` is permanently blocking; this is intended.
 - A grab row stuck in `fetched` after a crash mid-fetch blocks its torrent ID until someone clears it, because it can't be known whether MAM served it.
-- Any future code that fetches from MAM must go through `_dispatch_with_decision` or take `_grab_claim_lock()` and consult `find_blocking_grab` itself.
+- Any future code that fetches from MAM must go through `_dispatch_with_decision` or take `grab_claim_lock()` and consult `find_blocking_grab` itself. Code that already holds bytes (an upload) goes through `submit_torrent_bytes` after claiming its grab row.
+- Never wait on `grab_claim_lock()` with an open write transaction: the holder needs SQLite's write lock. Each claim site calls `release_write_lock(db)` first (a 30s deadlock in CI taught this).
+- An expired cookie stalls the queue (the liveness check can't run), even though submitting saved bytes would not need it. Accepted: nothing reaches qBit unchecked.

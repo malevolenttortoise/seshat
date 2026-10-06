@@ -7,11 +7,11 @@ announces are often the ones the user cares about most right now.
 Instead, we rotate:
 
     1. Pop the OLDEST queued grab
-    2. Re-fetch its .torrent bytes from MAM (the queue doesn't cache
-       bytes — see the rationale in `rate_limit/queue.py`)
-    3. Write the .torrent file to `delayed_torrents_path/`
-    4. Remove the popped grab's ledger/state entries
-    5. Return True so the caller can re-check queue capacity and
+    2. Move its saved .torrent bytes (`torrent_store`) into
+       `delayed_torrents_path/` — never re-fetched from MAM
+       (snatch safety, ADR-0022)
+    3. Remove the popped grab's queue/state entries
+    4. Return its id so the caller can re-check queue capacity and
        enqueue the new grab
 
 The delayed folder is a "dead-drop" the user's future UI will scan
@@ -28,40 +28,32 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional, Protocol
+from typing import Optional
 
 import aiosqlite
 
-from app.mam.grab import GrabResult
+from app.orchestrator import torrent_store
 from app.rate_limit import queue as queue_mod
 from app.storage import grabs as grabs_storage
 
 _log = logging.getLogger("seshat.orchestrator.delayed")
 
 
-class _FetchFn(Protocol):
-    async def __call__(
-        self, torrent_id: str, token: str, *, use_fl_wedge: bool = False
-    ) -> GrabResult: ...
-
-
 async def rotate_oldest_to_delayed(
     db: aiosqlite.Connection,
     *,
     delayed_path: str,
-    fetch_torrent: _FetchFn,
-    mam_token: str,
 ) -> Optional[int]:
     """Pop the oldest queued grab and park it in the delayed folder.
 
-    Returns the evicted grab_id on success, or None if:
+    Returns the evicted grab_id once its queue slot is free, or None if:
       - the queue is empty
       - the delayed_path isn't configured
-      - the MAM fetch failed
-      - the disk write failed
+      - the disk write failed (the grab stays queued, untouched)
 
-    On any failure path the grab is restored to its previous state so
-    we don't silently lose it.
+    A queued grab whose saved bytes are missing can't be parked without
+    a second MAM download, so it is failed loudly instead — that still
+    frees the slot, so its id is returned.
     """
     if not delayed_path:
         _log.debug("rotate_oldest_to_delayed: delayed_path not configured")
@@ -89,21 +81,11 @@ async def rotate_oldest_to_delayed(
         await queue_mod.remove(db, evict_id)
         return None
 
-    try:
-        result = await fetch_torrent(grab.mam_torrent_id, mam_token)
-    except Exception:
-        _log.exception(
-            "rotate_oldest_to_delayed: fetch raised for grab_id=%d tid=%s",
-            evict_id, grab.mam_torrent_id,
-        )
-        return None
-
-    if not result.success or not result.torrent_bytes:
-        _log.warning(
-            "rotate_oldest_to_delayed: fetch failed grab_id=%d (%s)",
-            evict_id, result.failure_kind,
-        )
-        return None
+    torrent_bytes = torrent_store.load(grab.torrent_file_path)
+    if torrent_bytes is None:
+        await queue_mod.remove(db, evict_id)
+        await torrent_store.fail_missing_file(db, grab)
+        return evict_id
 
     try:
         folder = Path(delayed_path)
@@ -112,7 +94,7 @@ async def rotate_oldest_to_delayed(
         # contain slashes, quotes, etc. We only use the ID + grab_id
         # to avoid any sanitization bugs.
         dest = folder / f"{evict_id}_{grab.mam_torrent_id}.torrent"
-        dest.write_bytes(result.torrent_bytes)
+        dest.write_bytes(torrent_bytes)
     except Exception:
         _log.exception(
             "rotate_oldest_to_delayed: write failed grab_id=%d", evict_id
@@ -128,6 +110,7 @@ async def rotate_oldest_to_delayed(
         db, evict_id, grabs_storage.STATE_FAILED_UNKNOWN,
         failed_reason="rotated to delayed folder",
     )
+    torrent_store.discard(grab.torrent_file_path)
 
     _log.info(
         "rotate_oldest_to_delayed: parked grab_id=%d → %s",

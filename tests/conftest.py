@@ -137,7 +137,17 @@ def _no_real_mam(monkeypatch):
     whenever it is set.
     """
     from app.discovery.sources import mam as disco_mam
-    from app.mam import cookie
+    from app.mam import cookie, torrent_info
+
+    # The torrent-info cache is module-level with a 120s TTL, so a test
+    # could see torrent IDs (and their authors) cached by an earlier one
+    # — which is how a CI-only deadlock hid behind test order.
+    torrent_info.invalidate_cache()
+    # Same for the live session token: `DispatcherDeps.live_mam_token()`
+    # prefers it over the deps' own token, so a cookie rotated by one
+    # test (`test_user_status`) leaked into every later dispatch — the
+    # lifespan smoke test failed whenever it ran after that file.
+    monkeypatch.setattr(cookie, "_current_token", None)
 
     def _refuse(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError(

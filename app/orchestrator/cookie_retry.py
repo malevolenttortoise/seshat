@@ -24,7 +24,11 @@ from typing import Optional
 
 from app.mam.grab import GrabResult
 from app.mam.torrent_meta import BencodeError, info_hash
-from app.orchestrator.dispatch import DispatcherDeps, _grab_claim_lock
+from app.orchestrator.dispatch import (
+    DispatcherDeps,
+    grab_claim_lock,
+    release_write_lock,
+)
 from app.rate_limit import ledger as ledger_mod
 from app.storage import grabs as grabs_storage
 
@@ -131,10 +135,11 @@ async def _retry_grab(
     newer blocking grab for the same torrent ID means the user already
     re-grabbed it. Either way a fetch here would be a second download,
     so the row is retired instead. The row is claimed (set to
-    `fetched`) under `_grab_claim_lock`, so a concurrent inject of the
+    `fetched`) under `grab_claim_lock`, so a concurrent inject of the
     same ID sees it as in flight and backs off.
     """
-    async with _grab_claim_lock():
+    await release_write_lock(db)
+    async with grab_claim_lock():
         reason = None
         if grab.qbit_hash:
             reason = (
