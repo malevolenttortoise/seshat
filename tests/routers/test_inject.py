@@ -306,7 +306,11 @@ class TestInjectWedgeFlags:
         # (default: success). We verify a personal_fl audit row is
         # recorded and the inject still completes normally.
         from app.storage import economy_audit
+        from tests.fake_mam import DEFAULT_TORRENT_INFO_BODY
 
+        # The torrent must exist on (fake) MAM: an empty search result
+        # now means "removed from MAM" and the inject skips the fetch.
+        fake_mam.search.body = DEFAULT_TORRENT_INFO_BODY
         state.dispatcher = _make_deps()
         try:
             async with _client(_make_app()) as client:
@@ -339,9 +343,12 @@ class TestInjectWedgeFlags:
     ):
         from app.storage import economy_audit
 
+        from tests.fake_mam import DEFAULT_TORRENT_INFO_BODY
+
         fake_mam.bonus_buy.body = (
             b'{"success":false,"error":"Not enough bonus, s1"}'
         )
+        fake_mam.search.body = DEFAULT_TORRENT_INFO_BODY  # torrent exists
         state.dispatcher = _make_deps()
         try:
             async with _client(_make_app()) as client:

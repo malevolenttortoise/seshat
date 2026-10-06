@@ -24,7 +24,7 @@ from typing import Optional
 
 from app.mam.grab import GrabResult
 from app.mam.torrent_meta import BencodeError, info_hash
-from app.orchestrator.dispatch import DispatcherDeps
+from app.orchestrator.dispatch import DispatcherDeps, _grab_claim_lock
 from app.rate_limit import ledger as ledger_mod
 from app.storage import grabs as grabs_storage
 
@@ -124,7 +124,40 @@ async def _retry_grab(
     On failure, the grab's state is updated to reflect the new
     failure mode (which may differ from cookie_expired if, e.g.,
     the torrent has since been removed from MAM).
+
+    Snatch safety: a row only gets re-fetched if MAM never served it.
+    A `qbit_hash` means an earlier fetch succeeded (pre-Phase-0, a
+    queued grab whose pop-time RE-fetch hit the expired cookie), and a
+    newer blocking grab for the same torrent ID means the user already
+    re-grabbed it. Either way a fetch here would be a second download,
+    so the row is retired instead. The row is claimed (set to
+    `fetched`) under `_grab_claim_lock`, so a concurrent inject of the
+    same ID sees it as in flight and backs off.
     """
+    async with _grab_claim_lock():
+        reason = None
+        if grab.qbit_hash:
+            reason = (
+                "not retried: MAM already served this torrent once; "
+                "fetching it again would be a second download"
+            )
+        else:
+            blocker = await grabs_storage.find_blocking_grab(
+                db, grab.mam_torrent_id, exclude_grab_id=grab.id,
+            )
+            if blocker is not None:
+                reason = f"not retried: superseded by grab #{blocker.id}"
+        if reason is not None:
+            await grabs_storage.set_state(
+                db, grab.id, grabs_storage.STATE_FAILED_UNKNOWN,
+                failed_reason=reason,
+            )
+            _log.info("cookie retry: grab_id=%d %s", grab.id, reason)
+            return False
+        await grabs_storage.set_state(
+            db, grab.id, grabs_storage.STATE_FETCHED,
+        )
+
     fetch_result: GrabResult = await deps.fetch_torrent(
         grab.mam_torrent_id, deps.live_mam_token()
     )

@@ -9,13 +9,91 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
-Test-suite and CI work only — no application code changes, and no
-version tag. These changes are on `main` but were deliberately not
-released: burning a version number on a build that is functionally
-identical to v3.10.1 buys nothing. The next release folds them in.
+Two batches. The test-suite and CI work (2026-09-14) is on `main` but
+was deliberately not tagged: it changed no application code. Phase 0 of
+the 2026-10 roadmap — **snatch safety** — adds the application changes
+on `development`: MAM sees one download per torrent, ever.
+
+### Added
+
+- **Torrent-ID guard on every grab path (snatch safety).** Nothing used
+  to stop Seshat fetching the same MAM torrent twice — the
+  `find_grab_by_torrent_id` helper meant for it had no callers, and the
+  live database already held nine torrent IDs grabbed more than once.
+  The dispatcher now refuses, before any fetch, with three new skip
+  reasons (each with a readable message in the result's `error`):
+  - `already_grabbed` — a prior grab of this ID is in flight or MAM
+    already served its .torrent (`qbit_hash` set, or a state in
+    `grabs.BLOCKING_STATES`). **No override.** A pre-fetch failure
+    (cookie expired, 404, network error) stays retryable. The result
+    carries the existing grab's id. The check re-runs under a lock right
+    before the grab row is inserted, so two concurrent grabs of one ID
+    can't both pass.
+  - `already_snatched_on_mam` — MAM's own `my_snatched` flag (now parsed
+    into `TorrentInfo`). Points the user at Reingest from disk. The new
+    `override_mam_snatched` flag lets a confirmed second download through
+    on `POST /api/v1/grabs/inject`, `/inject-batch`,
+    `/api/discovery/send-to-pipeline` and
+    `POST /api/v1/tentative/{id}/approve?override_mam_snatched=true`. A
+    tentative refused this way stays **pending** so it can be re-approved
+    with the override. (The confirm UI arrives with Manual Grab.)
+  - `torrent_removed_from_mam` — the search API no longer has the ID
+    (`TorrentNotFoundError`, a new `TorrentInfoError` subclass; ADR-0006).
+    User and programmatic grabs only (inject, tentative approve, hold
+    release, send-to-pipeline): an ID that has aged may have been removed
+    by staff, and fetching it would land a torrent that sits at 0%. IRC
+    announces still fail open, since a fresh upload can beat the search
+    index.
+- **`.github/workflows/tests.yml` — pytest now runs in CI**, on pushes
+  to `main`/`development` and on PRs into either. Nothing in CI had ever
+  run the suite; the only workflow builds and publishes images. That is
+  precisely how two broken tests survived both v3.10.0 and v3.10.1. The
+  matrix covers Python 3.12 (what `python:3.12-slim` ships) and 3.13
+  (what the dev venv runs).
+- `respx==0.23.1` declared in `requirements-dev.txt`. Two test modules
+  import it, but it existed only in the local dev venv — a clean
+  checkout could not collect the suite. Found by building the CI
+  environment from the requirements files alone.
+
+### Changed
+
+- **The cookie-retry job never re-fetches a torrent MAM already
+  served.** A `failed_cookie_expired` row with a `qbit_hash` (a queued
+  grab whose pop-time re-fetch hit the dead cookie), or one a newer grab
+  has superseded, is retired to `failed_unknown` with the reason instead
+  of being fetched again.
+- The excluded-uploader check now shares the guard's single cached
+  torrent-info lookup and runs before co-author auto-train, so a refused
+  grab no longer trains its authors.
+- **Test suite runtime cut ~43%: 6m43s → 3m50s.** Two fixed sleeps
+  accounted for nearly all of it, neither of which was testing anything
+  about timing:
+  - `_stagger_qbit_add()` sleeps `qbit_add_stagger_s` (default **2.0s**
+    ± 0.5 jitter) before every qBit add — deliberate tracker-announce
+    spacing in production, pure dead time in tests, charged to every
+    test reaching the submit path. Now disabled suite-wide via the
+    isolated `settings.json`. `test_dispatch_stagger.py` is the one
+    place that actually exercises the stagger and patches
+    `load_settings` itself, so it is unaffected.
+  - `test_negative_jitter_does_not_underflow` did 50 *real* sleeps
+    averaging ~2.5s (~147s, by a wide margin the slowest test in the
+    suite) to verify a `max(0.0, …)`. It now stubs the sleep and
+    asserts on the value passed to it — a stricter check than the old
+    assertion on the return value.
+
+  Together: `test_dispatch.py` + `test_dispatch_stagger.py` went from
+  ~185s to 8.13s.
 
 ### Fixed
 
+- **The test suite was sending real requests to MAM** — 44 search-API
+  POSTs and 6 cover GETs per run, all with a junk `mam_id`, twice per
+  CI push. Dispatcher tests passed a non-empty `mam_token` without the
+  `fake_mam` fixture, and `get_torrent_info` went out through the real
+  module-level client; the tests only passed because lookups fail open.
+  An autouse `_no_real_mam` fixture now gives both MAM clients
+  (`app.mam.cookie` and the discovery source's) a transport that refuses
+  every request.
 - **Two `tests/discovery/test_trigger_lookup.py` tests had been failing
   since v3.10.0.** `25c2855` (ADR-0021 slice 3) routed the scan router's
   pre-flight due-count through `scan_eligible_authors`, which admits an
@@ -64,40 +142,6 @@ identical to v3.10.1 buys nothing. The next release folds them in.
   been writing per-library `seshat_<slug>.db` and
   `metadata_cache_amazon.db` files into the developer's data dir on
   every test run.
-
-### Changed
-
-- **Test suite runtime cut ~43%: 6m43s → 3m50s.** Two fixed sleeps
-  accounted for nearly all of it, neither of which was testing anything
-  about timing:
-  - `_stagger_qbit_add()` sleeps `qbit_add_stagger_s` (default **2.0s**
-    ± 0.5 jitter) before every qBit add — deliberate tracker-announce
-    spacing in production, pure dead time in tests, charged to every
-    test reaching the submit path. Now disabled suite-wide via the
-    isolated `settings.json`. `test_dispatch_stagger.py` is the one
-    place that actually exercises the stagger and patches
-    `load_settings` itself, so it is unaffected.
-  - `test_negative_jitter_does_not_underflow` did 50 *real* sleeps
-    averaging ~2.5s (~147s, by a wide margin the slowest test in the
-    suite) to verify a `max(0.0, …)`. It now stubs the sleep and
-    asserts on the value passed to it — a stricter check than the old
-    assertion on the return value.
-
-  Together: `test_dispatch.py` + `test_dispatch_stagger.py` went from
-  ~185s to 8.13s.
-
-### Added
-
-- **`.github/workflows/tests.yml` — pytest now runs in CI**, on pushes
-  to `main`/`development` and on PRs into either. Nothing in CI had ever
-  run the suite; the only workflow builds and publishes images. That is
-  precisely how two broken tests survived both v3.10.0 and v3.10.1. The
-  matrix covers Python 3.12 (what `python:3.12-slim` ships) and 3.13
-  (what the dev venv runs).
-- `respx==0.23.1` declared in `requirements-dev.txt`. Two test modules
-  import it, but it existed only in the local dev venv — a clean
-  checkout could not collect the suite. Found by building the CI
-  environment from the requirements files alone.
 
 ---
 

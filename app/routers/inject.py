@@ -68,6 +68,10 @@ class InjectRequest(BaseModel):
     # checkbox the user can flip if they explicitly want a duplicate
     # format of an already-in-flight or already-owned book.
     override_format_dedup: bool = False
+    # Phase 0 snatch safety — let this grab through when MAM says the
+    # account already snatched the torrent (`my_snatched`). Never
+    # overrides `already_grabbed` (a torrent Seshat itself fetched).
+    override_mam_snatched: bool = False
 
 
 class InjectResponse(BaseModel):
@@ -277,6 +281,7 @@ async def inject_endpoint(request: InjectRequest) -> InjectResponse:
         raw_line=f"manual_inject:source={request.source}",
         force_fl_wedge=request.use_wedge_override,
         apply_format_dedup=not request.override_format_dedup,
+        override_mam_snatched=request.override_mam_snatched,
     )
 
     # ok=True means the grab successfully entered the pipeline

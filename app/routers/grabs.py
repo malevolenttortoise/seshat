@@ -79,6 +79,10 @@ class InjectBatchRequest(BaseModel):
     # as a "Snatch anyway" checkbox at the batch level (the typical
     # "I know I already own this format but want it again" path).
     override_format_dedup: bool = False
+    # Phase 0 snatch safety — let this grab through when MAM says the
+    # account already snatched the torrent (`my_snatched`). Never
+    # overrides `already_grabbed` (a torrent Seshat itself fetched).
+    override_mam_snatched: bool = False
 
 
 class GrabResultItem(BaseModel):
@@ -144,6 +148,7 @@ async def inject_batch(body: InjectBatchRequest) -> InjectBatchResponse:
                 filetype=(item.filetype or "").strip(),
                 raw_line=f"external:{item.url_or_id}",
                 apply_format_dedup=not body.override_format_dedup,
+                override_mam_snatched=body.override_mam_snatched,
             )
             ok = result.action in ("submit", "queue") and result.error is None
 

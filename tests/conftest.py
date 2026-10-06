@@ -116,6 +116,42 @@ def _isolated_data_dir(tmp_path_factory):
         mp.undo()
 
 
+@pytest.fixture(autouse=True)
+def _no_real_mam(monkeypatch):
+    """The suite never talks to the real MAM.
+
+    Until 2026-10-06 it did: any test that drove the dispatcher with a
+    non-empty `mam_token` but no `fake_mam` fixture reached
+    `get_torrent_info` / the cover fetch through the real module-level
+    httpx clients — 44 search-API POSTs and 6 CDN GETs per run, all
+    with a junk `mam_id`, twice per push in CI (one per Python
+    version). The tests passed only because they fail open on errors.
+
+    Both MAM clients (`app.mam.cookie` and the discovery source's own)
+    start every test as a client whose transport refuses with a
+    ConnectError — the same "network down" the fail-open paths already
+    handle. The getters fall back to it after an app-lifespan shutdown
+    nulls the client, instead of lazily building a real one. A test
+    that installs its own client (`fake_mam`, or setting `_client`
+    directly) still gets it: the patched getters return `_client`
+    whenever it is set.
+    """
+    from app.discovery.sources import mam as disco_mam
+    from app.mam import cookie
+
+    def _refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError(
+            f"test suite tried to contact real MAM: {request.url}",
+            request=request,
+        )
+
+    guard = httpx.AsyncClient(transport=httpx.MockTransport(_refuse))
+    for mod, getter in ((cookie, "get_client"), (disco_mam, "_get_client")):
+        monkeypatch.setattr(mod, "_client", guard)
+        monkeypatch.setattr(mod, getter, lambda mod=mod: mod._client or guard)
+    yield guard
+
+
 @pytest.fixture
 async def fake_mam():
     """Install a programmable fake MAM HTTP server for the test.

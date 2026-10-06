@@ -39,6 +39,7 @@ import asyncio
 import logging
 import random
 import time
+import weakref
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Optional, Protocol
 
@@ -48,7 +49,11 @@ from app.clients.base import AddResult, TorrentClient
 from app.filter.gate import Announce, Decision, FilterConfig, evaluate_announce
 from app.mam.grab import GrabResult
 from app.mam.torrent_meta import BencodeError, info_hash
-from app.mam.torrent_info import TorrentInfoError, get_torrent_info
+from app.mam.torrent_info import (
+    TorrentInfoError,
+    TorrentNotFoundError,
+    get_torrent_info,
+)
 from app.mam.user_status import UserStatusError, get_user_status
 from app.orchestrator.auto_train import train_authors_from_torrent_info
 from app.orchestrator.delayed import rotate_oldest_to_delayed
@@ -108,6 +113,27 @@ _last_buffer_gate_notify_at: dict[str, float] = {}
 # and both proceed immediately.
 _qbit_add_lock = asyncio.Lock()
 _last_qbit_add_at: float = 0.0
+
+# Snatch safety: MAM sees one download per torrent, ever. The guard
+# re-checks for a blocking grab and inserts the new grab row under this
+# lock, so two concurrent grabs of the same torrent ID (an IRC announce
+# racing a manual inject, a double-clicked Grab, the cookie-retry job)
+# can't both pass the check before either row exists. One process, one
+# event loop (single uvicorn worker), so an asyncio lock is enough.
+# Kept per event loop rather than as one module-level Lock: a Lock binds
+# to the first loop that contends for it, and the test suite runs a
+# fresh loop per test. Production has exactly one loop, so one lock.
+_grab_claim_locks: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _grab_claim_lock() -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    lock = _grab_claim_locks.get(loop)
+    if lock is None:
+        lock = _grab_claim_locks[loop] = asyncio.Lock()
+    return lock
 
 
 async def _stagger_qbit_add() -> float:
@@ -328,8 +354,12 @@ class DispatchResult:
 
     `action` mirrors the rate-limit decision (`submit`/`queue`/`drop`)
     when the filter allowed the announce, or `"skip"` when the filter
-    rejected it. `grab_id` is the row id in `grabs` (None for skip
-    and drop). `error` is set when fetching or submitting failed.
+    rejected it. `grab_id` is the row id in `grabs` (None for drop
+    and most skips; an `already_grabbed` skip carries the EXISTING
+    grab's id so the UI can link to it). `error` is set when fetching
+    or submitting failed, and on the snatch-safety skips
+    (`already_grabbed`, `already_snatched_on_mam`,
+    `torrent_removed_from_mam`) as a message the user can act on.
     """
 
     action: str               # "skip" | "submit" | "queue" | "drop"
@@ -473,6 +503,7 @@ async def inject_grab(
     raw_line: str = "manual_inject",
     force_fl_wedge: bool = False,
     apply_format_dedup: bool = True,
+    override_mam_snatched: bool = False,
 ) -> DispatchResult:
     """Manually queue a grab by torrent ID.
 
@@ -497,6 +528,12 @@ async def inject_grab(
     manual-inject router when the user checks "use a wedge for this
     one" — drains one wedge from the pool for this single grab
     without needing to flip the global `policy_use_wedge` setting.
+
+    `override_mam_snatched=True` lets the grab through when MAM says
+    this account already snatched the torrent (`my_snatched`) — the
+    user confirmed they want a second download. It never overrides
+    `already_grabbed`: a torrent Seshat itself fetched is never
+    fetched again.
 
     Live `dry_run` kill-switch (v2.21.2). Unlike the IRC-enabled
     toggle (which doesn't apply here — manual injects are user-
@@ -548,6 +585,7 @@ async def inject_grab(
         skip_filter=True,
         force_fl_wedge=force_fl_wedge,
         apply_format_dedup=apply_format_dedup,
+        override_mam_snatched=override_mam_snatched,
     )
 
 
@@ -563,6 +601,7 @@ async def _dispatch_with_decision(
     skip_filter: bool,
     force_fl_wedge: bool = False,
     apply_format_dedup: bool = True,
+    override_mam_snatched: bool = False,
 ) -> DispatchResult:
     """The shared pipeline body used by both handle_announce and
     inject_grab. The only thing they differ on is whether the filter
@@ -572,6 +611,8 @@ async def _dispatch_with_decision(
     dedup runs after the filter says allow. Default True; manual-
     inject callers can pass False from a UI override checkbox to
     force a grab regardless of in-flight/owned siblings.
+
+    `override_mam_snatched` — see `inject_grab`.
     """
     # Computed once at the top so the dedup gate, the announce row,
     # and (if we reach the grab branch) the grab row all carry the
@@ -668,6 +709,18 @@ async def _dispatch_with_decision(
                 action="skip",
                 reason=filter_decision.reason,
                 announce_id=announce_id,
+            )
+
+        # Snatch safety (Phase 0 S1): never fetch a torrent Seshat has
+        # already fetched or is fetching. No override — see
+        # `find_blocking_grab` for which rows block. Runs first because
+        # it's one indexed query and the most specific answer; re-run
+        # under `_grab_claim_lock` just before the grab row is created.
+        prior = await grabs_storage.find_blocking_grab(db, announce.torrent_id)
+        if prior is not None:
+            return await _skip_already_grabbed(
+                db, deps, announce=announce, announce_id=announce_id,
+                prior=prior,
             )
 
         # v2.17.7 — claim-for-owned gate. If the announce matches a
@@ -814,6 +867,72 @@ async def _dispatch_with_decision(
             # normal grab path. The grab-create call below stamps
             # book_format + dedup_key on the new row.
 
+        # Snatch safety (Phase 0 S1): MAM's own view of the torrent, from
+        # the same cached search-API lookup the auto-train and economic
+        # context below reuse (one call per grab, usually a cache hit).
+        # Runs before auto-train so a refused grab trains nothing.
+        #   - removed from MAM → skip without fetching. User/programmatic
+        #     grabs only: they act on an ID that may have aged (a
+        #     tentative approved days later, a hold released). A fresh
+        #     IRC announce can beat MAM's search index, so for IRC a
+        #     not-found stays fail-open like every other lookup error.
+        #   - `my_snatched` → skip unless the user confirmed the override.
+        #   - uploader on the excluded list → skip (your own uploads).
+        # Any other lookup failure fails open: the DB guard above still
+        # covers everything Seshat itself fetched.
+        if deps.live_mam_token() and announce.torrent_id:
+            info = None
+            try:
+                info = await get_torrent_info(
+                    announce.torrent_id, token=deps.live_mam_token(),
+                )
+            except TorrentNotFoundError:
+                if skip_filter:
+                    return await _refuse_grab(
+                        db, deps,
+                        announce=announce, announce_id=announce_id,
+                        reason="torrent_removed_from_mam",
+                        message=(
+                            f"MAM torrent {announce.torrent_id} is no "
+                            "longer on MAM (removed, deleted or trumped); "
+                            "nothing was downloaded."
+                        ),
+                    )
+            except TorrentInfoError as e:
+                _log.debug(
+                    "snatch safety: torrent_info lookup failed for tid=%s "
+                    "(failing open): %s", announce.torrent_id, e,
+                )
+
+            if info is not None and info.my_snatched and not override_mam_snatched:
+                return await _refuse_grab(
+                    db, deps,
+                    announce=announce, announce_id=announce_id,
+                    reason="already_snatched_on_mam",
+                    message=(
+                        f"MAM says this account already snatched torrent "
+                        f"{announce.torrent_id}. Use Reingest from disk to "
+                        "bring the existing files into Seshat; downloading "
+                        "it again needs an explicit override."
+                    ),
+                )
+
+            if (
+                info is not None
+                and deps.excluded_uploaders
+                and info.uploader_name
+                and info.uploader_name.lower() in deps.excluded_uploaders
+            ):
+                _emit(deps, "excluded_uploader", {
+                    "torrent_id": announce.torrent_id,
+                    "uploader": info.uploader_name,
+                })
+                return DispatchResult(
+                    action="skip",
+                    reason=f"excluded_uploader:{info.uploader_name}",
+                    announce_id=announce_id,
+                )
+
         # Co-author auto-train (v3.0.0 Phase 10, ITEM 1): train the
         # AUTHORITATIVE MAM authorlist for this grab into the allow list, so
         # future announces by any co-author of a book we acquired pass the
@@ -844,27 +963,6 @@ async def _dispatch_with_decision(
         # know from the announce, then enrich with the MAM APIs (both
         # cached, both fail-safe).
         eco_ctx = await _build_economic_context(deps, announce)
-
-        # Uploader exclusion check. Uses the cached torrent_info (zero
-        # extra cost) to see if this torrent was uploaded by someone on
-        # the excluded list. Prevents downloading your own uploads.
-        if deps.excluded_uploaders and deps.live_mam_token() and announce.torrent_id:
-            try:
-                info = await get_torrent_info(
-                    announce.torrent_id, token=deps.live_mam_token(), ttl=300
-                )
-                if info.uploader_name and info.uploader_name.lower() in deps.excluded_uploaders:
-                    _emit(deps, "excluded_uploader", {
-                        "torrent_id": announce.torrent_id,
-                        "uploader": info.uploader_name,
-                    })
-                    return DispatchResult(
-                        action="skip",
-                        reason=f"excluded_uploader:{info.uploader_name}",
-                        announce_id=announce_id,
-                    )
-            except TorrentInfoError:
-                pass  # fail-open: if we can't check, allow the grab
 
         policy_decision = evaluate_policy(eco_ctx, deps.policy_config)
 
@@ -978,17 +1076,30 @@ async def _dispatch_with_decision(
             if rate_decision.action == "submit"
             else grabs_storage.STATE_PENDING_QUEUE
         )
-        grab_id = await grabs_storage.create_grab(
-            db,
-            announce_id=announce_id,
-            mam_torrent_id=announce.torrent_id,
-            torrent_name=announce.torrent_name,
-            category=announce.category,
-            author_blob=announce.author_blob,
-            state=initial_state,
-            book_format=book_format,
-            dedup_key=dedup_key,
-        )
+        # Re-check + insert atomically: the early guard ran before a
+        # string of awaits (MAM lookups, policy, rate limiter), any of
+        # which let a concurrent grab of the same ID get this far too.
+        # Once the row exists its state blocks every later check.
+        async with _grab_claim_lock():
+            prior = await grabs_storage.find_blocking_grab(
+                db, announce.torrent_id,
+            )
+            if prior is not None:
+                return await _skip_already_grabbed(
+                    db, deps, announce=announce, announce_id=announce_id,
+                    prior=prior,
+                )
+            grab_id = await grabs_storage.create_grab(
+                db,
+                announce_id=announce_id,
+                mam_torrent_id=announce.torrent_id,
+                torrent_name=announce.torrent_name,
+                category=announce.category,
+                author_blob=announce.author_blob,
+                state=initial_state,
+                book_format=book_format,
+                dedup_key=dedup_key,
+            )
 
         # `force_fl_wedge` is the manual-inject override — the user
         # explicitly asked for `&fl=1` on this grab, irrespective of
@@ -1212,6 +1323,63 @@ async def _dispatch_with_decision(
         )
     finally:
         await db.close()
+
+
+async def _refuse_grab(
+    db: aiosqlite.Connection,
+    deps: DispatcherDeps,
+    *,
+    announce: Announce,
+    announce_id: int,
+    reason: str,
+    message: str,
+    grab_id: Optional[int] = None,
+) -> DispatchResult:
+    """Record a snatch-safety skip on the audit row and return it.
+
+    `message` rides in `DispatchResult.error` so every caller that
+    already surfaces `error` (inject, inject-batch, send-to-pipeline,
+    tentative approve) shows the user why nothing was grabbed.
+    """
+    await grabs_storage.update_announce_decision(
+        db, announce_id=announce_id, action="skip", reason=reason,
+    )
+    _log.info(
+        "snatch safety: skipped tid=%s (%s)", announce.torrent_id, reason,
+    )
+    _emit(deps, "snatch_guard_skip", {
+        "torrent_id": announce.torrent_id,
+        "reason": reason,
+        "grab_id": grab_id,
+    })
+    return DispatchResult(
+        action="skip",
+        reason=reason,
+        announce_id=announce_id,
+        grab_id=grab_id,
+        error=message,
+    )
+
+
+async def _skip_already_grabbed(
+    db: aiosqlite.Connection,
+    deps: DispatcherDeps,
+    *,
+    announce: Announce,
+    announce_id: int,
+    prior: grabs_storage.GrabRow,
+) -> DispatchResult:
+    return await _refuse_grab(
+        db, deps,
+        announce=announce, announce_id=announce_id,
+        reason="already_grabbed",
+        message=(
+            f"Seshat already grabbed MAM torrent {announce.torrent_id} "
+            f"(grab #{prior.id}, {prior.state}); it never downloads the "
+            "same torrent twice."
+        ),
+        grab_id=prior.id,
+    )
 
 
 async def _build_economic_context(

@@ -82,6 +82,10 @@ class TorrentInfo:
     seeders: int = 0
     times_completed: int = 0
     added: str = ""             # MAM-formatted upload timestamp
+    # Phase 0 snatch safety — MAM's own record that this account has
+    # already downloaded the torrent (before Seshat, by hand, or by an
+    # earlier grab). Part of the baseline response; no opt-in flag.
+    my_snatched: bool = False
 
 
 # ─── In-memory cache ────────────────────────────────────────
@@ -179,7 +183,7 @@ async def get_torrent_info(
 
     items = data.get("data", [])
     if not items:
-        raise TorrentInfoError(f"torrent {torrent_id} not found in search results")
+        raise TorrentNotFoundError(f"torrent {torrent_id} not found in search results")
 
     item = items[0]
 
@@ -210,6 +214,7 @@ async def get_torrent_info(
         seeders=int(item.get("seeders") or 0),
         times_completed=int(item.get("times_completed") or 0),
         added=str(item.get("added", "")),
+        my_snatched=_to_bool(item.get("my_snatched")),
     )
 
     _cache[torrent_id] = (now, info)
@@ -362,3 +367,15 @@ def mam_cover_url(torrent_id: str) -> str:
 
 class TorrentInfoError(Exception):
     """Raised when the torrent-info lookup fails."""
+
+
+class TorrentNotFoundError(TorrentInfoError):
+    """MAM answered, but the torrent is not in its index any more.
+
+    Removed by staff, deleted by the uploader, trumped or restricted —
+    a permanent condition (ADR-0006), unlike the transient failures
+    (network, 5xx, empty response) that stay plain `TorrentInfoError`.
+    Subclassing keeps every existing `except TorrentInfoError` working,
+    and the message keeps the "not found in search results" wording
+    that `app/quality/pipeline.py` matches on.
+    """

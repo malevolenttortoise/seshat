@@ -63,6 +63,10 @@ async def send_to_pipeline(data: dict = Body(...)):
     # v2.9.0 — bypass the format-priority dedup gate for this batch.
     # Equivalent to the manual-inject "Snatch anyway" checkbox.
     override_format_dedup = bool(data.get("override_format_dedup", False))
+    # Phase 0 snatch safety — confirmed second download of a torrent
+    # MAM says this account already snatched. Never overrides
+    # `already_grabbed`.
+    override_mam_snatched = bool(data.get("override_mam_snatched", False))
 
     if state.dispatcher is None:
         raise HTTPException(503, "Pipeline dispatcher not initialized")
@@ -163,6 +167,7 @@ async def send_to_pipeline(data: dict = Body(...)):
                 raw_line=f"discovery:{r['mam_torrent_id']}",
                 force_fl_wedge=use_wedge_override,
                 apply_format_dedup=not override_format_dedup,
+                override_mam_snatched=override_mam_snatched,
             )
             ok = result.action in ("submit", "queue") and result.error is None
 

@@ -246,7 +246,9 @@ async def bulk_dismiss(body: Optional[BulkRequest] = None) -> BulkResponse:
 
 
 @router.post("/{tentative_id}/approve", response_model=TentativeActionResponse)
-async def approve(tentative_id: int) -> TentativeActionResponse:
+async def approve(
+    tentative_id: int, override_mam_snatched: bool = False,
+) -> TentativeActionResponse:
     if state.dispatcher is None:
         raise HTTPException(status_code=503, detail="dispatcher not initialized")
 
@@ -304,18 +306,23 @@ async def approve(tentative_id: int) -> TentativeActionResponse:
         category=row.category or "",
         author_blob=row.author_blob,
         raw_line=f"tentative_approve:id={tentative_id}",
+        override_mam_snatched=override_mam_snatched,
     )
 
     # Mark the tentative row as approved regardless of the injection
     # outcome. If the injection failed (cookie expired, qBit down),
     # the user can retry via the cookie-retry job or manual re-inject.
-    db = await get_db()
-    try:
-        await tentative_storage.set_tentative_status(
-            db, tentative_id, tentative_storage.TENTATIVE_APPROVED
-        )
-    finally:
-        await db.close()
+    # Exception: `already_snatched_on_mam` stays pending, because the
+    # only way forward is this same approve with the override flag
+    # (or Reingest from disk) — an approved row couldn't be re-approved.
+    if result.reason != "already_snatched_on_mam":
+        db = await get_db()
+        try:
+            await tentative_storage.set_tentative_status(
+                db, tentative_id, tentative_storage.TENTATIVE_APPROVED
+            )
+        finally:
+            await db.close()
 
     pipeline_ok = (
         result.action in ("submit", "queue") and result.error is None
@@ -323,7 +330,11 @@ async def approve(tentative_id: int) -> TentativeActionResponse:
     return TentativeActionResponse(
         ok=pipeline_ok,
         id=tentative_id,
-        status=tentative_storage.TENTATIVE_APPROVED,
+        status=(
+            tentative_storage.TENTATIVE_PENDING
+            if result.reason == "already_snatched_on_mam"
+            else tentative_storage.TENTATIVE_APPROVED
+        ),
         grab_id=result.grab_id,
         error=result.error,
     )

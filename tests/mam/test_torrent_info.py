@@ -12,6 +12,7 @@ import pytest
 from app.mam.torrent_info import (
     TorrentInfo,
     TorrentInfoError,
+    TorrentNotFoundError,
     _classify_identifier,
     _to_bool,
     get_torrent_info,
@@ -110,6 +111,18 @@ class TestGetTorrentInfoSuccess:
         info = await get_torrent_info("965093", token="tok")
         assert info.personal_freeleech is True
 
+    async def test_parses_my_snatched(self, fake_mam):
+        fake_mam.search.body = _make_search_response({"my_snatched": 1})
+        info = await get_torrent_info("965093", token="tok")
+        assert info.my_snatched is True
+
+    async def test_my_snatched_absent_or_zero_is_false(self, fake_mam):
+        fake_mam.search.body = _make_search_response()
+        assert (await get_torrent_info("965093", token="tok")).my_snatched is False
+        invalidate_cache()
+        fake_mam.search.body = _make_search_response({"my_snatched": 0})
+        assert (await get_torrent_info("965093", token="tok")).my_snatched is False
+
     async def test_request_hits_search_endpoint(self, fake_mam):
         fake_mam.search.body = _make_search_response()
         await get_torrent_info("965093", token="tok")
@@ -193,6 +206,17 @@ class TestTorrentInfoErrors:
         fake_mam.search.body = b'{"perpage":1,"start":0,"found":0,"data":[]}'
         with pytest.raises(TorrentInfoError, match="not found"):
             await get_torrent_info("999999", token="tok")
+
+    async def test_no_results_is_the_permanent_not_found_subclass(self, fake_mam):
+        # ADR-0006: empty data = removed from MAM. Transient failures
+        # (403, empty body) must NOT be the not-found subclass.
+        fake_mam.search.body = b'{"perpage":1,"start":0,"found":0,"data":[]}'
+        with pytest.raises(TorrentNotFoundError):
+            await get_torrent_info("999999", token="tok")
+        fake_mam.search.body = b""
+        with pytest.raises(TorrentInfoError) as exc:
+            await get_torrent_info("999998", token="tok")
+        assert not isinstance(exc.value, TorrentNotFoundError)
 
 
 # ─── Boolean coercion ───────────────────────────────────────
