@@ -190,6 +190,16 @@ on `development`: MAM sees one download per torrent, ever. Phase 1 —
   buy's own result now marks the grab free, on `/api/v1/grabs/inject`,
   Discovery's send-to-pipeline and Manual Grab. Both older paths also
   read the live MAM cookie for the buy instead of a startup snapshot.
+- **Tests: three test files reloaded `app.config` and never put it back.**
+  `importlib.reload` re-runs a module in its own globals, so after
+  `test_goodreads_bibliography` every later test read settings from
+  that test's dead tmp directory, undoing the suite's DATA_DIR isolation
+  and bringing back the 2s qBit add stagger (each `test_dispatch` test
+  cost ~2.4s in CI; Manual Grab's 30-grab test timed out). An autouse
+  fixture now restores the globals of every module a test reloads, and
+  the suite's stagger default is set in `DEFAULT_SETTINGS` as well as
+  the file. The suite runs everything ahead of `tests/orchestrator/` in
+  about a third of the time.
 - Pasted MAM download links (`download.php?tid=…`) are now accepted
   wherever a torrent link or ID is (`inject-batch`, send-to-pipeline,
   Manual Grab); the parser has one home, `app/mam/torrent_id.py`.

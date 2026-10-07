@@ -90,6 +90,16 @@ def _isolated_data_dir(tmp_path_factory):
     # tests/orchestrator/test_dispatch_stagger.py is the one place that
     # actually exercises the stagger, and it patches `load_settings`
     # itself, so it is unaffected by this default.
+    #
+    # Set in DEFAULT_SETTINGS too, not just the file: `load_settings`
+    # merges the file over the defaults, and dozens of tests rewrite
+    # settings.json through `save_settings`. Any rewrite without these
+    # keys used to bring the 2s stagger back for every later test —
+    # silently in CI, where the directories ahead of tests/orchestrator/
+    # do that (test_dispatch tests took ~2.4s each there; a 30-grab test
+    # timed out).
+    mp.setitem(config.DEFAULT_SETTINGS, "qbit_add_stagger_s", 0)
+    mp.setitem(config.DEFAULT_SETTINGS, "qbit_add_stagger_jitter_s", 0)
     (data_dir / "settings.json").write_text(
         json.dumps({
             "qbit_add_stagger_s": 0,
@@ -114,6 +124,48 @@ def _isolated_data_dir(tmp_path_factory):
         config._settings_cache["data"] = None
         config._settings_cache["mtime"] = None
         mp.undo()
+
+
+# Modules some tests `importlib.reload()` to re-read env vars
+# (tests/test_config.py, tests/metadata/test_goodreads_*.py).
+_RELOADED_BY_TESTS = (
+    "app.config",
+    "app.metadata.id_cache",
+    "app.metadata.goodreads_session",
+    "app.metadata.goodreads_bibliography",
+)
+
+
+@pytest.fixture(autouse=True)
+def _undo_module_reloads():
+    """Put back the globals of any module a test reloaded.
+
+    `importlib.reload` re-runs a module in its SAME `__dict__`, so every
+    `from app.config import load_settings` elsewhere then reads the
+    reloaded globals, and nothing ever reloaded them back. After
+    `test_goodreads_bibliography` reloaded `app.config` with DATA_DIR
+    set to its own tmp dir, every later test read settings from that
+    dead directory: fresh defaults, so the qBit add stagger came back
+    (~2.4s per test_dispatch test in CI) and a 30-grab test timed out.
+    It also quietly undid `_isolated_data_dir` for the rest of the run.
+    """
+    import sys
+
+    snaps = {
+        name: dict(sys.modules[name].__dict__)
+        for name in _RELOADED_BY_TESTS if name in sys.modules
+    }
+    yield
+    for name, snap in snaps.items():
+        mod = sys.modules.get(name)
+        if mod is None:
+            continue
+        current = mod.__dict__
+        for key in [k for k in current if k not in snap]:
+            del current[key]
+        for key, value in snap.items():
+            if current.get(key) is not value:
+                current[key] = value
 
 
 @pytest.fixture(autouse=True)
