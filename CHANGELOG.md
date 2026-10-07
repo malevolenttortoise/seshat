@@ -11,6 +11,20 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- **Settings now reach IRC grabs without a restart.** The IRC listener
+  and the background jobs (snatch-budget watcher, cookie retry, review
+  timeout, format-dedup hold release) kept the dispatcher built at
+  startup for the life of the container. Saving settings, a credential
+  or the metadata sources builds a new one, which those jobs never saw:
+  after the first save, IRC kept the old grab policy (VIP-only,
+  free-only, wedges, buffer gate), the old snatch budget and the old
+  excluded uploaders, and **an author approved after any save was still
+  skipped as not allow-listed** until the next restart. Every job now
+  picks up the current dispatcher on each announce or tick, including
+  grabs waiting for MAM's search index. The replaced dispatcher's
+  metadata enricher is closed 15 minutes later instead of at once, so a
+  job still finishing a download isn't cut off mid-request.
+
 - **Autograbs wait for MAM's search before deciding.** A new torrent
   reaches #announce about a second after MAM adds it, before MAM's
   search API lists it, so every IRC autograb's lookup came back "not

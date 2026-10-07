@@ -20,7 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 from app.mam.grab import GrabResult
 from app.mam.torrent_meta import BencodeError, info_hash
@@ -246,7 +246,7 @@ def _grab_failure_state(result: GrabResult) -> str:
 
 
 async def run_loop(
-    deps: DispatcherDeps,
+    get_deps: Callable[[], Optional[DispatcherDeps]],
     *,
     interval_seconds: float = 300.0,
     stop_event: Optional[asyncio.Event] = None,
@@ -256,9 +256,17 @@ async def run_loop(
     Default interval: 300s (5 minutes). The job is a no-op when there
     are no failed grabs, so this mostly affects latency between cookie
     rotation and automatic retry.
+
+    `get_deps` is called at the start of every tick (main.py passes
+    `lambda: state.dispatcher`), so a settings save that rebuilds the
+    dispatcher reaches the next tick. None (shutdown) skips the tick.
     """
     _log.info("cookie retry loop started (interval=%.0fs)", interval_seconds)
     while True:
+        deps = get_deps()
+        if deps is None:
+            await asyncio.sleep(interval_seconds)
+            continue
         result = await tick(deps)
         if result.retried:
             _log.info(

@@ -123,6 +123,9 @@ _cookie_retry_task: Optional[asyncio.Task] = None
 # their grace period to the sink with bare metadata.
 _review_timeout_task: Optional[asyncio.Task] = None
 
+# Format-priority dedup hold release (v2.9.0): wakes due `pending_holds`.
+_hold_release_task: Optional[asyncio.Task] = None
+
 
 # ─── APScheduler ────────────────────────────────────────────
 # AsyncIOScheduler instance running the daily + weekly digest jobs
@@ -324,11 +327,37 @@ _hygiene_progress: Dict[str, Any] = {
 
 
 # ─── Dispatcher singleton ────────────────────────────────────
-# Set by main.py's lifespan during startup. The inject router and
-# the IRC listener both read this attribute, so swapping in a test
+# Set by main.py's lifespan during startup and replaced by every
+# settings / credential / metadata-source save (`replace_dispatcher`).
+# The routers, the IRC listener and the background loops all read this
+# attribute when they use it, never a copy taken at startup, so a save
+# reaches them on their next announce or tick. Swapping in a test
 # dispatcher is just `state.dispatcher = test_dispatcher` — no
 # monkey-patching, no DI framework.
 dispatcher: Optional[Any] = None
+
+# A replaced dispatcher's enricher is closed this long after the swap,
+# not at once: a loop that was mid-tick (a pipeline run enriching a
+# finished download) still holds the old dispatcher until its tick ends.
+# Anything still using it after the close just reopens its HTTP client.
+_RETIRED_ENRICHER_GRACE_S = 15 * 60
+_retiring_enrichers: set[asyncio.Task] = set()
+
+
+def replace_dispatcher(new: Any) -> None:
+    """Publish a rebuilt dispatcher and retire the old one's enricher."""
+    global dispatcher
+    old, dispatcher = dispatcher, new
+    enricher = getattr(old, "metadata_enricher", None)
+    if enricher is None or enricher is getattr(new, "metadata_enricher", None):
+        return
+
+    def _close() -> None:
+        task = asyncio.ensure_future(enricher.aclose())
+        _retiring_enrichers.add(task)
+        task.add_done_callback(_retiring_enrichers.discard)
+
+    asyncio.get_running_loop().call_later(_RETIRED_ENRICHER_GRACE_S, _close)
 
 
 async def refresh_filter_authors() -> None:

@@ -371,14 +371,15 @@ class DispatcherDeps:
 
         NEVER read `self.mam_token` directly at a call site that talks
         to MAM. That field is a snapshot taken when the dispatcher was
-        built, and the long-lived background loops (budget watcher,
-        cookie retry, IRC listener) capture a DispatcherDeps *once* at
-        startup — `main.py`'s `deps_for_loops`. Saving a new cookie in
-        Settings rebuilds `state.dispatcher`, but the running loops go
-        on holding the old object forever, so before v3.10.1 they kept
-        replaying a dead token: grabs and the cookie-retry job failed
-        with HTTP 401 until the container was restarted, even though
-        the cookie had been updated correctly.
+        built. Before the 2026-10 audit the long-lived background loops
+        (budget watcher, cookie retry, IRC listener) captured a
+        DispatcherDeps *once* at startup and held it forever, so before
+        v3.10.1 they kept replaying a dead token: grabs and the
+        cookie-retry job failed with HTTP 401 until the container was
+        restarted, even though the cookie had been updated correctly.
+        The loops now resolve `state.dispatcher` per tick, but a rotated
+        cookie never rebuilds the dispatcher at all, so the snapshot is
+        still stale between saves.
 
         `app.mam.cookie` holds the live token — it is updated both by
         rotation capture and by the Settings save path — so resolving
@@ -624,7 +625,10 @@ async def _grab_once_indexed(
     """The held grab: wait for MAM's index, then run the grab path."""
     try:
         indexed = await _wait_for_index(deps, announce.torrent_id)
-        # The wait can run for minutes: re-read the kill switches.
+        # The wait can run for minutes: a settings save may have
+        # replaced the dispatcher (grab policy, excluded uploaders,
+        # budget), and the kill switches may have flipped.
+        deps = _current_dispatcher(deps)
         live = _live_kill_switch_state()
         if not live["irc_enabled"] or (live["dry_run"] and not deps.dry_run):
             _log.info(
@@ -653,6 +657,17 @@ async def _grab_once_indexed(
             )
     except Exception:
         _log.exception("held grab of tid=%s failed", announce.torrent_id)
+
+
+def _current_dispatcher(held: DispatcherDeps) -> DispatcherDeps:
+    """`state.dispatcher` as it is now, for work that outlives its announce.
+
+    `held` is the dispatcher the announce arrived with; it is used only
+    when none is published (unit tests that drive `handle_announce`
+    directly).
+    """
+    from app import state
+    return state.dispatcher if state.dispatcher is not None else held
 
 
 def _live_kill_switch_state() -> dict[str, bool]:

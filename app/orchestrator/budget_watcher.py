@@ -29,7 +29,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 from app.clients.base import AddResult, TorrentClient
 from app.mam.torrent_meta import BencodeError, info_hash
@@ -422,12 +422,16 @@ def _add_failure_state(result: AddResult) -> str:
 
 
 async def run_loop(
-    deps: DispatcherDeps,
+    get_deps: Callable[[], Optional[DispatcherDeps]],
     *,
     interval_seconds: float = 60.0,
     stop_event: Optional[asyncio.Event] = None,
 ) -> None:
     """Long-running loop that calls `tick()` on a fixed interval.
+
+    `get_deps` is called at the start of every tick (main.py passes
+    `lambda: state.dispatcher`), so a settings save that rebuilds the
+    dispatcher reaches the next tick. None (shutdown) skips the tick.
 
     Designed to be wrapped in `app.state.supervised_task()` from the
     main lifespan. Cancellation propagates cleanly via the
@@ -441,6 +445,10 @@ async def run_loop(
     _log.info(f"budget watcher started (interval={interval_seconds}s)")
     consecutive_auth_failures = 0
     while True:
+        deps = get_deps()
+        if deps is None:
+            await asyncio.sleep(interval_seconds)
+            continue
         result = await tick(deps)
         # Push the client-status transition BEFORE the rest of the loop
         # body so even a `continue` (auth backoff) still notifies the UI

@@ -88,15 +88,15 @@ async def _apply_credential(key: str, value: str) -> None:
     For MAM cookie: update the in-memory token so the next API call
     uses it. For qBit: rebuild the dispatcher. For others: rebuild.
 
-    The MAM branch below is the ONLY thing that makes a pasted cookie
-    take effect without a container restart, because the dispatcher
-    rebuild further down does NOT reach the long-lived background
-    loops — they captured a DispatcherDeps at startup and hold it for
-    the life of the process (`main.py`'s `deps_for_loops`). Those loops
-    reach the new value by resolving through `app.mam.cookie` at call
-    time via `DispatcherDeps.live_mam_token()`; seeding that slot here
-    is what feeds them. See the v3.10.1 notes in `dispatch.py` and
-    `app/discovery/sources/mam.py`.
+    The MAM branch below is what makes a pasted cookie take effect
+    without a container restart. The cookie has one authority,
+    `app.mam.cookie`, and every MAM call resolves it at call time via
+    `DispatcherDeps.live_mam_token()`; the rebuilt dispatcher's own
+    `mam_token` is only a fallback. (Until the 2026-10 audit the
+    background loops also held the startup dispatcher for the life of
+    the process, so this slot was the only thing that reached them;
+    they now resolve `state.dispatcher` per tick.) See the v3.10.1
+    notes in `dispatch.py` and `app/discovery/sources/mam.py`.
     """
     if key == "mam_session_id":
         try:
@@ -127,13 +127,9 @@ async def _apply_credential(key: str, value: str) -> None:
         resolved_secrets = await _resolve_secrets()
 
         if state.dispatcher is not None:
-            old_enricher = getattr(state.dispatcher, "metadata_enricher", None)
-            state.dispatcher = await _build_dispatcher(settings, resolved_secrets)
-            if old_enricher is not None:
-                try:
-                    await old_enricher.aclose()
-                except Exception:
-                    pass
+            state.replace_dispatcher(
+                await _build_dispatcher(settings, resolved_secrets)
+            )
             _log.info("dispatcher rebuilt after credential %r update", key)
     except Exception:
         _log.exception("dispatcher rebuild failed after credential update")

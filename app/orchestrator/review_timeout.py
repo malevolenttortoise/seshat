@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Callable, Optional
 
 from app.database import get_db
 from app.orchestrator.dispatch import DispatcherDeps
@@ -118,16 +119,26 @@ async def tick(deps: DispatcherDeps) -> int:
 
 
 async def run_loop(
-    deps: DispatcherDeps, *, interval_seconds: float
+    get_deps: Callable[[], Optional[DispatcherDeps]],
+    *,
+    interval_seconds: float,
 ) -> None:
-    """Supervised loop: tick every `interval_seconds`, never raise."""
+    """Supervised loop: tick every `interval_seconds`, never raise.
+
+    `get_deps` is called at the start of every tick (main.py passes
+    `lambda: state.dispatcher`), so a settings save that rebuilds the
+    dispatcher reaches the next tick. None (shutdown) skips the tick.
+    """
     _log.info(
         "review_timeout loop starting (interval=%.0fs, grace=%d days)",
-        interval_seconds, deps.metadata_review_timeout_days,
+        interval_seconds,
+        getattr(get_deps(), "metadata_review_timeout_days", 14),
     )
     while True:
         try:
-            await tick(deps)
+            deps = get_deps()
+            if deps is not None:
+                await tick(deps)
         except asyncio.CancelledError:
             raise
         except Exception:

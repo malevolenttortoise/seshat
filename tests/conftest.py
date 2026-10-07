@@ -169,6 +169,23 @@ def _undo_module_reloads():
 
 
 @pytest.fixture(autouse=True)
+def _no_leaked_dispatcher():
+    """Every test starts and ends with no published dispatcher.
+
+    The IRC bridge, the background loops and held index-wait grabs
+    resolve `state.dispatcher` when they use it (issue 01), so one a
+    test left behind would be what a later test's held grab dispatches
+    with. The metadata-sources PUT tests build a real one and never
+    clear it.
+    """
+    from app import state
+
+    state.dispatcher = None
+    yield
+    state.dispatcher = None
+
+
+@pytest.fixture(autouse=True)
 def _no_real_mam(monkeypatch):
     """The suite never talks to the real MAM.
 
