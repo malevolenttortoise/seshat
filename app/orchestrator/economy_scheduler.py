@@ -30,6 +30,17 @@ The scheduler AND the manual-buy router share `mam_economy_last_*_buy_at`
 as a timestamp lockout — a manual click bumps the stamp and prevents a
 double-buy on the next tick.
 
+One evaluation per interval, not per wake (audit L1-11). A tick that
+reaches MAM and doesn't buy (no trigger, not enough bonus, MAM refused
+the buy, user status unreachable) leaves "last bought" alone but stamps
+"last checked" (in memory, per feature), and the next evaluation waits
+a full interval from that. Before, every 60s wake after the interval
+re-fetched `jsonLoad.php` uncached, wrote another skip row, and retried
+a refused `bonusBuy.php`. The stamp remembers the config and the
+economy dry-run toggle it was made under, so editing the auto-buy
+settings or switching dry run off re-arms the check at once (no phantom
+lockout, the same reason a simulated buy doesn't bump "last bought").
+
 Token resolution goes through the discovery router helper so it
 reads from the encrypted secrets store first (`mam_session_id`
 secret) with a settings.json fallback — matching how the existing
@@ -69,6 +80,26 @@ _log = logging.getLogger("seshat.orchestrator.economy_scheduler")
 # 60s pattern keeps settings-change responsiveness consistent across
 # the three Seshat schedulers.
 _WAKE_SECONDS = 60
+
+# label → ((config, economy dry run), when). See the module docstring.
+_last_checked: dict[str, tuple[object, float]] = {}
+
+
+def _check_key(config, settings: dict) -> tuple:
+    return (config, bool(settings.get("mam_economy_dry_run", False)))
+
+
+def _checked_recently(label: str, key: tuple, now_ts: float, interval_hours: float) -> bool:
+    stamp = _last_checked.get(label)
+    if stamp is None or stamp[0] != key:
+        return False
+    return not _interval_elapsed(stamp[1], now_ts, interval_hours)
+
+
+def _stamp_checked(label: str, key: tuple, now_ts: float, outcome: Optional[str]) -> Optional[str]:
+    """Record an evaluated tick and pass its outcome through."""
+    _last_checked[label] = (key, now_ts)
+    return outcome
 
 
 # ─── Config builders ────────────────────────────────────────
@@ -126,6 +157,10 @@ async def vip_tick() -> Optional[str]:
     if not _interval_elapsed(last_bought_at, now_ts, config.interval_hours):
         _log.debug("vip tick: interval not elapsed, skipping")
         return None
+    check_key = _check_key(config, settings)
+    if _checked_recently("vip", check_key, now_ts, config.interval_hours):
+        _log.debug("vip tick: checked this interval already, skipping")
+        return None
 
     token = await _resolve_mam_token()
     if not token:
@@ -136,12 +171,12 @@ async def vip_tick() -> Optional[str]:
         status = await get_user_status(token=token, ttl=0)
     except UserStatusError as e:
         _log.warning("vip tick: user_status fetch failed: %s", e)
-        return await _audit(
+        return _stamp_checked("vip", check_key, now_ts, await _audit(
             action=economy_audit.ACTION_VIP,
             outcome=economy_audit.OUTCOME_FAILURE,
             trigger=economy_audit.TRIGGER_SCHEDULED,
             message=f"user_status fetch failed: {e}",
-        )
+        ))
 
     decision = decide_vip_buy(
         status, config, last_bought_at=last_bought_at, now_ts=now_ts,
@@ -151,17 +186,18 @@ async def vip_tick() -> Optional[str]:
         # disabled/below_interval gates ran above). We DO audit this —
         # the interval elapsed and we chose not to buy; the user
         # should be able to see why.
-        return await _audit(
+        return _stamp_checked("vip", check_key, now_ts, await _audit(
             action=economy_audit.ACTION_VIP,
             outcome=f"skip_{decision.reason}",
             trigger=economy_audit.TRIGGER_SCHEDULED,
             tier=decision.reason,
             amount=str(decision.weeks) if decision.weeks is not None else None,
             message="insufficient seedbonus",
-        )
+        ))
 
     # Decision said buy — fire bonus_buy.
     result = await buy_vip(decision.weeks, token=token)
+    _stamp_checked("vip", check_key, now_ts, None)
     return await _record_buy_outcome(
         result,
         action=economy_audit.ACTION_VIP,
@@ -189,6 +225,10 @@ async def upload_tick() -> Optional[str]:
     if not _interval_elapsed(last_bought_at, now_ts, config.interval_hours):
         _log.debug("upload tick: interval not elapsed, skipping")
         return None
+    check_key = _check_key(config, settings)
+    if _checked_recently("upload", check_key, now_ts, config.interval_hours):
+        _log.debug("upload tick: checked this interval already, skipping")
+        return None
 
     token = await _resolve_mam_token()
     if not token:
@@ -199,12 +239,12 @@ async def upload_tick() -> Optional[str]:
         status = await get_user_status(token=token, ttl=0)
     except UserStatusError as e:
         _log.warning("upload tick: user_status fetch failed: %s", e)
-        return await _audit(
+        return _stamp_checked("upload", check_key, now_ts, await _audit(
             action=economy_audit.ACTION_UPLOAD,
             outcome=economy_audit.OUTCOME_FAILURE,
             trigger=economy_audit.TRIGGER_SCHEDULED,
             message=f"user_status fetch failed: {e}",
-        )
+        ))
 
     decision = decide_upload_buy(
         status, config, last_bought_at=last_bought_at, now_ts=now_ts,
@@ -213,7 +253,7 @@ async def upload_tick() -> Optional[str]:
         # Here `reason` is no_trigger or insufficient_bonus — both
         # worth recording because the interval elapsed and we chose
         # not to buy. `disabled`/`below_interval` can't reach here.
-        return await _audit(
+        return _stamp_checked("upload", check_key, now_ts, await _audit(
             action=economy_audit.ACTION_UPLOAD,
             outcome=f"skip_{decision.reason}",
             trigger=economy_audit.TRIGGER_SCHEDULED,
@@ -221,11 +261,12 @@ async def upload_tick() -> Optional[str]:
             tier=decision.reason,
             amount=_format_gb(decision.amount_gb),
             message=_upload_skip_message(decision),
-        )
+        ))
 
     # Decision said buy.
     assert decision.amount_gb is not None  # by decide_upload_buy contract
     result = await buy_upload_credit(decision.amount_gb, token=token)
+    _stamp_checked("upload", check_key, now_ts, None)
     return await _record_buy_outcome(
         result,
         action=economy_audit.ACTION_UPLOAD,

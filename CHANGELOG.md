@@ -54,6 +54,25 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   on the Announces page instead of allowed, and inject / tentative
   approve return the reason as their error.
 
+- **Less traffic to MAM in three places.**
+  - **A bulk MAM scan stops when the cookie stops working.** Scanning
+    selected books, several authors, or one author's books used to
+    carry on after MAM refused the cookie, firing every remaining
+    search back to back with no gap. These scans now stop at the first
+    refusal and the scan widget shows the error, as the full and batch
+    scans already did.
+  - **Scheduled VIP / upload-credit buys check MAM once per interval.**
+    Once the interval had passed, a check that didn't buy (no trigger
+    fired, not enough bonus points, MAM refused the buy, or MAM was
+    unreachable) repeated every minute: a fresh account lookup, another
+    history row, and for a refused buy another purchase attempt. Now the
+    next check waits a full interval. Changing the auto-buy settings, or
+    turning economy dry run off, re-arms it straight away.
+  - **No cover download for announces by ignored authors.** Each one
+    fetched the torrent's cover from MAM (about 25 a day) for a record
+    nothing displays. A tentative torrent's cover is reused when it is
+    announced again instead of being downloaded again.
+
 - **Autograbs wait for MAM's search before deciding.** A new torrent
   reaches #announce about a second after MAM adds it, before MAM's
   search API lists it, so every IRC autograb's lookup came back "not

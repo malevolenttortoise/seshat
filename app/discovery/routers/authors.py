@@ -2796,7 +2796,9 @@ async def scan_authors_mam(data: dict = Body(...)):
         return {"error": "No authors specified"}
 
     s = load_settings()
-    from app.discovery.routers.mam import _mam_ready, _get_mam_token
+    from app.discovery.routers.mam import (
+        _get_mam_token, _mam_ready, _stop_mam_scan_on_auth_error,
+    )
     if not await _mam_ready(s):
         return {"error": "MAM not configured or not enabled"}
     if not s.get("mam_scanning_enabled", True):
@@ -2959,6 +2961,11 @@ async def scan_authors_mam(data: dict = Body(...)):
                             state._mam_scan_progress[st] = (
                                 state._mam_scan_progress.get(st, 0) + 1
                             )
+                        if st == "auth_error":
+                            # Dead cookie: stop every library, not just
+                            # this one (see books.py).
+                            await _stop_mam_scan_on_auth_error(db2, check)
+                            return
                     await db2.commit()
                 finally:
                     await db2.close()

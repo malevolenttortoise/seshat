@@ -1058,7 +1058,9 @@ async def scan_books_mam(data: dict = Body(...), slug: str | None = Query(None))
         return {"error": "No books specified"}
 
     s = load_settings()
-    from app.discovery.routers.mam import _mam_ready, _get_mam_token
+    from app.discovery.routers.mam import (
+        _get_mam_token, _mam_ready, _stop_mam_scan_on_auth_error,
+    )
     if not await _mam_ready(s):
         return {"error": "MAM not configured or not enabled"}
     if not s.get("mam_scanning_enabled", True):
@@ -1176,6 +1178,13 @@ async def scan_books_mam(data: dict = Body(...), slug: str | None = Query(None))
                 st = check["status"]
                 if st in ("found", "possible", "not_found"):
                     state._mam_scan_progress[st] += 1
+                if st == "auth_error":
+                    # A dead cookie: every remaining search would fail
+                    # the same way, back to back (check_book raises
+                    # before its pacing sleep). Stop, as
+                    # scan_books_batch does.
+                    await _stop_mam_scan_on_auth_error(bdb, check)
+                    return
             await bdb.commit()
             state._mam_scan_progress.update({
                 "running": False, "status": "complete", "current_book": "",

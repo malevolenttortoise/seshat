@@ -926,12 +926,11 @@ async def _dispatch_with_decision(
 
             # Tier 2 routing: if the author was on the ignored list,
             # stash a seen-row so the weekly review can show the user
-            # what they're turning down.
+            # what they're turning down. No cover: nothing displays an
+            # ignored-seen cover (the digest lists authors), and fetching
+            # one cost a MAM CDN request per ignored announce (L1-15).
             elif filter_decision.reason == "ignored_author":
                 try:
-                    cover_path = await _fetch_mam_cover_for_skip(
-                        deps, announce.torrent_id
-                    )
                     await tentative_storage.record_ignored_seen(
                         db,
                         mam_torrent_id=announce.torrent_id,
@@ -941,7 +940,7 @@ async def _dispatch_with_decision(
                             or "",
                         category=announce.category,
                         info_url=announce.info_url or None,
-                        cover_path=cover_path,
+                        cover_path=None,
                     )
                 except Exception:
                     _log.exception(
@@ -2357,12 +2356,13 @@ def _add_failure_state(result: AddResult) -> str:
 async def _fetch_mam_cover_for_skip(
     deps: DispatcherDeps, torrent_id: str
 ) -> Optional[str]:
-    """Best-effort MAM cover fetch for tentative/ignored captures.
+    """Best-effort MAM cover fetch for tentative captures.
 
     Downloads the MAM poster to a temp directory and returns the path.
     Returns None on any failure — never blocks the dispatch loop.
-    The cover is stored alongside the tentative/ignored-seen DB row
-    so the review UI can show it.
+    The cover is stored alongside the tentative DB row so the review
+    UI can show it. A cover already on disk for this torrent (a
+    re-announce) is reused instead of fetched again.
     """
     if not deps.live_mam_token() or not torrent_id:
         return None
@@ -2375,6 +2375,9 @@ async def _fetch_mam_cover_for_skip(
         # (or a temp dir if staging isn't configured).
         base = Path(deps.staging_path) if deps.staging_path else Path(tempfile.gettempdir())
         cover_dir = base / "tentative-covers" / f"tid-{torrent_id}"
+        existing = sorted(cover_dir.glob("cover-mam.*")) if cover_dir.is_dir() else []
+        if existing:
+            return str(existing[0])
         path = await fetch_mam_cover(
             torrent_id,
             dest_dir=cover_dir,

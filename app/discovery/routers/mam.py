@@ -712,6 +712,21 @@ async def mam_books_endpoint(section: str = "upload", search: str = "",
         await db.close()
 
 
+async def _stop_mam_scan_on_auth_error(db, check: dict) -> None:
+    """End a bulk MAM scan on MAM's 401/403: commit what was written and
+    show the error in the scan widget (the batch scanner's wording)."""
+    from app import state
+
+    detail = check.get("error") or "MAM auth error"
+    logger.error(f"MAM auth error — stopping scan: {detail}")
+    await db.commit()
+    state._mam_scan_progress["errors"] = state._mam_scan_progress.get("errors", 0) + 1
+    state._mam_scan_progress.update({
+        "running": False, "status": f"error: {detail}",
+        "current_book": "", "current_library": "",
+    })
+
+
 @router.post("/scan-book/{book_id}")
 async def mam_scan_single_book(book_id: int, slug: str | None = Query(None)):
     """Re-scan a single book against MAM, ignoring its existing mam_status.
@@ -936,6 +951,10 @@ async def mam_scan_single_author(author_id: int, slug: str | None = None):
                     state._mam_scan_progress["possible"] += 1
                 elif check["status"] == "not_found":
                     state._mam_scan_progress["not_found"] += 1
+                elif check["status"] == "auth_error":
+                    # Dead cookie: stop (see books.py).
+                    await _stop_mam_scan_on_auth_error(bdb, check)
+                    return
             await bdb.commit()
             state._mam_scan_progress.update({"running": False, "status": "complete"})
             await _notify_mam_done()
