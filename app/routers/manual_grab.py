@@ -64,20 +64,11 @@ class PreviewRequest(_ItemIn):
 
 
 class GrabItemIn(_ItemIn):
-    buy_personal_fl: bool = False
     # Set only by the row's "Download again" confirm (D13).
     override_mam_snatched: bool = False
-    # The batch "Use wedges" toggle, applied by the page to each
-    # eligible row (D7). Links only.
+    # The batch "Use wedges" toggle, applied by the page to each eligible
+    # row (D7, D31): `&fl=1` on a link's download, "Buy as FL" on a file.
     use_wedge: bool = False
-
-    @model_validator(mode="after")
-    def _wedge_needs_a_link(self):
-        if self.use_wedge and self.kind != "link":
-            raise ValueError(
-                "an uploaded .torrent can't take a wedge (it rides on the MAM download)"
-            )
-        return self
 
 
 class GrabRequest(BaseModel):
@@ -127,7 +118,6 @@ async def grab(body: GrabRequest) -> dict:
         items.append(manual_grab.GrabRequestItem(
             kind=it.kind,
             value=it.value if it.kind == "link" else (it.name or "upload.torrent"),
-            buy_personal_fl=it.buy_personal_fl,
             override_mam_snatched=it.override_mam_snatched,
             data=data,
             use_wedge=it.use_wedge,

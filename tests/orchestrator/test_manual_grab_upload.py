@@ -252,7 +252,8 @@ class TestUploadPreview:
         assert row.status == manual_grab.STATUS_READY
         assert row.kind == "file" and row.torrent_id == TID
         assert row.info_hash == info_hash(data)
-        assert row.wedge_eligible is False
+        # A paid upload can take a wedge via "Buy as FL" (D31).
+        assert row.wedge_eligible is True
         assert row.title == "The Way of Kings"
 
     @pytest.mark.parametrize("data,status", [
@@ -295,22 +296,82 @@ class TestUploadJob:
         assert job.rows[0].reason == "foreign_file"
         assert mam_search["calls"] == []
 
-    async def test_personal_fl_on_a_file_row(self, temp_db, mam_search, me, fake_clock, monkeypatch):
+    @pytest.fixture
+    def buy_as_fl(self, monkeypatch):
+        """The site's "Buy as FL" (one wedge), as the job reaches it."""
         from app.mam import torrent_info
         from app.routers import inject as inject_router
 
+        bought: list[str] = []
+
         async def fake_buy(tid, token):
+            bought.append(tid)
             torrent_info.invalidate_cache()
             return True
 
         monkeypatch.setattr(inject_router, "_buy_personal_fl_for_inject", fake_buy)
+        return bought
+
+    async def test_wedge_on_a_file_row_buys_as_fl(
+        self, temp_db, mam_search, me, fake_clock, buy_as_fl,
+    ):
+        """D31: an upload can't take `&fl=1` (that's a second download),
+        so its wedge is the site's "Buy as FL"."""
         deps = _make_deps()
         job = await _run_job(deps, manual_grab.GrabRequestItem(
-            kind="file", value="x.torrent", data=_torrent(), buy_personal_fl=True,
+            kind="file", value="x.torrent", data=_torrent(), use_wedge=True,
+        ))
+        row = job.rows[0]
+        assert row.status == "submitted", row.message
+        assert buy_as_fl == [TID]
+        assert row.wedge_used is True
+        assert deps.fetch_torrent.calls == []
+
+    async def test_no_wedge_bought_for_a_grab_that_is_refused(
+        self, temp_db, mam_search, me, fake_clock, buy_as_fl,
+    ):
+        await _seed_grab(tid=TID, qbit_hash="b" * 40)
+        deps = _make_deps()
+        job = await _run_job(deps, manual_grab.GrabRequestItem(
+            kind="file", value="x.torrent", data=_torrent(), use_wedge=True,
+        ))
+        assert job.rows[0].reason == "already_grabbed"
+        assert buy_as_fl == []
+
+    async def test_no_wedge_bought_when_the_budget_drops_it(
+        self, temp_db, mam_search, me, fake_clock, buy_as_fl,
+    ):
+        deps = _make_deps(budget_cap=0, queue_max=0)
+        job = await _run_job(deps, manual_grab.GrabRequestItem(
+            kind="file", value="x.torrent", data=_torrent(), use_wedge=True,
+        ))
+        assert job.rows[0].status == "refused"
+        assert buy_as_fl == []
+
+    async def test_no_wedge_bought_on_a_free_upload(
+        self, temp_db, mam_search, me, fake_clock, buy_as_fl,
+    ):
+        mam_search["items"][TID] = _item(vip=1)
+        deps = _make_deps()
+        job = await _run_job(deps, manual_grab.GrabRequestItem(
+            kind="file", value="x.torrent", data=_torrent(), use_wedge=True,
         ))
         assert job.rows[0].status == "submitted"
-        assert job.rows[0].personal_fl_bought is True
-        assert deps.fetch_torrent.calls == []
+        assert buy_as_fl == []
+        assert job.rows[0].wedge_used is False
+
+    async def test_buy_as_fl_is_paced(
+        self, temp_db, mam_search, me, fake_clock, buy_as_fl, monkeypatch,
+    ):
+        from app.mam import search_pacer
+
+        monkeypatch.setattr(search_pacer, "gap_seconds", lambda: 2.0)
+        deps = _make_deps()
+        await _run_job(deps, manual_grab.GrabRequestItem(
+            kind="file", value="x.torrent", data=_torrent(), use_wedge=True,
+        ))
+        # torrent-info lookup, then Buy as FL: one gap between them.
+        assert fake_clock["sleeps"] == [2.0]
 
 
 # ─── Router: files over the wire ─────────────────────────────

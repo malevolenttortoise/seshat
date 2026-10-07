@@ -49,7 +49,7 @@ function itemBody(e: GrabEntry) {
 function newEntry(kind: EntryKind, input: string, dataB64: string | null = null): GrabEntry {
   return {
     key: nextKey(), kind, input, dataB64, preview: null, ticked: false,
-    buyFl: false, overrideSnatched: false, confirming: false, result: null,
+    overrideSnatched: false, confirming: false, result: null,
   };
 }
 
@@ -281,10 +281,6 @@ export function useManualGrabBatch() {
     (key: string) => patch(key, { confirming: false }),
     [patch],
   );
-  const setBuyFl = useCallback(
-    (key: string, on: boolean) => patch(key, { buyFl: on }),
-    [patch],
-  );
 
   const setUseWedges = useCallback(async (on: boolean) => {
     setUseWedgesState(on);
@@ -311,7 +307,6 @@ export function useManualGrabBatch() {
       started = await api.post<GrabJob>("/v1/manual-grab/grab", {
         items: chosen.map((e) => ({
           ...itemBody(e),
-          buy_personal_fl: e.buyFl,
           override_mam_snatched: e.overrideSnatched,
           use_wedge: useWedges && wedgeEligible(e),
         })),
@@ -354,7 +349,6 @@ export function useManualGrabBatch() {
   const pending = entries.some((e) => e.preview === null);
   const open = entries.filter((e) => e.ticked && !e.result);
   const tickedCount = open.length;
-  const flCount = open.filter((e) => e.buyFl).length;
   const wedgeCount = useWedges ? open.filter(wedgeEligible).length : 0;
   const eligibleForWedges = entries.filter(wedgeEligible).length;
   const wedgeShort = useWedges && !!wedges && wedgeCount > wedges.spendable;
@@ -369,7 +363,6 @@ export function useManualGrabBatch() {
     notice,
     pending,
     tickedCount,
-    flCount,
     useWedges,
     wedges,
     wedgeError,
@@ -385,7 +378,6 @@ export function useManualGrabBatch() {
     setTicked,
     confirmSnatched,
     cancelConfirm,
-    setBuyFl,
     setUseWedges,
     grabAll,
   };

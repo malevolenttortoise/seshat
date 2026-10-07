@@ -79,7 +79,6 @@ export default function MobileGrabFromMamPage({ initial }: { initial?: string | 
               compact
               willWedge={batch.useWedges && wedgeEligible(e)}
               onTick={(on) => batch.setTicked(e.key, on)}
-              onBuyFl={(on) => batch.setBuyFl(e.key, on)}
               onConfirmSnatched={() => batch.confirmSnatched(e.key)}
               onCancelConfirm={() => batch.cancelConfirm(e.key)}
               onRemove={batch.grabbing ? undefined : () => batch.remove(e.key)}

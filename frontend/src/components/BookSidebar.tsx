@@ -257,16 +257,15 @@ export function BookSidebar({
   const [sugBusy, setSugBusy] = useState<SuggestionAction | null>(null);
   const [sending, setSending] = useState(false);
 
-  // Economy offers — the "use wedge" / "buy personal FL" checkboxes
-  // only render when the user has opted into those offers via
-  // MamPage. `preflight` caches the result of the most recent buffer
-  // gate check for this book so the BufferInsufficientBanner has
-  // something to render.
+  // Economy offers — the "use wedge" checkbox only renders when the
+  // user has opted into it via MamPage. (The "buy personal FL" tick was
+  // dropped 2026-10-06: MAM's "Buy as FL" costs a wedge too, so it did
+  // what "use wedge" does.) `preflight` caches the result of the most
+  // recent buffer gate check for this book so the
+  // BufferInsufficientBanner has something to render.
   const [offerWedge, setOfferWedge] = useState(false);
-  const [offerFl, setOfferFl] = useState(false);
   const [bufferGateOn, setBufferGateOn] = useState(false);
   const [useWedgeChecked, setUseWedgeChecked] = useState(false);
-  const [buyFlChecked, setBuyFlChecked] = useState(false);
   const [preflight, setPreflight] = useState<PreflightResponse | null>(null);
   // v2.8.0 reingest state. `reingestBusy` mirrors `sending` for the
   // parallel button; `reingestCandidates` holds the picker payload
@@ -303,7 +302,6 @@ export function BookSidebar({
       .getConfig()
       .then((cfg) => {
         setOfferWedge(!!cfg.mam_economy_manual_wedge_offer_enabled);
-        setOfferFl(!!cfg.mam_economy_fl_wedge_offer_enabled);
         setBufferGateOn(!!cfg.mam_economy_buffer_gate_enabled);
       })
       .catch(() => {});
@@ -465,14 +463,12 @@ export function BookSidebar({
         "/discovery/send-to-pipeline",
         {
           book_ids: [book.id],
-          buy_personal_fl: buyFlChecked,
           use_wedge_override: useWedgeChecked,
         },
       );
       if (r.sent > 0) {
         alert("Sent to pipeline for download!");
         setUseWedgeChecked(false);
-        setBuyFlChecked(false);
       } else {
         alert(r.message || "Failed to send");
       }
@@ -1932,7 +1928,7 @@ export function BookSidebar({
                 {pipelineReady &&
                 book.mam_status === "found" &&
                 !book.mam_my_snatched &&
-                (offerWedge || offerFl) ? (
+                offerWedge ? (
                   <div
                     style={{
                       display: "flex",
@@ -1961,24 +1957,6 @@ export function BookSidebar({
                           }
                         />
                         Use wedge
-                      </label>
-                    )}
-                    {offerFl && (
-                      <label
-                        style={{
-                          display: "flex",
-                          gap: 4,
-                          alignItems: "center",
-                          cursor: "pointer",
-                        }}
-                        title="Spend 50,000 BP to flag this torrent as personal freeleech on MAM"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={buyFlChecked}
-                          onChange={(e) => setBuyFlChecked(e.target.checked)}
-                        />
-                        Buy personal FL (50k BP)
                       </label>
                     )}
                   </div>

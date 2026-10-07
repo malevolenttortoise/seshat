@@ -1568,6 +1568,7 @@ async def grab_uploaded_torrent(
     *,
     torrent_bytes: bytes,
     personal_fl_bought: bool = False,
+    buy_wedge: Optional[Callable[[], Awaitable[bool]]] = None,
 ) -> DispatchResult:
     """Manual Grab's upload path: a .torrent the user downloaded from MAM
     themselves. Never calls MAM's download endpoint (ADR-0023).
@@ -1585,6 +1586,14 @@ async def grab_uploaded_torrent(
     A budget-and-queue-full drop is refused before any grab row exists.
     Otherwise the grab row is claimed under `grab_claim_lock()` and the
     bytes go through `submit_torrent_bytes`.
+
+    `buy_wedge` (Manual Grab's "Use wedges", D31) wedges the upload via
+    the site's "Buy as FL" (`personalFL`, one wedge, no download). It's
+    called only once every refusal has passed and the grab row is
+    claimed, and only on a torrent MAM confirmed isn't free, so a wedge
+    is never spent on a grab that doesn't happen. The policy counts the
+    grab as free on the strength of it; a buy that then fails leaves the
+    grab going ahead paid.
     """
     live = _live_kill_switch_state()
     if live["dry_run"] or deps.dry_run:
@@ -1717,8 +1726,11 @@ async def grab_uploaded_torrent(
         except Exception:
             pass  # best-effort, as in dispatch
 
+        wedge_ok = buy_wedge is not None and info is not None and not (
+            info.vip or info.free or info.fl_vip or info.personal_freeleech
+        )
         eco_ctx = await _build_economic_context(
-            deps, announce, personal_fl_bought=personal_fl_bought,
+            deps, announce, personal_fl_bought=personal_fl_bought or wedge_ok,
         )
         policy_decision = evaluate_policy(eco_ctx, deps.policy_config)
         if policy_decision.action == "skip":
@@ -1776,6 +1788,12 @@ async def grab_uploaded_torrent(
             )
     finally:
         await db.close()
+
+    if wedge_ok:
+        if not await buy_wedge():
+            _log.info(
+                "upload tid=%s: Buy as FL failed; grabbing without it", tid,
+            )
 
     result = await submit_torrent_bytes(
         deps, grab_id=grab_id, torrent_bytes=torrent_bytes,

@@ -18,15 +18,18 @@ auth (auth_secret cookie) is enforced by the global middleware.
 """
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app import state
-from app.mam.bonus_buy import buy_personal_freeleech
+from app.mam.bonus_buy import buy_personal_freeleech, personal_fl_worth_buying
 from app.mam.torrent_info import invalidate_cache as invalidate_torrent_info
 from app.orchestrator.dispatch import inject_grab
+
+_log = logging.getLogger("seshat.routers.inject")
 
 router = APIRouter(prefix="/api/v1/grabs", tags=["grabs"])
 
@@ -45,14 +48,16 @@ class InjectRequest(BaseModel):
         URL for this one grab, draining one wedge from the user's
         pool. Overrides the global `policy_use_wedge` setting on a
         per-grab basis.
-      - `buy_personal_fl=True` spends 50k BP via `bonusBuy.php?
+      - `buy_personal_fl=True` spends ONE FL WEDGE via `bonusBuy.php?
         spendtype=personalFL` BEFORE the inject. MAM then flags the
         torrent as personal freeleech on the user's account, and
         the existing grab path picks up `torrent_free=True` via
         torrent_info — no `&fl=1` override needed.
 
-    Both can be set together (cheap + BP-spend for a belt-and-
-    suspenders grab), though the UI only lets the user pick one.
+    Both cost a wedge. Setting both never spends two: a successful FL
+    buy makes the grab read as free, so the dispatcher's wedge guard
+    leaves `&fl=1` off. Neither is spent on a torrent that's already
+    free or whose status MAM can't confirm.
     """
 
     torrent_id: str = Field(..., min_length=1)
@@ -204,7 +209,10 @@ async def snatch_budget():
 
 
 async def _buy_personal_fl_for_inject(torrent_id: str, token: str) -> bool:
-    """Spend 50k BP to flag this torrent as personal freeleech.
+    """Spend one FL wedge (the site's "Buy as FL") to flag this torrent
+    as personal freeleech. Not bought on a torrent that's already free or
+    whose status MAM can't confirm (`personal_fl_worth_buying`): MAM
+    would spend the wedge regardless.
 
     Returns True when MAM confirmed the buy. The caller passes that to
     `inject_grab(personal_fl_bought=...)`: MAM's search API takes 5-20
@@ -231,6 +239,11 @@ async def _buy_personal_fl_for_inject(torrent_id: str, token: str) -> bool:
     if not torrent_id or not token:
         return False
 
+    worth, why = await personal_fl_worth_buying(torrent_id, token)
+    if not worth:
+        _log.info("personal FL not bought on tid=%s: %s", torrent_id, why)
+        return False
+
     result = await buy_personal_freeleech(torrent_id, token=token)
     db = await get_db()
     try:
@@ -244,7 +257,7 @@ async def _buy_personal_fl_for_inject(torrent_id: str, token: str) -> bool:
                 else economy_audit.OUTCOME_FAILURE
             ),
             torrent_id=torrent_id,
-            message=result.message,
+            message=f"1 FL wedge (Buy as FL): {result.message}",
             user_bonus_after=result.new_seedbonus,
         )
     finally:

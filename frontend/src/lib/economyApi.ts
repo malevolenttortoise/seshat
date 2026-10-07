@@ -118,7 +118,7 @@ export function formatAction(action: AuditRow["action"]): string {
     case "upload":
       return "Upload";
     case "personal_fl":
-      return "Personal FL";
+      return "Personal FL (wedge)";
     case "buffer_gate_block":
       return "Buffer gate";
     case "wedge":

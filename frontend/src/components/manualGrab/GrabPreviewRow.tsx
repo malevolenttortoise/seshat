@@ -1,5 +1,5 @@
 // One row of a Manual Grab review list: the preview of a MAM torrent,
-// the user's tick, the per-row personal-FL tick, the "Download again?"
+// the user's tick, its cost (free, wedged, or paid), the "Download again?"
 // confirm for torrents MAM says you already snatched (D13), and the
 // outcome once Grab all has run. Used by both shells (`compact` for
 // mobile) and meant for reuse by Proactive Search.
@@ -7,7 +7,7 @@ import type { CSSProperties } from "react";
 import { useTheme } from "../../theme";
 import { fmtBytes } from "../../lib/format";
 import { Spin } from "../Spin";
-import { BLOCKING_STATUSES, isFree, type GrabEntry, type JobRowStatus } from "./types";
+import { BLOCKING_STATUSES, type GrabEntry, type JobRowStatus } from "./types";
 
 export interface GrabPreviewRowProps {
   entry: GrabEntry;
@@ -15,7 +15,6 @@ export interface GrabPreviewRowProps {
   // The batch "Use wedges" toggle will spend a wedge on this row.
   willWedge?: boolean;
   onTick: (on: boolean) => void;
-  onBuyFl: (on: boolean) => void;
   onConfirmSnatched: () => void;
   onCancelConfirm: () => void;
   onRemove?: () => void;
@@ -24,14 +23,13 @@ export interface GrabPreviewRowProps {
 }
 
 // What grabbing this row costs (D23): free and why, or paid and how much
-// of the upload buffer. Follows the row's own choices (personal FL, wedge).
+// of the upload buffer. Follows the batch wedge toggle.
 function costChip(entry: GrabEntry, willWedge: boolean): { label: string; free: boolean } | null {
   const p = entry.preview;
   if (!p || BLOCKING_STATUSES.has(p.status)) return null;
   if (p.vip) return { label: "FREE · VIP", free: true };
   if (p.freeleech) return { label: "FREE · Freeleech", free: true };
   if (p.personal_freeleech) return { label: "FREE · Personal FL", free: true };
-  if (entry.buyFl) return { label: "FREE · Personal FL (buying)", free: true };
   if (willWedge) return { label: "FREE · Wedge", free: true };
   return {
     label: p.size_bytes != null ? `PAID · ${fmtBytes(p.size_bytes)} from buffer` : "PAID",
@@ -42,7 +40,7 @@ function costChip(entry: GrabEntry, willWedge: boolean): { label: string; free: 
 const RETRYABLE = new Set(["lookup_failed", "uid_unknown"]);
 
 export function GrabPreviewRow({
-  entry, compact, willWedge, onTick, onBuyFl, onConfirmSnatched, onCancelConfirm, onRemove, onRetry,
+  entry, compact, willWedge, onTick, onConfirmSnatched, onCancelConfirm, onRemove, onRetry,
 }: GrabPreviewRowProps) {
   const t = useTheme();
   const p = entry.preview;
@@ -81,7 +79,6 @@ export function GrabPreviewRow({
       ].filter(Boolean).join(" · ")
     : "";
 
-  const showFl = !!p && !blocked && !entry.result && !isFree(p);
 
   return (
     <div
@@ -199,31 +196,16 @@ export function GrabPreviewRow({
           </div>
         )}
 
-        {showFl && (
-          <label style={{ fontSize: 12, color: t.text2, display: "flex", alignItems: "center", gap: 6, marginTop: 2 }}>
-            <input
-              type="checkbox"
-              checked={entry.buyFl}
-              onChange={(e) => onBuyFl(e.target.checked)}
-              style={{ accentColor: t.accent }}
-            />
-            Buy personal FL (50k BP)
-          </label>
-        )}
-        {showFl && entry.kind === "file" && (
-          <div style={{ fontSize: 11, color: t.tf, paddingLeft: 22 }}>
-            No wedge for this one: MAM only spends a wedge while serving the .torrent, and
-            you already downloaded it. Personal FL gets the same result without a download.
-          </div>
-        )}
-
         {entry.result && (
           <div style={{ fontSize: 12, color: resultColor[entry.result.status], display: "flex", gap: 6, alignItems: "center" }}>
             {entry.result.status === "working" && <Spin size={12} />}
             <strong>{resultLabel[entry.result.status]}</strong>
             {done && entry.result.message && <span style={{ color: t.td }}>· {entry.result.message}</span>}
-            {entry.result.personal_fl_bought && <span style={{ color: t.grnt }}>· personal FL bought</span>}
-            {entry.result.wedge_used && <span style={{ color: t.cyant }}>· wedge used</span>}
+            {entry.result.wedge_used && (
+              <span style={{ color: t.cyant }}>
+                · wedge used{entry.kind === "file" ? " (Buy as FL)" : ""}
+              </span>
+            )}
           </div>
         )}
       </div>

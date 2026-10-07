@@ -126,11 +126,22 @@ class TestBatchLimits:
         assert resp.status_code == 200
         assert wedges["fresh"] == []
 
-    async def test_an_upload_cannot_take_a_wedge(self, temp_db, no_job):
+    async def test_an_upload_can_take_a_wedge(self, temp_db, no_job, wedges):
+        """D31: via "Buy as FL"; and it counts toward the wedge budget."""
         item = _file()
         item["use_wedge"] = True
-        resp = await _post_grab([item])
-        assert resp.status_code == 422
+        resp = await _post_grab([item, _link("1", use_wedge=True)])
+        assert resp.status_code == 200, resp.text
+        assert [i.use_wedge for i in no_job[0]] == [True, True]
+
+    async def test_uploads_count_toward_the_wedge_budget(self, temp_db, no_job, wedges):
+        files = []
+        for mid in ("11", "12", "13", "14"):
+            f = _file(mid=mid)
+            f["use_wedge"] = True
+            files.append(f)
+        resp = await _post_grab(files)
+        assert resp.status_code == 409
         assert no_job == []
 
 
@@ -163,22 +174,6 @@ class TestJobWedges:
         job = await _run_job(deps, manual_grab.GrabRequestItem(kind="link", value=TID, use_wedge=True))
         assert [c["use_fl_wedge"] for c in calls] == [False]
         assert job.rows[0].wedge_used is False
-
-    async def test_no_wedge_on_top_of_a_bought_fl(self, temp_db, mam_search, fake_clock, monkeypatch):
-        from app.routers import inject as inject_router
-
-        async def fake_buy(tid, token):
-            torrent_info.invalidate_cache()
-            return True
-
-        monkeypatch.setattr(inject_router, "_buy_personal_fl_for_inject", fake_buy)
-        deps = _make_deps()
-        calls = _recording_fetch(deps)
-        job = await _run_job(deps, manual_grab.GrabRequestItem(
-            kind="link", value=TID, use_wedge=True, buy_personal_fl=True,
-        ))
-        assert [c["use_fl_wedge"] for c in calls] == [False]
-        assert job.rows[0].personal_fl_bought is True
 
 
 # ─── 30 rows, never a burst ──────────────────────────────────

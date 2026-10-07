@@ -266,8 +266,6 @@ async def _preview_torrent(deps: DispatcherDeps, row: PreviewRow) -> PreviewRow:
         return row
 
     _fill_from_info(row, info)
-    if is_file:
-        row.wedge_eligible = False
 
     if (
         deps.excluded_uploaders
@@ -478,11 +476,11 @@ def wedge_shortfall_message(needed: int, budget: WedgeBudget) -> str:
 class GrabRequestItem:
     kind: str                     # "link" | "file"
     value: str                    # the link, or the file's name
-    buy_personal_fl: bool = False
     override_mam_snatched: bool = False
     data: Optional[bytes] = None  # the .torrent bytes, for "file"
     # Set on each eligible row when the batch "Use wedges" toggle is on
-    # (D7). Links only: a wedge is `&fl=1` on the MAM download.
+    # (D7, D31). A link is wedged with `&fl=1` on its MAM download; an
+    # uploaded file with the site's "Buy as FL" (one wedge, no download).
     use_wedge: bool = False
 
 
@@ -599,21 +597,10 @@ async def _grab_link(
     if info is None:
         return
 
-    fl_bought = False
-    if item.buy_personal_fl:
-        fl_bought = await _buy_fl(row, tid, token)
-        if fl_bought:
-            # A successful buy clears the whole torrent-info cache.
-            info = await _warm(row, tid, token)
-            if info is None:
-                return
-
     # The batch wedge applies only where it buys something: not on a
-    # torrent that's free by now, nor on one whose FL was just bought.
-    use_wedge = (
-        item.use_wedge
-        and not fl_bought
-        and not (info.vip or info.free or info.fl_vip or info.personal_freeleech)
+    # torrent that's free by now (the dispatcher re-checks, D28).
+    use_wedge = item.use_wedge and not (
+        info.vip or info.free or info.fl_vip or info.personal_freeleech
     )
     result = await inject_grab(
         deps,
@@ -628,7 +615,6 @@ async def _grab_link(
         apply_format_dedup=False,
         apply_claim_for_owned=False,
         override_mam_snatched=item.override_mam_snatched,
-        personal_fl_bought=fl_bought,
         force_fl_wedge=use_wedge,
     )
     # A hash means MAM served the bytes, i.e. the &fl=1 download happened.
@@ -660,17 +646,22 @@ async def _grab_file(
     ):
         if await _warm(row, stamp.torrent_id, token) is None:
             return
-        if item.buy_personal_fl:
-            fl_bought = await _buy_fl(row, stamp.torrent_id, token)
-            if fl_bought and await _warm(row, stamp.torrent_id, token) is None:
-                return
+    buy_wedge = None
+    if item.use_wedge and stamp is not None and token:
+        tid = stamp.torrent_id
+
+        async def buy_wedge() -> bool:
+            return await _buy_fl(row, tid, token)
+
     result = await grab_uploaded_torrent(
-        deps, torrent_bytes=data, personal_fl_bought=row.personal_fl_bought,
+        deps, torrent_bytes=data, buy_wedge=buy_wedge,
     )
+    row.wedge_used = row.personal_fl_bought and result.grab_id is not None
     _apply_result(row, result)
 
 
 async def _buy_fl(row: JobRow, tid: str, token: str) -> bool:
+    """One wedge via the site's "Buy as FL" (personalFL), paced + audited."""
     from app.routers.inject import _buy_personal_fl_for_inject
 
     bought = await search_pacer.paced(

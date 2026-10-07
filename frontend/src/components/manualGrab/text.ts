@@ -10,11 +10,8 @@ export function linesOf(text: string | number | null | undefined): string[] {
   return String(text ?? "").split("\n").map((s) => s.trim()).filter(Boolean);
 }
 
-export function grabLabel(b: {
-  tickedCount: number; wedgeCount: number; flCount: number;
-}): string {
+export function grabLabel(b: { tickedCount: number; wedgeCount: number }): string {
   const parts = [`Grab ${b.tickedCount}`];
   if (b.wedgeCount) parts.push(`${b.wedgeCount} wedge${b.wedgeCount === 1 ? "" : "s"}`);
-  if (b.flCount) parts.push(`${b.flCount * 50}k BP`);
   return parts.join(" · ");
 }

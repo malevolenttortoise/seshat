@@ -6,11 +6,11 @@ are exposed to the rest of Seshat:
 
   - `buy_vip(weeks)`              — spend BP on VIP time (4/8/12/max weeks)
   - `buy_upload_credit(gb)`       — spend BP on upload buffer (float GB)
-  - `buy_personal_freeleech(tid)` — spend 50k BP to make a specific
-                                    torrent personal-freeleech (MAM flags
-                                    it on the user's account; the
-                                    subsequent grab goes through normally
-                                    with no `&fl=1` override needed)
+  - `buy_personal_freeleech(tid)` — spend ONE FL WEDGE to make a
+                                    specific torrent personal-freeleech:
+                                    the site's "Buy as FL" button. No
+                                    .torrent download involved, so it
+                                    can wedge a torrent already fetched.
 
 All three share a response shape: MAM echoes the user's fresh seedbonus,
 uploaded/downloaded totals, and ratio in the same JSON body. We parse
@@ -63,7 +63,10 @@ _BONUS_BUY_URL = "https://www.myanonamouse.net/json/bonusBuy.php"
 # surface these (too easy to misconfigure into failed buys).
 BP_PER_UPLOAD_GB: int = int(os.getenv("MAM_BP_PER_UPLOAD_GB", "500"))
 BP_PER_VIP_WEEK: int = int(os.getenv("MAM_BP_PER_VIP_WEEK", "1250"))
-BP_PER_PERSONAL_FL: int = int(os.getenv("MAM_BP_PER_PERSONAL_FL", "50000"))
+# Personal FL is NOT bought with BP: MAM's "Buy as FL" (site.js
+# `personalFreeleech`) asks "…as a personal freeleech for one FL wedge?"
+# and sends exactly `buy_personal_freeleech`'s request (read by Mark in
+# the browser console, 2026-10-06). It was labelled "50k BP" until then.
 
 # MAM-enforced minimum for programmatic upload-credit buys. A sub-50
 # GB purchase comes back with `"Automated spenders are limited to
@@ -127,7 +130,9 @@ def _is_dry_run() -> bool:
         return False
 
 
-def _dry_run_result(label: str, expected_cost_bp: Optional[int]) -> BuyResult:
+def _dry_run_result(
+    label: str, expected_cost_bp: Optional[int], *, cost_note: Optional[str] = None,
+) -> BuyResult:
     """Synthesize a plausible success for dry-run mode.
 
     Deliberately minimal: `new_*` fields stay None so the audit row
@@ -136,11 +141,12 @@ def _dry_run_result(label: str, expected_cost_bp: Optional[int]) -> BuyResult:
     `[DRY RUN]` is what the MamPage history tile surfaces to the
     operator so simulated rows don't visually blend with real ones.
     """
-    cost_note = (
-        f"~{expected_cost_bp:,} BP"
-        if expected_cost_bp is not None
-        else "unknown BP"
-    )
+    if cost_note is None:
+        cost_note = (
+            f"~{expected_cost_bp:,} BP"
+            if expected_cost_bp is not None
+            else "unknown BP"
+        )
     return BuyResult(
         success=True,
         message=f"[DRY RUN] would spend {cost_note} on {label}",
@@ -237,12 +243,15 @@ def _format_gb_for_display(gb: float) -> str:
 async def buy_personal_freeleech(
     torrent_id: str, token: Optional[str] = None
 ) -> BuyResult:
-    """Spend BP to make a specific torrent personal-freeleech.
+    """Spend one FL wedge to make a specific torrent personal-freeleech.
 
-    Flat 50k BP per call. After this returns success, MAM flags the
-    torrent as FL for the user's account, and the subsequent `.torrent`
-    grab goes through normally — no `&fl=1` override needed, no wedge
-    pool accounting.
+    This is the site's "Buy as FL" button: same request, and it costs a
+    wedge from the pool, not BP. After success MAM flags the torrent as
+    FL for the account, so the data download is free. Unlike `&fl=1` on
+    `download.php`, nothing is downloaded, so it can wedge a .torrent
+    the user already has (Manual Grab uploads). Callers check the
+    torrent isn't already free first (`personal_fl_worth_buying`): MAM
+    would spend the wedge regardless.
 
     The URL shape for this endpoint is non-obvious: MAM wants the
     epoch-ms cache-buster BOTH as a trailing path segment AND
@@ -256,7 +265,7 @@ async def buy_personal_freeleech(
 
     if _is_dry_run():
         return _dry_run_result(
-            f"personalFL tid={torrent_id}", BP_PER_PERSONAL_FL,
+            f"personalFL tid={torrent_id}", None, cost_note="1 FL wedge",
         )
 
     ts_ms = _epoch_ms()
@@ -271,6 +280,28 @@ async def buy_personal_freeleech(
         log_label=f"personalFL tid={torrent_id}",
         token=token,
     )
+
+
+async def personal_fl_worth_buying(
+    torrent_id: str, token: Optional[str],
+) -> tuple[bool, str]:
+    """Whether a personal-FL buy (one wedge) would buy anything.
+
+    MAM spends the wedge even on a torrent that's already free, so the
+    buy only goes ahead on one the search API confirmed is not VIP,
+    freeleech or personal FL. An unknown status (lookup failed) says no,
+    as for `&fl=1` wedges (Manual Grab D28/D29, D32). Uses the cached
+    torrent info when there is one.
+    """
+    from app.mam.torrent_info import TorrentInfoError, get_torrent_info
+
+    try:
+        info = await get_torrent_info(str(torrent_id), token=token)
+    except TorrentInfoError as e:
+        return False, f"MAM didn't say whether it's already free ({e})"
+    if info.vip or info.free or info.fl_vip or info.personal_freeleech:
+        return False, "already free or VIP"
+    return True, ""
 
 
 # ─── Internals ───────────────────────────────────────────────

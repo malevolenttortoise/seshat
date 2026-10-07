@@ -36,13 +36,13 @@ from app.config import load_settings, save_settings
 from app.database import get_db
 from app.mam import cookie as mam_cookie
 from app.mam.bonus_buy import (
-    BP_PER_PERSONAL_FL,
     BP_PER_UPLOAD_GB,
     MIN_UPLOAD_GB,
     BuyResult,
     buy_personal_freeleech,
     buy_upload_credit,
     buy_vip,
+    personal_fl_worth_buying,
 )
 from app.mam.economy import max_affordable_upload_gb
 from app.mam.torrent_info import (
@@ -234,8 +234,10 @@ async def upload_buy(body: UploadBuyRequest) -> BuyResponse:
 
 @router.post("/personal-fl/buy", response_model=BuyResponse)
 async def personal_fl_buy(body: PersonalFlBuyRequest) -> BuyResponse:
-    """Spend `BP_PER_PERSONAL_FL` BP to flag the torrent as personal
-    freeleech on MAM's side.
+    """Spend one FL wedge (the site's "Buy as FL") to flag the torrent as
+    personal freeleech on MAM's side. Refused (409) on a torrent that's
+    already free or whose status MAM can't confirm: MAM would spend the
+    wedge anyway.
 
     After a successful buy, the torrent-info cache is invalidated so
     the next grab (manual or IRC) re-reads the authoritative
@@ -244,6 +246,9 @@ async def personal_fl_buy(body: PersonalFlBuyRequest) -> BuyResponse:
     free tier on the grab decision without further configuration.
     """
     token = await _require_token()
+    worth, why = await personal_fl_worth_buying(body.torrent_id, token)
+    if not worth:
+        raise HTTPException(409, f"Not buying personal FL: {why}.")
     prev_seedbonus = await _fetch_prev_seedbonus(token)
     result = await buy_personal_freeleech(body.torrent_id, token=token)
 
@@ -471,8 +476,3 @@ def _format_gb(gb: float) -> str:
     if gb == int(gb):
         return str(int(gb))
     return f"{gb:.2f}"
-
-
-# Small sanity check during import — catch a renamed constant before
-# production traffic hits the endpoint.
-assert BP_PER_PERSONAL_FL > 0

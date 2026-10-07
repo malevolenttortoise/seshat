@@ -476,27 +476,3 @@ class TestGrabJob:
         job = await _run_job(deps, _link(), _link("2"))
         assert [r.status for r in job.rows] == ["submitted", "submitted"]
         assert mam_search["calls"] == [TID, "2"]
-
-    async def test_personal_fl_buy_is_paced_and_marks_the_grab_free(
-        self, temp_db, mam_search, fake_clock, monkeypatch,
-    ):
-        from app.routers import inject as inject_router
-
-        bought: list[str] = []
-
-        async def fake_buy(tid, token):
-            bought.append(tid)
-            torrent_info.invalidate_cache()
-            return True
-
-        monkeypatch.setattr(inject_router, "_buy_personal_fl_for_inject", fake_buy)
-        monkeypatch.setattr(search_pacer, "gap_seconds", lambda: 2.0)
-        deps = _make_deps()
-        job = await _run_job(deps, _link(buy_personal_fl=True))
-        row = job.rows[0]
-        assert bought == [TID]
-        assert row.personal_fl_bought is True
-        assert row.status == "submitted"
-        # lookup, buy, re-lookup (the buy cleared the cache): two gaps.
-        assert fake_clock["sleeps"] == [2.0, 2.0]
-        assert mam_search["calls"] == [TID, TID]

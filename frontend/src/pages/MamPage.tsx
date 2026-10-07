@@ -584,7 +584,7 @@ function EconomySections() {
           </div>
           <div style={{ color: theme.textDim, lineHeight: 1.5 }}>
             The MAM economy features (VIP auto-buy, upload-credit
-            auto-buy, buffer gate, personal-FL offers on grabs) are
+            auto-buy, buffer gate, the wedge offer on grabs) are
             all disabled by default. Enable each one individually in
             the sections below.
           </div>
@@ -818,15 +818,6 @@ function EconomySections() {
             disabled={configBusy}
             onChange={(v) =>
               patchConfig({ mam_economy_manual_wedge_offer_enabled: v })
-            }
-          />
-        </KV>
-        <KV label="Show &quot;buy personal FL (50k BP)&quot; checkbox on manual grabs">
-          <Toggle
-            on={config.mam_economy_fl_wedge_offer_enabled}
-            disabled={configBusy}
-            onChange={(v) =>
-              patchConfig({ mam_economy_fl_wedge_offer_enabled: v })
             }
           />
         </KV>

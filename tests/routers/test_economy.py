@@ -310,7 +310,10 @@ class TestPersonalFlBuy:
     async def test_happy_path(
         self, client, temp_db, isolated_settings, fake_mam
     ):
+        from tests.fake_mam import DEFAULT_TORRENT_INFO_BODY
+
         _set_token(isolated_settings, "tok")
+        fake_mam.search.body = DEFAULT_TORRENT_INFO_BODY  # confirmed paid
         resp = await client.post(
             "/api/v1/mam/economy/personal-fl/buy",
             json={"torrent_id": "12345"},
@@ -327,6 +330,35 @@ class TestPersonalFlBuy:
         persisted = json.loads(Path(isolated_settings).read_text())
         assert persisted["mam_economy_last_vip_buy_at"] == 0.0
         assert persisted["mam_economy_last_upload_buy_at"] == 0.0
+
+    @pytest.mark.parametrize("flag", ["vip", "free", "personal_freeleech"])
+    async def test_never_spends_a_wedge_on_a_free_torrent(
+        self, client, temp_db, isolated_settings, fake_mam, flag
+    ):
+        """'Buy as FL' costs a wedge, and MAM spends it even on a free or
+        VIP torrent (no refunds). Refuse before calling bonusBuy."""
+        from tests.fake_mam import DEFAULT_TORRENT_INFO_BODY
+
+        _set_token(isolated_settings, "tok")
+        body = json.loads(DEFAULT_TORRENT_INFO_BODY)
+        body["data"][0][flag] = "1"
+        fake_mam.search.body = json.dumps(body).encode()
+        resp = await client.post(
+            "/api/v1/mam/economy/personal-fl/buy", json={"torrent_id": "12345"},
+        )
+        assert resp.status_code == 409
+        assert not any("bonusBuy" in str(r.url) for r in fake_mam.requests)
+
+    async def test_unknown_status_spends_nothing(
+        self, client, temp_db, isolated_settings, fake_mam
+    ):
+        _set_token(isolated_settings, "tok")
+        fake_mam.search.body = b'{"data": []}'   # not in the index
+        resp = await client.post(
+            "/api/v1/mam/economy/personal-fl/buy", json={"torrent_id": "12345"},
+        )
+        assert resp.status_code == 409
+        assert not any("bonusBuy" in str(r.url) for r in fake_mam.requests)
 
     async def test_empty_torrent_id_returns_422(
         self, client, temp_db, isolated_settings, fake_mam

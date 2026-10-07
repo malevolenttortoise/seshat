@@ -35,8 +35,9 @@ async def send_to_pipeline(data: dict = Body(...)):
     Two optional per-batch flags line up with the manual-inject
     confirm dialog's per-grab knobs:
 
-      - `buy_personal_fl=True` — before each grab, spend 50k BP to
-        flag that specific torrent as personal freeleech on MAM.
+      - `buy_personal_fl=True` — before each grab, spend one FL wedge
+        ("Buy as FL") to flag that torrent as personal freeleech on MAM
+        (skipped on one that's already free or of unknown status).
         Best-effort: a failed buy doesn't block the grab, it's just
         audited. Applies to EVERY torrent in the batch, so the UI
         typically only exposes this when sending one book at a time.
@@ -114,7 +115,7 @@ async def send_to_pipeline(data: dict = Body(...)):
             finally:
                 await pdb.close()
 
-        # F4 path: spend 50k BP to flag this torrent as personal
+        # F4 path: spend one FL wedge to flag this torrent as personal
         # freeleech BEFORE the inject. Best-effort — a failed buy is
         # audited and the grab proceeds anyway. Calls the same helper
         # the manual-inject router uses so the audit row shape stays

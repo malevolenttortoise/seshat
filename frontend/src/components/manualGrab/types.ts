@@ -105,14 +105,10 @@ export interface GrabEntry {
   dataB64: string | null; // the .torrent bytes, for files
   preview: PreviewRow | null; // null while the lookup is pending
   ticked: boolean;
-  buyFl: boolean;
   overrideSnatched: boolean;
   confirming: boolean; // the "Download again?" confirm is open (D13)
   result: JobRow | null;
 }
-
-export const isFree = (p: PreviewRow) =>
-  p.vip || p.freeleech || p.personal_freeleech;
 
 export const MAX_BATCH = 30;
 
@@ -124,7 +120,8 @@ export function torrentIdOf(input: string): string | null {
   return m ? m[1] : null;
 }
 
-// A row the batch "Use wedges" toggle would spend a wedge on (D7): a
-// pasted link, not free, not getting personal FL, not yet grabbed.
+// A row the batch "Use wedges" toggle would spend a wedge on (D7, D31):
+// ticked, not free, not yet grabbed. A link is wedged with `&fl` on its
+// MAM download; an uploaded file with the site's "Buy as FL".
 export const wedgeEligible = (e: GrabEntry) =>
-  e.kind === "link" && e.ticked && !e.buyFl && !e.result && !!e.preview?.wedge_eligible;
+  e.ticked && !e.result && !!e.preview?.wedge_eligible;

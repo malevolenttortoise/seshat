@@ -14,7 +14,6 @@ import pytest
 
 from app.mam import bonus_buy, cookie as cookie_module
 from app.mam.bonus_buy import (
-    BP_PER_PERSONAL_FL,
     BP_PER_UPLOAD_GB,
     BP_PER_VIP_WEEK,
     BuyResult,
@@ -149,11 +148,21 @@ class TestBuyPersonalFreeleechHappyPath:
         query = url.split("?", 1)[1]
         assert f"timestamp={last_segment}" in query
 
-    async def test_personalfl_cost_constant_is_50k(self):
-        # Sanity check on the hardcoded pricing — if MAM ever changes
-        # this, the scheduler / router need to be updated too, so a
-        # regression here is a prompt for conscious review.
-        assert BP_PER_PERSONAL_FL == 50000
+    async def test_personalfl_matches_the_sites_buy_as_fl(self, fake_mam):
+        """MAM's site.js `freeleechCallback` (read 2026-10-06) sends
+        GET /json/bonusBuy.php/<ms>?spendtype=personalFL&torrentid=<tid>
+        &timestamp=<ms> for "Buy as FL". It costs one FL wedge."""
+        from urllib.parse import parse_qs, urlparse
+
+        await buy_personal_freeleech("1274908", token="tok")
+        [req] = _bonus_requests(fake_mam)
+        url = urlparse(str(req.url))
+        q = parse_qs(url.query)
+        assert req.method == "GET"
+        assert url.path.startswith("/json/bonusBuy.php/")
+        assert q["spendtype"] == ["personalFL"]
+        assert q["torrentid"] == ["1274908"]
+        assert q["timestamp"] == [url.path.rsplit("/", 1)[1]]
 
 
 # ─── Input validation ──────────────────────────────────────
@@ -444,7 +453,7 @@ class TestDryRun:
         result = await buy_personal_freeleech("123", token="tok")
         assert result.success is True
         assert result.dry_run is True
-        assert f"{BP_PER_PERSONAL_FL:,}" in result.message
+        assert "1 FL wedge" in result.message
         assert _bonus_requests(fake_mam) == []
 
     async def test_dry_run_still_validates_inputs(
