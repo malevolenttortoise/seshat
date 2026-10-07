@@ -242,7 +242,7 @@ class TestCacheWarming:
             uploaded_bytes=1_000_000_000,
             downloaded_bytes=500_000_000,
         )
-        # Match user_status._cache_key behaviour — key is the first 16 chars.
+        # Seed the cache the way user_status keys it (one entry per account).
         from app.mam.user_status import _cache_key
         _user_status_cache[_cache_key(token)] = (
             __import__("time").monotonic(),

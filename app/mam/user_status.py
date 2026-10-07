@@ -71,8 +71,15 @@ _cache: dict[str, tuple[float, UserStatus]] = {}
 
 
 def _cache_key(token: str) -> str:
-    """Derive a cache key from the token (first 16 chars for privacy)."""
-    return token[:16] if token else ""
+    """One entry for the account, whatever the cookie value.
+
+    Keyed by the token until 2026-10-06, but MAM rotates the `mam_id`
+    cookie on every jsonLoad response, so the next read always carried a
+    new token and the 5-minute cache never hit: every status read was a
+    MAM call. Seshat runs one MAM account; a newly saved cookie clears
+    the cache instead (`cookie.set_current_token`).
+    """
+    return "account"
 
 
 def invalidate_cache() -> None:

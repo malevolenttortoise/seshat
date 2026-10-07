@@ -193,6 +193,14 @@ on `development`: MAM sees one download per torrent, ever. Phase 1 —
   `mam_economy_buffer_gate_enabled` on, grabs that would drive your
   upload buffer below the safety margin are now actually refused (with
   the audit row and notification that were always meant to fire).
+- **MAM account status is cached again; every read was a MAM call.**
+  MAM rotates the session cookie on every `jsonLoad.php` response, and
+  the 5-minute status cache was keyed by the cookie, so the next read
+  always missed. Any page polling MAM status, the economy checks and
+  Grab from MAM's per-file account check each cost a fresh MAM call (a
+  container restart with a few tabs open produced ~22 in a minute). The
+  cache is now one entry for the account, cleared when a new cookie is
+  saved.
 - **A personal-FL buy now actually frees the grab it was bought for.**
   MAM's search API takes 5–20 min to report a new personal FL, so the
   grab that re-read it right after the buy still saw a paid torrent: the
