@@ -210,6 +210,12 @@ export function GrabPreviewRow({
             Buy personal FL (50k BP)
           </label>
         )}
+        {showFl && entry.kind === "file" && (
+          <div style={{ fontSize: 11, color: t.tf, paddingLeft: 22 }}>
+            No wedge for this one: MAM only spends a wedge while serving the .torrent, and
+            you already downloaded it. Personal FL gets the same result without a download.
+          </div>
+        )}
 
         {entry.result && (
           <div style={{ fontSize: 12, color: resultColor[entry.result.status], display: "flex", gap: 6, alignItems: "center" }}>

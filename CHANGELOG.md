@@ -70,7 +70,10 @@ on `development`: MAM sees one download per torrent, ever. Phase 1 —
   - A row whose MAM lookup failed for a passing reason says what
     happened ("MAM didn't answer in time (ReadTimeout)") and has a
     **Retry** that re-runs just that row's lookup, paced like the rest.
-  - Per-row **Buy personal FL (50k BP)**.
+  - Per-row **Buy personal FL (50k BP)**. On a dropped .torrent that isn't
+    free it's the only way to make the download free, and the row says
+    why: MAM only spends a wedge while serving the .torrent, which you
+    already downloaded.
   - The grab row gets the real title, authors, category, series and
     format instead of `manual_inject_<id>`, so the review queue,
     notifications and the post-ingest MAM link-back read properly.
