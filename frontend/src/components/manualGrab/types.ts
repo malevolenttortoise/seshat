@@ -81,6 +81,13 @@ export interface JobRow {
   message: string;
   grab_id: number | null;
   personal_fl_bought: boolean;
+  wedge_used: boolean;
+}
+
+export interface WedgeBudget {
+  wedges: number;
+  reserved: number;
+  spendable: number;
 }
 
 export interface GrabJob {
@@ -106,3 +113,18 @@ export interface GrabEntry {
 
 export const isFree = (p: PreviewRow) =>
   p.vip || p.freeleech || p.personal_freeleech;
+
+export const MAX_BATCH = 30;
+
+// Same rules as app/mam/torrent_id.py: bare ID, /t/<id>, download.php?tid=<id>.
+export function torrentIdOf(input: string): string | null {
+  const s = input.trim();
+  if (/^\d+$/.test(s)) return s;
+  const m = s.match(/\/t\/(\d+)/) || s.match(/[?&]tid=(\d+)/);
+  return m ? m[1] : null;
+}
+
+// A row the batch "Use wedges" toggle would spend a wedge on (D7): a
+// pasted link, not free, not getting personal FL, not yet grabbed.
+export const wedgeEligible = (e: GrabEntry) =>
+  e.kind === "link" && e.ticked && !e.buyFl && !e.result && !!e.preview?.wedge_eligible;

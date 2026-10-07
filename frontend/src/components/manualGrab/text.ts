@@ -6,6 +6,15 @@ export const SNATCH_LAG_HINT =
   "Already downloaded the .torrent? Drop the file instead — MAM takes up to 20 min to show it as snatched, and a pasted link downloads it again.";
 
 // What the Import page hands over: the MAM lines it spotted.
-export function firstLine(text: string | number | null | undefined): string {
-  return String(text ?? "").split("\n").map((s) => s.trim()).find(Boolean) ?? "";
+export function linesOf(text: string | number | null | undefined): string[] {
+  return String(text ?? "").split("\n").map((s) => s.trim()).filter(Boolean);
+}
+
+export function grabLabel(b: {
+  tickedCount: number; wedgeCount: number; flCount: number;
+}): string {
+  const parts = [`Grab ${b.tickedCount}`];
+  if (b.wedgeCount) parts.push(`${b.wedgeCount} wedge${b.wedgeCount === 1 ? "" : "s"}`);
+  if (b.flCount) parts.push(`${b.flCount * 50}k BP`);
+  return parts.join(" · ");
 }

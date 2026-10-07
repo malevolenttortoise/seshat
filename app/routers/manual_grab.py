@@ -4,6 +4,7 @@ Manual Grab HTTP endpoints — the "Grab from MAM" page.
     POST /api/v1/manual-grab/preview        one row's preview (link or .torrent)
     POST /api/v1/manual-grab/grab           start a Grab all job (≤30 rows)
     GET  /api/v1/manual-grab/grab/{job_id}  the job's per-row status
+    GET  /api/v1/manual-grab/wedges         wedges a batch may spend
     GET  /api/v1/manual-grab/cover/{tid}    a cached preview thumbnail
 
 The page calls `/preview` once per row, in sequence, so rows fill in as
@@ -66,6 +67,17 @@ class GrabItemIn(_ItemIn):
     buy_personal_fl: bool = False
     # Set only by the row's "Download again" confirm (D13).
     override_mam_snatched: bool = False
+    # The batch "Use wedges" toggle, applied by the page to each
+    # eligible row (D7). Links only.
+    use_wedge: bool = False
+
+    @model_validator(mode="after")
+    def _wedge_needs_a_link(self):
+        if self.use_wedge and self.kind != "link":
+            raise ValueError(
+                "an uploaded .torrent can't take a wedge (it rides on the MAM download)"
+            )
+        return self
 
 
 class GrabRequest(BaseModel):
@@ -118,6 +130,7 @@ async def grab(body: GrabRequest) -> dict:
             buy_personal_fl=it.buy_personal_fl,
             override_mam_snatched=it.override_mam_snatched,
             data=data,
+            use_wedge=it.use_wedge,
         ))
     if duplicates:
         raise HTTPException(
@@ -125,8 +138,29 @@ async def grab(body: GrabRequest) -> dict:
             "The same torrent is in this batch more than once "
             f"(rows {', '.join(str(i + 1) for i in duplicates)}).",
         )
+    # D9: never part-spend. Checked against a fresh read of the account
+    # (the page's count can be minutes old) before anything starts.
+    wanted = sum(1 for it in items if it.use_wedge)
+    if wanted:
+        budget = await manual_grab.wedge_budget(deps, fresh=True)
+        if budget is None:
+            raise HTTPException(
+                409, "Can't read your wedge count from MAM right now; "
+                "turn wedges off or try again.",
+            )
+        if wanted > budget.spendable:
+            raise HTTPException(409, manual_grab.wedge_shortfall_message(wanted, budget))
     job = manual_grab.start_job(deps, items)
     return job.to_dict()
+
+
+@router.get("/wedges")
+async def wedges() -> dict:
+    """Wedges, the policy's reserve, and how many a batch may spend (D9)."""
+    budget = await manual_grab.wedge_budget(_deps())
+    if budget is None:
+        raise HTTPException(409, "Can't read your wedge count from MAM right now.")
+    return budget.to_dict()
 
 
 @router.get("/grab/{job_id}")

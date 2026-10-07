@@ -18,10 +18,28 @@ on `development`: MAM sees one download per torrent, ever. Phase 1 —
 ### Added
 
 - **Grab from MAM** (Manual Grab, ADR-0023). A new page, in the Pipeline
-  nav and the dashboard's Pipeline actions (desktop and mobile): paste a
-  MAM link or torrent ID and Seshat shows what it is — cover, title,
-  authors, narrators, series, format, size, seeders, VIP/FL — plus what
-  you already have, then grabs it when you say so.
+  nav and the dashboard's Pipeline actions (desktop and mobile): paste
+  MAM links or torrent IDs, or drop .torrent files, **up to 30 at once**,
+  and Seshat shows what each one is — cover, title, authors, narrators,
+  series, format, size, seeders, VIP/FL — plus what you already have,
+  then grabs the ones you tick.
+  - One review list for pasted links and dropped files. Duplicates are
+    dropped as you add them (same torrent pasted twice, same file
+    dropped twice); a link and a file for the same torrent keep the file.
+    The 30 cap counts both and is enforced by the server.
+  - Rows fill in as they're looked up, one MAM call at a time. Grab
+    runs as a server-side job and each row shows its outcome (grabbed,
+    queued, not grabbed and why); leaving the page doesn't stop it. The
+    button totals what you're about to spend
+    ("Grab 12 · 3 wedges · 100k BP"), and says how many will queue when
+    the snatch budget is full.
+  - **Use wedges** is one toggle for the batch: it spends a wedge on each
+    ticked pasted link that isn't free (not on uploads, not on rows
+    getting personal FL, not on a torrent that turned free by grab time).
+    If the batch needs more wedges than you can spend (your wedges minus
+    the policy's reserve), Grab is blocked until it fits, and the server
+    re-checks against a fresh read of your account and refuses the whole
+    batch rather than part-spend.
   - A torrent Seshat already grabbed, or one removed from MAM, can't be
     ticked. One you own, one already on its way, or one your grab policy
     would skip starts unticked; ticking it is your decision. Manual grabs
@@ -53,12 +71,13 @@ on `development`: MAM sees one download per torrent, ever. Phase 1 —
     pacer at the `rate_mam` gap (default 2s): never a burst.
   - Grab runs as a server-side job the page polls, so leaving the page
     doesn't stop it.
-  - Pasting a MAM link into Import / Export now points you to Grab from
-    MAM and carries the link over, instead of failing as a book URL.
+  - Pasting MAM links into Import / Export now points you to Grab from
+    MAM and carries them over, instead of failing them as book URLs.
   - API: `POST /api/v1/manual-grab/preview`, `POST /api/v1/manual-grab/grab`
     (≤30 items, enforced server-side; a `file` item carries the .torrent
-    as base64 in `data_b64`), `GET /api/v1/manual-grab/grab/{job_id}`,
-    `GET /api/v1/manual-grab/cover/{tid}`.
+    as base64 in `data_b64`; per-item `use_wedge`; 409 when the wedges
+    don't fit, 422 for a duplicate torrent), `GET /api/v1/manual-grab/grab/{job_id}`,
+    `GET /api/v1/manual-grab/wedges`, `GET /api/v1/manual-grab/cover/{tid}`.
 
 - **Torrent-ID guard on every grab path (snatch safety).** Nothing used
   to stop Seshat fetching the same MAM torrent twice — the

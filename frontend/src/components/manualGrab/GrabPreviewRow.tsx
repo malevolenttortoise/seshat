@@ -12,14 +12,17 @@ import { BLOCKING_STATUSES, isFree, type GrabEntry, type JobRowStatus } from "./
 export interface GrabPreviewRowProps {
   entry: GrabEntry;
   compact?: boolean;
+  // The batch "Use wedges" toggle will spend a wedge on this row.
+  willWedge?: boolean;
   onTick: (on: boolean) => void;
   onBuyFl: (on: boolean) => void;
   onConfirmSnatched: () => void;
   onCancelConfirm: () => void;
+  onRemove?: () => void;
 }
 
 export function GrabPreviewRow({
-  entry, compact, onTick, onBuyFl, onConfirmSnatched, onCancelConfirm,
+  entry, compact, willWedge, onTick, onBuyFl, onConfirmSnatched, onCancelConfirm, onRemove,
 }: GrabPreviewRowProps) {
   const t = useTheme();
   const p = entry.preview;
@@ -122,6 +125,11 @@ export function GrabPreviewRow({
           {badges.map(({ label, ...style }) => (
             <span key={label} style={style}>{label}</span>
           ))}
+          {willWedge && (
+            <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 4, color: t.cyan, border: `1px solid ${t.cyan}` }}>
+              WEDGE
+            </span>
+          )}
         </div>
 
         {entry.kind === "file" && p && p.title && (
@@ -188,9 +196,24 @@ export function GrabPreviewRow({
             <strong>{resultLabel[entry.result.status]}</strong>
             {done && entry.result.message && <span style={{ color: t.td }}>· {entry.result.message}</span>}
             {entry.result.personal_fl_bought && <span style={{ color: t.grnt }}>· personal FL bought</span>}
+            {entry.result.wedge_used && <span style={{ color: t.cyant }}>· wedge used</span>}
           </div>
         )}
       </div>
+
+      {onRemove && !entry.result && (
+        <button
+          onClick={onRemove}
+          aria-label="Remove from the list"
+          title="Remove from the list"
+          style={{
+            alignSelf: "flex-start", background: "transparent", border: "none",
+            color: t.tf, fontSize: 16, cursor: "pointer", padding: "0 4px",
+          }}
+        >
+          ×
+        </button>
+      )}
     </div>
   );
 }

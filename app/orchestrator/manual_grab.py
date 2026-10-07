@@ -34,7 +34,7 @@ from app.filter.gate import Announce
 from app.mam import search_pacer
 from app.mam.torrent_id import extract_torrent_id
 from app.mam.torrent_info import TorrentInfo, TorrentInfoError, TorrentNotFoundError
-from app.mam.user_status import UserStatusError
+from app.mam.user_status import UserStatusError, get_user_status
 from app.orchestrator.dispatch import (
     DispatcherDeps,
     DispatchResult,
@@ -413,6 +413,55 @@ def _prune_covers() -> None:
             continue
 
 
+# ─── Wedges (D9) ─────────────────────────────────────────────
+
+
+@dataclass
+class WedgeBudget:
+    wedges: int
+    reserved: int
+
+    @property
+    def spendable(self) -> int:
+        return max(0, self.wedges - self.reserved)
+
+    def to_dict(self) -> dict[str, int]:
+        return {"wedges": self.wedges, "reserved": self.reserved, "spendable": self.spendable}
+
+
+async def wedge_budget(deps: DispatcherDeps, *, fresh: bool = False) -> Optional[WedgeBudget]:
+    """The account's wedges and the reserve the policy keeps back.
+
+    `fresh=True` re-reads MAM (through the pacer) instead of the cached
+    status: Grab all checks the batch against it, and the cached count
+    can be minutes old. None when the account can't be read.
+    """
+    token = deps.live_mam_token()
+    if not token:
+        return None
+    try:
+        if fresh:
+            status = await search_pacer.paced(
+                lambda: get_user_status(token=token, ttl=0), label="user status (fresh)",
+            )
+        else:
+            status = await search_pacer.paced_user_status(token)
+    except UserStatusError:
+        return None
+    return WedgeBudget(
+        wedges=int(status.wedges or 0),
+        reserved=int(deps.policy_config.min_wedges_reserved or 0),
+    )
+
+
+def wedge_shortfall_message(needed: int, budget: WedgeBudget) -> str:
+    return (
+        f"Needs {needed} wedge{'s' if needed != 1 else ''}, {budget.spendable} spendable "
+        f"({budget.wedges} − {budget.reserved} reserved). "
+        "Untick rows or turn wedges off."
+    )
+
+
 # ─── Grab all (background job) ───────────────────────────────
 
 
@@ -423,6 +472,9 @@ class GrabRequestItem:
     buy_personal_fl: bool = False
     override_mam_snatched: bool = False
     data: Optional[bytes] = None  # the .torrent bytes, for "file"
+    # Set on each eligible row when the batch "Use wedges" toggle is on
+    # (D7). Links only: a wedge is `&fl=1` on the MAM download.
+    use_wedge: bool = False
 
 
 @dataclass
@@ -436,6 +488,7 @@ class JobRow:
     message: str = ""
     grab_id: Optional[int] = None
     personal_fl_bought: bool = False
+    wedge_used: bool = False
 
 
 @dataclass
@@ -546,6 +599,13 @@ async def _grab_link(
             if info is None:
                 return
 
+    # The batch wedge applies only where it buys something: not on a
+    # torrent that's free by now, nor on one whose FL was just bought.
+    use_wedge = (
+        item.use_wedge
+        and not fl_bought
+        and not (info.vip or info.free or info.fl_vip or info.personal_freeleech)
+    )
     result = await inject_grab(
         deps,
         torrent_id=tid,
@@ -560,7 +620,10 @@ async def _grab_link(
         apply_claim_for_owned=False,
         override_mam_snatched=item.override_mam_snatched,
         personal_fl_bought=fl_bought,
+        force_fl_wedge=use_wedge,
     )
+    # A hash means MAM served the bytes, i.e. the &fl=1 download happened.
+    row.wedge_used = use_wedge and result.qbit_hash is not None
     _apply_result(row, result)
 
 
