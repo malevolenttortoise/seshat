@@ -25,6 +25,20 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   metadata enricher is closed 15 minutes later instead of at once, so a
   job still finishing a download isn't cut off mid-request.
 
+- **Cookie retry respects dry run, the snatch budget and a dead
+  cookie.** The job that re-tries grabs which failed on an expired MAM
+  cookie ran every 5 minutes regardless of dry run, retried with the
+  same dead cookie every time (one refused download per stuck grab, every
+  5 minutes, for the whole outage), and added straight to qBit past the
+  snatch budget, the queue and the qBit add stagger. Now it does nothing
+  while dry run is on; it remembers which cookie each grab failed with
+  and retries only once the cookie has changed; and it asks the snatch
+  budget first: over budget the grab is downloaded into the queue with
+  its .torrent kept, and with the queue full too it waits for the next
+  run without contacting MAM. A retried grab is added to qBit with your
+  save path and tags, and sends the "New book grabbed" notification like
+  any other grab.
+
 - **Autograbs wait for MAM's search before deciding.** A new torrent
   reaches #announce about a second after MAM adds it, before MAM's
   search API lists it, so every IRC autograb's lookup came back "not

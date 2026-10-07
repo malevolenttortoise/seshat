@@ -47,6 +47,7 @@ import aiosqlite
 
 from app.clients.base import AddResult, TorrentClient
 from app.filter.gate import Announce, Decision, FilterConfig, evaluate_announce
+from app.mam.cookie import fingerprint as cookie_fingerprint
 from app.mam.grab import GrabResult
 from app.mam.torrent_meta import BencodeError, info_hash, read_mam_comment
 from app.mam.torrent_info import (
@@ -1342,8 +1343,9 @@ async def _dispatch_with_decision(
             forced=force_fl_wedge,
             raw_line=raw_line,
         )
+        token = deps.live_mam_token()
         fetch_result = await deps.fetch_torrent(
-            announce.torrent_id, deps.live_mam_token(),
+            announce.torrent_id, token,
             use_fl_wedge=use_wedge,
         )
         if use_wedge and fetch_result.success:
@@ -1359,6 +1361,7 @@ async def _dispatch_with_decision(
                 grab_id,
                 failed_state,
                 failed_reason=fetch_result.failure_detail,
+                failed_with_cookie_id=failed_cookie_id(failed_state, token),
             )
             _emit(
                 deps,
@@ -2288,6 +2291,16 @@ def _grab_failure_state(result: GrabResult) -> str:
     if kind == "torrent_not_found":
         return grabs_storage.STATE_FAILED_TORRENT_GONE
     return grabs_storage.STATE_FAILED_UNKNOWN
+
+
+def failed_cookie_id(failed_state: str, token: str) -> Optional[int]:
+    """`grabs.failed_with_cookie_id` for a failed download: the refused
+    cookie's fingerprint on `failed_cookie_expired`, else None. The
+    cookie-retry job retries such a grab only once the live cookie's
+    fingerprint differs."""
+    if failed_state != grabs_storage.STATE_FAILED_COOKIE_EXPIRED:
+        return None
+    return cookie_fingerprint(token)
 
 
 def _add_failure_state(result: AddResult) -> str:

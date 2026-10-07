@@ -424,3 +424,131 @@ class TestFailedRetry:
             assert grab.state == grabs_storage.STATE_DUPLICATE_IN_QBIT
         finally:
             await db.close()
+
+
+# ─── Gates: dry run, the cookie it failed with, the budget ───
+#
+# Audit issue 02 (L1-10). Each refusal is proven by asserting the
+# download was NOT fetched.
+
+
+async def _insert_failed_with_cookie(cookie: str, torrent_id: str = "12345") -> int:
+    db = await get_db()
+    try:
+        grab_id = await _insert_failed_grab(db, torrent_id)
+        await grabs_storage.set_state(
+            db, grab_id, grabs_storage.STATE_FAILED_COOKIE_EXPIRED,
+            failed_with_cookie_id=cookie_mod.fingerprint(cookie),
+        )
+        return grab_id
+    finally:
+        await db.close()
+
+
+async def _state(grab_id: int) -> str:
+    db = await get_db()
+    try:
+        return (await grabs_storage.get_grab(db, grab_id)).state
+    finally:
+        await db.close()
+
+
+class TestRetryGates:
+    async def test_dry_run_fetches_nothing(self, temp_db, monkeypatch):
+        from app.orchestrator import dispatch
+        gid = await _insert_failed_with_cookie("an_older_cookie")
+        monkeypatch.setattr(
+            dispatch, "_live_kill_switch_state",
+            lambda: {"irc_enabled": True, "dry_run": True},
+        )
+        deps = _make_deps()
+
+        result = await tick(deps)
+
+        assert deps.fetch_torrent.calls == []  # type: ignore[attr-defined]
+        assert result.retried == 0
+        assert await _state(gid) == grabs_storage.STATE_FAILED_COOKIE_EXPIRED
+
+    async def test_same_cookie_as_at_failure_fetches_nothing(self, temp_db):
+        gid = await _insert_failed_with_cookie("fresh_cookie")
+        deps = _make_deps()  # live cookie = "fresh_cookie"
+
+        result = await tick(deps)
+
+        assert deps.fetch_torrent.calls == []  # type: ignore[attr-defined]
+        assert (result.found, result.retried) == (1, 0)
+        assert await _state(gid) == grabs_storage.STATE_FAILED_COOKIE_EXPIRED
+
+    async def test_new_cookie_fetches_once(self, temp_db):
+        await _insert_failed_with_cookie("the_dead_cookie")
+        qbit = _FakeQbit()
+        deps = _make_deps(qbit=qbit)
+
+        result = await tick(deps)
+
+        assert deps.fetch_torrent.calls == [("12345", "fresh_cookie")]  # type: ignore[attr-defined]
+        assert result.succeeded == 1
+        assert len(qbit.add_calls) == 1
+
+    async def test_failing_again_records_the_cookie_so_the_next_tick_waits(
+        self, temp_db,
+    ):
+        await _insert_failed_with_cookie("the_dead_cookie")
+        deps = _make_deps(fetch_result=GrabResult(
+            success=False, failure_kind="cookie_expired",
+            failure_detail="HTTP 403 from MAM",
+        ))
+
+        await tick(deps)
+        await tick(deps)
+
+        assert len(deps.fetch_torrent.calls) == 1  # type: ignore[attr-defined]
+
+    async def test_dispatch_failure_records_the_refused_cookie(self, temp_db):
+        # End to end: the dispatcher writes the fingerprint when MAM
+        # refuses the cookie, and the retry job then leaves it alone.
+        from app.orchestrator.dispatch import inject_grab
+        from tests.orchestrator.test_dispatch import _make_deps as _dispatch_deps
+        expired = GrabResult(
+            success=False, failure_kind="cookie_expired",
+            failure_detail="HTTP 403 from MAM",
+        )
+        deps = _dispatch_deps(fetch_result=expired)
+        await inject_grab(deps, torrent_id="12345")
+        assert len(deps.fetch_torrent.calls) == 1  # type: ignore[attr-defined]
+
+        await tick(deps)
+
+        assert len(deps.fetch_torrent.calls) == 1  # type: ignore[attr-defined]
+
+    async def test_budget_full_queues_with_the_bytes_instead_of_adding(self, temp_db):
+        from dataclasses import replace
+
+        from app.orchestrator import torrent_store
+        gid = await _insert_failed_with_cookie("the_dead_cookie")
+        qbit = _FakeQbit()
+        deps = replace(_make_deps(qbit=qbit), budget_cap=0)
+
+        result = await tick(deps)
+
+        assert len(deps.fetch_torrent.calls) == 1  # type: ignore[attr-defined]
+        assert qbit.add_calls == []
+        assert result.succeeded == 1
+        db = await get_db()
+        try:
+            grab = await grabs_storage.get_grab(db, gid)
+        finally:
+            await db.close()
+        assert grab.state == grabs_storage.STATE_PENDING_QUEUE
+        assert torrent_store.load(grab.torrent_file_path) == MINIMAL_BENCODED_TORRENT
+
+    async def test_budget_and_queue_full_fetches_nothing(self, temp_db):
+        from dataclasses import replace
+        gid = await _insert_failed_with_cookie("the_dead_cookie")
+        deps = replace(_make_deps(), budget_cap=0, queue_max=0)
+
+        result = await tick(deps)
+
+        assert deps.fetch_torrent.calls == []  # type: ignore[attr-defined]
+        assert result.retried == 0
+        assert await _state(gid) == grabs_storage.STATE_FAILED_COOKIE_EXPIRED

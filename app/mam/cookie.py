@@ -29,6 +29,7 @@ returns clear status codes.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 from typing import Awaitable, Callable, Optional
@@ -164,6 +165,17 @@ def get_current_token() -> str:
     rotation captured the expected new value.
     """
     return _current_token or ""
+
+
+def fingerprint(token: str) -> int:
+    """A stable ID for a cookie value that doesn't reveal it.
+
+    Stored as `grabs.failed_with_cookie_id` when a download fails on an
+    expired cookie, so the cookie-retry job retries only once the live
+    cookie is a different one. 56 bits of SHA-256, which fits SQLite's
+    signed 64-bit INTEGER.
+    """
+    return int.from_bytes(hashlib.sha256(token.encode()).digest()[:7], "big")
 
 
 async def get_active_token() -> str:
