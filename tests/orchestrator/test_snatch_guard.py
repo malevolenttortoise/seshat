@@ -385,15 +385,18 @@ class TestRemovedFromMam:
         assert deps.fetch_torrent.calls == []  # type: ignore[attr-defined]
         assert await _grab_ids() == []
 
-    async def test_irc_announce_fails_open_on_not_found(self, temp_db, mam_says):
-        # A fresh announce can beat MAM's search index; not-found on the
-        # IRC path must not drop a real upload.
+    async def test_irc_announce_fails_open_on_not_found(self, temp_db, mam_says, monkeypatch):
+        # A fresh announce beats MAM's search index: the grab waits for
+        # it (D37), and a torrent MAM still doesn't list when the wait
+        # runs out is grabbed anyway rather than dropping a real upload.
         mam_says["answer"] = TorrentNotFoundError("not found in search results")
+        monkeypatch.setattr(dispatch, "_index_sleep", lambda s: asyncio.sleep(0))
         deps = _irc_deps()
 
         result = await handle_announce(deps, _make_announce(TID))
+        assert result.reason == "waiting_for_mam_index"
+        await asyncio.gather(*list(dispatch._held_grabs))
 
-        assert result.reason == "ok"
         assert len(deps.fetch_torrent.calls) == 1  # type: ignore[attr-defined]
 
     async def test_transient_lookup_failure_fails_open(self, temp_db, mam_says):

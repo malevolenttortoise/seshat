@@ -21,7 +21,7 @@ Every path into the dispatcher refuses, before any fetch:
 | --- | --- | --- |
 | `already_grabbed` | A prior grab of this ID has `qbit_hash` set, or is in `grabs.BLOCKING_STATES` (in flight, or a state only reachable after a successful fetch) | **None.** A torrent Seshat fetched is never fetched again |
 | `already_snatched_on_mam` | MAM's `my_snatched` flag on the search-API result | `override_mam_snatched` — an explicit user confirm. Otherwise point the user at Reingest from disk |
-| `torrent_removed_from_mam` | Search API says not found ([0006](0006-mam-not-found-is-permanent.md)), on user/programmatic grabs | None. IRC announces fail open: a fresh upload can beat the search index |
+| `torrent_removed_from_mam` | Search API says not found ([0006](0006-mam-not-found-is-permanent.md)), on user/programmatic grabs | None. IRC announces fail open: a fresh upload beats the search index, so an allowed announce first waits up to 10 minutes for MAM to list it (`_hold_for_index`), then grabs anyway |
 
 Pre-fetch failures (cookie expired, 404 on download, network error — no `qbit_hash`) stay retryable. The `already_grabbed` check re-runs under a per-event-loop asyncio lock immediately before the grab row is inserted, and the cookie-retry job claims its row under the same lock, so concurrent grabs of one ID cannot both pass. Seshat runs one uvicorn worker, so an in-process lock is sufficient.
 

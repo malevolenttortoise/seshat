@@ -97,6 +97,11 @@ class EconomicContext:
     # buffer gate skips (fail-open) rather than blocking.
     torrent_size_bytes: Optional[int] = None
 
+    # True when MAM's search still didn't list a fresh announce after
+    # the dispatcher waited for its index (D37): the announce's own
+    # VIP|Normal flag then stands as the torrent's free status.
+    trust_announce: bool = False
+
     @property
     def is_vip(self) -> bool:
         """True if ANY source says this torrent is VIP."""
@@ -108,15 +113,19 @@ class EconomicContext:
 
     @property
     def free_status_known(self) -> bool:
-        """True when MAM's search API told us whether the torrent is free.
+        """True when Seshat knows whether the torrent is free.
 
-        False when the torrent-info lookup was skipped or failed (a brand-
-        new torrent can beat MAM's search index). A wedge needs this:
-        MAM spends one even on a torrent that's already free or VIP
-        (its `download.php` doc: "no refunds"), so Seshat only wedges a
-        torrent it has seen is not free (D28, D29).
+        Known when MAM's search API answered, or when an IRC announce
+        was still unlisted after the index wait and its VIP|Normal flag
+        is trusted instead (D37). False when the lookup was skipped or
+        failed. A wedge needs this: MAM spends one even on a torrent
+        that's already free or VIP (its `download.php` doc: "no
+        refunds"), so Seshat only wedges a torrent it knows is not free
+        (D28, D29).
         """
-        return self.torrent_free is not None and self.torrent_vip is not None
+        if self.torrent_free is not None and self.torrent_vip is not None:
+            return True
+        return self.trust_announce
 
     @property
     def is_free(self) -> bool:
@@ -187,9 +196,10 @@ def evaluate_policy(
 
     # Step 4: Wedge path. If the user allows wedge spending and has
     # enough wedges above the reserve, we can make it free. Only for a
-    # torrent MAM confirmed isn't free: with the status unknown, fall
-    # through to a paid grab (or a free_only skip) rather than risk a
-    # non-refundable wedge on a torrent that was free all along.
+    # torrent known not to be free (MAM's search, or a trusted announce
+    # after the index wait): with the status unknown, fall through to a
+    # paid grab (or a free_only skip) rather than risk a non-refundable
+    # wedge on a torrent that was free all along.
     if config.use_wedge and ctx.free_status_known:
         wedges = ctx.user_wedges
         if wedges is not None and wedges > config.min_wedges_reserved:

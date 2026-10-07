@@ -11,6 +11,24 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- **Autograbs wait for MAM's search before deciding.** A new torrent
+  reaches #announce about a second after MAM adds it, before MAM's
+  search API lists it, so every IRC autograb's lookup came back "not
+  found". Since 3.11.0's no-blind-wedges fix, that meant **no wedge on
+  any autograb**: the grab policy's wedges were effectively off, and
+  non-VIP grabs counted against your ratio. The same miss also blinded
+  the excluded-uploader and "already snatched on MAM" checks for
+  autograbs. Now an allowed announce MAM doesn't list yet is held: its
+  announce row is written straight away, and the grab runs in the
+  background once MAM lists the torrent (checked at 5s, 15s, 30s, 1m,
+  2m, 3m, 5m, 7m and 10m). If MAM still doesn't list it after 10
+  minutes, the announce's own VIP / Normal flag decides, so a Normal
+  torrent gets its wedge. Held grabs are kept in memory: a restart
+  during the wait drops that grab. If MAM's search can't be reached at
+  all, the grab goes ahead without waiting, as before. When the grab
+  policy would have wedged but the free status is unknown, the log now
+  says so instead of grabbing paid in silence.
+
 - **Excluded uploaders were never excluded.** MAM's search API sends
   the uploader as `ownership`, a JSON-encoded string
   (`"[12345,\"Name\"]"`), not a list, and not the `owner` /

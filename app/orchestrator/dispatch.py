@@ -137,6 +137,37 @@ def grab_claim_lock() -> asyncio.Lock:
     return lock
 
 
+# Waiting for MAM's index (D37, D38). A fresh upload reaches #announce
+# about a second after MAM adds it, before MAM's search API lists it,
+# so the lookup every grab decision leans on (free status for a wedge,
+# the uploader, `my_snatched`, the size) used to come back "not found"
+# on nearly every autograb. An allowed announce MAM doesn't list yet is
+# held: a background task polls on this schedule (cumulative seconds
+# after the announce: 5, 15, 30, 60, 120, 180, 300, 420, 600) and grabs
+# once MAM lists it. If MAM still doesn't by the end, the grab goes
+# ahead on the announce's word (VIP|Normal). In memory only: a restart
+# mid-wait loses the grab, though its announce row is already written.
+_INDEX_WAIT_DELAYS_S: tuple[float, ...] = (5, 10, 15, 30, 60, 60, 120, 120, 180)
+_index_sleep: Callable[[float], Awaitable[None]] = asyncio.sleep  # test seam
+# Strong refs: the event loop only keeps weak ones to running tasks.
+_held_grabs: set[asyncio.Task] = set()
+# Held grabs finish in the background, so two could otherwise run the
+# grab path at once and both slip past the format-dedup gate (each sees
+# no in-flight sibling yet). Every allowed IRC announce's grab runs
+# under this lock, as they did when the IRC loop ran them one by one.
+_announce_grab_locks: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _announce_grab_lock() -> asyncio.Lock:
+    loop = asyncio.get_running_loop()
+    lock = _announce_grab_locks.get(loop)
+    if lock is None:
+        lock = _announce_grab_locks[loop] = asyncio.Lock()
+    return lock
+
+
 async def release_write_lock(db: aiosqlite.Connection) -> None:
     """Commit anything pending on `db` before waiting on the claim lock.
 
@@ -376,9 +407,11 @@ class DispatchResult:
     or submitting failed, and on the snatch-safety skips
     (`already_grabbed`, `already_snatched_on_mam`,
     `torrent_removed_from_mam`) as a message the user can act on.
+    `"hold"` means an IRC announce is waiting for MAM's search index;
+    its grab runs later in the background (`_grab_once_indexed`).
     """
 
-    action: str               # "skip" | "submit" | "queue" | "drop"
+    action: str               # "skip" | "submit" | "queue" | "drop" | "hold"
     reason: str               # human-readable + machine-stable
     announce_id: int          # always set — every dispatch produces an audit row
     grab_id: Optional[int] = None
@@ -479,15 +512,147 @@ async def handle_announce(
         )
 
     decision = evaluate_announce(announce, deps.filter_config)
-    return await _dispatch_with_decision(
-        deps,
-        announce=announce,
-        raw_line=raw_line,
-        filter_decision=decision,
-        skip_filter=False,
-        force_fl_wedge=False,
-        apply_format_dedup=True,
+    if decision.action != "allow":
+        return await _dispatch_with_decision(
+            deps,
+            announce=announce,
+            raw_line=raw_line,
+            filter_decision=decision,
+            skip_filter=False,
+            force_fl_wedge=False,
+            apply_format_dedup=True,
+        )
+    if await _not_indexed_yet(deps, announce):
+        return await _hold_for_index(
+            deps, announce, raw_line=raw_line, decision=decision,
+        )
+    async with _announce_grab_lock():
+        return await _dispatch_with_decision(
+            deps,
+            announce=announce,
+            raw_line=raw_line,
+            filter_decision=decision,
+            skip_filter=False,
+            force_fl_wedge=False,
+            apply_format_dedup=True,
+        )
+
+
+async def _not_indexed_yet(deps: DispatcherDeps, announce: Announce) -> bool:
+    """True when MAM's search doesn't list this announce's torrent yet.
+
+    A found torrent stays in the lookup cache for the grab path. Any
+    other lookup error (MAM unreachable) is False: the grab goes ahead
+    now and fails open, as every lookup error does.
+    """
+    if not (deps.live_mam_token() and announce.torrent_id):
+        return False
+    try:
+        await get_torrent_info(announce.torrent_id, token=deps.live_mam_token())
+    except TorrentNotFoundError:
+        return True
+    except TorrentInfoError:
+        return False
+    return False
+
+
+async def _hold_for_index(
+    deps: DispatcherDeps,
+    announce: Announce,
+    *,
+    raw_line: str,
+    decision: Decision,
+) -> DispatchResult:
+    """Write the announce row now; grab in the background once MAM lists it."""
+    db = await deps.db_factory()
+    try:
+        announce_id = await grabs_storage.record_announce(
+            db,
+            raw=raw_line,
+            torrent_id=announce.torrent_id,
+            torrent_name=announce.torrent_name,
+            category=announce.category,
+            author_blob=announce.author_blob,
+            decision=decision,
+            filetype=(announce.filetype or "").lower().strip(),
+        )
+    finally:
+        await db.close()
+    _emit(deps, "announce_recorded", {"announce_id": announce_id})
+    _log.info(
+        "tid=%s %r isn't in MAM's search yet; grabbing once it is "
+        "(waiting up to %ds)",
+        announce.torrent_id, announce.torrent_name,
+        int(sum(_INDEX_WAIT_DELAYS_S)),
     )
+    task = asyncio.create_task(_grab_once_indexed(
+        deps, announce,
+        raw_line=raw_line, decision=decision, announce_id=announce_id,
+    ))
+    _held_grabs.add(task)
+    task.add_done_callback(_held_grabs.discard)
+    return DispatchResult(
+        action="hold", reason="waiting_for_mam_index", announce_id=announce_id,
+    )
+
+
+async def _wait_for_index(deps: DispatcherDeps, torrent_id: str) -> bool:
+    """Poll MAM's search until it lists `torrent_id`. False if it never did."""
+    waited = 0.0
+    for delay in _INDEX_WAIT_DELAYS_S:
+        await _index_sleep(delay)
+        waited += delay
+        try:
+            await get_torrent_info(torrent_id, token=deps.live_mam_token())
+        except TorrentInfoError as e:
+            _log.debug("tid=%s not in MAM's search after %ds: %s",
+                       torrent_id, int(waited), e)
+            continue
+        _log.info("tid=%s is in MAM's search after %ds", torrent_id, int(waited))
+        return True
+    return False
+
+
+async def _grab_once_indexed(
+    deps: DispatcherDeps,
+    announce: Announce,
+    *,
+    raw_line: str,
+    decision: Decision,
+    announce_id: int,
+) -> None:
+    """The held grab: wait for MAM's index, then run the grab path."""
+    try:
+        indexed = await _wait_for_index(deps, announce.torrent_id)
+        # The wait can run for minutes: re-read the kill switches.
+        live = _live_kill_switch_state()
+        if not live["irc_enabled"] or (live["dry_run"] and not deps.dry_run):
+            _log.info(
+                "held grab of tid=%s dropped: IRC grabbing was switched "
+                "off or dry run on during the wait", announce.torrent_id,
+            )
+            return
+        if not indexed:
+            _log.info(
+                "tid=%s still not in MAM's search after %ds; grabbing on "
+                "the announce's word (%s)", announce.torrent_id,
+                int(sum(_INDEX_WAIT_DELAYS_S)),
+                "VIP" if announce.vip else "Normal",
+            )
+        async with _announce_grab_lock():
+            await _dispatch_with_decision(
+                deps,
+                announce=announce,
+                raw_line=raw_line,
+                filter_decision=decision,
+                skip_filter=False,
+                force_fl_wedge=False,
+                apply_format_dedup=True,
+                announce_id=announce_id,
+                trust_announce=not indexed,
+            )
+    except Exception:
+        _log.exception("held grab of tid=%s failed", announce.torrent_id)
 
 
 def _live_kill_switch_state() -> dict[str, bool]:
@@ -626,6 +791,8 @@ async def _dispatch_with_decision(
     apply_format_dedup: bool = True,
     override_mam_snatched: bool = False,
     apply_claim_for_owned: bool = True,
+    announce_id: Optional[int] = None,
+    trust_announce: bool = False,
 ) -> DispatchResult:
     """The shared pipeline body used by both handle_announce and
     inject_grab. The only thing they differ on is whether the filter
@@ -638,6 +805,11 @@ async def _dispatch_with_decision(
 
     `override_mam_snatched` and `apply_claim_for_owned` — see
     `inject_grab`.
+
+    `announce_id` and `trust_announce` come from a held grab
+    (`_grab_once_indexed`): its announce row already exists, and
+    `trust_announce` says MAM's search never listed the torrent, so
+    the announce's VIP|Normal is its free status.
     """
     # Computed once at the top so the dedup gate, the announce row,
     # and (if we reach the grab branch) the grab row all carry the
@@ -650,17 +822,18 @@ async def _dispatch_with_decision(
 
     db = await deps.db_factory()
     try:
-        announce_id = await grabs_storage.record_announce(
-            db,
-            raw=raw_line,
-            torrent_id=announce.torrent_id,
-            torrent_name=announce.torrent_name,
-            category=announce.category,
-            author_blob=announce.author_blob,
-            decision=filter_decision,
-            filetype=book_format,
-        )
-        _emit(deps, "announce_recorded", {"announce_id": announce_id})
+        if announce_id is None:
+            announce_id = await grabs_storage.record_announce(
+                db,
+                raw=raw_line,
+                torrent_id=announce.torrent_id,
+                torrent_name=announce.torrent_name,
+                category=announce.category,
+                author_blob=announce.author_blob,
+                decision=filter_decision,
+                filetype=book_format,
+            )
+            _emit(deps, "announce_recorded", {"announce_id": announce_id})
 
         if filter_decision.action == "skip":
             _emit(
@@ -902,9 +1075,10 @@ async def _dispatch_with_decision(
         # Runs before auto-train so a refused grab trains nothing.
         #   - removed from MAM → skip without fetching. User/programmatic
         #     grabs only: they act on an ID that may have aged (a
-        #     tentative approved days later, a hold released). A fresh
-        #     IRC announce can beat MAM's search index, so for IRC a
-        #     not-found stays fail-open like every other lookup error.
+        #     tentative approved days later, a hold released). An IRC
+        #     announce only gets here once MAM lists it, or after the
+        #     index wait ran out (D37), so for IRC a not-found stays
+        #     fail-open like every other lookup error.
         #   - `my_snatched` → skip unless the user confirmed the override.
         #   - uploader on the excluded list → skip (your own uploads).
         # Any other lookup failure fails open: the DB guard above still
@@ -993,9 +1167,19 @@ async def _dispatch_with_decision(
         # cached, both fail-safe).
         eco_ctx = await _build_economic_context(
             deps, announce, wedge_requested=force_fl_wedge,
+            trust_announce=trust_announce,
         )
 
         policy_decision = evaluate_policy(eco_ctx, deps.policy_config)
+        if (
+            deps.policy_config.use_wedge
+            and policy_decision.tier == "normal"
+            and not eco_ctx.free_status_known
+        ):
+            _log.info(
+                "no wedge on tid=%s: MAM's search didn't say whether it's "
+                "already free, so it's grabbed paid", announce.torrent_id,
+            )
 
         if policy_decision.action == "skip":
             _emit(
@@ -1847,6 +2031,7 @@ async def _build_economic_context(
     announce: Announce,
     *,
     wedge_requested: bool = False,
+    trust_announce: bool = False,
 ) -> EconomicContext:
     """Build the EconomicContext for the policy engine.
 
@@ -1862,8 +2047,11 @@ async def _build_economic_context(
     Both are cached and fail-safe — if either errors out, the policy
     engine just runs with whatever data is available. The announce
     VIP flag is always present, so the policy never runs blind.
+
+    `trust_announce` (a held grab MAM never listed, D37) lets the
+    announce's VIP|Normal stand as the free status.
     """
-    ctx_kwargs: dict = {"announce_vip": announce.vip}
+    ctx_kwargs: dict = {"announce_vip": announce.vip, "trust_announce": trust_announce}
 
     # Torrent-info is needed when any gate branches on per-torrent
     # economics OR when the buffer gate needs the torrent size.
