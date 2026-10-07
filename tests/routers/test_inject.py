@@ -250,9 +250,13 @@ class TestInjectWedgeFlags:
         MAM's side so the subsequent grab picks up the free tier.
     """
 
-    async def test_use_wedge_override_forces_fl_on_fetch(self, temp_db):
+    async def test_use_wedge_override_forces_fl_on_fetch(self, temp_db, fake_mam):
         # Capture the kwargs the fetcher was called with so we can
-        # assert `use_fl_wedge=True` reached it.
+        # assert `use_fl_wedge=True` reached it. The torrent must be
+        # one MAM confirms isn't free: a wedge is never sent otherwise.
+        from tests.fake_mam import DEFAULT_TORRENT_INFO_BODY
+
+        fake_mam.search.body = DEFAULT_TORRENT_INFO_BODY
         captured: dict = {}
 
         async def capturing_fetch(torrent_id, token, **kwargs):

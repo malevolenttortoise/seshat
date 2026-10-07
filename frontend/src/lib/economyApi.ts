@@ -43,7 +43,7 @@ export interface BuyResponse {
 export interface AuditRow {
   id: number;
   occurred_at: string;
-  action: "vip" | "upload" | "personal_fl" | "buffer_gate_block";
+  action: "vip" | "upload" | "personal_fl" | "buffer_gate_block" | "wedge";
   trigger: "scheduled" | "manual" | "irc_autograb" | "user_grab";
   outcome: string;
   mode: string | null;
@@ -121,6 +121,8 @@ export function formatAction(action: AuditRow["action"]): string {
       return "Personal FL";
     case "buffer_gate_block":
       return "Buffer gate";
+    case "wedge":
+      return "Wedge";
   }
 }
 

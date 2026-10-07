@@ -1001,6 +1001,7 @@ async def _dispatch_with_decision(
         # cached, both fail-safe).
         eco_ctx = await _build_economic_context(
             deps, announce, personal_fl_bought=personal_fl_bought,
+            wedge_requested=force_fl_wedge,
         )
 
         policy_decision = evaluate_policy(eco_ctx, deps.policy_config)
@@ -1142,14 +1143,24 @@ async def _dispatch_with_decision(
                 dedup_key=dedup_key,
             )
 
-        # `force_fl_wedge` is the manual-inject override — the user
-        # explicitly asked for `&fl=1` on this grab, irrespective of
-        # what the policy engine decided. Either path alone is
-        # enough to flip the wedge on.
+        # A wedge comes from the policy or from `force_fl_wedge` (a user
+        # tick: inject, send-to-pipeline, Manual Grab). Either way it's
+        # only sent on a torrent MAM confirmed isn't free (`_wedge_for`).
+        use_wedge, wedge_why = _wedge_for(
+            announce, eco_ctx,
+            policy_wedge=policy_decision.use_wedge,
+            forced=force_fl_wedge,
+            raw_line=raw_line,
+        )
         fetch_result = await deps.fetch_torrent(
             announce.torrent_id, deps.live_mam_token(),
-            use_fl_wedge=policy_decision.use_wedge or force_fl_wedge,
+            use_fl_wedge=use_wedge,
         )
+        if use_wedge and fetch_result.success:
+            await _audit_wedge(
+                db, announce=announce, why=wedge_why,
+                tier=policy_decision.tier, user_grab=skip_filter,
+            )
 
         if not fetch_result.success:
             failed_state = _grab_failure_state(fetch_result)
@@ -1846,6 +1857,7 @@ async def _build_economic_context(
     announce: Announce,
     *,
     personal_fl_bought: bool = False,
+    wedge_requested: bool = False,
 ) -> EconomicContext:
     """Build the EconomicContext for the policy engine.
 
@@ -1874,6 +1886,9 @@ async def _build_economic_context(
             or deps.policy_config.use_wedge
             or deps.policy_config.ratio_floor > 0
             or deps.policy_config.buffer_gate_enabled
+            # A wedge override needs to know the torrent isn't free yet
+            # (`_wedge_for`); the lookup is usually already cached.
+            or wedge_requested
         )
     )
     if needs_torrent_info:
@@ -1917,6 +1932,72 @@ async def _build_economic_context(
         ctx_kwargs["personal_freeleech"] = True
 
     return EconomicContext(**ctx_kwargs)
+
+
+def _wedge_for(
+    announce: Announce,
+    eco_ctx: EconomicContext,
+    *,
+    policy_wedge: bool,
+    forced: bool,
+    raw_line: str,
+) -> tuple[bool, str]:
+    """Whether this fetch may carry `&fl=1`, and why it was asked for.
+
+    MAM spends a wedge on `fl` even when the torrent is already free or
+    VIP, with no refund (its `download.php` doc). So a wedge goes only
+    on a torrent the search API confirmed is not free, whoever asked
+    for it (D28). The policy can't choose one for an unknown status
+    (D29); this also stops a user's tick on a free or unknown one.
+    """
+    if not (policy_wedge or forced):
+        return False, ""
+    if raw_line.startswith("manual_grab:"):
+        why = "Grab from MAM"
+    elif forced:
+        why = "manual tick"
+    else:
+        why = "grab policy"
+    if not eco_ctx.free_status_known:
+        _log.info(
+            "wedge not used on tid=%s (%s): MAM didn't say whether it's "
+            "already free", announce.torrent_id, why,
+        )
+        return False, why
+    if eco_ctx.is_free:
+        _log.info(
+            "wedge not used on tid=%s (%s): already free or VIP",
+            announce.torrent_id, why,
+        )
+        return False, why
+    return True, why
+
+
+async def _audit_wedge(
+    db: aiosqlite.Connection,
+    *,
+    announce: Announce,
+    why: str,
+    tier: str,
+    user_grab: bool,
+) -> None:
+    """One economy-audit row per wedge spent (D30). Best-effort."""
+    _log.info("wedge used on tid=%s (%s)", announce.torrent_id, why)
+    try:
+        await economy_audit.record(
+            db,
+            action=economy_audit.ACTION_WEDGE,
+            trigger=(
+                economy_audit.TRIGGER_USER_GRAB if user_grab
+                else economy_audit.TRIGGER_IRC_AUTOGRAB
+            ),
+            outcome=economy_audit.OUTCOME_SUCCESS,
+            torrent_id=announce.torrent_id,
+            tier=tier,
+            message=f"Wedge on '{announce.torrent_name}' ({why})",
+        )
+    except Exception:
+        _log.exception("wedge audit failed for tid=%s (non-fatal)", announce.torrent_id)
 
 
 async def _record_buffer_gate_block(

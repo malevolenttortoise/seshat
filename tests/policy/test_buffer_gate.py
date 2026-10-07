@@ -106,9 +106,11 @@ class TestHigherPriorityBypass:
     def test_wedge_path_bypasses_gate(self):
         # Wedge makes the torrent free, so buffer gate doesn't apply.
         d = evaluate_policy(
+            # Known not free (a wedge is only spent on those, D29).
             _ctx(torrent_size_bytes=100 * GB,
                  user_upload_buffer_bytes=1 * GB,
-                 user_wedges=10),
+                 user_wedges=10,
+                 torrent_vip=False, torrent_free=False),
             _cfg(use_wedge=True, min_wedges_reserved=0),
         )
         assert d.action == "grab"

@@ -190,6 +190,21 @@ on `development`: MAM sees one download per torrent, ever. Phase 1 —
 
 ### Fixed
 
+- **Wedges are no longer spent on torrents that are already free.**
+  MAM's `download.php` spends a wedge whenever `fl` is set, "even on
+  VIP torrents … no refunds". Seshat now sends it only on a torrent the
+  search API confirmed is not free (not VIP, freeleech or personal FL),
+  on every path: the grab policy's automatic wedges, the "use wedge"
+  tick (manual inject, send-to-pipeline) and Grab from MAM. When MAM
+  can't say (a new torrent that hasn't reached the search index yet),
+  the grab goes ahead without a wedge, or is skipped if your policy is
+  free-only. Previously the policy wedged blind whenever that lookup
+  failed.
+- **Every wedge is now recorded.** Each one used adds an economy-audit
+  row (torrent, title, and why: grab policy, manual tick, or Grab from
+  MAM), listed as "Wedge" in the MAM page's history, plus a log line
+  (`wedge used on tid=…`). Skipped wedges log why
+  (`wedge not used on tid=…`).
 - **The buffer gate now works — it never blocked anything before.** MAM's
   search API sends a torrent's size as text ("46.6 GiB"), and the gate
   read it with `int()`, which failed on every real torrent, so the gate
