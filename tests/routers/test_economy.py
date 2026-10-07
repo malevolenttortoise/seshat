@@ -439,6 +439,25 @@ class TestPreflight:
         assert body["shortfall_gb"] == 0.0
         assert body["recommended_buy_gb"] == 0.0
 
+    async def test_reads_mams_human_readable_size(
+        self, client, temp_db, isolated_settings, fake_mam
+    ):
+        """MAM sends size as "9.3 GiB". `int()` on that read 0 GB, so the
+        preflight called every torrent affordable (fixed 2026-10-06)."""
+        _set_token(isolated_settings, "tok")
+        body = json.loads(self._torrent_info_body(0))
+        body["data"][0]["size"] = "9.3 GiB"
+        fake_mam.search.body = json.dumps(body).encode()
+        fake_mam.user_status.body = self._user_status_body(4_000_000_000)
+
+        resp = await client.post(
+            "/api/v1/mam/economy/preflight", json={"torrent_id": "1234"}
+        )
+        assert resp.status_code == 200
+        out = resp.json()
+        assert out["size_gb"] == pytest.approx(9.3 * 1024 ** 3 / 1e9)
+        assert out["sufficient"] is False
+
     async def test_insufficient_buffer_computes_shortfall(
         self, client, temp_db, isolated_settings, fake_mam
     ):

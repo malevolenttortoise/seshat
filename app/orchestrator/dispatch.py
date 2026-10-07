@@ -1883,14 +1883,10 @@ async def _build_economic_context(
             ctx_kwargs["torrent_free"] = info.free
             ctx_kwargs["torrent_fl_vip"] = info.fl_vip
             ctx_kwargs["personal_freeleech"] = info.personal_freeleech
-            # info.size is a string of bytes — parse defensively
-            # because MAM has been known to send an empty string on
-            # edge cases. Malformed values fall through to None so
-            # the policy engine fails open on the buffer gate.
-            try:
-                ctx_kwargs["torrent_size_bytes"] = int(info.size) if info.size else None
-            except (TypeError, ValueError):
-                ctx_kwargs["torrent_size_bytes"] = None
+            # MAM sends size as "1.2 GiB". `int(info.size)` failed on
+            # every real torrent, so until 2026-10-06 the buffer gate
+            # always failed open. Unparseable values still fail open.
+            ctx_kwargs["torrent_size_bytes"] = info.size_bytes
         except TorrentInfoError as e:
             _log.debug("torrent_info lookup failed for tid=%s: %s",
                          announce.torrent_id, e)

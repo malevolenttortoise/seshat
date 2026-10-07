@@ -877,6 +877,29 @@ class TestBufferGate:
             }],
         }).encode()
 
+    async def test_gate_reads_mams_human_readable_size(self, temp_db, fake_mam):
+        """MAM sends size as "46.6 GiB", not bytes. `int()` on it failed,
+        so the gate failed open on every real torrent until 2026-10-06."""
+        import json
+
+        from app.mam import torrent_info as ti
+        from app.mam import user_status as us
+
+        ti.invalidate_cache()
+        us.invalidate_cache()
+        body = json.loads(self._torrent_info_body(0))
+        body["data"][0]["size"] = "46.6 GiB"
+        fake_mam.search.body = json.dumps(body).encode()
+        fake_mam.user_status.body = self._buffer_gate_config(10_000_000_000)
+
+        deps = _make_deps(
+            filter_config=_make_filter_config(allowed=["Brandon Sanderson"]),
+        )
+        deps.policy_config = PolicyConfig(buffer_gate_enabled=True)
+        result = await handle_announce(deps, _make_announce())
+        assert result.reason == "policy:buffer_insufficient"
+        assert deps.fetch_torrent.calls == []  # type: ignore[attr-defined]
+
     async def test_irc_autograb_block_writes_audit_row(
         self, temp_db, fake_mam
     ):

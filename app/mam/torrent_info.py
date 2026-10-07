@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from app.mam.cookie import MAM_SEARCH_URL, _do_post
+from app.mam.size import parse_size_to_bytes
 
 _log = logging.getLogger("seshat.mam")
 
@@ -52,7 +53,7 @@ class TorrentInfo:
     personal_freeleech: bool
     category: str       # e.g. "Audiobooks - Urban Fantasy"
     title: str
-    size: str           # e.g. "6324306932" (bytes as string)
+    size: str           # as MAM sends it, e.g. "1.2 GiB"; use `size_bytes`
     # Bibliographic fields — populated from the same search response.
     authors: dict[str, str] = field(default_factory=dict)    # {mam_id: name}
     narrators: dict[str, str] = field(default_factory=dict)  # {mam_id: name}
@@ -86,6 +87,11 @@ class TorrentInfo:
     # already downloaded the torrent (before Seshat, by hand, or by an
     # earlier grab). Part of the baseline response; no opt-in flag.
     my_snatched: bool = False
+
+    @property
+    def size_bytes(self) -> Optional[int]:
+        """`size` in bytes. MAM sends "1.2 GiB"; never `int(size)` it."""
+        return parse_size_to_bytes(self.size)
 
 
 # ─── In-memory cache ────────────────────────────────────────

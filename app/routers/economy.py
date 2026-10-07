@@ -339,10 +339,7 @@ async def preflight(body: PreflightRequest) -> PreflightResponse:
     except UserStatusError as e:
         raise HTTPException(502, f"Couldn't fetch user status: {e}") from e
 
-    try:
-        size_bytes = int(info.size) if info.size else 0
-    except (TypeError, ValueError):
-        size_bytes = 0
+    size_bytes = info.size_bytes or 0
     buffer_bytes = int(status.upload_buffer_bytes or 0)
     margin_bytes = int(margin_gb * 1_000_000_000)
 

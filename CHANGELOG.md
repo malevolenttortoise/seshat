@@ -183,6 +183,16 @@ on `development`: MAM sees one download per torrent, ever. Phase 1 —
 
 ### Fixed
 
+- **The buffer gate now works — it never blocked anything before.** MAM's
+  search API sends a torrent's size as text ("46.6 GiB"), and the gate
+  read it with `int()`, which failed on every real torrent, so the gate
+  always failed open. The economy preflight (the "Buy N GB" banner) read
+  every torrent as 0 GB for the same reason. Both now parse MAM's size
+  (one shared parser, `app/mam/size.py`, also used by Grab from MAM and
+  quality metadata). **Behaviour change:** with
+  `mam_economy_buffer_gate_enabled` on, grabs that would drive your
+  upload buffer below the safety margin are now actually refused (with
+  the audit row and notification that were always meant to fire).
 - **A personal-FL buy now actually frees the grab it was bought for.**
   MAM's search API takes 5–20 min to report a new personal FL, so the
   grab that re-read it right after the buy still saw a paid torrent: the

@@ -145,10 +145,7 @@ def _fill_from_info(row: PreviewRow, info: TorrentInfo) -> None:
     ]
     row.category = info.category
     row.filetype = info.filetype
-    try:
-        row.size_bytes = int(info.size) if info.size else None
-    except (TypeError, ValueError):
-        row.size_bytes = None
+    row.size_bytes = info.size_bytes
     row.seeders = info.seeders
     row.vip = info.vip
     row.freeleech = info.free or info.fl_vip
