@@ -10,6 +10,7 @@
 // grabs it makes show up in the usual grab history.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../api";
+import { economyApi } from "../../lib/economyApi";
 import {
   BLOCKING_STATUSES,
   MAX_BATCH,
@@ -81,6 +82,10 @@ export function useManualGrabBatch() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [useWedges, setUseWedgesState] = useState(false);
+  // The MAM page's "Show 'use wedge' checkbox on manual grabs" setting
+  // (`mam_economy_manual_wedge_offer_enabled`) governs this page too
+  // (D34). Off, or unreadable: no wedge toggle, no wedges.
+  const [offerWedges, setOfferWedges] = useState(false);
   const [wedges, setWedges] = useState<WedgeBudget | null>(null);
   const [wedgeError, setWedgeError] = useState<string | null>(null);
   const [snatch, setSnatch] = useState<SnatchBudget | null>(null);
@@ -112,6 +117,12 @@ export function useManualGrabBatch() {
   useEffect(() => {
     mounted.current = true;
     void loadSnatch();
+    economyApi
+      .getConfig()
+      .then((cfg) => {
+        if (mounted.current) setOfferWedges(!!cfg.mam_economy_manual_wedge_offer_enabled);
+      })
+      .catch(() => {});
     return () => {
       mounted.current = false;
     };
@@ -308,7 +319,7 @@ export function useManualGrabBatch() {
         items: chosen.map((e) => ({
           ...itemBody(e),
           override_mam_snatched: e.overrideSnatched,
-          use_wedge: useWedges && wedgeEligible(e),
+          use_wedge: offerWedges && useWedges && wedgeEligible(e),
         })),
       });
     } catch (e) {
@@ -344,14 +355,15 @@ export function useManualGrabBatch() {
       setGrabbing(false);
       void loadSnatch();
     }
-  }, [entries, useWedges, setUseWedges, commit, loadSnatch]);
+  }, [entries, offerWedges, useWedges, setUseWedges, commit, loadSnatch]);
 
   const pending = entries.some((e) => e.preview === null);
   const open = entries.filter((e) => e.ticked && !e.result);
   const tickedCount = open.length;
-  const wedgeCount = useWedges ? open.filter(wedgeEligible).length : 0;
+  const wedgesOn = offerWedges && useWedges;
+  const wedgeCount = wedgesOn ? open.filter(wedgeEligible).length : 0;
   const eligibleForWedges = entries.filter(wedgeEligible).length;
-  const wedgeShort = useWedges && !!wedges && wedgeCount > wedges.spendable;
+  const wedgeShort = wedgesOn && !!wedges && wedgeCount > wedges.spendable;
   const freeSlots = snatch ? Math.max(0, snatch.budget_cap - snatch.budget_used) : null;
   const willQueue = freeSlots === null ? 0 : Math.max(0, tickedCount - freeSlots);
 
@@ -363,7 +375,8 @@ export function useManualGrabBatch() {
     notice,
     pending,
     tickedCount,
-    useWedges,
+    offerWedges,
+    useWedges: wedgesOn,
     wedges,
     wedgeError,
     wedgeCount,

@@ -86,7 +86,7 @@ export default function MobileGrabFromMamPage({ initial }: { initial?: string | 
             />
           ))}
 
-          {(batch.useWedges || batch.eligibleForWedges > 0) && (
+          {batch.offerWedges && (batch.useWedges || batch.eligibleForWedges > 0) && (
             <label style={{ fontSize: 14, color: t.text2, display: "flex", alignItems: "center", gap: 10, padding: "10px 0" }}>
               <input
                 type="checkbox"

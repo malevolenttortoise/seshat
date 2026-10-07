@@ -126,7 +126,7 @@ function DesktopGrabFromMamPage({ initial }: { initial?: string | number | null 
 
 function GrabFooter({ batch }: { batch: ManualGrabBatch }) {
   const t = useTheme();
-  const showWedges = batch.useWedges || batch.eligibleForWedges > 0;
+  const showWedges = batch.offerWedges && (batch.useWedges || batch.eligibleForWedges > 0);
   const blocked =
     !batch.tickedCount || batch.pending || batch.grabbing || batch.wedgeShort ||
     (batch.useWedges && batch.wedgeCount > 0 && !batch.wedges);
