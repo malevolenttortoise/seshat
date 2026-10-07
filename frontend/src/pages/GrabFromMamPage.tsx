@@ -15,6 +15,7 @@ import { useMobileCodepath } from "../components/mobile";
 import { GrabPreviewRow } from "../components/manualGrab/GrabPreviewRow";
 import { useManualGrabBatch } from "../components/manualGrab/useManualGrabBatch";
 import { SNATCH_LAG_HINT, firstLine } from "../components/manualGrab/text";
+import { TorrentDropZone } from "../components/manualGrab/TorrentDropZone";
 import MobileGrabFromMamPage from "./MobileGrabFromMamPage";
 
 export default function GrabFromMamPage({ initial }: { initial?: string | number | null }) {
@@ -48,6 +49,11 @@ function DesktopGrabFromMamPage({ initial }: { initial?: string | number | null 
     batch.addLinks([value]);
   };
 
+  const upload = (files: File[]) => {
+    batch.clear();
+    void batch.addFiles(files);
+  };
+
   const label =
     `Grab ${batch.tickedCount}` + (batch.flCount ? ` · ${batch.flCount * 50}k BP` : "");
 
@@ -58,8 +64,10 @@ function DesktopGrabFromMamPage({ initial }: { initial?: string | number | null 
           Grab from MAM
         </h1>
         <p style={{ fontSize: 14, color: t.textDim, margin: 0 }}>
-          Paste a MAM link or torrent ID. Seshat looks it up, shows you what it is and
-          what you already have, and grabs it when you say so.
+          Paste a MAM link or torrent ID, or drop a .torrent you downloaded from MAM.
+          Seshat shows you what it is and what you already have, and grabs it when you
+          say so. A dropped .torrent goes straight to qBittorrent, with no second
+          download from MAM.
         </p>
       </div>
 
@@ -79,7 +87,8 @@ function DesktopGrabFromMamPage({ initial }: { initial?: string | number | null 
             Look up
           </Btn>
         </div>
-        <p style={{ fontSize: 12, color: t.td, margin: "8px 0 0" }}>{SNATCH_LAG_HINT}</p>
+        <p style={{ fontSize: 12, color: t.td, margin: "8px 0 14px" }}>{SNATCH_LAG_HINT}</p>
+        <TorrentDropZone onFiles={upload} />
       </div>
 
       {batch.error && (

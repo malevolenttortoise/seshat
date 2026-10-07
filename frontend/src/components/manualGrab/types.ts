@@ -12,7 +12,12 @@ export type PreviewStatus =
   | "removed_from_mam"
   | "excluded_uploader"
   | "bad_input"
-  | "lookup_failed";
+  | "lookup_failed"
+  // Uploads only: the file must be this account's own MAM download.
+  | "bad_file"
+  | "not_mam_file"
+  | "foreign_file"
+  | "uid_unknown";
 
 // Rows that can never be ticked. The rest start unticked unless
 // "ready"; ticking them is the user's decision (ADR-0023).
@@ -22,10 +27,16 @@ export const BLOCKING_STATUSES: ReadonlySet<PreviewStatus> = new Set([
   "excluded_uploader",
   "bad_input",
   "lookup_failed",
+  "bad_file",
+  "not_mam_file",
+  "foreign_file",
+  "uid_unknown",
 ]);
 
+export type EntryKind = "link" | "file";
+
 export interface PreviewRow {
-  kind: "link";
+  kind: EntryKind;
   input: string;
   status: PreviewStatus;
   message: string;
@@ -49,6 +60,7 @@ export interface PreviewRow {
   wedge_eligible: boolean;
   grab_id: number | null;
   cover_url: string | null;
+  info_hash: string | null;
 }
 
 export type JobRowStatus =
@@ -81,7 +93,9 @@ export interface GrabJob {
 // it arrives, the user's choices, and (after Grab all) its outcome.
 export interface GrabEntry {
   key: string;
-  input: string;
+  kind: EntryKind;
+  input: string; // the pasted line, or the file's name
+  dataB64: string | null; // the .torrent bytes, for files
   preview: PreviewRow | null; // null while the lookup is pending
   ticked: boolean;
   buyFl: boolean;

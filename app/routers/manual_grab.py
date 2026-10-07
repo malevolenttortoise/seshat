@@ -1,7 +1,7 @@
 """
 Manual Grab HTTP endpoints — the "Grab from MAM" page.
 
-    POST /api/v1/manual-grab/preview        one row's preview
+    POST /api/v1/manual-grab/preview        one row's preview (link or .torrent)
     POST /api/v1/manual-grab/grab           start a Grab all job (≤30 rows)
     GET  /api/v1/manual-grab/grab/{job_id}  the job's per-row status
     GET  /api/v1/manual-grab/cover/{tid}    a cached preview thumbnail
@@ -15,27 +15,54 @@ Session auth (auth_secret cookie) is enforced by the global middleware.
 """
 from __future__ import annotations
 
-from typing import Literal
+import base64
+import binascii
+from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app import state
 from app.mam.torrent_id import extract_torrent_id
+from app.mam.torrent_meta import BencodeError, read_mam_comment
 from app.orchestrator import manual_grab
+
+# base64 of a 1 MB .torrent, plus slack. Uploads travel as base64 in
+# JSON (D18): no multipart dependency, and .torrent files are tiny.
+_MAX_B64 = (manual_grab.MAX_TORRENT_BYTES * 4) // 3 + 8
 
 router = APIRouter(prefix="/api/v1/manual-grab", tags=["manual-grab"])
 
 
-class PreviewRequest(BaseModel):
-    kind: Literal["link"]
-    value: str = Field(..., min_length=1, max_length=2000)
+class _ItemIn(BaseModel):
+    """A pasted link (`value`) or an uploaded .torrent (`name` + `data_b64`)."""
+
+    kind: Literal["link", "file"]
+    value: str = Field("", max_length=2000)
+    name: str = Field("", max_length=500)
+    data_b64: str = Field("", max_length=_MAX_B64)
+
+    @model_validator(mode="after")
+    def _shape(self):
+        if self.kind == "link" and not self.value.strip():
+            raise ValueError("a link item needs `value`")
+        if self.kind == "file" and not self.data_b64:
+            raise ValueError("a file item needs `data_b64`")
+        return self
+
+    def file_bytes(self) -> bytes:
+        try:
+            return base64.b64decode(self.data_b64, validate=True)
+        except (binascii.Error, ValueError):
+            raise HTTPException(422, f"{self.name or 'file'}: not valid base64")
 
 
-class GrabItemIn(BaseModel):
-    kind: Literal["link"]
-    value: str = Field(..., min_length=1, max_length=2000)
+class PreviewRequest(_ItemIn):
+    pass
+
+
+class GrabItemIn(_ItemIn):
     buy_personal_fl: bool = False
     # Set only by the row's "Download again" confirm (D13).
     override_mam_snatched: bool = False
@@ -53,8 +80,22 @@ def _deps():
 
 @router.post("/preview")
 async def preview(body: PreviewRequest) -> dict:
-    row = await manual_grab.preview_link(_deps(), body.value)
+    deps = _deps()
+    if body.kind == "file":
+        row = await manual_grab.preview_file(deps, body.name, body.file_bytes())
+    else:
+        row = await manual_grab.preview_link(deps, body.value)
     return row.to_dict()
+
+
+def _torrent_id_of(item: GrabItemIn, data: Optional[bytes]) -> Optional[str]:
+    if item.kind == "link":
+        return extract_torrent_id(item.value)
+    try:
+        stamp = read_mam_comment(data or b"")
+    except BencodeError:
+        return None
+    return stamp.torrent_id if stamp else None
 
 
 @router.post("/grab")
@@ -64,7 +105,8 @@ async def grab(body: GrabRequest) -> dict:
     seen: set[str] = set()
     duplicates: list[int] = []
     for i, it in enumerate(body.items):
-        tid = extract_torrent_id(it.value)
+        data = it.file_bytes() if it.kind == "file" else None
+        tid = _torrent_id_of(it, data)
         if tid is not None and tid in seen:
             duplicates.append(i)
             continue
@@ -72,9 +114,10 @@ async def grab(body: GrabRequest) -> dict:
             seen.add(tid)
         items.append(manual_grab.GrabRequestItem(
             kind=it.kind,
-            value=it.value,
+            value=it.value if it.kind == "link" else (it.name or "upload.torrent"),
             buy_personal_fl=it.buy_personal_fl,
             override_mam_snatched=it.override_mam_snatched,
+            data=data,
         ))
     if duplicates:
         raise HTTPException(

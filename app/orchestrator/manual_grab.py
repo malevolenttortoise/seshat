@@ -3,10 +3,10 @@ Manual Grab — the user hands Seshat specific MAM torrents to grab.
 
 Two halves, both behind `app/routers/manual_grab.py`:
 
-  - **Preview.** One row per pasted link: what MAM says about the
-    torrent, plus local state (already grabbed? owned? in flight?) and
-    the policy tier the grab would get. Read-only: no announce or grab
-    rows are written.
+  - **Preview.** One row per pasted link or uploaded .torrent: what
+    MAM says about the torrent, plus local state (already grabbed?
+    owned? in flight?) and the policy tier the grab would get.
+    Read-only: no announce or grab rows are written.
   - **Grab all.** The ticked rows go to a background job that grabs
     them one at a time and reports per-row status. The job lives in
     memory (D14): a restart loses the rows it hadn't reached; every row
@@ -34,10 +34,12 @@ from app.filter.gate import Announce
 from app.mam import search_pacer
 from app.mam.torrent_id import extract_torrent_id
 from app.mam.torrent_info import TorrentInfo, TorrentInfoError, TorrentNotFoundError
+from app.mam.user_status import UserStatusError
 from app.orchestrator.dispatch import (
     DispatcherDeps,
     DispatchResult,
     _build_economic_context,
+    grab_uploaded_torrent,
     inject_grab,
 )
 from app.orchestrator.format_dedup import (
@@ -64,11 +66,20 @@ STATUS_REMOVED = "removed_from_mam"
 STATUS_EXCLUDED_UPLOADER = "excluded_uploader"
 STATUS_BAD_INPUT = "bad_input"
 STATUS_LOOKUP_FAILED = "lookup_failed"
+# Upload-only (ADR-0023): the file must be this account's own MAM download.
+STATUS_BAD_FILE = "bad_file"
+STATUS_NOT_MAM_FILE = "not_mam_file"
+STATUS_FOREIGN_FILE = "foreign_file"
+STATUS_UID_UNKNOWN = "uid_unknown"
 
 BLOCKING_STATUSES = frozenset({
     STATUS_ALREADY_GRABBED, STATUS_REMOVED, STATUS_EXCLUDED_UPLOADER,
-    STATUS_BAD_INPUT, STATUS_LOOKUP_FAILED,
+    STATUS_BAD_INPUT, STATUS_LOOKUP_FAILED, STATUS_BAD_FILE,
+    STATUS_NOT_MAM_FILE, STATUS_FOREIGN_FILE, STATUS_UID_UNKNOWN,
 })
+
+# A real .torrent tops out around 100 KB (largest on the host: 97 KB).
+MAX_TORRENT_BYTES = 1_000_000
 
 
 # ─── Preview ─────────────────────────────────────────────────
@@ -100,6 +111,7 @@ class PreviewRow:
     wedge_eligible: bool = False
     grab_id: Optional[int] = None
     cover_url: Optional[str] = None
+    info_hash: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -156,12 +168,78 @@ async def preview_link(deps: DispatcherDeps, value: str) -> PreviewRow:
         row.message = "Not a MAM torrent link or ID."
         return row
     row.torrent_id = tid
+    return await _preview_torrent(deps, row)
+
+
+async def preview_file(deps: DispatcherDeps, name: str, data: bytes) -> PreviewRow:
+    """Build the preview row for one uploaded .torrent (ADR-0023).
+
+    The file must be a MAM download by this account; then it previews
+    like a link to its MID, except `my_snatched` is expected (the upload
+    is the snatch) and a wedge is never offered (it rides on the MAM
+    download, which already happened).
+    """
+    from app.mam.torrent_meta import BencodeError, info_hash, read_mam_comment
+
+    row = PreviewRow(kind="file", input=name, status=STATUS_READY)
+    if len(data) > MAX_TORRENT_BYTES:
+        row.status = STATUS_BAD_FILE
+        row.message = "Too big to be a .torrent file."
+        return row
+    try:
+        row.info_hash = info_hash(data)
+        stamp = read_mam_comment(data)
+    except BencodeError:
+        row.status = STATUS_BAD_FILE
+        row.message = "Not a valid .torrent file."
+        return row
+    if stamp is None:
+        row.status = STATUS_NOT_MAM_FILE
+        row.message = "Not a MAM .torrent (no MAM torrent ID in it)."
+        return row
+    row.torrent_id = stamp.torrent_id
+
+    uid = await _paced_account_uid(deps)
+    if uid is None:
+        row.status = STATUS_UID_UNKNOWN
+        row.message = (
+            "Can't confirm this .torrent is yours: Seshat can't read your "
+            "MAM account right now. Check the cookie and try again."
+        )
+        return row
+    if stamp.uid != uid:
+        row.status = STATUS_FOREIGN_FILE
+        row.message = (
+            "This .torrent was downloaded by another MAM account; "
+            "download your own copy from MAM."
+        )
+        return row
+    return await _preview_torrent(deps, row)
+
+
+async def _paced_account_uid(deps: DispatcherDeps) -> Optional[int]:
+    token = deps.live_mam_token()
+    if not token:
+        return None
+    try:
+        status = await search_pacer.paced_user_status(token)
+    except UserStatusError:
+        return None
+    return status.uid or None
+
+
+async def _preview_torrent(deps: DispatcherDeps, row: PreviewRow) -> PreviewRow:
+    """The shared half of a preview, once the row has a torrent ID."""
+    tid = row.torrent_id or ""
+    is_file = row.kind == "file"
 
     # Local guard first: a torrent Seshat already grabbed costs MAM
     # nothing to report, so it never reaches the pacer.
     db = await deps.db_factory()
     try:
         prior = await grabs_storage.find_blocking_grab(db, tid)
+        if prior is None and row.info_hash:
+            prior = await grabs_storage.find_grab_by_hash(db, row.info_hash)
     finally:
         await db.close()
     if prior is not None:
@@ -191,6 +269,8 @@ async def preview_link(deps: DispatcherDeps, value: str) -> PreviewRow:
         return row
 
     _fill_from_info(row, info)
+    if is_file:
+        row.wedge_eligible = False
 
     if (
         deps.excluded_uploaders
@@ -205,7 +285,7 @@ async def preview_link(deps: DispatcherDeps, value: str) -> PreviewRow:
     await _fill_policy(row, deps, info)
     row.cover_url = await cover_url_for(tid, token)
 
-    if row.my_snatched:
+    if row.my_snatched and not is_file:
         row.status = STATUS_SNATCHED
         row.message = "You already snatched this on MAM."
     elif row.owned_in:
@@ -338,10 +418,11 @@ def _prune_covers() -> None:
 
 @dataclass
 class GrabRequestItem:
-    kind: str
-    value: str
+    kind: str                     # "link" | "file"
+    value: str                    # the link, or the file's name
     buy_personal_fl: bool = False
     override_mam_snatched: bool = False
+    data: Optional[bytes] = None  # the .torrent bytes, for "file"
 
 
 @dataclass
@@ -416,7 +497,10 @@ async def _run_job(
         for row, item in zip(job.rows, items):
             row.status = "working"
             try:
-                await _grab_link(deps, row, item)
+                if item.kind == "file":
+                    await _grab_file(deps, row, item)
+                else:
+                    await _grab_link(deps, row, item)
             except Exception as e:
                 _log.exception("manual grab: row %d crashed", row.index)
                 row.status = "failed"
@@ -455,12 +539,7 @@ async def _grab_link(
 
     fl_bought = False
     if item.buy_personal_fl:
-        from app.routers.inject import _buy_personal_fl_for_inject
-        fl_bought = await search_pacer.paced(
-            lambda: _buy_personal_fl_for_inject(tid, token),
-            label=f"personal FL tid={tid}",
-        )
-        row.personal_fl_bought = fl_bought
+        fl_bought = await _buy_fl(row, tid, token)
         if fl_bought:
             # A successful buy clears the whole torrent-info cache.
             info = await _warm(row, tid, token)
@@ -483,6 +562,51 @@ async def _grab_link(
         personal_fl_bought=fl_bought,
     )
     _apply_result(row, result)
+
+
+async def _grab_file(
+    deps: DispatcherDeps, row: JobRow, item: GrabRequestItem,
+) -> None:
+    """Grab an uploaded .torrent: its own bytes, never a MAM download."""
+    from app.mam.torrent_meta import BencodeError, read_mam_comment
+
+    data = item.data or b""
+    try:
+        stamp = read_mam_comment(data)
+    except BencodeError:
+        stamp = None
+    token = deps.live_mam_token()
+    if stamp is not None:
+        row.torrent_id = stamp.torrent_id
+    # Warm what grab_uploaded_torrent reads (account uid, then torrent
+    # info) through the pacer, so its own lookups are cache hits. A file
+    # that isn't ours never costs a torrent-info lookup: it's refused below.
+    if (
+        stamp is not None
+        and token
+        and await _paced_account_uid(deps) == stamp.uid
+    ):
+        if await _warm(row, stamp.torrent_id, token) is None:
+            return
+        if item.buy_personal_fl:
+            fl_bought = await _buy_fl(row, stamp.torrent_id, token)
+            if fl_bought and await _warm(row, stamp.torrent_id, token) is None:
+                return
+    result = await grab_uploaded_torrent(
+        deps, torrent_bytes=data, personal_fl_bought=row.personal_fl_bought,
+    )
+    _apply_result(row, result)
+
+
+async def _buy_fl(row: JobRow, tid: str, token: str) -> bool:
+    from app.routers.inject import _buy_personal_fl_for_inject
+
+    bought = await search_pacer.paced(
+        lambda: _buy_personal_fl_for_inject(tid, token),
+        label=f"personal FL tid={tid}",
+    )
+    row.personal_fl_bought = bool(bought)
+    return row.personal_fl_bought
 
 
 async def _warm(row: JobRow, tid: str, token: str) -> Optional[TorrentInfo]:
@@ -516,6 +640,8 @@ def _apply_result(row: JobRow, result: DispatchResult) -> None:
 
 
 def _skip_message(reason: str) -> str:
+    if reason == "lookup_failed":
+        return "Couldn't reach MAM; nothing was grabbed. Try again."
     if reason.startswith("policy:"):
         return _policy_message(reason.split(":", 1)[1])
     if reason.startswith("dry_run"):

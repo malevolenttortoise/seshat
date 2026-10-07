@@ -124,6 +124,9 @@ export function GrabPreviewRow({
           ))}
         </div>
 
+        {entry.kind === "file" && p && p.title && (
+          <div style={{ fontSize: 11, color: t.tf, wordBreak: "break-all" }}>📎 {entry.input}</div>
+        )}
         {p && p.authors.length > 0 && (
           <div style={{ fontSize: 13, color: t.text2 }}>
             {p.authors.join(", ")}
@@ -145,7 +148,7 @@ export function GrabPreviewRow({
             {p.message}
           </div>
         )}
-        {p && p.status === "snatched_on_mam" && !entry.result && (
+        {p && p.status === "snatched_on_mam" && entry.kind === "link" && !entry.result && (
           <div style={{ fontSize: 12, color: t.td }}>
             Have the files? Use Reingest from disk. Have the .torrent? Drop it here instead.
           </div>

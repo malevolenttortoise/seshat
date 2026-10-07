@@ -10,6 +10,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 import {
   BLOCKING_STATUSES,
+  type EntryKind,
   type GrabEntry,
   type GrabJob,
   type PreviewRow,
@@ -20,15 +21,41 @@ const POLL_MS = 1500;
 let keySeq = 0;
 const nextKey = () => `mg-${Date.now()}-${keySeq++}`;
 
-function errorPreview(input: string, message: string): PreviewRow {
+// A .torrent as base64 (D18: uploads travel inside JSON).
+function readBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const url = String(reader.result || "");
+      resolve(url.slice(url.indexOf(",") + 1));
+    };
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+function itemBody(e: GrabEntry) {
+  return e.kind === "file"
+    ? { kind: "file", name: e.input, data_b64: e.dataB64 }
+    : { kind: "link", value: e.input };
+}
+
+function newEntry(kind: EntryKind, input: string, dataB64: string | null = null): GrabEntry {
   return {
-    kind: "link", input, status: "lookup_failed", message,
+    key: nextKey(), kind, input, dataB64, preview: null, ticked: false,
+    buyFl: false, overrideSnatched: false, confirming: false, result: null,
+  };
+}
+
+function errorPreview(kind: EntryKind, input: string, message: string): PreviewRow {
+  return {
+    kind, input, status: "lookup_failed", message,
     torrent_id: null, title: "", authors: [], narrators: [], series: [],
     category: "", filetype: "", size_bytes: null, seeders: null,
     vip: false, freeleech: false, personal_freeleech: false,
     my_snatched: false, owned_in: [], in_flight: false,
     policy_tier: "", policy_grab: true, wedge_eligible: false,
-    grab_id: null, cover_url: null,
+    grab_id: null, cover_url: null, info_hash: null,
   };
 }
 
@@ -61,12 +88,9 @@ export function useManualGrabBatch() {
         const entry = queue.current.shift()!;
         let preview: PreviewRow;
         try {
-          preview = await api.post<PreviewRow>("/v1/manual-grab/preview", {
-            kind: "link",
-            value: entry.input,
-          });
+          preview = await api.post<PreviewRow>("/v1/manual-grab/preview", itemBody(entry));
         } catch (e) {
-          preview = errorPreview(entry.input, `Preview failed: ${String(e)}`);
+          preview = errorPreview(entry.kind, entry.input, `Preview failed: ${String(e)}`);
         }
         if (!mounted.current) break;
         patch(entry.key, { preview, ticked: preview.status === "ready" });
@@ -76,23 +100,33 @@ export function useManualGrabBatch() {
     }
   }, [patch]);
 
-  const addLinks = useCallback(
-    (inputs: string[]) => {
-      const fresh: GrabEntry[] = inputs.map((input) => ({
-        key: nextKey(),
-        input,
-        preview: null,
-        ticked: false,
-        buyFl: false,
-        overrideSnatched: false,
-        confirming: false,
-        result: null,
-      }));
+  const enqueue = useCallback(
+    (fresh: GrabEntry[]) => {
       setEntries((prev) => [...prev, ...fresh]);
       queue.current.push(...fresh);
       void drain();
     },
     [drain],
+  );
+
+  const addLinks = useCallback(
+    (inputs: string[]) => enqueue(inputs.map((input) => newEntry("link", input))),
+    [enqueue],
+  );
+
+  const addFiles = useCallback(
+    async (files: File[]) => {
+      const fresh: GrabEntry[] = [];
+      for (const f of files) {
+        try {
+          fresh.push(newEntry("file", f.name, await readBase64(f)));
+        } catch (e) {
+          setError(`Couldn't read ${f.name}: ${String(e)}`);
+        }
+      }
+      if (mounted.current && fresh.length) enqueue(fresh);
+    },
+    [enqueue],
   );
 
   const clear = useCallback(() => {
@@ -144,8 +178,7 @@ export function useManualGrabBatch() {
     try {
       started = await api.post<GrabJob>("/v1/manual-grab/grab", {
         items: chosen.map((e) => ({
-          kind: "link",
-          value: e.input,
+          ...itemBody(e),
           buy_personal_fl: e.buyFl,
           override_mam_snatched: e.overrideSnatched,
         })),
@@ -193,6 +226,7 @@ export function useManualGrabBatch() {
     tickedCount,
     flCount,
     addLinks,
+    addFiles,
     clear,
     setTicked,
     confirmSnatched,

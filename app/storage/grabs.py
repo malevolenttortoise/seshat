@@ -386,6 +386,31 @@ async def find_blocking_grab(
     return _row_to_grab(row) if row else None
 
 
+async def find_grab_by_hash(
+    db: aiosqlite.Connection, qbit_hash: str,
+) -> Optional[GrabRow]:
+    """The most recent grab carrying this info hash, in any state.
+
+    Manual Grab's upload check (ADR-0023): a .torrent whose hash Seshat
+    already holds is the same torrent, whatever ID its grab row has.
+    Orphan-adopted rows (no torrent ID) are only findable this way.
+    """
+    if not qbit_hash:
+        return None
+    cursor = await db.execute(
+        """
+        SELECT id, announce_id, mam_torrent_id, torrent_name, category,
+               author_blob, torrent_file_path, qbit_hash, state, grabbed_at,
+               submitted_at, failed_reason
+        FROM grabs WHERE qbit_hash = ?
+        ORDER BY id DESC LIMIT 1
+        """,
+        (qbit_hash.lower(),),
+    )
+    row = await cursor.fetchone()
+    return _row_to_grab(row) if row else None
+
+
 def _row_to_grab(row) -> GrabRow:
     return GrabRow(
         id=int(row["id"]),

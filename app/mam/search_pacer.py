@@ -28,6 +28,7 @@ from app.mam.torrent_info import (
     cached_torrent_info,
     get_torrent_info,
 )
+from app.mam.user_status import UserStatus, cached_user_status, get_user_status
 
 _log = logging.getLogger("seshat.mam.search_pacer")
 
@@ -102,3 +103,14 @@ async def paced_torrent_info(
         lambda: get_torrent_info(torrent_id, token=token),
         label=f"torrent info tid={torrent_id}",
     )
+
+
+async def paced_user_status(token: Optional[str]) -> UserStatus:
+    """`get_user_status` through the pacer; a cache hit skips it.
+
+    Raises what `get_user_status` raises.
+    """
+    hit = cached_user_status(token)
+    if hit is not None:
+        return hit
+    return await paced(lambda: get_user_status(token=token), label="user status")

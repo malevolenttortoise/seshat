@@ -80,6 +80,16 @@ def invalidate_cache() -> None:
     _cache.clear()
 
 
+def cached_user_status(
+    token: Optional[str], ttl: int = _CACHE_TTL,
+) -> Optional[UserStatus]:
+    """The cached status for `token` if still fresh, else None (no MAM call)."""
+    entry = _cache.get(_cache_key(token or ""))
+    if entry is None or time.monotonic() - entry[0] >= ttl:
+        return None
+    return entry[1]
+
+
 def update_cache_from_buy(
     token: Optional[str],
     *,

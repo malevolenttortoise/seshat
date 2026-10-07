@@ -31,6 +31,20 @@ on `development`: MAM sees one download per torrent, ever. Phase 1 —
     "Download it from MAM again?", and only *Download again* sets
     `override_mam_snatched` for that grab (Phase 0's override, now with
     a UI).
+  - **Drop a .torrent you downloaded from MAM** (drag-and-drop on desktop,
+    a file picker on both) and Seshat sends those bytes to qBittorrent —
+    no second MAM download, ever. The file has to prove it's your own MAM
+    download: MAM stamps every .torrent it serves with
+    `comment = "MID=<torrent id>,UID=<account>"`, so a file with no MID
+    ("not a MAM .torrent") or another account's UID ("downloaded by
+    another MAM account", its announce URL carries their passkey) is
+    refused, and so is any upload while Seshat can't read your account.
+    A torrent Seshat already holds is refused by torrent ID or by info
+    hash. MAM's "already snatched" is expected here (the upload is the
+    snatch). Uploads still go through the buffer gate (qBit downloads the
+    data through MAM's tracker) and the snatch budget; one that has to
+    queue keeps its bytes on disk like any queued grab. No wedge: it rides
+    on the MAM download, which already happened.
   - Per-row **Buy personal FL (50k BP)**.
   - The grab row gets the real title, authors, category, series and
     format instead of `manual_inject_<id>`, so the review queue,
@@ -42,7 +56,8 @@ on `development`: MAM sees one download per torrent, ever. Phase 1 —
   - Pasting a MAM link into Import / Export now points you to Grab from
     MAM and carries the link over, instead of failing as a book URL.
   - API: `POST /api/v1/manual-grab/preview`, `POST /api/v1/manual-grab/grab`
-    (≤30 items, enforced server-side), `GET /api/v1/manual-grab/grab/{job_id}`,
+    (≤30 items, enforced server-side; a `file` item carries the .torrent
+    as base64 in `data_b64`), `GET /api/v1/manual-grab/grab/{job_id}`,
     `GET /api/v1/manual-grab/cover/{tid}`.
 
 - **Torrent-ID guard on every grab path (snatch safety).** Nothing used
