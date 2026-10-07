@@ -7,8 +7,8 @@ Mounts at `/api/v1/mam/economy`. Three role groups:
      `mam_economy_*` keys in settings.json so the MamPage can render
      the auto-buy UI without hardcoding any of the key names.
 
-  2. **Manual buys** (`POST /vip/buy`, `POST /upload/buy`,
-     `POST /personal-fl/buy`) — trigger a bonusBuy.php call directly
+  2. **Manual buys** (`POST /vip/buy`, `POST /upload/buy`) — trigger a
+     bonusBuy.php call directly
      and audit it with `trigger='manual'`. Manual buys BYPASS the
      enable flag (so the user can test integration before flipping
      it on) but HONOR the shared-timestamp lockout (so a click
@@ -39,16 +39,13 @@ from app.mam.bonus_buy import (
     BP_PER_UPLOAD_GB,
     MIN_UPLOAD_GB,
     BuyResult,
-    buy_personal_freeleech,
     buy_upload_credit,
     buy_vip,
-    personal_fl_worth_buying,
 )
 from app.mam.economy import max_affordable_upload_gb
 from app.mam.torrent_info import (
     TorrentInfoError,
     get_torrent_info,
-    invalidate_cache as invalidate_torrent_info,
 )
 from app.mam.user_status import (
     UserStatusError,
@@ -168,10 +165,6 @@ class UploadBuyRequest(BaseModel):
     mode: Optional[Literal["max_affordable"]] = None
 
 
-class PersonalFlBuyRequest(BaseModel):
-    torrent_id: str = Field(..., min_length=1)
-
-
 class BuyResponse(BaseModel):
     ok: bool
     message: str
@@ -230,44 +223,6 @@ async def upload_buy(body: UploadBuyRequest) -> BuyResponse:
         prev_seedbonus=prev_seedbonus,
         timestamp_key="mam_economy_last_upload_buy_at",
     )
-
-
-@router.post("/personal-fl/buy", response_model=BuyResponse)
-async def personal_fl_buy(body: PersonalFlBuyRequest) -> BuyResponse:
-    """Spend one FL wedge (the site's "Buy as FL") to flag the torrent as
-    personal freeleech on MAM's side. Refused (409) on a torrent that's
-    already free or whose status MAM can't confirm: MAM would spend the
-    wedge anyway.
-
-    After a successful buy, the torrent-info cache is invalidated so
-    the next grab (manual or IRC) re-reads the authoritative
-    `personal_freeleech=True` from MAM. Callers that chain an inject
-    onto this endpoint benefit from that invalidation: they get a
-    free tier on the grab decision without further configuration.
-    """
-    token = await _require_token()
-    worth, why = await personal_fl_worth_buying(body.torrent_id, token)
-    if not worth:
-        raise HTTPException(409, f"Not buying personal FL: {why}.")
-    prev_seedbonus = await _fetch_prev_seedbonus(token)
-    result = await buy_personal_freeleech(body.torrent_id, token=token)
-
-    # Whether or not the buy succeeded, we audit through the shared
-    # helper; `torrent_id` distinguishes it from the other actions.
-    response = await _persist_manual_buy_result(
-        result,
-        action=economy_audit.ACTION_PERSONAL_FL,
-        tier="trigger:manual",
-        amount=None,
-        prev_seedbonus=prev_seedbonus,
-        # Personal-FL doesn't consume a scheduler interval, so there's
-        # no shared-timestamp to bump.
-        timestamp_key=None,
-        torrent_id=body.torrent_id,
-    )
-    if result.success:
-        invalidate_torrent_info()
-    return response
 
 
 # ─── Audit + preflight ──────────────────────────────────────

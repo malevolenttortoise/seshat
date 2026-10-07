@@ -1,18 +1,20 @@
 """
 MAM bonus-point purchase API.
 
-Thin async wrappers around MAM's `bonusBuy.php` endpoint. Three purchases
+Thin async wrappers around MAM's `bonusBuy.php` endpoint. Two purchases
 are exposed to the rest of Seshat:
 
   - `buy_vip(weeks)`              — spend BP on VIP time (4/8/12/max weeks)
   - `buy_upload_credit(gb)`       — spend BP on upload buffer (float GB)
-  - `buy_personal_freeleech(tid)` — spend ONE FL WEDGE to make a
-                                    specific torrent personal-freeleech:
-                                    the site's "Buy as FL" button. No
-                                    .torrent download involved, so it
-                                    can wedge a torrent already fetched.
 
-All three share a response shape: MAM echoes the user's fresh seedbonus,
+Personal freeleech ("Buy as FL" on a torrent page, one wedge) is NOT
+available to apps: MAM answered `spendtype=personalFL` with "Not allowed
+via API" (2026-10-07, the first live call, from Manual Grab), and its
+API page lists only VIP, upload, wedges, gift and sendWedge. The buy and
+everything that called it were removed. An app can spend a wedge only
+with `fl` on `download.php`, i.e. while downloading the .torrent.
+
+Both share a response shape: MAM echoes the user's fresh seedbonus,
 uploaded/downloaded totals, and ratio in the same JSON body. We parse
 that into `BuyResult` AND warm `user_status._cache` from it — the buy
 already told us everything a follow-up `jsonLoad.php` would, so there's
@@ -63,10 +65,6 @@ _BONUS_BUY_URL = "https://www.myanonamouse.net/json/bonusBuy.php"
 # surface these (too easy to misconfigure into failed buys).
 BP_PER_UPLOAD_GB: int = int(os.getenv("MAM_BP_PER_UPLOAD_GB", "500"))
 BP_PER_VIP_WEEK: int = int(os.getenv("MAM_BP_PER_VIP_WEEK", "1250"))
-# Personal FL is NOT bought with BP: MAM's "Buy as FL" (site.js
-# `personalFreeleech`) asks "…as a personal freeleech for one FL wedge?"
-# and sends exactly `buy_personal_freeleech`'s request (read by Mark in
-# the browser console, 2026-10-06). It was labelled "50k BP" until then.
 
 # MAM-enforced minimum for programmatic upload-credit buys. A sub-50
 # GB purchase comes back with `"Automated spenders are limited to
@@ -130,9 +128,7 @@ def _is_dry_run() -> bool:
         return False
 
 
-def _dry_run_result(
-    label: str, expected_cost_bp: Optional[int], *, cost_note: Optional[str] = None,
-) -> BuyResult:
+def _dry_run_result(label: str, expected_cost_bp: Optional[int]) -> BuyResult:
     """Synthesize a plausible success for dry-run mode.
 
     Deliberately minimal: `new_*` fields stay None so the audit row
@@ -141,12 +137,11 @@ def _dry_run_result(
     `[DRY RUN]` is what the MamPage history tile surfaces to the
     operator so simulated rows don't visually blend with real ones.
     """
-    if cost_note is None:
-        cost_note = (
-            f"~{expected_cost_bp:,} BP"
-            if expected_cost_bp is not None
-            else "unknown BP"
-        )
+    cost_note = (
+        f"~{expected_cost_bp:,} BP"
+        if expected_cost_bp is not None
+        else "unknown BP"
+    )
     return BuyResult(
         success=True,
         message=f"[DRY RUN] would spend {cost_note} on {label}",
@@ -238,70 +233,6 @@ def _format_gb_for_display(gb: float) -> str:
     if gb == int(gb):
         return str(int(gb))
     return f"{gb:.2f}"
-
-
-async def buy_personal_freeleech(
-    torrent_id: str, token: Optional[str] = None
-) -> BuyResult:
-    """Spend one FL wedge to make a specific torrent personal-freeleech.
-
-    This is the site's "Buy as FL" button: same request, and it costs a
-    wedge from the pool, not BP. After success MAM flags the torrent as
-    FL for the account, so the data download is free. Unlike `&fl=1` on
-    `download.php`, nothing is downloaded, so it can wedge a .torrent
-    the user already has (Manual Grab uploads). Callers check the
-    torrent isn't already free first (`personal_fl_worth_buying`): MAM
-    would spend the wedge regardless.
-
-    The URL shape for this endpoint is non-obvious: MAM wants the
-    epoch-ms cache-buster BOTH as a trailing path segment AND
-    duplicated as a `timestamp` query param. Matching that exactly
-    is paranoia — the other two spendtypes work with a plain `_=`
-    cache-buster, but personal-FL is the one the wider wild
-    consistently sends in the path-segment form, so we do too.
-    """
-    if not torrent_id or not str(torrent_id).strip():
-        raise ValueError("buy_personal_freeleech requires a non-empty torrent_id")
-
-    if _is_dry_run():
-        return _dry_run_result(
-            f"personalFL tid={torrent_id}", None, cost_note="1 FL wedge",
-        )
-
-    ts_ms = _epoch_ms()
-    query = urlencode({
-        "spendtype": "personalFL",
-        "torrentid": str(torrent_id),
-        "timestamp": str(ts_ms),
-    })
-    url = f"{_BONUS_BUY_URL}/{ts_ms}?{query}"
-    return await _execute(
-        url=url,
-        log_label=f"personalFL tid={torrent_id}",
-        token=token,
-    )
-
-
-async def personal_fl_worth_buying(
-    torrent_id: str, token: Optional[str],
-) -> tuple[bool, str]:
-    """Whether a personal-FL buy (one wedge) would buy anything.
-
-    MAM spends the wedge even on a torrent that's already free, so the
-    buy only goes ahead on one the search API confirmed is not VIP,
-    freeleech or personal FL. An unknown status (lookup failed) says no,
-    as for `&fl=1` wedges (Manual Grab D28/D29, D32). Uses the cached
-    torrent info when there is one.
-    """
-    from app.mam.torrent_info import TorrentInfoError, get_torrent_info
-
-    try:
-        info = await get_torrent_info(str(torrent_id), token=token)
-    except TorrentInfoError as e:
-        return False, f"MAM didn't say whether it's already free ({e})"
-    if info.vip or info.free or info.fl_vip or info.personal_freeleech:
-        return False, "already free or VIP"
-    return True, ""
 
 
 # ─── Internals ───────────────────────────────────────────────

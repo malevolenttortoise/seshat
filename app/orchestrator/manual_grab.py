@@ -12,8 +12,8 @@ Two halves, both behind `app/routers/manual_grab.py`:
     memory (D14): a restart loses the rows it hadn't reached; every row
     it did reach is an ordinary grab.
 
-Every MAM request made here goes through `search_pacer` (lookups,
-covers, personal-FL buys), so a batch never bursts. A paste grab is
+Every MAM request made here goes through `search_pacer` (lookups and
+covers), so a batch never bursts. A paste grab is
 `inject_grab` with the preview's metadata filled in, claim-for-owned
 and format dedup off (the preview showed the user what they own;
 ADR-0023), and the snatch-safety guards of ADR-0022 untouched.
@@ -266,6 +266,10 @@ async def _preview_torrent(deps: DispatcherDeps, row: PreviewRow) -> PreviewRow:
         return row
 
     _fill_from_info(row, info)
+    if is_file:
+        # No wedge for an upload: `&fl` would be a second MAM download,
+        # and "Buy as FL" is refused via the API (D35).
+        row.wedge_eligible = False
 
     if (
         deps.excluded_uploaders
@@ -479,8 +483,8 @@ class GrabRequestItem:
     override_mam_snatched: bool = False
     data: Optional[bytes] = None  # the .torrent bytes, for "file"
     # Set on each eligible row when the batch "Use wedges" toggle is on
-    # (D7, D31). A link is wedged with `&fl=1` on its MAM download; an
-    # uploaded file with the site's "Buy as FL" (one wedge, no download).
+    # (D7). Links only: an app can spend a wedge only with `&fl=1` on the
+    # MAM download, and MAM refuses "Buy as FL" via the API (D35).
     use_wedge: bool = False
 
 
@@ -494,7 +498,6 @@ class JobRow:
     reason: str = ""
     message: str = ""
     grab_id: Optional[int] = None
-    personal_fl_bought: bool = False
     wedge_used: bool = False
 
 
@@ -646,30 +649,8 @@ async def _grab_file(
     ):
         if await _warm(row, stamp.torrent_id, token) is None:
             return
-    buy_wedge = None
-    if item.use_wedge and stamp is not None and token:
-        tid = stamp.torrent_id
-
-        async def buy_wedge() -> bool:
-            return await _buy_fl(row, tid, token)
-
-    result = await grab_uploaded_torrent(
-        deps, torrent_bytes=data, buy_wedge=buy_wedge,
-    )
-    row.wedge_used = row.personal_fl_bought and result.grab_id is not None
+    result = await grab_uploaded_torrent(deps, torrent_bytes=data)
     _apply_result(row, result)
-
-
-async def _buy_fl(row: JobRow, tid: str, token: str) -> bool:
-    """One wedge via the site's "Buy as FL" (personalFL), paced + audited."""
-    from app.routers.inject import _buy_personal_fl_for_inject
-
-    bought = await search_pacer.paced(
-        lambda: _buy_personal_fl_for_inject(tid, token),
-        label=f"personal FL tid={tid}",
-    )
-    row.personal_fl_bought = bool(bought)
-    return row.personal_fl_bought
 
 
 async def _warm(row: JobRow, tid: str, token: str) -> Optional[TorrentInfo]:

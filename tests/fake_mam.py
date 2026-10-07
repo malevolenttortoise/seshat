@@ -20,7 +20,7 @@ Five endpoints are simulated, matching the real MAM surface:
   - dynamicSeedbox.php        — IP register     (cookie.register_ip)
   - download.php              — .torrent fetch  (grab.fetch_torrent)
   - jsonLoad.php              — user status      (user_status)
-  - bonusBuy.php              — VIP / upload / personalFL purchases
+  - bonusBuy.php              — VIP / upload purchases
                                 (bonus_buy)
 
 Each endpoint has independently configurable status code, body, and

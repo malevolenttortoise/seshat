@@ -67,8 +67,17 @@ class GrabItemIn(_ItemIn):
     # Set only by the row's "Download again" confirm (D13).
     override_mam_snatched: bool = False
     # The batch "Use wedges" toggle, applied by the page to each eligible
-    # row (D7, D31): `&fl=1` on a link's download, "Buy as FL" on a file.
+    # row (D7): `&fl=1` on a link's download. Never on an upload (D35).
     use_wedge: bool = False
+
+    @model_validator(mode="after")
+    def _wedge_needs_a_link(self):
+        if self.use_wedge and self.kind != "link":
+            raise ValueError(
+                "an uploaded .torrent can't take a wedge: an app can only "
+                "spend one while downloading the .torrent"
+            )
+        return self
 
 
 class GrabRequest(BaseModel):

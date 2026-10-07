@@ -372,11 +372,11 @@ class TestInjectFlags:
         deps.fetch_torrent = fetch
         return calls
 
-    async def test_bought_personal_fl_passes_the_buffer_gate(
+    async def test_personal_fl_from_the_site_passes_the_buffer_gate(
         self, temp_db, mam_search, broke_account,
     ):
-        """MAM reports personal_freeleech=False for 5-20 min after a buy;
-        the grab paid for must not be buffer-gated meanwhile."""
+        """Wedged or "Bought as FL" on MAM's site: once the search API
+        reports personal_freeleech, the grab is free (D36)."""
         deps = _make_deps()
         deps.policy_config = PolicyConfig(buffer_gate_enabled=True)
         calls = self._recording_fetch(deps)
@@ -385,12 +385,12 @@ class TestInjectFlags:
         assert gated.reason == "policy:buffer_insufficient"
         assert calls == []
 
-        mam_search["items"]["2"] = _item("2")
-        bought = await inject_grab(deps, torrent_id="2", personal_fl_bought=True)
-        assert bought.action == "submit" and bought.error is None
+        mam_search["items"]["2"] = _item("2", personal_freeleech=1)
+        free = await inject_grab(deps, torrent_id="2")
+        assert free.action == "submit" and free.error is None
         assert [c["tid"] for c in calls] == ["2"]
 
-    async def test_bought_personal_fl_never_spends_a_wedge(
+    async def test_personal_fl_from_the_site_never_gets_a_wedge_on_top(
         self, temp_db, mam_search, broke_account,
     ):
         deps = _make_deps()
@@ -398,8 +398,8 @@ class TestInjectFlags:
         calls = self._recording_fetch(deps)
 
         await inject_grab(deps, torrent_id=TID)
-        mam_search["items"]["2"] = _item("2")
-        await inject_grab(deps, torrent_id="2", personal_fl_bought=True)
+        mam_search["items"]["2"] = _item("2", personal_freeleech=1)
+        await inject_grab(deps, torrent_id="2")
         assert [(c["tid"], c["use_fl_wedge"]) for c in calls] == [(TID, True), ("2", False)]
 
 

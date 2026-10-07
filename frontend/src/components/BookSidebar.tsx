@@ -259,8 +259,8 @@ export function BookSidebar({
 
   // Economy offers — the "use wedge" checkbox only renders when the
   // user has opted into it via MamPage. (The "buy personal FL" tick was
-  // dropped 2026-10-06: MAM's "Buy as FL" costs a wedge too, so it did
-  // what "use wedge" does.) `preflight` caches the result of the most
+  // dropped 2026-10-07: MAM refuses spendtype=personalFL via the API,
+  // "Not allowed via API".) `preflight` caches the result of the most
   // recent buffer gate check for this book so the
   // BufferInsufficientBanner has something to render.
   const [offerWedge, setOfferWedge] = useState(false);

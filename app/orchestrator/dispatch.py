@@ -521,7 +521,6 @@ async def inject_grab(
     apply_format_dedup: bool = True,
     override_mam_snatched: bool = False,
     apply_claim_for_owned: bool = True,
-    personal_fl_bought: bool = False,
 ) -> DispatchResult:
     """Manually queue a grab by torrent ID.
 
@@ -557,11 +556,6 @@ async def inject_grab(
     Grab passes it (with `apply_format_dedup=False`): its preview already
     showed the user what they own, so ticking the row is the decision to
     grab anyway (ADR-0023).
-
-    `personal_fl_bought=True` means the caller just bought personal
-    freeleech for this torrent. MAM's search API takes 5-20 min to report
-    `personal_freeleech`, so the policy engine is told directly: the grab
-    is free (no buffer gate, no wedge).
 
     Live `dry_run` kill-switch (v2.21.2). Unlike the IRC-enabled
     toggle (which doesn't apply here — manual injects are user-
@@ -615,7 +609,6 @@ async def inject_grab(
         apply_format_dedup=apply_format_dedup,
         override_mam_snatched=override_mam_snatched,
         apply_claim_for_owned=apply_claim_for_owned,
-        personal_fl_bought=personal_fl_bought,
     )
 
 
@@ -633,7 +626,6 @@ async def _dispatch_with_decision(
     apply_format_dedup: bool = True,
     override_mam_snatched: bool = False,
     apply_claim_for_owned: bool = True,
-    personal_fl_bought: bool = False,
 ) -> DispatchResult:
     """The shared pipeline body used by both handle_announce and
     inject_grab. The only thing they differ on is whether the filter
@@ -644,8 +636,8 @@ async def _dispatch_with_decision(
     inject callers can pass False from a UI override checkbox to
     force a grab regardless of in-flight/owned siblings.
 
-    `override_mam_snatched`, `apply_claim_for_owned` and
-    `personal_fl_bought` — see `inject_grab`.
+    `override_mam_snatched` and `apply_claim_for_owned` — see
+    `inject_grab`.
     """
     # Computed once at the top so the dedup gate, the announce row,
     # and (if we reach the grab branch) the grab row all carry the
@@ -1000,8 +992,7 @@ async def _dispatch_with_decision(
         # know from the announce, then enrich with the MAM APIs (both
         # cached, both fail-safe).
         eco_ctx = await _build_economic_context(
-            deps, announce, personal_fl_bought=personal_fl_bought,
-            wedge_requested=force_fl_wedge,
+            deps, announce, wedge_requested=force_fl_wedge,
         )
 
         policy_decision = evaluate_policy(eco_ctx, deps.policy_config)
@@ -1567,8 +1558,6 @@ async def grab_uploaded_torrent(
     deps: DispatcherDeps,
     *,
     torrent_bytes: bytes,
-    personal_fl_bought: bool = False,
-    buy_wedge: Optional[Callable[[], Awaitable[bool]]] = None,
 ) -> DispatchResult:
     """Manual Grab's upload path: a .torrent the user downloaded from MAM
     themselves. Never calls MAM's download endpoint (ADR-0023).
@@ -1581,19 +1570,13 @@ async def grab_uploaded_torrent(
     torrent ID or by info hash, `torrent_removed_from_mam`, an excluded
     uploader. Claim-for-owned and format dedup don't run (the preview
     showed what the user owns). Auto-train and the policy gate do: qBit
-    still downloads the data through MAM's tracker. No wedge, ever.
+    still downloads the data through MAM's tracker. No wedge, ever: an
+    app can only spend one with `fl` on the .torrent download, which
+    already happened, and MAM refuses "Buy as FL" via the API.
 
     A budget-and-queue-full drop is refused before any grab row exists.
     Otherwise the grab row is claimed under `grab_claim_lock()` and the
     bytes go through `submit_torrent_bytes`.
-
-    `buy_wedge` (Manual Grab's "Use wedges", D31) wedges the upload via
-    the site's "Buy as FL" (`personalFL`, one wedge, no download). It's
-    called only once every refusal has passed and the grab row is
-    claimed, and only on a torrent MAM confirmed isn't free, so a wedge
-    is never spent on a grab that doesn't happen. The policy counts the
-    grab as free on the strength of it; a buy that then fails leaves the
-    grab going ahead paid.
     """
     live = _live_kill_switch_state()
     if live["dry_run"] or deps.dry_run:
@@ -1726,12 +1709,7 @@ async def grab_uploaded_torrent(
         except Exception:
             pass  # best-effort, as in dispatch
 
-        wedge_ok = buy_wedge is not None and info is not None and not (
-            info.vip or info.free or info.fl_vip or info.personal_freeleech
-        )
-        eco_ctx = await _build_economic_context(
-            deps, announce, personal_fl_bought=personal_fl_bought or wedge_ok,
-        )
+        eco_ctx = await _build_economic_context(deps, announce)
         policy_decision = evaluate_policy(eco_ctx, deps.policy_config)
         if policy_decision.action == "skip":
             await grabs_storage.update_announce_decision(
@@ -1788,12 +1766,6 @@ async def grab_uploaded_torrent(
             )
     finally:
         await db.close()
-
-    if wedge_ok:
-        if not await buy_wedge():
-            _log.info(
-                "upload tid=%s: Buy as FL failed; grabbing without it", tid,
-            )
 
     result = await submit_torrent_bytes(
         deps, grab_id=grab_id, torrent_bytes=torrent_bytes,
@@ -1874,7 +1846,6 @@ async def _build_economic_context(
     deps: DispatcherDeps,
     announce: Announce,
     *,
-    personal_fl_bought: bool = False,
     wedge_requested: bool = False,
 ) -> EconomicContext:
     """Build the EconomicContext for the policy engine.
@@ -1942,12 +1913,6 @@ async def _build_economic_context(
             ctx_kwargs["user_upload_buffer_bytes"] = status.upload_buffer_bytes
         except UserStatusError as e:
             _log.debug("user_status lookup failed: %s", e)
-
-    # A personal-FL buy that just succeeded: MAM's search API lags 5-20
-    # min on `personal_freeleech`, so the lookup above still says False.
-    # Trust the buy, or the grab paid for can be buffer-gated or wedged.
-    if personal_fl_bought:
-        ctx_kwargs["personal_freeleech"] = True
 
     return EconomicContext(**ctx_kwargs)
 

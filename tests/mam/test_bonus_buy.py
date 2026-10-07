@@ -17,7 +17,6 @@ from app.mam.bonus_buy import (
     BP_PER_UPLOAD_GB,
     BP_PER_VIP_WEEK,
     BuyResult,
-    buy_personal_freeleech,
     buy_upload_credit,
     buy_vip,
 )
@@ -120,54 +119,6 @@ class TestBuyUploadHappyPath:
         assert _bonus_requests(fake_mam) == []
 
 
-class TestBuyPersonalFreeleechHappyPath:
-    async def test_success_with_torrent_id(self, fake_mam):
-        result = await buy_personal_freeleech("965093", token="tok")
-        assert result.success is True
-
-    async def test_url_has_spendtype_personalfl_and_torrentid(self, fake_mam):
-        await buy_personal_freeleech("965093", token="tok")
-        urls = [str(r.url) for r in _bonus_requests(fake_mam)]
-        assert "spendtype=personalFL" in urls[0]
-        assert "torrentid=965093" in urls[0]
-
-    async def test_url_embeds_timestamp_in_path(self, fake_mam):
-        # Personal-FL is the one spendtype where MAM wants the epoch-ms
-        # cache-buster duplicated as a trailing path segment. The `timestamp`
-        # query param carries the same value.
-        before_ms = int(time.time() * 1000) - 5
-        await buy_personal_freeleech("965093", token="tok")
-        url = str(_bonus_requests(fake_mam)[0].url)
-        # Path is /json/bonusBuy.php/<ts_ms>. Strip the query and check
-        # the last segment parses as an epoch-ms near "now".
-        path_only = url.split("?", 1)[0]
-        last_segment = path_only.rstrip("/").rsplit("/", 1)[-1]
-        assert last_segment.isdigit()
-        assert int(last_segment) >= before_ms
-        # AND the same value appears as the `timestamp` query param.
-        query = url.split("?", 1)[1]
-        assert f"timestamp={last_segment}" in query
-
-    async def test_personalfl_matches_the_sites_buy_as_fl(self, fake_mam):
-        """MAM's site.js `freeleechCallback` (read 2026-10-06) sends
-        GET /json/bonusBuy.php/<ms>?spendtype=personalFL&torrentid=<tid>
-        &timestamp=<ms> for "Buy as FL". It costs one FL wedge."""
-        from urllib.parse import parse_qs, urlparse
-
-        await buy_personal_freeleech("1274908", token="tok")
-        [req] = _bonus_requests(fake_mam)
-        url = urlparse(str(req.url))
-        q = parse_qs(url.query)
-        assert req.method == "GET"
-        assert url.path.startswith("/json/bonusBuy.php/")
-        assert q["spendtype"] == ["personalFL"]
-        assert q["torrentid"] == ["1274908"]
-        assert q["timestamp"] == [url.path.rsplit("/", 1)[1]]
-
-
-# ─── Input validation ──────────────────────────────────────
-
-
 class TestInputValidation:
     async def test_buy_vip_rejects_odd_weeks(self, fake_mam):
         with pytest.raises(ValueError, match="4, 8, 12"):
@@ -186,17 +137,6 @@ class TestInputValidation:
     async def test_buy_upload_rejects_negative(self, fake_mam):
         with pytest.raises(ValueError, match="positive"):
             await buy_upload_credit(-5, token="tok")
-
-    async def test_buy_personal_fl_rejects_empty_torrent_id(self, fake_mam):
-        with pytest.raises(ValueError, match="torrent_id"):
-            await buy_personal_freeleech("", token="tok")
-
-    async def test_buy_personal_fl_rejects_whitespace_only(self, fake_mam):
-        with pytest.raises(ValueError, match="torrent_id"):
-            await buy_personal_freeleech("   ", token="tok")
-
-
-# ─── MAM-side failures never raise ────────────────────────
 
 
 class TestFailureHandling:
@@ -343,8 +283,12 @@ class TestModuleSurface:
         # and commit 6 (routers/economy.py) both import from here.
         assert callable(bonus_buy.buy_vip)
         assert callable(bonus_buy.buy_upload_credit)
-        assert callable(bonus_buy.buy_personal_freeleech)
         assert bonus_buy.BuyResult is BuyResult
+
+    def test_no_personal_fl(self):
+        """MAM refuses spendtype=personalFL via the API ("Not allowed via
+        API", 2026-10-07). Nothing in Seshat may send it again."""
+        assert not hasattr(bonus_buy, "buy_personal_freeleech")
 
     def test_uses_www_subdomain(self):
         # bonusBuy.php is only served from www — `t.` returns 404 for
@@ -447,14 +391,6 @@ class TestDryRun:
         assert f"{50 * BP_PER_UPLOAD_GB:,}" in result.message
         assert _bonus_requests(fake_mam) == []
 
-    async def test_personal_fl_returns_dry_run_result(
-        self, fake_mam, dry_run_enabled
-    ):
-        result = await buy_personal_freeleech("123", token="tok")
-        assert result.success is True
-        assert result.dry_run is True
-        assert "1 FL wedge" in result.message
-        assert _bonus_requests(fake_mam) == []
 
     async def test_dry_run_still_validates_inputs(
         self, fake_mam, dry_run_enabled
@@ -466,8 +402,6 @@ class TestDryRun:
             await buy_vip(7, token="tok")
         with pytest.raises(ValueError):
             await buy_upload_credit(-1, token="tok")
-        with pytest.raises(ValueError):
-            await buy_personal_freeleech("", token="tok")
 
     async def test_dry_run_result_leaves_new_fields_none(
         self, fake_mam, dry_run_enabled

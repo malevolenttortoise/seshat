@@ -24,7 +24,7 @@ Two facts shaped it:
 | Search API says not found | Refused `torrent_removed_from_mam` |
 | `my_snatched` | **Not** a refusal: the upload *is* the snatch |
 
-An upload never calls MAM's download endpoint. Its bytes go through `submit_torrent_bytes` after its grab row is claimed under `grab_claim_lock()`. The wedge can't apply (it rides on the download); personal FL can.
+An upload never calls MAM's download endpoint. Its bytes go through `submit_torrent_bytes` after its grab row is claimed under `grab_claim_lock()`. No wedge can apply: an app spends one only with `fl` on `download.php` (the download already happened), and MAM answers `bonusBuy.php?spendtype=personalFL` ("Buy as FL") from an app with "Not allowed via API" (found live 2026-10-07). A torrent wedged on MAM's site shows as personal FL once the search API catches up (5-20 min).
 
 **A manual grab is the user's decision, informed by the preview.** Manual Grab skips claim-for-owned and format-priority dedup (never claimed, never held). The preview shows owned and in-flight siblings and leaves those rows unticked, so ticking one is the decision to grab. A `my_snatched` row is the one exception that asks twice: ticking it opens a confirm, and only that confirm sets `override_mam_snatched` for that row.
 

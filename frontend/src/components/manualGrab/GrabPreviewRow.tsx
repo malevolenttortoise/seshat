@@ -14,6 +14,8 @@ export interface GrabPreviewRowProps {
   compact?: boolean;
   // The batch "Use wedges" toggle will spend a wedge on this row.
   willWedge?: boolean;
+  // The batch "Use wedges" toggle is on (for the paid-upload note, D36).
+  wedgesOn?: boolean;
   onTick: (on: boolean) => void;
   onConfirmSnatched: () => void;
   onCancelConfirm: () => void;
@@ -40,7 +42,7 @@ function costChip(entry: GrabEntry, willWedge: boolean): { label: string; free: 
 const RETRYABLE = new Set(["lookup_failed", "uid_unknown"]);
 
 export function GrabPreviewRow({
-  entry, compact, willWedge, onTick, onConfirmSnatched, onCancelConfirm, onRemove, onRetry,
+  entry, compact, willWedge, wedgesOn, onTick, onConfirmSnatched, onCancelConfirm, onRemove, onRetry,
 }: GrabPreviewRowProps) {
   const t = useTheme();
   const p = entry.preview;
@@ -180,6 +182,23 @@ export function GrabPreviewRow({
           </div>
         )}
 
+        {entry.kind === "file" && cost && !cost.free && !entry.result && (
+          <div style={{ fontSize: 11, color: t.tf }}>
+            {wedgesOn &&
+              "No wedge for an uploaded .torrent: MAM only lets an app wedge a torrent while downloading it, and you already did. "}
+            Wedged it on MAM's site? It can take up to 20 min to show here
+            {onRetry && (
+              <>
+                {" "}
+                <button onClick={onRetry} style={{ ...smallBtn(t.bg4, t.text2, t.border), padding: "1px 8px", fontSize: 11 }}>
+                  Retry
+                </button>
+              </>
+            )}
+            ; the download is still free either way.
+          </div>
+        )}
+
         {entry.confirming && (
           <div
             style={{
@@ -201,11 +220,7 @@ export function GrabPreviewRow({
             {entry.result.status === "working" && <Spin size={12} />}
             <strong>{resultLabel[entry.result.status]}</strong>
             {done && entry.result.message && <span style={{ color: t.td }}>· {entry.result.message}</span>}
-            {entry.result.wedge_used && (
-              <span style={{ color: t.cyant }}>
-                · wedge used{entry.kind === "file" ? " (Buy as FL)" : ""}
-              </span>
-            )}
+            {entry.result.wedge_used && <span style={{ color: t.cyant }}>· wedge used</span>}
           </div>
         )}
       </div>

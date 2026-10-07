@@ -110,6 +110,7 @@ function DesktopGrabFromMamPage({ initial }: { initial?: string | number | null 
               key={e.key}
               entry={e}
               willWedge={batch.useWedges && wedgeEligible(e)}
+              wedgesOn={batch.useWedges}
               onTick={(on) => batch.setTicked(e.key, on)}
               onConfirmSnatched={() => batch.confirmSnatched(e.key)}
               onCancelConfirm={() => batch.cancelConfirm(e.key)}

@@ -76,8 +76,6 @@ export const economyApi = {
     api.post<BuyResponse>(`${BASE}/vip/buy`, { weeks }),
   uploadBuy: (body: { gb: number } | { mode: "max_affordable" }) =>
     api.post<BuyResponse>(`${BASE}/upload/buy`, body),
-  personalFlBuy: (torrent_id: string) =>
-    api.post<BuyResponse>(`${BASE}/personal-fl/buy`, { torrent_id }),
 
   audit: (params: { limit?: number; action?: AuditRow["action"] } = {}) => {
     const q = new URLSearchParams();
@@ -118,7 +116,7 @@ export function formatAction(action: AuditRow["action"]): string {
     case "upload":
       return "Upload";
     case "personal_fl":
-      return "Personal FL (wedge)";
+      return "Personal FL";
     case "buffer_gate_block":
       return "Buffer gate";
     case "wedge":

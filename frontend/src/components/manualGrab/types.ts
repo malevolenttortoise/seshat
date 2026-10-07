@@ -80,7 +80,6 @@ export interface JobRow {
   reason: string;
   message: string;
   grab_id: number | null;
-  personal_fl_bought: boolean;
   wedge_used: boolean;
 }
 
@@ -120,8 +119,8 @@ export function torrentIdOf(input: string): string | null {
   return m ? m[1] : null;
 }
 
-// A row the batch "Use wedges" toggle would spend a wedge on (D7, D31):
-// ticked, not free, not yet grabbed. A link is wedged with `&fl` on its
-// MAM download; an uploaded file with the site's "Buy as FL".
+// A row the batch "Use wedges" toggle would spend a wedge on (D7): a
+// ticked pasted link, not free, not yet grabbed. Wedges ride on the MAM
+// download (`&fl`), so an uploaded .torrent can't take one (D35).
 export const wedgeEligible = (e: GrabEntry) =>
-  e.ticked && !e.result && !!e.preview?.wedge_eligible;
+  e.kind === "link" && e.ticked && !e.result && !!e.preview?.wedge_eligible;

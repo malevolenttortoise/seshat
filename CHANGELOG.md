@@ -34,11 +34,12 @@ on `development`: MAM sees one download per torrent, ever. Phase 1 —
     ("Grab 12 · 3 wedges · 100k BP"), and says how many will queue when
     the snatch budget is full.
   - **Use wedges** is one toggle for the batch: it spends a wedge on each
-    ticked row that isn't free (and not on one that turned free by grab
-    time). A pasted link is wedged as MAM serves its .torrent (`&fl`); a
-    dropped .torrent, already downloaded, through MAM's "Buy as FL"
-    (one wedge, no download), bought only once every check has passed
-    so a refused grab never costs one. If the batch needs more wedges
+    ticked pasted link that isn't free (and not on one that turned free
+    by grab time), as MAM serves its .torrent (`&fl`). A dropped .torrent
+    can't take one: you already downloaded it, and MAM refuses "Buy as
+    FL" from apps. A paid upload row says so, and that a wedge you used
+    on MAM's site can take up to 20 min to show (with a Retry); the
+    download is free either way. If the batch needs more wedges
     than you can spend (your wedges minus the policy's reserve), Grab is
     blocked until it fits, and the server re-checks against a fresh read
     of your account and refuses the whole batch rather than part-spend.
@@ -72,7 +73,8 @@ on `development`: MAM sees one download per torrent, ever. Phase 1 —
   - Every row carries a **cost chip**: green `FREE · VIP` /
     `FREE · Freeleech` / `FREE · Personal FL`, or amber
     `PAID · 2.9 MiB from buffer`, or `FREE · Wedge` when the wedge
-    toggle covers it.
+    toggle covers it. A torrent you wedged or bought as FL on MAM's
+    site shows as `FREE · Personal FL` once MAM's API catches up.
   - A row whose MAM lookup failed for a passing reason says what
     happened ("MAM didn't answer in time (ReadTimeout)") and has a
     **Retry** that re-runs just that row's lookup, paced like the rest.
@@ -193,6 +195,19 @@ on `development`: MAM sees one download per torrent, ever. Phase 1 —
   Together: `test_dispatch.py` + `test_dispatch_stagger.py` went from
   ~185s to 8.13s.
 
+### Removed
+
+- **"Buy personal FL (50k BP)" — it never worked.** The tick in a book's
+  sidebar, its MAM page setting, the `buy_personal_fl` flag on
+  `/api/v1/grabs/inject` and send-to-pipeline (now ignored if sent),
+  and `POST /api/v1/mam/economy/personal-fl/buy`. Seshat's request
+  matched MAM's own "Buy as FL" button exactly (read from MAM's site
+  code), but that button costs a wedge, not points, and MAM answers the
+  same request from an app with **"Not allowed via API"** (the first
+  live call, 2026-10-07; nothing was spent). It had only ever run as a
+  dry run. An app can spend a wedge only while downloading the
+  .torrent (`&fl`), which is what "Use wedge" does.
+
 ### Fixed
 
 - **Wedges are no longer spent on torrents that are already free.**
@@ -228,23 +243,6 @@ on `development`: MAM sees one download per torrent, ever. Phase 1 —
   container restart with a few tabs open produced ~22 in a minute). The
   cache is now one entry for the account, cleared when a new cookie is
   saved.
-- **"Buy personal FL" costs a wedge, not 50k BP, and now says so.**
-  Seshat's request matches MAM's "Buy as FL" button exactly (its
-  site.js, read in the browser), and that button spends one FL wedge.
-  Every "50k BP" label and total is gone. It's never bought on a torrent
-  that's already free or whose status MAM can't confirm (the wedge would
-  be spent anyway), and its audit row says "1 FL wedge (Buy as FL)".
-  BookSidebar's "Buy personal FL" tick, and the MAM page setting that
-  showed it, are removed: "Use wedge" does the same job for a pipeline
-  grab. The `buy_personal_fl` API flags remain.
-- **A personal-FL buy now actually frees the grab it was bought for.**
-  MAM's search API takes 5–20 min to report a new personal FL, so the
-  grab that re-read it right after the buy still saw a paid torrent: the
-  buffer gate could refuse it, or a second wedge could be spent on top.
-  The buy's own result now marks the grab free, on
-  `/api/v1/grabs/inject`, Discovery's send-to-pipeline and Grab from
-  MAM. Both older paths also read the live MAM cookie for the buy
-  instead of a startup snapshot.
 - **Tests: three test files reloaded `app.config` and never put it back.**
   `importlib.reload` re-runs a module in its own globals, so after
   `test_goodreads_bibliography` every later test read settings from

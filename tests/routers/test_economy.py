@@ -306,72 +306,15 @@ class TestUploadBuy:
 # ─── Personal-FL buy ───────────────────────────────────────
 
 
-class TestPersonalFlBuy:
-    async def test_happy_path(
-        self, client, temp_db, isolated_settings, fake_mam
-    ):
-        from tests.fake_mam import DEFAULT_TORRENT_INFO_BODY
-
+class TestPersonalFlEndpointGone:
+    async def test_personal_fl_buy_is_404(self, client, temp_db, isolated_settings, fake_mam):
+        """MAM refuses spendtype=personalFL via the API; the endpoint is gone."""
         _set_token(isolated_settings, "tok")
-        fake_mam.search.body = DEFAULT_TORRENT_INFO_BODY  # confirmed paid
-        resp = await client.post(
-            "/api/v1/mam/economy/personal-fl/buy",
-            json={"torrent_id": "12345"},
-        )
-        assert resp.status_code == 200
-        assert resp.json()["ok"] is True
-
-        rows = await _audit_rows(action=economy_audit.ACTION_PERSONAL_FL)
-        assert len(rows) == 1
-        assert rows[0].torrent_id == "12345"
-        assert rows[0].trigger == economy_audit.TRIGGER_MANUAL
-        # Personal-FL doesn't have a scheduler timestamp — confirm
-        # the two scheduler timestamps stayed at 0.
-        persisted = json.loads(Path(isolated_settings).read_text())
-        assert persisted["mam_economy_last_vip_buy_at"] == 0.0
-        assert persisted["mam_economy_last_upload_buy_at"] == 0.0
-
-    @pytest.mark.parametrize("flag", ["vip", "free", "personal_freeleech"])
-    async def test_never_spends_a_wedge_on_a_free_torrent(
-        self, client, temp_db, isolated_settings, fake_mam, flag
-    ):
-        """'Buy as FL' costs a wedge, and MAM spends it even on a free or
-        VIP torrent (no refunds). Refuse before calling bonusBuy."""
-        from tests.fake_mam import DEFAULT_TORRENT_INFO_BODY
-
-        _set_token(isolated_settings, "tok")
-        body = json.loads(DEFAULT_TORRENT_INFO_BODY)
-        body["data"][0][flag] = "1"
-        fake_mam.search.body = json.dumps(body).encode()
         resp = await client.post(
             "/api/v1/mam/economy/personal-fl/buy", json={"torrent_id": "12345"},
         )
-        assert resp.status_code == 409
+        assert resp.status_code in (404, 405)
         assert not any("bonusBuy" in str(r.url) for r in fake_mam.requests)
-
-    async def test_unknown_status_spends_nothing(
-        self, client, temp_db, isolated_settings, fake_mam
-    ):
-        _set_token(isolated_settings, "tok")
-        fake_mam.search.body = b'{"data": []}'   # not in the index
-        resp = await client.post(
-            "/api/v1/mam/economy/personal-fl/buy", json={"torrent_id": "12345"},
-        )
-        assert resp.status_code == 409
-        assert not any("bonusBuy" in str(r.url) for r in fake_mam.requests)
-
-    async def test_empty_torrent_id_returns_422(
-        self, client, temp_db, isolated_settings, fake_mam
-    ):
-        _set_token(isolated_settings, "tok")
-        resp = await client.post(
-            "/api/v1/mam/economy/personal-fl/buy",
-            json={"torrent_id": ""},
-        )
-        assert resp.status_code == 422  # pydantic min_length=1
-
-
-# ─── Audit ─────────────────────────────────────────────────
 
 
 class TestAudit:
