@@ -7,13 +7,20 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
-## [Unreleased]
+## [3.11.0] — 2026-10-07
 
-Three batches. The test-suite and CI work (2026-09-14) is on `main` but
-was deliberately not tagged: it changed no application code. Phase 0 of
-the 2026-10 roadmap — **snatch safety** — adds the application changes
-on `development`: MAM sees one download per torrent, ever. Phase 1 —
-**Manual Grab** — adds the "Grab from MAM" page on top of it.
+Three batches. The test-suite and CI work (2026-09-14) reached `main`
+untagged, since it changed no application code. Phase 0 of the 2026-10
+roadmap — **snatch safety** — makes MAM see one download per torrent,
+ever. Phase 1 — **Manual Grab** — adds the "Grab from MAM" page on top
+of it, and its live check turned up a buffer gate that never blocked, a
+status cache that never hit, wedges spent on already-free torrents and
+a personal-FL buy MAM refuses, all fixed or removed here.
+
+**Behaviour changes to know about:** the buffer gate now actually
+refuses low-buffer grabs when it's on; the grab policy no longer
+wedges a torrent whose free status MAM can't confirm; and "Buy personal
+FL" is gone (MAM refuses it via the API).
 
 ### Added
 
