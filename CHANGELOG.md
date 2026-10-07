@@ -39,6 +39,21 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   save path and tags, and sends the "New book grabbed" notification like
   any other grab.
 
+- **Grab guards: one form of torrent ID, one MAM lookup, a recorded
+  refusal.** `POST /api/v1/grabs/inject` passed the torrent ID through
+  as typed, so the "already grabbed" check (one download per torrent)
+  missed `" 123"` or `0123` after a grab of `123`, and an ID like
+  `123&fl=1` reached MAM's download link as written. Every inject path
+  now normalises the ID first (the same parser inject-batch, Discovery
+  and Manual Grab use), refuses anything that isn't a torrent ID with a
+  "could not parse torrent ID" error, and the download link encodes the
+  ID. When MAM's search can't be reached, a grab used to ask it up to
+  three times (snatch guard, co-author training, wedge/free check); it
+  now asks once and shares the answer. An announce refused because of
+  an excluded uploader now shows as skipped (`excluded_uploader:<name>`)
+  on the Announces page instead of allowed, and inject / tentative
+  approve return the reason as their error.
+
 - **Autograbs wait for MAM's search before deciding.** A new torrent
   reaches #announce about a second after MAM adds it, before MAM's
   search API lists it, so every IRC autograb's lookup came back "not

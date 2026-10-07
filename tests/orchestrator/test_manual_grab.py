@@ -167,6 +167,7 @@ class TestExtractTorrentId:
     @pytest.mark.parametrize("value", [
         "1274788",
         "  1274788 ",
+        "01274788",
         "https://www.myanonamouse.net/t/1274788",
         "https://www.myanonamouse.net/t/1274788#torDetMainCon",
         "https://www.myanonamouse.net/tor/download.php?tid=1274788",
@@ -174,7 +175,9 @@ class TestExtractTorrentId:
     def test_accepts(self, value):
         assert extract_torrent_id(value) == "1274788"
 
-    @pytest.mark.parametrize("value", ["", "abc", "https://www.goodreads.com/book/show/7235533"])
+    @pytest.mark.parametrize("value", [
+        "", "abc", "1274788&fl=1", "https://www.goodreads.com/book/show/7235533",
+    ])
     def test_rejects(self, value):
         assert extract_torrent_id(value) is None
 

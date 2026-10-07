@@ -50,7 +50,9 @@ from app.filter.gate import Announce, Decision, FilterConfig, evaluate_announce
 from app.mam.cookie import fingerprint as cookie_fingerprint
 from app.mam.grab import GrabResult
 from app.mam.torrent_meta import BencodeError, info_hash, read_mam_comment
+from app.mam.torrent_id import extract_torrent_id
 from app.mam.torrent_info import (
+    TorrentInfo,
     TorrentInfoError,
     TorrentNotFoundError,
     get_torrent_info,
@@ -421,6 +423,27 @@ class DispatchResult:
     error: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class TorrentLookup:
+    """One grab's search-API lookup of its torrent, made once and passed
+    down to the snatch guard, co-author auto-train and the economic
+    context. `get_torrent_info` caches only successes, so before this a
+    failing lookup (MAM unreachable, not listed yet) ran three times per
+    grab (audit L1-14). Exactly one of `info` / `error` is set."""
+
+    info: Optional[TorrentInfo] = None
+    error: Optional[TorrentInfoError] = None
+
+
+async def _look_up_torrent(deps: "DispatcherDeps", torrent_id: str) -> TorrentLookup:
+    try:
+        return TorrentLookup(
+            info=await get_torrent_info(torrent_id, token=deps.live_mam_token()),
+        )
+    except TorrentInfoError as e:
+        return TorrentLookup(error=e)
+
+
 # ─── Public surface ──────────────────────────────────────────
 
 
@@ -524,10 +547,17 @@ async def handle_announce(
             force_fl_wedge=False,
             apply_format_dedup=True,
         )
-    if await _not_indexed_yet(deps, announce):
-        return await _hold_for_index(
-            deps, announce, raw_line=raw_line, decision=decision,
-        )
+    # Not listed by MAM's search yet → hold for the index (D37). Any
+    # other lookup error (MAM unreachable) means the grab goes ahead now
+    # and fails open, as every lookup error does; the lookup is passed
+    # down so the grab path doesn't repeat it (L1-14).
+    lookup = None
+    if deps.live_mam_token() and announce.torrent_id:
+        lookup = await _look_up_torrent(deps, announce.torrent_id)
+        if isinstance(lookup.error, TorrentNotFoundError):
+            return await _hold_for_index(
+                deps, announce, raw_line=raw_line, decision=decision,
+            )
     async with _announce_grab_lock():
         return await _dispatch_with_decision(
             deps,
@@ -537,25 +567,8 @@ async def handle_announce(
             skip_filter=False,
             force_fl_wedge=False,
             apply_format_dedup=True,
+            lookup=lookup,
         )
-
-
-async def _not_indexed_yet(deps: DispatcherDeps, announce: Announce) -> bool:
-    """True when MAM's search doesn't list this announce's torrent yet.
-
-    A found torrent stays in the lookup cache for the grab path. Any
-    other lookup error (MAM unreachable) is False: the grab goes ahead
-    now and fails open, as every lookup error does.
-    """
-    if not (deps.live_mam_token() and announce.torrent_id):
-        return False
-    try:
-        await get_torrent_info(announce.torrent_id, token=deps.live_mam_token())
-    except TorrentNotFoundError:
-        return True
-    except TorrentInfoError:
-        return False
-    return False
 
 
 async def _hold_for_index(
@@ -743,7 +756,19 @@ async def inject_grab(
     initiated regardless of the IRC listener state), the live
     `dry_run` setting IS honored on every manual inject. Mirrors
     the same contract `handle_announce` uses.
+
+    `torrent_id` is normalised first (`extract_torrent_id`: whitespace,
+    leading zeros, a pasted link), so ADR-0022's `already_grabbed`
+    check compares one form. Anything that isn't a torrent ID is
+    refused before an audit row or a MAM call (`invalid_torrent_id`).
     """
+    tid = extract_torrent_id(torrent_id)
+    if tid is None:
+        return DispatchResult(
+            action="skip", reason="invalid_torrent_id", announce_id=0,
+            error=f"could not parse torrent ID from: {torrent_id}",
+        )
+    torrent_id = tid
     live = _live_kill_switch_state()
     fake_announce = Announce(
         torrent_id=torrent_id,
@@ -809,6 +834,7 @@ async def _dispatch_with_decision(
     apply_claim_for_owned: bool = True,
     announce_id: Optional[int] = None,
     trust_announce: bool = False,
+    lookup: Optional[TorrentLookup] = None,
 ) -> DispatchResult:
     """The shared pipeline body used by both handle_announce and
     inject_grab. The only thing they differ on is whether the filter
@@ -826,6 +852,10 @@ async def _dispatch_with_decision(
     (`_grab_once_indexed`): its announce row already exists, and
     `trust_announce` says MAM's search never listed the torrent, so
     the announce's VIP|Normal is its free status.
+
+    `lookup` is a torrent-info lookup the caller already made
+    (`handle_announce`'s index check); otherwise the snatch guard makes
+    one. Either way it is the grab's only lookup.
     """
     # Computed once at the top so the dedup gate, the announce row,
     # and (if we reach the grab branch) the grab row all carry the
@@ -1100,12 +1130,10 @@ async def _dispatch_with_decision(
         # Any other lookup failure fails open: the DB guard above still
         # covers everything Seshat itself fetched.
         if deps.live_mam_token() and announce.torrent_id:
-            info = None
-            try:
-                info = await get_torrent_info(
-                    announce.torrent_id, token=deps.live_mam_token(),
-                )
-            except TorrentNotFoundError:
+            if lookup is None:
+                lookup = await _look_up_torrent(deps, announce.torrent_id)
+            info = lookup.info
+            if isinstance(lookup.error, TorrentNotFoundError):
                 if skip_filter:
                     return await _refuse_grab(
                         db, deps,
@@ -1117,10 +1145,10 @@ async def _dispatch_with_decision(
                             "nothing was downloaded."
                         ),
                     )
-            except TorrentInfoError as e:
+            elif lookup.error is not None:
                 _log.debug(
                     "snatch safety: torrent_info lookup failed for tid=%s "
-                    "(failing open): %s", announce.torrent_id, e,
+                    "(failing open): %s", announce.torrent_id, lookup.error,
                 )
 
             if info is not None and info.my_snatched and not override_mam_snatched:
@@ -1146,10 +1174,13 @@ async def _dispatch_with_decision(
                     "torrent_id": announce.torrent_id,
                     "uploader": info.uploader_name,
                 })
-                return DispatchResult(
-                    action="skip",
+                # Through `_refuse_grab` like the other snatch-safety
+                # skips, so the announce row says skip, not allow (L2-07).
+                return await _refuse_grab(
+                    db, deps,
+                    announce=announce, announce_id=announce_id,
                     reason=f"excluded_uploader:{info.uploader_name}",
-                    announce_id=announce_id,
+                    message="The uploader is on your excluded-uploaders list.",
                 )
 
         # Co-author auto-train (v3.0.0 Phase 10, ITEM 1): train the
@@ -1173,6 +1204,8 @@ async def _dispatch_with_decision(
                     token=deps.live_mam_token(),
                     fallback_blob=announce.author_blob or "",
                     source="coauthor_train",
+                    looked_up=lookup is not None,
+                    info=lookup.info if lookup is not None else None,
                 )
             except Exception:
                 pass  # best-effort, don't block the grab
@@ -1183,7 +1216,7 @@ async def _dispatch_with_decision(
         # cached, both fail-safe).
         eco_ctx = await _build_economic_context(
             deps, announce, wedge_requested=force_fl_wedge,
-            trust_announce=trust_announce,
+            trust_announce=trust_announce, lookup=lookup,
         )
 
         policy_decision = evaluate_policy(eco_ctx, deps.policy_config)
@@ -2050,8 +2083,12 @@ async def _build_economic_context(
     *,
     wedge_requested: bool = False,
     trust_announce: bool = False,
+    lookup: Optional[TorrentLookup] = None,
 ) -> EconomicContext:
     """Build the EconomicContext for the policy engine.
+
+    `lookup` is the grab's torrent-info lookup when the snatch guard
+    already made it; reused instead of asking MAM again.
 
     Always starts with the announce VIP flag (reliable, free). Then
     enriches with two MAM API calls when the policy config requires
@@ -2087,8 +2124,12 @@ async def _build_economic_context(
         )
     )
     if needs_torrent_info:
+        if lookup is None:
+            lookup = await _look_up_torrent(deps, announce.torrent_id)
         try:
-            info = await get_torrent_info(announce.torrent_id, token=deps.live_mam_token())
+            if lookup.error is not None:
+                raise lookup.error
+            info = lookup.info
             ctx_kwargs["torrent_vip"] = info.vip
             ctx_kwargs["torrent_free"] = info.free
             ctx_kwargs["torrent_fl_vip"] = info.fl_vip

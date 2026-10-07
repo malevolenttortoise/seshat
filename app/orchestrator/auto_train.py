@@ -124,6 +124,8 @@ async def train_authors_from_torrent_info(
     token: str | None,
     fallback_blob: str = "",
     source: str = "author_info",
+    looked_up: bool = False,
+    info=None,
 ) -> int:
     """v3.0.0 Phase 10 — train the AUTHORITATIVE MAM authorlist for a grab.
 
@@ -137,9 +139,15 @@ async def train_authors_from_torrent_info(
     MAM economy: at most one cached-or-fetched `torrent_info` call per GRAB
     (grabs are rare + deliberate; the snatch dwarfs it). Do NOT call this on
     the per-announce path. Returns the count of newly-added authors.
+
+    `looked_up=True` means the caller already asked MAM: `info` is its
+    result (None = the lookup failed), and nothing is fetched here.
     """
     names: list[str] = []
-    if torrent_id and token:
+    if looked_up:
+        if info is not None:
+            names = [n for n in (info.authors or {}).values() if n and n.strip()]
+    elif torrent_id and token:
         from app.mam.torrent_info import TorrentInfoError, get_torrent_info
         try:
             info = await get_torrent_info(str(torrent_id), token=token)
