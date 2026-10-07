@@ -810,19 +810,6 @@ function EconomySections() {
         </KV>
 
         <div style={{ marginTop: 14 }}>
-          <SubHeader>Per-grab offers</SubHeader>
-        </div>
-        <KV label="Show &quot;use wedge&quot; checkbox on manual grabs">
-          <Toggle
-            on={config.mam_economy_manual_wedge_offer_enabled}
-            disabled={configBusy}
-            onChange={(v) =>
-              patchConfig({ mam_economy_manual_wedge_offer_enabled: v })
-            }
-          />
-        </KV>
-
-        <div style={{ marginTop: 14 }}>
           <SubHeader>Operator / testing</SubHeader>
         </div>
         <KV label="Dry-run mode (simulate buys, spend no BP)">
@@ -830,6 +817,22 @@ function EconomySections() {
             on={config.mam_economy_dry_run}
             disabled={configBusy}
             onChange={(v) => patchConfig({ mam_economy_dry_run: v })}
+          />
+        </KV>
+      </Section>
+
+      {/* Wedges on manual grabs (moved out of Upload credit, 2026-10-07) */}
+      <Section
+        title="Wedges on manual grabs"
+        subtitle="A wedge is only spent on a torrent MAM confirms isn't already free (VIP, freeleech or personal FL)."
+      >
+        <KV label="Offer wedges on Grab from MAM and the book sidebar">
+          <Toggle
+            on={config.mam_economy_manual_wedge_offer_enabled}
+            disabled={configBusy}
+            onChange={(v) =>
+              patchConfig({ mam_economy_manual_wedge_offer_enabled: v })
+            }
           />
         </KV>
       </Section>

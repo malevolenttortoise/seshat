@@ -42,9 +42,10 @@ on `development`: MAM sees one download per torrent, ever. Phase 1 —
     than you can spend (your wedges minus the policy's reserve), Grab is
     blocked until it fits, and the server re-checks against a fresh read
     of your account and refuses the whole batch rather than part-spend.
-    The toggle only appears when the MAM page's "Show 'use wedge'
-    checkbox on manual grabs" setting is on, the same setting
-    BookSidebar's wedge tick follows.
+    The toggle only appears when MAM Status › **Wedges on manual grabs**
+    is on, the setting BookSidebar's wedge tick follows too. It used to
+    hide under "Auto-buy: Upload credit" and now has its own section;
+    with it off, Grab from MAM says where to turn it on.
   - A torrent Seshat already grabbed, or one removed from MAM, can't be
     ticked. One you own, one already on its way, or one your grab policy
     would skip starts unticked; ticking it is your decision. Manual grabs

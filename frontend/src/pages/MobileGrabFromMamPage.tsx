@@ -2,6 +2,7 @@
 // drag-and-drop on phones, so uploads go through the file picker.
 import { useState } from "react";
 import { useTheme } from "../theme";
+import { useNavigation } from "../providers/NavigationProvider";
 import { MobileBackButton, MobileBtn } from "../components/mobile";
 import { GrabPreviewRow } from "../components/manualGrab/GrabPreviewRow";
 import { useManualGrabBatch } from "../components/manualGrab/useManualGrabBatch";
@@ -13,6 +14,7 @@ import { useCarriedLinks } from "../components/manualGrab/useCarriedLinks";
 export default function MobileGrabFromMamPage({ initial }: { initial?: string | number | null }) {
   const t = useTheme();
   const batch = useManualGrabBatch();
+  const { nav } = useNavigation();
   const [text, setText] = useState("");
   useCarriedLinks(batch, initial);
 
@@ -102,6 +104,19 @@ export default function MobileGrabFromMamPage({ initial }: { initial?: string | 
                 )}
               </span>
             </label>
+          )}
+          {batch.wedgesSwitchedOff && batch.eligibleForWedges > 0 && (
+            <div style={{ fontSize: 12, color: t.td, paddingBottom: 8 }}>
+              Wedges are off for manual grabs. Turn them on in{" "}
+              <a
+                href="#"
+                onClick={(e) => { e.preventDefault(); nav("pipe-mam"); }}
+                style={{ color: t.accent }}
+              >
+                MAM Status › Wedges on manual grabs
+              </a>
+              .
+            </div>
           )}
           {batch.wedgeError && <div style={{ fontSize: 12, color: t.err }}>{batch.wedgeError}</div>}
           {batch.wedgeShort && batch.wedges && (

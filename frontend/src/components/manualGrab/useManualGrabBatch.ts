@@ -86,6 +86,7 @@ export function useManualGrabBatch() {
   // (`mam_economy_manual_wedge_offer_enabled`) governs this page too
   // (D34). Off, or unreadable: no wedge toggle, no wedges.
   const [offerWedges, setOfferWedges] = useState(false);
+  const [offerKnown, setOfferKnown] = useState(false);
   const [wedges, setWedges] = useState<WedgeBudget | null>(null);
   const [wedgeError, setWedgeError] = useState<string | null>(null);
   const [snatch, setSnatch] = useState<SnatchBudget | null>(null);
@@ -120,7 +121,9 @@ export function useManualGrabBatch() {
     economyApi
       .getConfig()
       .then((cfg) => {
-        if (mounted.current) setOfferWedges(!!cfg.mam_economy_manual_wedge_offer_enabled);
+        if (!mounted.current) return;
+        setOfferWedges(!!cfg.mam_economy_manual_wedge_offer_enabled);
+        setOfferKnown(true);
       })
       .catch(() => {});
     return () => {
@@ -376,6 +379,8 @@ export function useManualGrabBatch() {
     pending,
     tickedCount,
     offerWedges,
+    // The setting was read and is off: the page says where to turn it on.
+    wedgesSwitchedOff: offerKnown && !offerWedges,
     useWedges: wedgesOn,
     wedges,
     wedgeError,

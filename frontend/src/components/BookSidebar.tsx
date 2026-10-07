@@ -1922,7 +1922,7 @@ export function BookSidebar({
                     own row so narrow sidebar widths don't wrap the
                     Found/Re-scan/Send buttons around them. Only
                     renders when the user has enabled one of the
-                    offers under MamPage → Auto-buy → Per-grab offers
+                    offer under MamPage → Wedges on manual grabs
                     AND the send-to-pipeline button would actually
                     show up on the row above. */}
                 {pipelineReady &&

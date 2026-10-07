@@ -8,6 +8,7 @@
 // snatched on MAM starts unticked and is yours to decide (ADR-0023).
 import { useState } from "react";
 import { useTheme } from "../theme";
+import { useNavigation } from "../providers/NavigationProvider";
 import { Btn } from "../components/Btn";
 import { Spin } from "../components/Spin";
 import { useViewport } from "../hooks/useViewport";
@@ -126,6 +127,7 @@ function DesktopGrabFromMamPage({ initial }: { initial?: string | number | null 
 
 function GrabFooter({ batch }: { batch: ManualGrabBatch }) {
   const t = useTheme();
+  const { nav } = useNavigation();
   const showWedges = batch.offerWedges && (batch.useWedges || batch.eligibleForWedges > 0);
   const blocked =
     !batch.tickedCount || batch.pending || batch.grabbing || batch.wedgeShort ||
@@ -148,6 +150,19 @@ function GrabFooter({ batch }: { batch: ManualGrabBatch }) {
             </span>
           )}
         </label>
+      )}
+      {batch.wedgesSwitchedOff && batch.eligibleForWedges > 0 && (
+        <div style={{ fontSize: 12, color: t.td }}>
+          Wedges are off for manual grabs. Turn them on in{" "}
+          <a
+            href="#"
+            onClick={(e) => { e.preventDefault(); nav("pipe-mam"); }}
+            style={{ color: t.accent }}
+          >
+            MAM Status › Wedges on manual grabs
+          </a>
+          .
+        </div>
       )}
       {batch.wedgeError && <div style={{ fontSize: 12, color: t.err }}>{batch.wedgeError}</div>}
       {batch.wedgeShort && batch.wedges && (
