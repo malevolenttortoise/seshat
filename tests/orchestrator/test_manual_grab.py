@@ -260,6 +260,23 @@ class TestPreview:
         row = await manual_grab.preview_link(_make_deps(), TID)
         assert row.status == manual_grab.STATUS_REMOVED
 
+    async def test_a_timeout_says_so(self, temp_db, mam_search, fake_clock):
+        """The live check's upload row read "Couldn't reach MAM: network
+        error:" — a timeout's message is empty. Name it (D26)."""
+        import httpx
+
+        mam_search["items"][TID] = httpx.ReadTimeout("")
+        row = await manual_grab.preview_link(_make_deps(), TID)
+        assert row.status == manual_grab.STATUS_LOOKUP_FAILED
+        assert row.message.startswith("MAM didn't answer in time (ReadTimeout)")
+
+    async def test_other_lookup_errors_carry_their_reason(self, temp_db, mam_search, fake_clock):
+        import httpx
+
+        mam_search["items"][TID] = httpx.ConnectError("")
+        row = await manual_grab.preview_link(_make_deps(), TID)
+        assert "ConnectError" in row.message
+
     async def test_snatched_on_mam(self, temp_db, mam_search, fake_clock, covers):
         mam_search["items"][TID] = _item(my_snatched=1)
         row = await manual_grab.preview_link(_make_deps(), TID)

@@ -83,6 +83,7 @@ export default function MobileGrabFromMamPage({ initial }: { initial?: string | 
               onConfirmSnatched={() => batch.confirmSnatched(e.key)}
               onCancelConfirm={() => batch.cancelConfirm(e.key)}
               onRemove={batch.grabbing ? undefined : () => batch.remove(e.key)}
+              onRetry={() => batch.retry(e.key)}
             />
           ))}
 

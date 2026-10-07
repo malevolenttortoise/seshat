@@ -225,6 +225,21 @@ export function useManualGrabBatch() {
     [admit],
   );
 
+  // Re-run one row's preview (D26): a lookup that failed for a passing
+  // reason (MAM timed out, account unreadable). Goes back in the queue,
+  // so it's paced like any other lookup.
+  const retry = useCallback(
+    (key: string) => {
+      const entry = current.current.find((e) => e.key === key);
+      if (!entry || entry.result) return;
+      const reset = { ...entry, preview: null, ticked: false, confirming: false };
+      commit((prev) => prev.map((e) => (e.key === key ? reset : e)));
+      queue.current.push(reset);
+      void drain();
+    },
+    [commit, drain],
+  );
+
   const remove = useCallback(
     (key: string) => commit((prev) => prev.filter((e) => e.key !== key || !!e.result)),
     [commit],
@@ -364,6 +379,7 @@ export function useManualGrabBatch() {
     willQueue,
     addLinks,
     addFiles,
+    retry,
     remove,
     clear,
     setTicked,

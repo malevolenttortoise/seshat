@@ -63,6 +63,13 @@ on `development`: MAM sees one download per torrent, ever. Phase 1 —
     data through MAM's tracker) and the snatch budget; one that has to
     queue keeps its bytes on disk like any queued grab. No wedge: it rides
     on the MAM download, which already happened.
+  - Every row carries a **cost chip**: green `FREE · VIP` /
+    `FREE · Freeleech` / `FREE · Personal FL`, or amber
+    `PAID · 2.9 MiB from buffer`. It follows your choices on the row
+    (personal FL ticked, wedges on).
+  - A row whose MAM lookup failed for a passing reason says what
+    happened ("MAM didn't answer in time (ReadTimeout)") and has a
+    **Retry** that re-runs just that row's lookup, paced like the rest.
   - Per-row **Buy personal FL (50k BP)**.
   - The grab row gets the real title, authors, category, series and
     format instead of `manual_inject_<id>`, so the review queue,

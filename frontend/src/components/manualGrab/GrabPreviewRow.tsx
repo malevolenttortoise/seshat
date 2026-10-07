@@ -19,10 +19,30 @@ export interface GrabPreviewRowProps {
   onConfirmSnatched: () => void;
   onCancelConfirm: () => void;
   onRemove?: () => void;
+  // Shown on rows whose lookup failed for a passing reason (D26).
+  onRetry?: () => void;
 }
 
+// What grabbing this row costs (D23): free and why, or paid and how much
+// of the upload buffer. Follows the row's own choices (personal FL, wedge).
+function costChip(entry: GrabEntry, willWedge: boolean): { label: string; free: boolean } | null {
+  const p = entry.preview;
+  if (!p || BLOCKING_STATUSES.has(p.status)) return null;
+  if (p.vip) return { label: "FREE · VIP", free: true };
+  if (p.freeleech) return { label: "FREE · Freeleech", free: true };
+  if (p.personal_freeleech) return { label: "FREE · Personal FL", free: true };
+  if (entry.buyFl) return { label: "FREE · Personal FL (buying)", free: true };
+  if (willWedge) return { label: "FREE · Wedge", free: true };
+  return {
+    label: p.size_bytes != null ? `PAID · ${fmtBytes(p.size_bytes)} from buffer` : "PAID",
+    free: false,
+  };
+}
+
+const RETRYABLE = new Set(["lookup_failed", "uid_unknown"]);
+
 export function GrabPreviewRow({
-  entry, compact, willWedge, onTick, onBuyFl, onConfirmSnatched, onCancelConfirm, onRemove,
+  entry, compact, willWedge, onTick, onBuyFl, onConfirmSnatched, onCancelConfirm, onRemove, onRetry,
 }: GrabPreviewRowProps) {
   const t = useTheme();
   const p = entry.preview;
@@ -49,17 +69,8 @@ export function GrabPreviewRow({
     queued: "Queued", refused: "Not grabbed", failed: "Failed",
   };
 
-  const badge = (label: string, color: string): CSSProperties & { label: string } => ({
-    label, fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 4,
-    color, border: `1px solid ${color}`, letterSpacing: 0.3,
-  });
-  const badges = p
-    ? [
-        p.vip && badge("VIP", t.pur),
-        p.freeleech && badge("FL", t.grn),
-        p.personal_freeleech && badge("PERSONAL FL", t.grn),
-      ].filter(Boolean) as (CSSProperties & { label: string })[]
-    : [];
+  const cost = costChip(entry, !!willWedge);
+  const canRetry = !!onRetry && !!p && RETRYABLE.has(p.status) && !entry.result;
 
   const meta = p
     ? [
@@ -122,12 +133,17 @@ export function GrabPreviewRow({
               {p ? entry.input : `Looking up ${entry.input}…`}
             </span>
           )}
-          {badges.map(({ label, ...style }) => (
-            <span key={label} style={style}>{label}</span>
-          ))}
-          {willWedge && (
-            <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 6px", borderRadius: 4, color: t.cyan, border: `1px solid ${t.cyan}` }}>
-              WEDGE
+          {cost && (
+            <span
+              style={{
+                fontSize: 10, fontWeight: 700, padding: "1px 7px", borderRadius: 4,
+                letterSpacing: 0.3, whiteSpace: "nowrap",
+                color: cost.free ? t.grn : t.ylw,
+                background: cost.free ? t.grnb : t.ylwb,
+                border: `1px solid ${cost.free ? t.grn : t.ylw}`,
+              }}
+            >
+              {cost.label}
             </span>
           )}
         </div>
@@ -151,9 +167,14 @@ export function GrabPreviewRow({
         {meta && <div style={{ fontSize: 12, color: t.td }}>{meta}</div>}
 
         {p && p.status !== "ready" && p.message && !entry.result && (
-          <div style={{ fontSize: 12, color: statusColor }}>
-            {p.status === "snatched_on_mam" ? "⚠ " : ""}
-            {p.message}
+          <div style={{ fontSize: 12, color: statusColor, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span>
+              {p.status === "snatched_on_mam" ? "⚠ " : ""}
+              {p.message}
+            </span>
+            {canRetry && (
+              <button onClick={onRetry} style={smallBtn(t.bg4, t.text2, t.border)}>Retry</button>
+            )}
           </div>
         )}
         {p && p.status === "snatched_on_mam" && entry.kind === "link" && !entry.result && (

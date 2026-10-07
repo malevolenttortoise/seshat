@@ -188,7 +188,10 @@ async def get_torrent_info(
     try:
         resp = await _do_post(MAM_SEARCH_URL, token=token, payload=payload, timeout=15)
     except Exception as exc:
-        raise TorrentInfoError(f"network error: {exc}") from exc
+        # A timeout's str() is empty; name the exception instead.
+        raise TorrentInfoError(
+            f"network error: {str(exc) or type(exc).__name__}"
+        ) from exc
 
     if resp.status_code != 200:
         raise TorrentInfoError(f"HTTP {resp.status_code} from search API")

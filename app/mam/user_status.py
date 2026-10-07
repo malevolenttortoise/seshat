@@ -173,7 +173,7 @@ async def get_user_status(
     try:
         resp = await _do_get(MAM_USER_URL, token=token, timeout=15)
     except Exception as exc:
-        raise UserStatusError(f"network error: {exc}") from exc
+        raise UserStatusError(f"network error: {str(exc) or type(exc).__name__}") from exc
 
     if resp.status_code != 200:
         raise UserStatusError(f"HTTP {resp.status_code} from jsonLoad.php")

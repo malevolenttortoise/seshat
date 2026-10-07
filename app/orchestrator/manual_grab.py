@@ -262,7 +262,7 @@ async def _preview_torrent(deps: DispatcherDeps, row: PreviewRow) -> PreviewRow:
         return row
     except TorrentInfoError as e:
         row.status = STATUS_LOOKUP_FAILED
-        row.message = f"Couldn't reach MAM: {e}"
+        row.message = lookup_failure_message(e)
         return row
 
     _fill_from_info(row, info)
@@ -333,6 +333,18 @@ async def _fill_policy(row: PreviewRow, deps: DispatcherDeps, info: TorrentInfo)
         return
     row.policy_tier = decision.tier
     row.policy_grab = decision.action == "grab"
+
+
+def lookup_failure_message(e: TorrentInfoError) -> str:
+    """What went wrong with a MAM lookup, in words the row can show (D26)."""
+    import httpx
+
+    if isinstance(e.__cause__, httpx.TimeoutException):
+        return (
+            f"MAM didn't answer in time ({type(e.__cause__).__name__}). "
+            "Try again in a moment."
+        )
+    return f"Couldn't reach MAM ({e}). Try again in a moment."
 
 
 def _policy_message(tier: str) -> str:
@@ -677,7 +689,7 @@ async def _warm(row: JobRow, tid: str, token: str) -> Optional[TorrentInfo]:
         row.message = "This torrent is no longer on MAM; nothing was downloaded."
     except TorrentInfoError as e:
         row.status, row.reason = "failed", "lookup_failed"
-        row.message = f"Couldn't reach MAM ({e}); nothing was downloaded. Try again."
+        row.message = f"{lookup_failure_message(e)} Nothing was downloaded."
     return None
 
 
