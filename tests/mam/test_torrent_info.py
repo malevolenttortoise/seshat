@@ -152,6 +152,41 @@ class TestGetTorrentInfoSuccess:
         assert body.get("description") is True, "description opt-in flag missing"
 
 
+# ─── Uploader (`ownership`) ─────────────────────────────────
+
+
+class TestUploaderParsing:
+    """The excluded-uploader guard keys on `uploader_name`. MAM's API
+    reference documents `owner` / `owner_name`, but the live response
+    (2026-10-07) has neither: the uploader arrives as
+    `ownership`, a JSON-encoded string like `author_info`. An empty
+    name makes the guard silently inert."""
+
+    async def test_live_shape_json_string(self, fake_mam):
+        fake_mam.search.body = _make_search_response({
+            "ownership": '[12345,"SomeUploader"]',
+        })
+        info = await get_torrent_info("965093", token="tok")
+        assert info.uploader_id == 12345
+        assert info.uploader_name == "SomeUploader"
+
+    async def test_decoded_list_still_accepted(self, fake_mam):
+        fake_mam.search.body = _make_search_response({
+            "ownership": [12345, "SomeUploader"],
+        })
+        info = await get_torrent_info("965093", token="tok")
+        assert info.uploader_id == 12345
+        assert info.uploader_name == "SomeUploader"
+
+    @pytest.mark.parametrize("value", [None, "", "not json", "[]", "{}", '["x"]'])
+    async def test_missing_or_malformed_is_empty(self, fake_mam, value):
+        overrides = {} if value is None else {"ownership": value}
+        fake_mam.search.body = _make_search_response(overrides)
+        info = await get_torrent_info("965093", token="tok")
+        assert info.uploader_id == 0
+        assert info.uploader_name == ""
+
+
 # ─── Caching ────────────────────────────────────────────────
 
 

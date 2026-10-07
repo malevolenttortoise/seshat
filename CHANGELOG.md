@@ -7,6 +7,20 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **Excluded uploaders were never excluded.** MAM's search API sends
+  the uploader as `ownership`, a JSON-encoded string
+  (`"[12345,\"Name\"]"`), not a list, and not the `owner` /
+  `owner_name` fields its API page documents. Seshat only accepted a
+  list, so every uploader read as blank and the **Excluded Uploaders**
+  setting (Settings → Snatch Budget) never matched anything: announces,
+  injects and Manual Grab could all grab your own uploads, which MAM
+  counts as a re-snatch. The uploader now parses on every path, and the
+  list works as described.
+
 ## [3.11.0] — 2026-10-07
 
 Three batches. The test-suite and CI work (2026-09-14) reached `main`

@@ -17,6 +17,8 @@ never by fetching anything twice.
 from __future__ import annotations
 
 import asyncio
+import json
+from dataclasses import replace
 
 import pytest
 
@@ -26,6 +28,7 @@ from app.mam.torrent_info import (
     TorrentInfo,
     TorrentInfoError,
     TorrentNotFoundError,
+    invalidate_cache,
 )
 from app.orchestrator import cookie_retry, dispatch
 from app.orchestrator.dispatch import DispatchResult, handle_announce, inject_grab
@@ -398,6 +401,62 @@ class TestRemovedFromMam:
         deps = _make_deps()
 
         result = await inject_grab(deps, torrent_id=TID)
+
+        assert result.reason == "ok"
+        assert len(deps.fetch_torrent.calls) == 1  # type: ignore[attr-defined]
+
+
+# ─── excluded uploader ───────────────────────────────────────
+
+
+def _search_body(**overrides) -> bytes:
+    item = {
+        "id": TID, "title": "The Way of Kings", "catname": "Ebooks - Fantasy",
+        "size": "1000", "vip": "0", "free": "0", "fl_vip": "0",
+        "personal_freeleech": "0", "my_snatched": "0",
+        "author_info": '{"1": "Brandon Sanderson"}',
+    }
+    item.update(overrides)
+    return json.dumps({"perpage": 1, "found": 1, "data": [item]}).encode()
+
+
+class TestExcludedUploader:
+    """Your own uploads are never grabbed (MAM counts that as a re-snatch).
+    Runs the real search-API parse through FakeMAM: `ownership` arrives as
+    a JSON string (live, 2026-10-07), and the guard was inert while the
+    parser only accepted a list."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh_info_cache(self):
+        invalidate_cache()
+        yield
+        invalidate_cache()
+
+    async def test_irc_announce_refused_without_fetch(self, temp_db, fake_mam):
+        fake_mam.search.body = _search_body(ownership='[12345,"MyAccount"]')
+        deps = replace(_irc_deps(), excluded_uploaders=frozenset({"myaccount"}))
+
+        result = await handle_announce(deps, _make_announce(TID))
+
+        assert result.action == "skip"
+        assert result.reason == "excluded_uploader:MyAccount"
+        assert deps.fetch_torrent.calls == []  # type: ignore[attr-defined]
+        assert await _grab_ids() == []
+
+    async def test_inject_refused_without_fetch(self, temp_db, fake_mam):
+        fake_mam.search.body = _search_body(ownership='[12345,"MyAccount"]')
+        deps = replace(_make_deps(), excluded_uploaders=frozenset({"myaccount"}))
+
+        result = await inject_grab(deps, torrent_id=TID)
+
+        assert result.reason == "excluded_uploader:MyAccount"
+        assert deps.fetch_torrent.calls == []  # type: ignore[attr-defined]
+
+    async def test_other_uploader_grabs_once(self, temp_db, fake_mam):
+        fake_mam.search.body = _search_body(ownership='[1,"SomeoneElse"]')
+        deps = replace(_irc_deps(), excluded_uploaders=frozenset({"myaccount"}))
+
+        result = await handle_announce(deps, _make_announce(TID))
 
         assert result.reason == "ok"
         assert len(deps.fetch_torrent.calls) == 1  # type: ignore[attr-defined]
