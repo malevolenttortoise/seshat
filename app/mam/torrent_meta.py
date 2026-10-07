@@ -29,7 +29,9 @@ key inside the top-level dict and return its value's byte slice.
 from __future__ import annotations
 
 import hashlib
-from typing import Tuple
+import re
+from dataclasses import dataclass
+from typing import Optional, Tuple
 
 
 class BencodeError(ValueError):
@@ -68,6 +70,53 @@ def info_hash(torrent_bytes: bytes) -> str:
             return hashlib.sha1(torrent_bytes[value_start:pos]).hexdigest()
 
     raise BencodeError("no `info` key in top-level dict")
+
+
+def top_level_string(torrent_bytes: bytes, key: bytes) -> Optional[bytes]:
+    """The raw value of a top-level string key (e.g. `comment`), or None.
+
+    Raises BencodeError if the input isn't a bencoded dict.
+    """
+    if not torrent_bytes or torrent_bytes[:1] != b"d":
+        raise BencodeError("torrent file must start with a top-level dict")
+    pos = 1
+    while pos < len(torrent_bytes):
+        if torrent_bytes[pos:pos + 1] == b"e":
+            return None
+        k, pos = _read_string(torrent_bytes, pos)
+        if k == key and torrent_bytes[pos:pos + 1].isdigit():
+            value, _ = _read_string(torrent_bytes, pos)
+            return value
+        pos = _walk(torrent_bytes, pos)
+    raise BencodeError("unterminated top-level dict")
+
+
+@dataclass(frozen=True)
+class MamComment:
+    torrent_id: str
+    uid: Optional[int]
+
+
+_MID_RX = re.compile(rb"\bMID=(\d+)")
+_UID_RX = re.compile(rb"\bUID=(\d+)")
+
+
+def read_mam_comment(torrent_bytes: bytes) -> Optional[MamComment]:
+    """MAM's stamp on a .torrent it served: `comment = "MID=<torrent
+    id>,UID=<downloading account>"` (every one of 388 grabbed files
+    checked, 2026-10-06). None when there's no MID — not a MAM file.
+
+    Raises BencodeError if the input isn't a bencoded dict.
+    """
+    comment = top_level_string(torrent_bytes, b"comment") or b""
+    mid = _MID_RX.search(comment)
+    if mid is None:
+        return None
+    uid = _UID_RX.search(comment)
+    return MamComment(
+        torrent_id=mid.group(1).decode(),
+        uid=int(uid.group(1)) if uid else None,
+    )
 
 
 # ─── Minimal bencode walker ──────────────────────────────────

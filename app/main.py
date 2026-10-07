@@ -75,6 +75,7 @@ from app.routers.delayed import router as delayed_router
 from app.routers.economy import router as economy_router
 from app.routers.enums import router as enums_router
 from app.routers.inject import router as inject_router
+from app.routers.manual_grab import router as manual_grab_router
 from app.routers.logs import router as logs_router, install_log_handler
 from app.routers.mam import router as mam_router
 from app.routers.qbittorrent import router as qbittorrent_router
@@ -553,6 +554,20 @@ async def lifespan(app: FastAPI):
 
     await init_db()
     _log.info("Database initialized")
+
+    # Saved .torrent bytes exist only for grabs still in the queue
+    # (snatch safety, ADR-0022); anything else is a leftover from a
+    # crash between submit and delete. They carry the passkey, so
+    # don't let them accumulate.
+    try:
+        from app.orchestrator import torrent_store
+        _sweep_db = await get_db()
+        try:
+            await torrent_store.sweep(_sweep_db)
+        finally:
+            await _sweep_db.close()
+    except Exception:
+        _log.exception("queued-torrent sweep failed (non-fatal)")
     await init_auth_db()
     _log.info("Auth database initialized")
 
@@ -1436,6 +1451,7 @@ app.include_router(delayed_router)
 app.include_router(enums_router)
 app.include_router(economy_router)
 app.include_router(inject_router)
+app.include_router(manual_grab_router)
 app.include_router(logs_router)
 app.include_router(mam_router)
 app.include_router(qbittorrent_router)

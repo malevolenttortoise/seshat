@@ -1,18 +1,20 @@
 """
 MAM bonus-point purchase API.
 
-Thin async wrappers around MAM's `bonusBuy.php` endpoint. Three purchases
+Thin async wrappers around MAM's `bonusBuy.php` endpoint. Two purchases
 are exposed to the rest of Seshat:
 
   - `buy_vip(weeks)`              — spend BP on VIP time (4/8/12/max weeks)
   - `buy_upload_credit(gb)`       — spend BP on upload buffer (float GB)
-  - `buy_personal_freeleech(tid)` — spend 50k BP to make a specific
-                                    torrent personal-freeleech (MAM flags
-                                    it on the user's account; the
-                                    subsequent grab goes through normally
-                                    with no `&fl=1` override needed)
 
-All three share a response shape: MAM echoes the user's fresh seedbonus,
+Personal freeleech ("Buy as FL" on a torrent page, one wedge) is NOT
+available to apps: MAM answered `spendtype=personalFL` with "Not allowed
+via API" (2026-10-07, the first live call, from Manual Grab), and its
+API page lists only VIP, upload, wedges, gift and sendWedge. The buy and
+everything that called it were removed. An app can spend a wedge only
+with `fl` on `download.php`, i.e. while downloading the .torrent.
+
+Both share a response shape: MAM echoes the user's fresh seedbonus,
 uploaded/downloaded totals, and ratio in the same JSON body. We parse
 that into `BuyResult` AND warm `user_status._cache` from it — the buy
 already told us everything a follow-up `jsonLoad.php` would, so there's
@@ -63,7 +65,6 @@ _BONUS_BUY_URL = "https://www.myanonamouse.net/json/bonusBuy.php"
 # surface these (too easy to misconfigure into failed buys).
 BP_PER_UPLOAD_GB: int = int(os.getenv("MAM_BP_PER_UPLOAD_GB", "500"))
 BP_PER_VIP_WEEK: int = int(os.getenv("MAM_BP_PER_VIP_WEEK", "1250"))
-BP_PER_PERSONAL_FL: int = int(os.getenv("MAM_BP_PER_PERSONAL_FL", "50000"))
 
 # MAM-enforced minimum for programmatic upload-credit buys. A sub-50
 # GB purchase comes back with `"Automated spenders are limited to
@@ -232,45 +233,6 @@ def _format_gb_for_display(gb: float) -> str:
     if gb == int(gb):
         return str(int(gb))
     return f"{gb:.2f}"
-
-
-async def buy_personal_freeleech(
-    torrent_id: str, token: Optional[str] = None
-) -> BuyResult:
-    """Spend BP to make a specific torrent personal-freeleech.
-
-    Flat 50k BP per call. After this returns success, MAM flags the
-    torrent as FL for the user's account, and the subsequent `.torrent`
-    grab goes through normally — no `&fl=1` override needed, no wedge
-    pool accounting.
-
-    The URL shape for this endpoint is non-obvious: MAM wants the
-    epoch-ms cache-buster BOTH as a trailing path segment AND
-    duplicated as a `timestamp` query param. Matching that exactly
-    is paranoia — the other two spendtypes work with a plain `_=`
-    cache-buster, but personal-FL is the one the wider wild
-    consistently sends in the path-segment form, so we do too.
-    """
-    if not torrent_id or not str(torrent_id).strip():
-        raise ValueError("buy_personal_freeleech requires a non-empty torrent_id")
-
-    if _is_dry_run():
-        return _dry_run_result(
-            f"personalFL tid={torrent_id}", BP_PER_PERSONAL_FL,
-        )
-
-    ts_ms = _epoch_ms()
-    query = urlencode({
-        "spendtype": "personalFL",
-        "torrentid": str(torrent_id),
-        "timestamp": str(ts_ms),
-    })
-    url = f"{_BONUS_BUY_URL}/{ts_ms}?{query}"
-    return await _execute(
-        url=url,
-        log_label=f"personalFL tid={torrent_id}",
-        token=token,
-    )
 
 
 # ─── Internals ───────────────────────────────────────────────

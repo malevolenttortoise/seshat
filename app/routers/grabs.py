@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -28,16 +27,13 @@ from pydantic import BaseModel, Field
 
 from app import state
 from app.database import get_db
+from app.mam.torrent_id import extract_torrent_id
 from app.orchestrator.auto_train import train_author
 from app.orchestrator.dispatch import inject_grab
 
 _log = logging.getLogger("seshat.routers.grabs")
 
 router = APIRouter(prefix="/api/v1/grabs", tags=["grabs"])
-
-_MAM_URL_RX = re.compile(r"/t/(\d+)")
-_BARE_ID_RX = re.compile(r"^\d+$")
-
 
 class GrabItem(BaseModel):
     url_or_id: str
@@ -79,6 +75,10 @@ class InjectBatchRequest(BaseModel):
     # as a "Snatch anyway" checkbox at the batch level (the typical
     # "I know I already own this format but want it again" path).
     override_format_dedup: bool = False
+    # Phase 0 snatch safety — let this grab through when MAM says the
+    # account already snatched the torrent (`my_snatched`). Never
+    # overrides `already_grabbed` (a torrent Seshat itself fetched).
+    override_mam_snatched: bool = False
 
 
 class GrabResultItem(BaseModel):
@@ -94,14 +94,6 @@ class InjectBatchResponse(BaseModel):
     results: list[GrabResultItem]
 
 
-def _extract_torrent_id(url_or_id: str) -> Optional[str]:
-    s = url_or_id.strip()
-    if _BARE_ID_RX.match(s):
-        return s
-    m = _MAM_URL_RX.search(s)
-    return m.group(1) if m else None
-
-
 @router.post("/inject-batch", response_model=InjectBatchResponse)
 async def inject_batch(body: InjectBatchRequest) -> InjectBatchResponse:
     if state.dispatcher is None:
@@ -112,7 +104,7 @@ async def inject_batch(body: InjectBatchRequest) -> InjectBatchResponse:
     failed = 0
 
     for item in body.items:
-        tid = _extract_torrent_id(item.url_or_id)
+        tid = extract_torrent_id(item.url_or_id)
         if tid is None:
             results.append(
                 GrabResultItem(
@@ -144,6 +136,7 @@ async def inject_batch(body: InjectBatchRequest) -> InjectBatchResponse:
                 filetype=(item.filetype or "").strip(),
                 raw_line=f"external:{item.url_or_id}",
                 apply_format_dedup=not body.override_format_dedup,
+                override_mam_snatched=body.override_mam_snatched,
             )
             ok = result.action in ("submit", "queue") and result.error is None
 

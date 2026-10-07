@@ -7,15 +7,289 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
-## [Unreleased]
+## [3.11.0] — 2026-10-07
 
-Test-suite and CI work only — no application code changes, and no
-version tag. These changes are on `main` but were deliberately not
-released: burning a version number on a build that is functionally
-identical to v3.10.1 buys nothing. The next release folds them in.
+Three batches. The test-suite and CI work (2026-09-14) reached `main`
+untagged, since it changed no application code. Phase 0 of the 2026-10
+roadmap — **snatch safety** — makes MAM see one download per torrent,
+ever. Phase 1 — **Manual Grab** — adds the "Grab from MAM" page on top
+of it, and its live check turned up a buffer gate that never blocked, a
+status cache that never hit, wedges spent on already-free torrents and
+a personal-FL buy MAM refuses, all fixed or removed here.
+
+**Behaviour changes to know about:** the buffer gate now actually
+refuses low-buffer grabs when it's on; the grab policy no longer
+wedges a torrent whose free status MAM can't confirm; and "Buy personal
+FL" is gone (MAM refuses it via the API).
+
+### Added
+
+- **Grab from MAM** (Manual Grab, ADR-0023). A new page, in the Pipeline
+  nav and the dashboard's Pipeline actions (desktop and mobile): paste
+  MAM links or torrent IDs, or drop .torrent files, **up to 30 at once**,
+  and Seshat shows what each one is — cover, title, authors, narrators,
+  series, format, size, seeders, VIP/FL — plus what you already have,
+  then grabs the ones you tick.
+  - One review list for pasted links and dropped files. Duplicates are
+    dropped as you add them (same torrent pasted twice, same file
+    dropped twice); a link and a file for the same torrent keep the file.
+    The 30 cap counts both and is enforced by the server.
+  - Rows fill in as they're looked up, one MAM call at a time. Grab
+    runs as a server-side job and each row shows its outcome (grabbed,
+    queued, not grabbed and why); leaving the page doesn't stop it. The
+    button totals what you're about to spend
+    ("Grab 12 · 3 wedges · 100k BP"), and says how many will queue when
+    the snatch budget is full.
+  - **Use wedges** is one toggle for the batch: it spends a wedge on each
+    ticked pasted link that isn't free (and not on one that turned free
+    by grab time), as MAM serves its .torrent (`&fl`). A dropped .torrent
+    can't take one: you already downloaded it, and MAM refuses "Buy as
+    FL" from apps. A paid upload row says so, and that a wedge you used
+    on MAM's site can take up to 20 min to show (with a Retry); the
+    download is free either way. If the batch needs more wedges
+    than you can spend (your wedges minus the policy's reserve), Grab is
+    blocked until it fits, and the server re-checks against a fresh read
+    of your account and refuses the whole batch rather than part-spend.
+    The toggle only appears when MAM Status › **Wedges on manual grabs**
+    is on, the setting BookSidebar's wedge tick follows too. It used to
+    hide under "Auto-buy: Upload credit" and now has its own section;
+    with it off, Grab from MAM says where to turn it on.
+  - A torrent Seshat already grabbed, or one removed from MAM, can't be
+    ticked. One you own, one already on its way, or one your grab policy
+    would skip starts unticked; ticking it is your decision. Manual grabs
+    skip claim-for-owned and format dedup, since the preview already
+    showed you what you own.
+  - A torrent MAM says you already snatched asks first: ticking it opens
+    "Download it from MAM again?", and only *Download again* sets
+    `override_mam_snatched` for that grab (Phase 0's override, now with
+    a UI).
+  - **Drop a .torrent you downloaded from MAM** (drag-and-drop on desktop,
+    a file picker on both) and Seshat sends those bytes to qBittorrent —
+    no second MAM download, ever. The file has to prove it's your own MAM
+    download: MAM stamps every .torrent it serves with
+    `comment = "MID=<torrent id>,UID=<account>"`, so a file with no MID
+    ("not a MAM .torrent") or another account's UID ("downloaded by
+    another MAM account", its announce URL carries their passkey) is
+    refused, and so is any upload while Seshat can't read your account.
+    A torrent Seshat already holds is refused by torrent ID or by info
+    hash. MAM's "already snatched" is expected here (the upload is the
+    snatch). Uploads still go through the buffer gate (qBit downloads the
+    data through MAM's tracker) and the snatch budget; one that has to
+    queue keeps its bytes on disk like any queued grab. No wedge: it rides
+    on the MAM download, which already happened.
+  - Every row carries a **cost chip**: green `FREE · VIP` /
+    `FREE · Freeleech` / `FREE · Personal FL`, or amber
+    `PAID · 2.9 MiB from buffer`, or `FREE · Wedge` when the wedge
+    toggle covers it. A torrent you wedged or bought as FL on MAM's
+    site shows as `FREE · Personal FL` once MAM's API catches up.
+  - A row whose MAM lookup failed for a passing reason says what
+    happened ("MAM didn't answer in time (ReadTimeout)") and has a
+    **Retry** that re-runs just that row's lookup, paced like the rest.
+  - The grab row gets the real title, authors, category, series and
+    format instead of `manual_inject_<id>`, so the review queue,
+    notifications and the post-ingest MAM link-back read properly.
+  - Every MAM request it makes (lookups, covers, FL buys) goes through a
+    pacer at the `rate_mam` gap (default 2s): never a burst.
+  - Grab runs as a server-side job the page polls, so leaving the page
+    doesn't stop it.
+  - Pasting MAM links into Import / Export now points you to Grab from
+    MAM and carries them over, instead of failing them as book URLs.
+  - API: `POST /api/v1/manual-grab/preview`, `POST /api/v1/manual-grab/grab`
+    (≤30 items, enforced server-side; a `file` item carries the .torrent
+    as base64 in `data_b64`; per-item `use_wedge`; 409 when the wedges
+    don't fit, 422 for a duplicate torrent), `GET /api/v1/manual-grab/grab/{job_id}`,
+    `GET /api/v1/manual-grab/wedges`, `GET /api/v1/manual-grab/cover/{tid}`.
+
+- **Torrent-ID guard on every grab path (snatch safety).** Nothing used
+  to stop Seshat fetching the same MAM torrent twice — the
+  `find_grab_by_torrent_id` helper meant for it had no callers, and the
+  live database already held nine torrent IDs grabbed more than once.
+  The dispatcher now refuses, before any fetch, with three new skip
+  reasons (each with a readable message in the result's `error`):
+  - `already_grabbed` — a prior grab of this ID is in flight or MAM
+    already served its .torrent (`qbit_hash` set, or a state in
+    `grabs.BLOCKING_STATES`). **No override.** A pre-fetch failure
+    (cookie expired, 404, network error) stays retryable. The result
+    carries the existing grab's id. The check re-runs under a lock right
+    before the grab row is inserted, so two concurrent grabs of one ID
+    can't both pass.
+  - `already_snatched_on_mam` — MAM's own `my_snatched` flag (now parsed
+    into `TorrentInfo`). Points the user at Reingest from disk. The new
+    `override_mam_snatched` flag lets a confirmed second download through
+    on `POST /api/v1/grabs/inject`, `/inject-batch`,
+    `/api/discovery/send-to-pipeline` and
+    `POST /api/v1/tentative/{id}/approve?override_mam_snatched=true`. A
+    tentative refused this way stays **pending** so it can be re-approved
+    with the override. (The confirm UI arrives with Manual Grab.)
+  - `torrent_removed_from_mam` — the search API no longer has the ID
+    (`TorrentNotFoundError`, a new `TorrentInfoError` subclass; ADR-0006).
+    User and programmatic grabs only (inject, tentative approve, hold
+    release, send-to-pipeline): an ID that has aged may have been removed
+    by staff, and fetching it would land a torrent that sits at 0%. IRC
+    announces still fail open, since a fresh upload can beat the search
+    index.
+- **Queued and delayed grabs keep their .torrent bytes; nothing is
+  fetched twice.** Every queued grab used to cost two MAM downloads (the
+  bytes were dropped at queue time and re-fetched at pop), and a delayed
+  grab up to three. Now:
+  - A grab that can't reach qBit yet (budget full, or qBit unreachable)
+    saves the bytes it already has to `<data>/queued-torrents/<grab_id>.torrent`
+    (owner-only; the path is on `grabs.torrent_file_path`). If the save
+    fails the grab fails loudly instead of queueing.
+  - The budget watcher submits those saved bytes. Before each one, a
+    single search-API call checks the torrent is still on MAM: removed →
+    the grab fails as `failed_torrent_gone` instead of landing in qBit at
+    0%; check unreachable → the **whole queue holds** until the next tick.
+    A missing saved file fails the grab loudly — never a re-fetch. qBit
+    unreachable puts the grab back exactly where it was in the queue.
+  - Delayed rotation moves the saved bytes into the delayed folder, and
+    delayed reinject submits the file's own bytes through a new bytes-in
+    path (`submit_torrent_bytes`, which Manual Grab's upload will reuse),
+    after the same liveness check.
+  - A startup sweep deletes saved files whose grab is no longer queued.
+- **`grab.failed` notification** (priority 4, fires during quiet hours)
+  for a grab that can't reach qBit and won't be retried: saved file
+  missing, or the torrent was removed from MAM while queued.
+- **`.github/workflows/tests.yml` — pytest now runs in CI**, on pushes
+  to `main`/`development` and on PRs into either. Nothing in CI had ever
+  run the suite; the only workflow builds and publishes images. That is
+  precisely how two broken tests survived both v3.10.0 and v3.10.1. The
+  matrix covers Python 3.12 (what `python:3.12-slim` ships) and 3.13
+  (what the dev venv runs).
+- `respx==0.23.1` declared in `requirements-dev.txt`. Two test modules
+  import it, but it existed only in the local dev venv — a clean
+  checkout could not collect the suite. Found by building the CI
+  environment from the requirements files alone.
+
+### Changed
+
+- **The cookie-retry job never re-fetches a torrent MAM already
+  served.** A `failed_cookie_expired` row with a `qbit_hash` (a queued
+  grab whose pop-time re-fetch hit the dead cookie), or one a newer grab
+  has superseded, is retired to `failed_unknown` with the reason instead
+  of being fetched again.
+- The excluded-uploader check now shares the guard's single cached
+  torrent-info lookup and runs before co-author auto-train, so a refused
+  grab no longer trains its authors.
+- **CI now blocks instead of just reporting.** `docker-publish.yml` runs
+  the test suite first (it calls `tests.yml`) and builds no image from a
+  red commit — before this, a red suite still rolled `:development-slim`,
+  as the first snatch-safety push did. Tag builds skip the suite as
+  before. `tests.yml` dropped its own `push` trigger (it would run the
+  suite twice per push) and only cancels superseded PR runs, never a run
+  an image build is waiting on. `main` is branch-protected: a merge needs
+  `pytest (py3.12)` and `pytest (py3.13)` green, admins included.
+- Queue pops now go through the same qBit add stagger as fresh grabs (a
+  multi-pop drain was exactly the burst the stagger exists for), and a
+  qBit "duplicate" on a pop is recorded as `duplicate_in_qbit` instead of
+  `failed_unknown`.
+- **Test suite runtime cut ~43%: 6m43s → 3m50s.** Two fixed sleeps
+  accounted for nearly all of it, neither of which was testing anything
+  about timing:
+  - `_stagger_qbit_add()` sleeps `qbit_add_stagger_s` (default **2.0s**
+    ± 0.5 jitter) before every qBit add — deliberate tracker-announce
+    spacing in production, pure dead time in tests, charged to every
+    test reaching the submit path. Now disabled suite-wide via the
+    isolated `settings.json`. `test_dispatch_stagger.py` is the one
+    place that actually exercises the stagger and patches
+    `load_settings` itself, so it is unaffected.
+  - `test_negative_jitter_does_not_underflow` did 50 *real* sleeps
+    averaging ~2.5s (~147s, by a wide margin the slowest test in the
+    suite) to verify a `max(0.0, …)`. It now stubs the sleep and
+    asserts on the value passed to it — a stricter check than the old
+    assertion on the return value.
+
+  Together: `test_dispatch.py` + `test_dispatch_stagger.py` went from
+  ~185s to 8.13s.
+
+### Removed
+
+- **"Buy personal FL (50k BP)" — it never worked.** The tick in a book's
+  sidebar, its MAM page setting, the `buy_personal_fl` flag on
+  `/api/v1/grabs/inject` and send-to-pipeline (now ignored if sent),
+  and `POST /api/v1/mam/economy/personal-fl/buy`. Seshat's request
+  matched MAM's own "Buy as FL" button exactly (read from MAM's site
+  code), but that button costs a wedge, not points, and MAM answers the
+  same request from an app with **"Not allowed via API"** (the first
+  live call, 2026-10-07; nothing was spent). It had only ever run as a
+  dry run. An app can spend a wedge only while downloading the
+  .torrent (`&fl`), which is what "Use wedge" does.
 
 ### Fixed
 
+- **Wedges are no longer spent on torrents that are already free.**
+  MAM's `download.php` spends a wedge whenever `fl` is set, "even on
+  VIP torrents … no refunds". Seshat now sends it only on a torrent the
+  search API confirmed is not free (not VIP, freeleech or personal FL),
+  on every path: the grab policy's automatic wedges, the "use wedge"
+  tick (manual inject, send-to-pipeline) and Grab from MAM. When MAM
+  can't say (a new torrent that hasn't reached the search index yet),
+  the grab goes ahead without a wedge, or is skipped if your policy is
+  free-only. Previously the policy wedged blind whenever that lookup
+  failed.
+- **Every wedge is now recorded.** Each one used adds an economy-audit
+  row (torrent, title, and why: grab policy, manual tick, or Grab from
+  MAM), listed as "Wedge" in the MAM page's history, plus a log line
+  (`wedge used on tid=…`). Skipped wedges log why
+  (`wedge not used on tid=…`).
+- **The buffer gate now works — it never blocked anything before.** MAM's
+  search API sends a torrent's size as text ("46.6 GiB"), and the gate
+  read it with `int()`, which failed on every real torrent, so the gate
+  always failed open. The economy preflight (the "Buy N GB" banner) read
+  every torrent as 0 GB for the same reason. Both now parse MAM's size
+  (one shared parser, `app/mam/size.py`, also used by Grab from MAM and
+  quality metadata). **Behaviour change:** with
+  `mam_economy_buffer_gate_enabled` on, grabs that would drive your
+  upload buffer below the safety margin are now actually refused (with
+  the audit row and notification that were always meant to fire).
+- **MAM account status is cached again; every read was a MAM call.**
+  MAM rotates the session cookie on every `jsonLoad.php` response, and
+  the 5-minute status cache was keyed by the cookie, so the next read
+  always missed. Any page polling MAM status, the economy checks and
+  Grab from MAM's per-file account check each cost a fresh MAM call (a
+  container restart with a few tabs open produced ~22 in a minute). The
+  cache is now one entry for the account, cleared when a new cookie is
+  saved.
+- **Tests: three test files reloaded `app.config` and never put it back.**
+  `importlib.reload` re-runs a module in its own globals, so after
+  `test_goodreads_bibliography` every later test read settings from
+  that test's dead tmp directory, undoing the suite's DATA_DIR isolation
+  and bringing back the 2s qBit add stagger (each `test_dispatch` test
+  cost ~2.4s in CI; Manual Grab's 30-grab test timed out). An autouse
+  fixture now restores the globals of every module a test reloads, and
+  the suite's stagger default is set in `DEFAULT_SETTINGS` as well as
+  the file. The suite runs everything ahead of `tests/orchestrator/` in
+  about a third of the time.
+- Pasted MAM download links (`download.php?tid=…`) are now accepted
+  wherever a torrent link or ID is (`inject-batch`, send-to-pipeline,
+  Manual Grab); the parser has one home, `app/mam/torrent_id.py`.
+
+- **Auto-train left a write transaction open after losing an insert
+  race.** When two grabs trained the same author at once, the loser's
+  `INSERT` hit the UNIQUE constraint, the error was swallowed, and the
+  connection kept SQLite's write lock with no rollback. Harmless until
+  the snatch-safety claim lock: the loser then waited on that lock while
+  holding the write lock the winner needed, a deadlock that ended only
+  at `busy_timeout` (30s) with `database is locked`. Caught by CI on the
+  Python 3.12 leg; `train_author` now rolls back.
+- **The test suite was sending real requests to MAM** — 44 search-API
+  POSTs and 6 cover GETs per run, all with a junk `mam_id`, twice per
+  CI push. Dispatcher tests passed a non-empty `mam_token` without the
+  `fake_mam` fixture, and `get_torrent_info` went out through the real
+  module-level client; the tests only passed because lookups fail open.
+  An autouse `_no_real_mam` fixture now gives both MAM clients
+  (`app.mam.cookie` and the discovery source's) a transport that refuses
+  every request. The same fixture now clears the torrent-info cache and
+  the live session token per test; both were module-global and leaked
+  across tests, which made two failures depend on test order.
+- **`test_resolver_never_hits_goodreads_search` took ~92s and made real
+  requests to goodreads.com.** Tier 5 (the `/author/list/` walk) goes
+  through the process-wide Goodreads session, not the client the test
+  injects, so every resolver test that reached it made live curl_cffi
+  requests, each behind a rate-limit sleep — and those URLs never reached
+  the test's "no `/search`" assertion. The resolver tests now swap that
+  session for a fake; the regression test routes it through its own
+  handler and asserts Tier 5 actually ran. ~92s → 0.02s.
 - **Two `tests/discovery/test_trigger_lookup.py` tests had been failing
   since v3.10.0.** `25c2855` (ADR-0021 slice 3) routed the scan router's
   pre-flight due-count through `scan_eligible_authors`, which admits an
@@ -64,40 +338,6 @@ identical to v3.10.1 buys nothing. The next release folds them in.
   been writing per-library `seshat_<slug>.db` and
   `metadata_cache_amazon.db` files into the developer's data dir on
   every test run.
-
-### Changed
-
-- **Test suite runtime cut ~43%: 6m43s → 3m50s.** Two fixed sleeps
-  accounted for nearly all of it, neither of which was testing anything
-  about timing:
-  - `_stagger_qbit_add()` sleeps `qbit_add_stagger_s` (default **2.0s**
-    ± 0.5 jitter) before every qBit add — deliberate tracker-announce
-    spacing in production, pure dead time in tests, charged to every
-    test reaching the submit path. Now disabled suite-wide via the
-    isolated `settings.json`. `test_dispatch_stagger.py` is the one
-    place that actually exercises the stagger and patches
-    `load_settings` itself, so it is unaffected.
-  - `test_negative_jitter_does_not_underflow` did 50 *real* sleeps
-    averaging ~2.5s (~147s, by a wide margin the slowest test in the
-    suite) to verify a `max(0.0, …)`. It now stubs the sleep and
-    asserts on the value passed to it — a stricter check than the old
-    assertion on the return value.
-
-  Together: `test_dispatch.py` + `test_dispatch_stagger.py` went from
-  ~185s to 8.13s.
-
-### Added
-
-- **`.github/workflows/tests.yml` — pytest now runs in CI**, on pushes
-  to `main`/`development` and on PRs into either. Nothing in CI had ever
-  run the suite; the only workflow builds and publishes images. That is
-  precisely how two broken tests survived both v3.10.0 and v3.10.1. The
-  matrix covers Python 3.12 (what `python:3.12-slim` ships) and 3.13
-  (what the dev venv runs).
-- `respx==0.23.1` declared in `requirements-dev.txt`. Two test modules
-  import it, but it existed only in the local dev venv — a clean
-  checkout could not collect the suite. Found by building the CI
-  environment from the requirements files alone.
 
 ---
 

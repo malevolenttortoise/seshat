@@ -306,40 +306,15 @@ class TestUploadBuy:
 # ─── Personal-FL buy ───────────────────────────────────────
 
 
-class TestPersonalFlBuy:
-    async def test_happy_path(
-        self, client, temp_db, isolated_settings, fake_mam
-    ):
+class TestPersonalFlEndpointGone:
+    async def test_personal_fl_buy_is_404(self, client, temp_db, isolated_settings, fake_mam):
+        """MAM refuses spendtype=personalFL via the API; the endpoint is gone."""
         _set_token(isolated_settings, "tok")
         resp = await client.post(
-            "/api/v1/mam/economy/personal-fl/buy",
-            json={"torrent_id": "12345"},
+            "/api/v1/mam/economy/personal-fl/buy", json={"torrent_id": "12345"},
         )
-        assert resp.status_code == 200
-        assert resp.json()["ok"] is True
-
-        rows = await _audit_rows(action=economy_audit.ACTION_PERSONAL_FL)
-        assert len(rows) == 1
-        assert rows[0].torrent_id == "12345"
-        assert rows[0].trigger == economy_audit.TRIGGER_MANUAL
-        # Personal-FL doesn't have a scheduler timestamp — confirm
-        # the two scheduler timestamps stayed at 0.
-        persisted = json.loads(Path(isolated_settings).read_text())
-        assert persisted["mam_economy_last_vip_buy_at"] == 0.0
-        assert persisted["mam_economy_last_upload_buy_at"] == 0.0
-
-    async def test_empty_torrent_id_returns_422(
-        self, client, temp_db, isolated_settings, fake_mam
-    ):
-        _set_token(isolated_settings, "tok")
-        resp = await client.post(
-            "/api/v1/mam/economy/personal-fl/buy",
-            json={"torrent_id": ""},
-        )
-        assert resp.status_code == 422  # pydantic min_length=1
-
-
-# ─── Audit ─────────────────────────────────────────────────
+        assert resp.status_code in (404, 405)
+        assert not any("bonusBuy" in str(r.url) for r in fake_mam.requests)
 
 
 class TestAudit:
@@ -438,6 +413,25 @@ class TestPreflight:
         assert body["buffer_gb"] == pytest.approx(20.0)
         assert body["shortfall_gb"] == 0.0
         assert body["recommended_buy_gb"] == 0.0
+
+    async def test_reads_mams_human_readable_size(
+        self, client, temp_db, isolated_settings, fake_mam
+    ):
+        """MAM sends size as "9.3 GiB". `int()` on that read 0 GB, so the
+        preflight called every torrent affordable (fixed 2026-10-06)."""
+        _set_token(isolated_settings, "tok")
+        body = json.loads(self._torrent_info_body(0))
+        body["data"][0]["size"] = "9.3 GiB"
+        fake_mam.search.body = json.dumps(body).encode()
+        fake_mam.user_status.body = self._user_status_body(4_000_000_000)
+
+        resp = await client.post(
+            "/api/v1/mam/economy/preflight", json={"torrent_id": "1234"}
+        )
+        assert resp.status_code == 200
+        out = resp.json()
+        assert out["size_gb"] == pytest.approx(9.3 * 1024 ** 3 / 1e9)
+        assert out["sufficient"] is False
 
     async def test_insufficient_buffer_computes_shortfall(
         self, client, temp_db, isolated_settings, fake_mam

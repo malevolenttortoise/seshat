@@ -12,16 +12,21 @@ Coverage targets:
   - tick() pops from pending_queue when budget has room
   - tick() does NOT pop when budget is still full after reconcile
   - tick() drains the queue until budget fills again
-  - Pop failure (fetch error) marks the grab failed and stops popping
-  - Pop failure (qBit error) marks the grab failed and stops popping
+  - Pops submit the SAVED .torrent bytes and never call fetch_torrent
+    (snatch safety, ADR-0022): missing file → fail loudly; removed
+    from MAM → fail as torrent-gone; liveness unreachable → hold the
+    queue; qBit unreachable → put the grab back where it was
+  - Pop failure (qBit rejected) marks the grab failed
   - tick() captures unexpected exceptions in TickResult.error
 """
 from typing import Optional
 
+import pytest
+
 from app.clients.base import AddResult, TorrentInfo
 from app.database import get_db
 from app.filter.gate import FilterConfig
-from app.mam.grab import GrabResult
+from app.orchestrator import torrent_store
 from app.orchestrator.budget_watcher import tick
 from app.orchestrator.dispatch import DispatcherDeps
 from app.rate_limit import ledger as ledger_mod
@@ -74,16 +79,14 @@ class _FakeQbit:
         return None
 
 
-def _make_fetch(result: GrabResult = None):
-    """Build a fetch_torrent fake that always returns a fixed result."""
-    final = result or GrabResult(
-        success=True, torrent_bytes=MINIMAL_BENCODED_TORRENT
-    )
+def _never_fetch():
+    """fetch_torrent fake for the watcher: a pop must never reach MAM's
+    download endpoint, so any call is recorded and fails the test."""
     calls: list[tuple[str, str]] = []
 
-    async def fake_fetch(torrent_id: str, token: str) -> GrabResult:
+    async def fake_fetch(torrent_id: str, token: str, **kwargs):
         calls.append((torrent_id, token))
-        return final
+        raise AssertionError("budget watcher fetched a .torrent from MAM")
 
     fake_fetch.calls = calls  # type: ignore[attr-defined]
     return fake_fetch
@@ -92,7 +95,6 @@ def _make_fetch(result: GrabResult = None):
 def _make_deps(
     *,
     qbit: _FakeQbit = None,
-    fetch_result: GrabResult = None,
     budget_cap: int = 200,
 ) -> DispatcherDeps:
     return DispatcherDeps(
@@ -108,9 +110,40 @@ def _make_deps(
         queue_mode_enabled=True,
         seed_seconds_required=72 * 3600,
         db_factory=get_db,
-        fetch_torrent=_make_fetch(fetch_result),
+        fetch_torrent=_never_fetch(),
         qbit=qbit or _FakeQbit(),
     )
+
+
+@pytest.fixture(autouse=True)
+def mam_liveness(monkeypatch):
+    """What the pre-submit liveness check reports; "ok" unless a test
+    says otherwise. Records the torrent IDs it was asked about."""
+    box = {"answer": "ok", "asked": []}
+
+    async def fake_check(torrent_id, token):
+        box["asked"].append(torrent_id)
+        return box["answer"]
+
+    monkeypatch.setattr(torrent_store, "check_still_on_mam", fake_check)
+    return box
+
+
+async def _queue_saved(
+    db, *, torrent_id: str = "1", data: bytes = MINIMAL_BENCODED_TORRENT,
+) -> int:
+    """A queued grab the way the dispatcher leaves one: bytes saved in
+    the torrent store, path stamped on the row, row in pending_queue."""
+    grab_id = await insert_dummy_grab(
+        db, torrent_id=torrent_id, state=grabs_storage.STATE_PENDING_QUEUE,
+    )
+    path = torrent_store.save(grab_id, data)
+    await grabs_storage.set_state(
+        db, grab_id, grabs_storage.STATE_PENDING_QUEUE,
+        torrent_file_path=str(path),
+    )
+    await queue_mod.enqueue(db, grab_id)
+    return grab_id
 
 
 def _info(hash_: str, seeding_seconds: int) -> TorrentInfo:
@@ -184,11 +217,9 @@ class TestPopFromQueue:
         # Pre-populate the queue with one grab.
         db = await get_db()
         try:
-            grab_id = await insert_dummy_grab(
-                db, state=grabs_storage.STATE_PENDING_QUEUE
-            )
-            await queue_mod.enqueue(db, grab_id)
+            grab_id = await _queue_saved(db)
             assert await queue_mod.size(db) == 1
+            saved = (await grabs_storage.get_grab(db, grab_id)).torrent_file_path
         finally:
             await db.close()
 
@@ -200,6 +231,8 @@ class TestPopFromQueue:
         assert result.queue_pops_submitted == 1
         assert result.queue_pops_failed == 0
         assert len(qbit.add_calls) == 1
+        assert qbit.add_calls[0]["size"] == len(MINIMAL_BENCODED_TORRENT)
+        assert deps.fetch_torrent.calls == []  # type: ignore[attr-defined]
 
         db = await get_db()
         try:
@@ -211,6 +244,8 @@ class TestPopFromQueue:
             assert await ledger_mod.count_active(db) == 1
         finally:
             await db.close()
+        # Submitted → the saved copy (it carries the passkey) is gone.
+        assert torrent_store.load(saved) is None
 
     async def test_does_not_pop_when_budget_full(self, temp_db):
         # Fill the budget to exactly cap, then verify nothing pops.
@@ -220,10 +255,7 @@ class TestPopFromQueue:
                 grab_id = await insert_dummy_grab(db, torrent_id=str(i))
                 await ledger_mod.record_grab(db, grab_id, f"h{i}")
             # And queue one
-            queued_id = await insert_dummy_grab(
-                db, torrent_id="queued", state=grabs_storage.STATE_PENDING_QUEUE
-            )
-            await queue_mod.enqueue(db, queued_id)
+            await _queue_saved(db, torrent_id="queued")
         finally:
             await db.close()
 
@@ -258,12 +290,7 @@ class TestPopFromQueue:
                 await ledger_mod.record_grab(db, grab_id, f"active{i}")
             queued_ids = []
             for i in range(3):
-                qid = await insert_dummy_grab(
-                    db, torrent_id=f"q{i}",
-                    state=grabs_storage.STATE_PENDING_QUEUE,
-                )
-                await queue_mod.enqueue(db, qid)
-                queued_ids.append(qid)
+                queued_ids.append(await _queue_saved(db, torrent_id=f"q{i}"))
         finally:
             await db.close()
 
@@ -296,9 +323,18 @@ class TestPopFromQueue:
 
 
 class TestPopFailures:
-    async def test_fetch_failure_marks_grab(self, temp_db):
+    async def test_missing_saved_file_fails_loudly_without_fetch(
+        self, temp_db, monkeypatch,
+    ):
+        notified: list[str] = []
+
+        async def capture(grab_id, detail):
+            notified.append(detail)
+
+        monkeypatch.setattr(torrent_store, "notify_grab_failed", capture)
         db = await get_db()
         try:
+            # Queued the pre-Phase-0 way: no bytes saved anywhere.
             grab_id = await insert_dummy_grab(
                 db, state=grabs_storage.STATE_PENDING_QUEUE
             )
@@ -306,36 +342,127 @@ class TestPopFailures:
         finally:
             await db.close()
 
-        deps = _make_deps(
-            fetch_result=GrabResult(
-                success=False,
-                failure_kind="cookie_expired",
-                failure_detail="login HTML",
-            )
-        )
+        qbit = _FakeQbit()
+        deps = _make_deps(qbit=qbit)
         result = await tick(deps)
 
         assert result.queue_pops_attempted == 1
-        assert result.queue_pops_submitted == 0
         assert result.queue_pops_failed == 1
-
+        assert deps.fetch_torrent.calls == []  # type: ignore[attr-defined]
+        assert qbit.add_calls == []
+        assert len(notified) == 1 and "missing from disk" in notified[0]
         db = await get_db()
         try:
             grab = await grabs_storage.get_grab(db, grab_id)
-            assert grab.state == grabs_storage.STATE_FAILED_COOKIE_EXPIRED
-            # Queue should be drained — the failed grab IS popped,
-            # just not successfully resubmitted.
+            assert grab.state == grabs_storage.STATE_FAILED_UNKNOWN
+            assert "not re-fetched" in (grab.failed_reason or "")
             assert await queue_mod.size(db) == 0
+        finally:
+            await db.close()
+
+    async def test_torrent_removed_from_mam_is_failed_not_submitted(
+        self, temp_db, mam_liveness, monkeypatch,
+    ):
+        notified: list[str] = []
+
+        async def capture(grab_id, detail):
+            notified.append(detail)
+
+        monkeypatch.setattr(torrent_store, "notify_grab_failed", capture)
+        mam_liveness["answer"] = "removed"
+        db = await get_db()
+        try:
+            grab_id = await _queue_saved(db, torrent_id="4242")
+            saved = (await grabs_storage.get_grab(db, grab_id)).torrent_file_path
+        finally:
+            await db.close()
+
+        qbit = _FakeQbit()
+        deps = _make_deps(qbit=qbit)
+        result = await tick(deps)
+
+        assert mam_liveness["asked"] == ["4242"]
+        assert result.queue_pops_failed == 1
+        assert qbit.add_calls == []
+        assert deps.fetch_torrent.calls == []  # type: ignore[attr-defined]
+        assert len(notified) == 1 and "removed from MAM" in notified[0]
+        assert torrent_store.load(saved) is None
+        db = await get_db()
+        try:
+            grab = await grabs_storage.get_grab(db, grab_id)
+            assert grab.state == grabs_storage.STATE_FAILED_TORRENT_GONE
+            assert await queue_mod.size(db) == 0
+        finally:
+            await db.close()
+
+    async def test_liveness_unreachable_holds_the_whole_queue(
+        self, temp_db, mam_liveness,
+    ):
+        mam_liveness["answer"] = "unreachable"
+        db = await get_db()
+        try:
+            queued = [
+                await _queue_saved(db, torrent_id="1"),
+                await _queue_saved(db, torrent_id="2"),
+            ]
+        finally:
+            await db.close()
+
+        qbit = _FakeQbit()
+        deps = _make_deps(qbit=qbit)
+        result = await tick(deps)
+
+        # Checked the head once, then stopped: nothing popped or failed.
+        assert len(mam_liveness["asked"]) == 1
+        assert result.queue_pops_attempted == 0
+        assert qbit.add_calls == []
+        db = await get_db()
+        try:
+            assert await queue_mod.size(db) == 2
+            for gid in queued:
+                grab = await grabs_storage.get_grab(db, gid)
+                assert grab.state == grabs_storage.STATE_PENDING_QUEUE
+                assert torrent_store.load(grab.torrent_file_path) is not None
+        finally:
+            await db.close()
+
+    async def test_qbit_unreachable_puts_grab_back_in_place(self, temp_db):
+        db = await get_db()
+        try:
+            first = await _queue_saved(db, torrent_id="1")
+            await _queue_saved(db, torrent_id="2")
+            before = await queue_mod.list_all(db)
+        finally:
+            await db.close()
+
+        qbit = _FakeQbit(
+            add_result=AddResult(
+                success=False,
+                failure_kind="network_error",
+                failure_detail="connection refused",
+            )
+        )
+        deps = _make_deps(qbit=qbit)
+        result = await tick(deps)
+
+        # One attempt, then the drain stops — the next grab would hit
+        # the same dead client.
+        assert len(qbit.add_calls) == 1
+        assert result.queue_pops_submitted == 0
+        assert result.queue_pops_failed == 0
+        db = await get_db()
+        try:
+            assert await queue_mod.list_all(db) == before
+            grab = await grabs_storage.get_grab(db, first)
+            assert grab.state == grabs_storage.STATE_PENDING_QUEUE
+            assert torrent_store.load(grab.torrent_file_path) is not None
         finally:
             await db.close()
 
     async def test_qbit_failure_marks_grab(self, temp_db):
         db = await get_db()
         try:
-            grab_id = await insert_dummy_grab(
-                db, state=grabs_storage.STATE_PENDING_QUEUE
-            )
-            await queue_mod.enqueue(db, grab_id)
+            grab_id = await _queue_saved(db)
         finally:
             await db.close()
 
@@ -354,6 +481,7 @@ class TestPopFailures:
         try:
             grab = await grabs_storage.get_grab(db, grab_id)
             assert grab.state == grabs_storage.STATE_FAILED_QBIT_REJECTED
+            assert torrent_store.load(grab.torrent_file_path) is None
         finally:
             await db.close()
 

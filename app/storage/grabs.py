@@ -308,10 +308,10 @@ async def get_source_metadata(
 async def find_grab_by_torrent_id(
     db: aiosqlite.Connection, mam_torrent_id: str
 ) -> Optional[GrabRow]:
-    """Look up the most recent grab for a given MAM torrent ID.
-
-    Used by the inject endpoint to detect "we already grabbed this
-    one" before making another attempt.
+    """Look up the most recent grab for a given MAM torrent ID, in any
+    state. For the snatch-safety question ("may we fetch this torrent
+    again?") use `find_blocking_grab` — the most recent row can be a
+    harmless pre-fetch failure sitting on top of an earlier download.
     """
     cursor = await db.execute(
         """
@@ -322,6 +322,90 @@ async def find_grab_by_torrent_id(
         ORDER BY id DESC LIMIT 1
         """,
         (mam_torrent_id,),
+    )
+    row = await cursor.fetchone()
+    return _row_to_grab(row) if row else None
+
+
+# States that mean a grab of this torrent is in flight or MAM has
+# already served its .torrent. `pending_queue` and `fetched` are written
+# by `create_grab` BEFORE the fetch, so they also cover a concurrent
+# grab that hasn't reached MAM yet. `duplicate_in_qbit` and
+# `failed_qbit_rejected` are only ever written after a successful fetch.
+# The remaining failure states are ambiguous by name (`failed_torrent_gone`
+# is also the download watcher's "absent from qBit for 12h"), so
+# `find_blocking_grab` tells them apart by `qbit_hash`, which is only
+# stamped once MAM has handed over the bytes.
+BLOCKING_STATES = frozenset({
+    STATE_PENDING_QUEUE,
+    STATE_FETCHED,
+    STATE_SUBMITTED,
+    STATE_DOWNLOADING,
+    STATE_DOWNLOADED,
+    STATE_PROCESSING,
+    STATE_COMPLETE,
+    STATE_DUPLICATE_IN_QBIT,
+    STATE_FAILED_QBIT_REJECTED,
+})
+
+
+async def find_blocking_grab(
+    db: aiosqlite.Connection,
+    mam_torrent_id: str,
+    *,
+    exclude_grab_id: Optional[int] = None,
+) -> Optional[GrabRow]:
+    """The most recent grab that forbids fetching this torrent again.
+
+    Snatch safety: MAM sees one download per torrent, ever. A row
+    blocks when MAM already served the bytes (`qbit_hash` set) or a
+    grab is still in flight (`BLOCKING_STATES`). A pre-fetch failure —
+    cookie expired, 404, network error, all with no hash — does not
+    block, so the user can retry it.
+
+    `exclude_grab_id` lets the cookie-retry job ask "does anything
+    OTHER than the row I'm about to retry block this torrent?"
+    """
+    if not mam_torrent_id:
+        return None
+    placeholders = ", ".join("?" for _ in BLOCKING_STATES)
+    cursor = await db.execute(
+        f"""
+        SELECT id, announce_id, mam_torrent_id, torrent_name, category,
+               author_blob, torrent_file_path, qbit_hash, state, grabbed_at,
+               submitted_at, failed_reason
+        FROM grabs
+        WHERE mam_torrent_id = ?
+          AND id != ?
+          AND (qbit_hash IS NOT NULL OR state IN ({placeholders}))
+        ORDER BY id DESC LIMIT 1
+        """,
+        (mam_torrent_id, exclude_grab_id or 0, *sorted(BLOCKING_STATES)),
+    )
+    row = await cursor.fetchone()
+    return _row_to_grab(row) if row else None
+
+
+async def find_grab_by_hash(
+    db: aiosqlite.Connection, qbit_hash: str,
+) -> Optional[GrabRow]:
+    """The most recent grab carrying this info hash, in any state.
+
+    Manual Grab's upload check (ADR-0023): a .torrent whose hash Seshat
+    already holds is the same torrent, whatever ID its grab row has.
+    Orphan-adopted rows (no torrent ID) are only findable this way.
+    """
+    if not qbit_hash:
+        return None
+    cursor = await db.execute(
+        """
+        SELECT id, announce_id, mam_torrent_id, torrent_name, category,
+               author_blob, torrent_file_path, qbit_hash, state, grabbed_at,
+               submitted_at, failed_reason
+        FROM grabs WHERE qbit_hash = ?
+        ORDER BY id DESC LIMIT 1
+        """,
+        (qbit_hash.lower(),),
     )
     row = await cursor.fetchone()
     return _row_to_grab(row) if row else None

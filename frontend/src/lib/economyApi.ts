@@ -43,7 +43,7 @@ export interface BuyResponse {
 export interface AuditRow {
   id: number;
   occurred_at: string;
-  action: "vip" | "upload" | "personal_fl" | "buffer_gate_block";
+  action: "vip" | "upload" | "personal_fl" | "buffer_gate_block" | "wedge";
   trigger: "scheduled" | "manual" | "irc_autograb" | "user_grab";
   outcome: string;
   mode: string | null;
@@ -76,8 +76,6 @@ export const economyApi = {
     api.post<BuyResponse>(`${BASE}/vip/buy`, { weeks }),
   uploadBuy: (body: { gb: number } | { mode: "max_affordable" }) =>
     api.post<BuyResponse>(`${BASE}/upload/buy`, body),
-  personalFlBuy: (torrent_id: string) =>
-    api.post<BuyResponse>(`${BASE}/personal-fl/buy`, { torrent_id }),
 
   audit: (params: { limit?: number; action?: AuditRow["action"] } = {}) => {
     const q = new URLSearchParams();
@@ -121,6 +119,8 @@ export function formatAction(action: AuditRow["action"]): string {
       return "Personal FL";
     case "buffer_gate_block":
       return "Buffer gate";
+    case "wedge":
+      return "Wedge";
   }
 }
 

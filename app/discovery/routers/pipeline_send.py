@@ -10,7 +10,6 @@ process.
 """
 import json
 import logging
-import re
 
 from fastapi import APIRouter, Body, HTTPException
 
@@ -18,24 +17,13 @@ from app import state
 from app.config import load_settings
 from app.database import get_db as get_pipeline_db
 from app.discovery.database import get_db as get_discovery_db
+from app.mam.torrent_id import extract_torrent_id
 from app.orchestrator.auto_train import train_author
 from app.orchestrator.dispatch import inject_grab
 
 logger = logging.getLogger("seshat.discovery")
 
 router = APIRouter(prefix="/api/discovery", tags=["pipeline-send"])
-
-_MAM_URL_RX = re.compile(r"/t/(\d+)")
-_BARE_ID_RX = re.compile(r"^\d+$")
-
-
-def _extract_torrent_id(url_or_id: str) -> str | None:
-    s = url_or_id.strip()
-    if _BARE_ID_RX.match(s):
-        return s
-    m = _MAM_URL_RX.search(s)
-    return m.group(1) if m else None
-
 
 @router.post("/send-to-pipeline")
 async def send_to_pipeline(data: dict = Body(...)):
@@ -44,25 +32,22 @@ async def send_to_pipeline(data: dict = Body(...)):
     Accepts a list of book IDs. Only books with mam_status="found"
     are sent — others are silently skipped.
 
-    Two optional per-batch flags line up with the manual-inject
-    confirm dialog's per-grab knobs:
-
-      - `buy_personal_fl=True` — before each grab, spend 50k BP to
-        flag that specific torrent as personal freeleech on MAM.
-        Best-effort: a failed buy doesn't block the grab, it's just
-        audited. Applies to EVERY torrent in the batch, so the UI
-        typically only exposes this when sending one book at a time.
-      - `use_wedge_override=True` — forces `&fl=1` on every grab in
-        the batch, draining one wedge from the pool per torrent.
+    `use_wedge_override=True` forces `&fl=1` on every grab in the
+    batch, one wedge per torrent (never on one that's already free or
+    of unknown status). A `buy_personal_fl` flag existed until MAM
+    refused personal FL via the API (2026-10-07); it's ignored now.
     """
     book_ids = data.get("book_ids", [])
     if not book_ids:
         raise HTTPException(400, "No books specified")
-    buy_personal_fl = bool(data.get("buy_personal_fl", False))
     use_wedge_override = bool(data.get("use_wedge_override", False))
     # v2.9.0 — bypass the format-priority dedup gate for this batch.
     # Equivalent to the manual-inject "Snatch anyway" checkbox.
     override_format_dedup = bool(data.get("override_format_dedup", False))
+    # Phase 0 snatch safety — confirmed second download of a torrent
+    # MAM says this account already snatched. Never overrides
+    # `already_grabbed`.
+    override_mam_snatched = bool(data.get("override_mam_snatched", False))
 
     if state.dispatcher is None:
         raise HTTPException(503, "Pipeline dispatcher not initialized")
@@ -104,7 +89,7 @@ async def send_to_pipeline(data: dict = Body(...)):
     results = []
 
     for r in found_rows:
-        tid = _extract_torrent_id(str(r["mam_torrent_id"]))
+        tid = extract_torrent_id(str(r["mam_torrent_id"]))
         if tid is None:
             results.append({"torrent_id": str(r["mam_torrent_id"]), "ok": False, "error": "bad torrent ID"})
             failed += 1
@@ -121,22 +106,6 @@ async def send_to_pipeline(data: dict = Body(...)):
                 pass
             finally:
                 await pdb.close()
-
-        # F4 path: spend 50k BP to flag this torrent as personal
-        # freeleech BEFORE the inject. Best-effort — a failed buy is
-        # audited and the grab proceeds anyway. Calls the same helper
-        # the manual-inject router uses so the audit row shape stays
-        # consistent between the two entry points.
-        if buy_personal_fl:
-            try:
-                from app.routers.inject import _buy_personal_fl_for_inject
-                await _buy_personal_fl_for_inject(
-                    tid, state.dispatcher.mam_token or "",
-                )
-            except Exception:
-                logger.exception(
-                    "personal-FL buy raised for tid=%s (non-fatal)", tid
-                )
 
         try:
             # v2.9.0 — feed the first MAM format (e.g. "epub" from a
@@ -163,6 +132,7 @@ async def send_to_pipeline(data: dict = Body(...)):
                 raw_line=f"discovery:{r['mam_torrent_id']}",
                 force_fl_wedge=use_wedge_override,
                 apply_format_dedup=not override_format_dedup,
+                override_mam_snatched=override_mam_snatched,
             )
             ok = result.action in ("submit", "queue") and result.error is None
 

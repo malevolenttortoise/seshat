@@ -386,48 +386,9 @@ def parse_tags(tags: str) -> Optional[dict]:
 
 # ─── Size parsing ─────────────────────────────────────────────
 
-
-# MAM's `size` field is a human-readable string like "658.5 MiB" or
-# "1,023.2 KiB". We want bytes so future quality scoring can use
-# size-per-duration ratios for bitrate sanity checks.
-_SIZE_RE = re.compile(
-    r"^\s*([\d,]+(?:\.\d+)?)\s*(B|KiB|MiB|GiB|TiB|KB|MB|GB|TB)\s*$",
-    re.IGNORECASE,
-)
-_SIZE_UNITS = {
-    "b": 1,
-    "kib": 1024,
-    "mib": 1024 ** 2,
-    "gib": 1024 ** 3,
-    "tib": 1024 ** 4,
-    "kb": 1000,
-    "mb": 1000 ** 2,
-    "gb": 1000 ** 3,
-    "tb": 1000 ** 4,
-}
-
-
-def parse_size_to_bytes(value) -> Optional[int]:
-    """Parse MAM's human-readable size string into bytes.
-
-    Returns None on any parse failure rather than guessing.
-    """
-    if value is None:
-        return None
-    if isinstance(value, int):
-        return value
-    if not isinstance(value, str):
-        return None
-    m = _SIZE_RE.match(value.strip())
-    if not m:
-        return None
-    num_str = m.group(1).replace(",", "")
-    unit = m.group(2).lower()
-    try:
-        n = float(num_str)
-    except ValueError:
-        return None
-    return int(n * _SIZE_UNITS.get(unit, 1))
+# Lives in app/mam/size.py (the buffer gate and the preflight need it
+# too); re-exported here for existing importers.
+from app.mam.size import parse_size_to_bytes  # noqa: E402,F401
 
 
 # ─── Top-level orchestrator ───────────────────────────────────

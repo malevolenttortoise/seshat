@@ -64,6 +64,34 @@ class TestUserStatusCaching:
         ]
         assert len(jsonload_requests) == 1
 
+    async def test_rotated_cookie_still_hits_the_cache(self, fake_mam):
+        """MAM rotates mam_id on every jsonLoad response, so the next read
+        always carries a new token. Keyed per token, the cache never hit
+        and every status read was a MAM call (fixed 2026-10-06)."""
+        from app.mam.cookie import get_current_token, set_current_token
+
+        set_current_token("first_cookie")
+        fake_mam.rotate_cookie_to = "rotated_cookie"
+        await get_user_status(token="first_cookie")
+        assert get_current_token() == "rotated_cookie"
+        await get_user_status(token=get_current_token())
+        jsonload_requests = [
+            r for r in fake_mam.requests if "jsonLoad.php" in str(r.url)
+        ]
+        assert len(jsonload_requests) == 1
+
+    async def test_saving_a_new_cookie_clears_the_cache(self, fake_mam):
+        from app.mam.cookie import set_current_token
+
+        set_current_token("first_cookie")
+        await get_user_status(token="first_cookie")
+        set_current_token("pasted_cookie")   # maybe another account
+        await get_user_status(token="pasted_cookie")
+        jsonload_requests = [
+            r for r in fake_mam.requests if "jsonLoad.php" in str(r.url)
+        ]
+        assert len(jsonload_requests) == 2
+
     async def test_ttl_zero_bypasses_cache(self, fake_mam):
         await get_user_status(token="tok")
         await get_user_status(token="tok", ttl=0)

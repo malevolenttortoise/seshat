@@ -107,6 +107,18 @@ class EconomicContext:
         return False
 
     @property
+    def free_status_known(self) -> bool:
+        """True when MAM's search API told us whether the torrent is free.
+
+        False when the torrent-info lookup was skipped or failed (a brand-
+        new torrent can beat MAM's search index). A wedge needs this:
+        MAM spends one even on a torrent that's already free or VIP
+        (its `download.php` doc: "no refunds"), so Seshat only wedges a
+        torrent it has seen is not free (D28, D29).
+        """
+        return self.torrent_free is not None and self.torrent_vip is not None
+
+    @property
     def is_free(self) -> bool:
         """True if the torrent is free by any mechanism (VIP, FL, personal FL)."""
         if self.is_vip:
@@ -174,8 +186,11 @@ def evaluate_policy(
         return PolicyDecision(action="skip", tier="vip_required")
 
     # Step 4: Wedge path. If the user allows wedge spending and has
-    # enough wedges above the reserve, we can make it free.
-    if config.use_wedge:
+    # enough wedges above the reserve, we can make it free. Only for a
+    # torrent MAM confirmed isn't free: with the status unknown, fall
+    # through to a paid grab (or a free_only skip) rather than risk a
+    # non-refundable wedge on a torrent that was free all along.
+    if config.use_wedge and ctx.free_status_known:
         wedges = ctx.user_wedges
         if wedges is not None and wedges > config.min_wedges_reserved:
             return PolicyDecision(action="grab", tier="wedge", use_wedge=True)

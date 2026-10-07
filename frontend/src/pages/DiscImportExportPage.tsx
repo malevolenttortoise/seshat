@@ -16,6 +16,7 @@ import { api } from "../api";
 import { Btn } from "../components/Btn";
 import { Spin } from "../components/Spin";
 import { ExportModal } from "../components/ExportModal";
+import { MamLinkHint, isMamLine } from "../components/manualGrab/MamLinkHint";
 import { useViewport } from "../hooks/useViewport";
 import { useMobileCodepath } from "../components/mobile";
 import MobileImportExportPage from "./MobileImportExportPage";
@@ -76,7 +77,7 @@ function DesktopImportExportPage() {
     const lines = urls
       .split("\n")
       .map((u) => u.trim())
-      .filter((u) => u.startsWith("http"));
+      .filter((u) => u.startsWith("http") && !isMamLine(u));
     if (!lines.length) return;
     setFetching(true);
     setResults(null);
@@ -174,6 +175,7 @@ function DesktopImportExportPage() {
             resize: "vertical",
           }}
         />
+        <MamLinkHint text={urls} />
         <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 12 }}>
           <Btn variant="accent" onClick={fetchPreview} disabled={fetching || !urls.trim()}>
             {fetching ? (

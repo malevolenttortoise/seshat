@@ -147,6 +147,12 @@ def set_current_token(token: str) -> None:
     it automatically via `handle_response_cookie()`.
     """
     global _current_token
+    if token != _current_token:
+        # A different cookie may be a different account: drop the cached
+        # status (keyed per account, not per cookie). Rotation goes
+        # through `handle_response_cookie` and keeps it.
+        from app.mam import user_status
+        user_status.invalidate_cache()
     _current_token = token
 
 

@@ -34,6 +34,7 @@ class TestRegistryShape:
         must_fire = {
             events.PIPELINE_ERROR,
             events.GRAB_BUFFER_BLOCKED,
+            events.GRAB_FAILED,
             events.SOURCE_GOODREADS_CANARY_FAILED,
             events.SOURCE_METADATA_CACHE_ERROR,
         }
@@ -114,7 +115,9 @@ class TestRegistryLookups:
     def test_by_prefix_grab(self):
         grab_events = events.by_prefix("grab")
         names = {e.name for e in grab_events}
-        assert names == {events.GRAB_SUCCESS, events.GRAB_BUFFER_BLOCKED}
+        assert names == {
+            events.GRAB_SUCCESS, events.GRAB_BUFFER_BLOCKED, events.GRAB_FAILED,
+        }
 
     def test_by_prefix_with_trailing_dot(self):
         a = {e.name for e in events.by_prefix("grab")}

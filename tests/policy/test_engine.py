@@ -23,6 +23,17 @@ def _ctx(**overrides) -> EconomicContext:
     return EconomicContext(**overrides)
 
 
+def _paid(**overrides) -> EconomicContext:
+    """A torrent MAM's search API confirmed is NOT free (the only kind a
+    wedge may be spent on, D29)."""
+    fields = dict(
+        torrent_vip=False, torrent_free=False, torrent_fl_vip=False,
+        personal_freeleech=False,
+    )
+    fields.update(overrides)
+    return EconomicContext(**fields)
+
+
 # ─── VIP fast-path ──────────────────────────────────────────
 
 
@@ -135,7 +146,7 @@ class TestVipOnly:
 class TestWedgePath:
     def test_wedge_used_when_available(self):
         d = evaluate_policy(
-            _ctx(user_wedges=100),
+            _paid(user_wedges=100),
             _default_config(use_wedge=True),
         )
         assert d.action == "grab"
@@ -144,7 +155,7 @@ class TestWedgePath:
 
     def test_wedge_respects_reserve(self):
         d = evaluate_policy(
-            _ctx(user_wedges=5),
+            _paid(user_wedges=5),
             _default_config(use_wedge=True, min_wedges_reserved=10),
         )
         # Not enough wedges above reserve — falls through.
@@ -153,14 +164,14 @@ class TestWedgePath:
     def test_wedge_at_exactly_reserve_skips(self):
         # Wedges == reserve means we'd drop TO zero reserve, not stay above.
         d = evaluate_policy(
-            _ctx(user_wedges=10),
+            _paid(user_wedges=10),
             _default_config(use_wedge=True, min_wedges_reserved=10),
         )
         assert d.tier != "wedge"
 
     def test_wedge_one_above_reserve_grabs(self):
         d = evaluate_policy(
-            _ctx(user_wedges=11),
+            _paid(user_wedges=11),
             _default_config(use_wedge=True, min_wedges_reserved=10),
         )
         assert d.action == "grab"
@@ -169,7 +180,7 @@ class TestWedgePath:
 
     def test_wedge_not_used_when_disabled(self):
         d = evaluate_policy(
-            _ctx(user_wedges=100),
+            _paid(user_wedges=100),
             _default_config(use_wedge=False),
         )
         assert d.use_wedge is False
@@ -178,15 +189,34 @@ class TestWedgePath:
         # If user_wedges is None (API lookup failed/skipped), don't
         # try to use wedges.
         d = evaluate_policy(
-            _ctx(user_wedges=None),
+            _paid(user_wedges=None),
             _default_config(use_wedge=True),
         )
         assert d.tier != "wedge"
 
+    def test_unknown_free_status_never_wedges(self):
+        """The lookup failed (a new torrent beat MAM's search index): MAM
+        would spend the wedge even if the torrent were free. Grab paid."""
+        d = evaluate_policy(
+            _ctx(user_wedges=100),
+            _default_config(use_wedge=True),
+        )
+        assert d.action == "grab"
+        assert d.use_wedge is False
+        assert d.tier != "wedge"
+
+    def test_unknown_free_status_under_free_only_skips(self):
+        d = evaluate_policy(
+            _ctx(user_wedges=100),
+            _default_config(use_wedge=True, free_only=True),
+        )
+        assert d.action == "skip"
+        assert d.tier == "free_required"
+
     def test_wedge_reserve_skip_when_free_only(self):
         # use_wedge=True but not enough wedges, AND free_only=True.
         d = evaluate_policy(
-            _ctx(user_wedges=5),
+            _paid(user_wedges=5),
             _default_config(use_wedge=True, min_wedges_reserved=10, free_only=True),
         )
         assert d.action == "skip"
@@ -333,7 +363,7 @@ class TestPolicyPriority:
     def test_wedge_beats_ratio_floor(self):
         # Wedge makes the torrent free, so ratio doesn't matter.
         d = evaluate_policy(
-            _ctx(user_ratio=0.1, user_wedges=50),
+            _paid(user_ratio=0.1, user_wedges=50),
             _default_config(use_wedge=True, ratio_floor=100.0),
         )
         assert d.action == "grab"

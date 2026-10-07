@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from app.mam.cookie import MAM_SEARCH_URL, _do_post
+from app.mam.size import parse_size_to_bytes
 
 _log = logging.getLogger("seshat.mam")
 
@@ -52,7 +53,7 @@ class TorrentInfo:
     personal_freeleech: bool
     category: str       # e.g. "Audiobooks - Urban Fantasy"
     title: str
-    size: str           # e.g. "6324306932" (bytes as string)
+    size: str           # as MAM sends it, e.g. "1.2 GiB"; use `size_bytes`
     # Bibliographic fields — populated from the same search response.
     authors: dict[str, str] = field(default_factory=dict)    # {mam_id: name}
     narrators: dict[str, str] = field(default_factory=dict)  # {mam_id: name}
@@ -82,6 +83,15 @@ class TorrentInfo:
     seeders: int = 0
     times_completed: int = 0
     added: str = ""             # MAM-formatted upload timestamp
+    # Phase 0 snatch safety — MAM's own record that this account has
+    # already downloaded the torrent (before Seshat, by hand, or by an
+    # earlier grab). Part of the baseline response; no opt-in flag.
+    my_snatched: bool = False
+
+    @property
+    def size_bytes(self) -> Optional[int]:
+        """`size` in bytes. MAM sends "1.2 GiB"; never `int(size)` it."""
+        return parse_size_to_bytes(self.size)
 
 
 # ─── In-memory cache ────────────────────────────────────────
@@ -92,6 +102,20 @@ _cache: dict[str, tuple[float, TorrentInfo]] = {}
 def invalidate_cache() -> None:
     """Clear the torrent-info cache."""
     _cache.clear()
+
+
+def cached_torrent_info(
+    torrent_id: str, ttl: int = _CACHE_TTL,
+) -> Optional[TorrentInfo]:
+    """The cached result for `torrent_id` if still fresh, else None.
+
+    Lets a paced caller skip the pacer on a cache hit, since a hit
+    costs MAM nothing.
+    """
+    entry = _cache.get(torrent_id)
+    if entry is None or time.monotonic() - entry[0] >= ttl:
+        return None
+    return entry[1]
 
 
 # ─── Public API ─────────────────────────────────────────────
@@ -164,7 +188,10 @@ async def get_torrent_info(
     try:
         resp = await _do_post(MAM_SEARCH_URL, token=token, payload=payload, timeout=15)
     except Exception as exc:
-        raise TorrentInfoError(f"network error: {exc}") from exc
+        # A timeout's str() is empty; name the exception instead.
+        raise TorrentInfoError(
+            f"network error: {str(exc) or type(exc).__name__}"
+        ) from exc
 
     if resp.status_code != 200:
         raise TorrentInfoError(f"HTTP {resp.status_code} from search API")
@@ -179,7 +206,7 @@ async def get_torrent_info(
 
     items = data.get("data", [])
     if not items:
-        raise TorrentInfoError(f"torrent {torrent_id} not found in search results")
+        raise TorrentNotFoundError(f"torrent {torrent_id} not found in search results")
 
     item = items[0]
 
@@ -210,6 +237,7 @@ async def get_torrent_info(
         seeders=int(item.get("seeders") or 0),
         times_completed=int(item.get("times_completed") or 0),
         added=str(item.get("added", "")),
+        my_snatched=_to_bool(item.get("my_snatched")),
     )
 
     _cache[torrent_id] = (now, info)
@@ -362,3 +390,15 @@ def mam_cover_url(torrent_id: str) -> str:
 
 class TorrentInfoError(Exception):
     """Raised when the torrent-info lookup fails."""
+
+
+class TorrentNotFoundError(TorrentInfoError):
+    """MAM answered, but the torrent is not in its index any more.
+
+    Removed by staff, deleted by the uploader, trumped or restricted —
+    a permanent condition (ADR-0006), unlike the transient failures
+    (network, 5xx, empty response) that stay plain `TorrentInfoError`.
+    Subclassing keeps every existing `except TorrentInfoError` working,
+    and the message keeps the "not found in search results" wording
+    that `app/quality/pipeline.py` matches on.
+    """

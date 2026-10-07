@@ -71,13 +71,30 @@ _cache: dict[str, tuple[float, UserStatus]] = {}
 
 
 def _cache_key(token: str) -> str:
-    """Derive a cache key from the token (first 16 chars for privacy)."""
-    return token[:16] if token else ""
+    """One entry for the account, whatever the cookie value.
+
+    Keyed by the token until 2026-10-06, but MAM rotates the `mam_id`
+    cookie on every jsonLoad response, so the next read always carried a
+    new token and the 5-minute cache never hit: every status read was a
+    MAM call. Seshat runs one MAM account; a newly saved cookie clears
+    the cache instead (`cookie.set_current_token`).
+    """
+    return "account"
 
 
 def invalidate_cache() -> None:
     """Clear the user-status cache (e.g. after a cookie rotation)."""
     _cache.clear()
+
+
+def cached_user_status(
+    token: Optional[str], ttl: int = _CACHE_TTL,
+) -> Optional[UserStatus]:
+    """The cached status for `token` if still fresh, else None (no MAM call)."""
+    entry = _cache.get(_cache_key(token or ""))
+    if entry is None or time.monotonic() - entry[0] >= ttl:
+        return None
+    return entry[1]
 
 
 def update_cache_from_buy(
@@ -156,7 +173,7 @@ async def get_user_status(
     try:
         resp = await _do_get(MAM_USER_URL, token=token, timeout=15)
     except Exception as exc:
-        raise UserStatusError(f"network error: {exc}") from exc
+        raise UserStatusError(f"network error: {str(exc) or type(exc).__name__}") from exc
 
     if resp.status_code != 200:
         raise UserStatusError(f"HTTP {resp.status_code} from jsonLoad.php")

@@ -39,7 +39,25 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  # Publish gate (Phase 0 S3, 2026-10-06): no image is pushed from a
+  # commit whose suite is red. Before this, a red Tests run still rolled
+  # `:development-slim` — which is what Mark's container runs.
+  #
+  # Tag builds skip it: a `vX.Y.Z` tag points at a commit already tested
+  # by its push to `main` (same reasoning as tests.yml). So does a
+  # dispatched rebuild of an old tag.
+  tests:
+    if: github.ref_type != 'tag'
+    uses: ./.github/workflows/tests.yml
+    permissions:
+      contents: read
+
   build-and-push:
+    needs: tests
+    # `skipped` = a tag build; anything else (failure, cancelled) builds
+    # nothing. `!cancelled()` is what lets this job evaluate at all when
+    # `tests` was skipped.
+    if: ${{ !cancelled() && (needs.tests.result == 'success' || needs.tests.result == 'skipped') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

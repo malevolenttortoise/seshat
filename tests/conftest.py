@@ -90,6 +90,16 @@ def _isolated_data_dir(tmp_path_factory):
     # tests/orchestrator/test_dispatch_stagger.py is the one place that
     # actually exercises the stagger, and it patches `load_settings`
     # itself, so it is unaffected by this default.
+    #
+    # Set in DEFAULT_SETTINGS too, not just the file: `load_settings`
+    # merges the file over the defaults, and dozens of tests rewrite
+    # settings.json through `save_settings`. Any rewrite without these
+    # keys used to bring the 2s stagger back for every later test —
+    # silently in CI, where the directories ahead of tests/orchestrator/
+    # do that (test_dispatch tests took ~2.4s each there; a 30-grab test
+    # timed out).
+    mp.setitem(config.DEFAULT_SETTINGS, "qbit_add_stagger_s", 0)
+    mp.setitem(config.DEFAULT_SETTINGS, "qbit_add_stagger_jitter_s", 0)
     (data_dir / "settings.json").write_text(
         json.dumps({
             "qbit_add_stagger_s": 0,
@@ -114,6 +124,97 @@ def _isolated_data_dir(tmp_path_factory):
         config._settings_cache["data"] = None
         config._settings_cache["mtime"] = None
         mp.undo()
+
+
+# Modules some tests `importlib.reload()` to re-read env vars
+# (tests/test_config.py, tests/metadata/test_goodreads_*.py).
+_RELOADED_BY_TESTS = (
+    "app.config",
+    "app.metadata.id_cache",
+    "app.metadata.goodreads_session",
+    "app.metadata.goodreads_bibliography",
+)
+
+
+@pytest.fixture(autouse=True)
+def _undo_module_reloads():
+    """Put back the globals of any module a test reloaded.
+
+    `importlib.reload` re-runs a module in its SAME `__dict__`, so every
+    `from app.config import load_settings` elsewhere then reads the
+    reloaded globals, and nothing ever reloaded them back. After
+    `test_goodreads_bibliography` reloaded `app.config` with DATA_DIR
+    set to its own tmp dir, every later test read settings from that
+    dead directory: fresh defaults, so the qBit add stagger came back
+    (~2.4s per test_dispatch test in CI) and a 30-grab test timed out.
+    It also quietly undid `_isolated_data_dir` for the rest of the run.
+    """
+    import sys
+
+    snaps = {
+        name: dict(sys.modules[name].__dict__)
+        for name in _RELOADED_BY_TESTS if name in sys.modules
+    }
+    yield
+    for name, snap in snaps.items():
+        mod = sys.modules.get(name)
+        if mod is None:
+            continue
+        current = mod.__dict__
+        for key in [k for k in current if k not in snap]:
+            del current[key]
+        for key, value in snap.items():
+            if current.get(key) is not value:
+                current[key] = value
+
+
+@pytest.fixture(autouse=True)
+def _no_real_mam(monkeypatch):
+    """The suite never talks to the real MAM.
+
+    Until 2026-10-06 it did: any test that drove the dispatcher with a
+    non-empty `mam_token` but no `fake_mam` fixture reached
+    `get_torrent_info` / the cover fetch through the real module-level
+    httpx clients — 44 search-API POSTs and 6 CDN GETs per run, all
+    with a junk `mam_id`, twice per push in CI (one per Python
+    version). The tests passed only because they fail open on errors.
+
+    Both MAM clients (`app.mam.cookie` and the discovery source's own)
+    start every test as a client whose transport refuses with a
+    ConnectError — the same "network down" the fail-open paths already
+    handle. The getters fall back to it after an app-lifespan shutdown
+    nulls the client, instead of lazily building a real one. A test
+    that installs its own client (`fake_mam`, or setting `_client`
+    directly) still gets it: the patched getters return `_client`
+    whenever it is set.
+    """
+    from app.discovery.sources import mam as disco_mam
+    from app.mam import cookie, search_pacer, torrent_info
+
+    # The torrent-info cache is module-level with a 120s TTL, so a test
+    # could see torrent IDs (and their authors) cached by an earlier one
+    # — which is how a CI-only deadlock hid behind test order.
+    torrent_info.invalidate_cache()
+    # Manual Grab's pacer remembers when the last MAM call ended; a
+    # leftover timestamp would make the next test sleep the real gap.
+    search_pacer.reset()
+    # Same for the live session token: `DispatcherDeps.live_mam_token()`
+    # prefers it over the deps' own token, so a cookie rotated by one
+    # test (`test_user_status`) leaked into every later dispatch — the
+    # lifespan smoke test failed whenever it ran after that file.
+    monkeypatch.setattr(cookie, "_current_token", None)
+
+    def _refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError(
+            f"test suite tried to contact real MAM: {request.url}",
+            request=request,
+        )
+
+    guard = httpx.AsyncClient(transport=httpx.MockTransport(_refuse))
+    for mod, getter in ((cookie, "get_client"), (disco_mam, "_get_client")):
+        monkeypatch.setattr(mod, "_client", guard)
+        monkeypatch.setattr(mod, getter, lambda mod=mod: mod._client or guard)
+    yield guard
 
 
 @pytest.fixture

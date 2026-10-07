@@ -7,8 +7,9 @@ Periodically:
   2. Calls `ledger.reconcile_with_qbit()` to update seedtimes and
      release rows that have hit the threshold (or vanished from qBit)
   3. As long as the ledger has freed-up budget, pops grabs from
-     `pending_queue` and submits them to qBit, recording each in
-     the ledger
+     `pending_queue` and submits their SAVED .torrent bytes to qBit,
+     recording each in the ledger — never re-fetching from MAM
+     (snatch safety, ADR-0022)
 
 This is the function that turns the static "park grabs in a queue
 when budget is full" logic into a real flow that actually drains
@@ -30,10 +31,10 @@ import logging
 from dataclasses import dataclass
 from typing import Optional
 
-from app.clients.base import TorrentClient
-from app.mam.grab import GrabResult
+from app.clients.base import AddResult, TorrentClient
 from app.mam.torrent_meta import BencodeError, info_hash
-from app.orchestrator.dispatch import DispatcherDeps
+from app.orchestrator import torrent_store
+from app.orchestrator.dispatch import DispatcherDeps, add_to_client
 from app.orchestrator.download_folders import translate_path
 from app.orchestrator.download_watcher import (
     TorrentSnap,
@@ -240,6 +241,13 @@ async def _tick_inner(deps: DispatcherDeps, db) -> TickResult:
     )
 
     # ── Phase 3: drain the queue while budget has room ──────
+    # Queued grabs carry their .torrent bytes on disk (`torrent_store`),
+    # so a pop never touches MAM's download endpoint. Before the bytes
+    # go to qBit, one search-API call checks the torrent is still on
+    # MAM: removed → fail the grab (in qBit it would sit at 0% forever);
+    # check unreachable → HOLD the whole queue until the next tick (Mark,
+    # Phase 0 kickoff) — the next grab would hit the same outage. A
+    # missing saved file fails the grab loudly; it is never re-fetched.
     pops_attempted = 0
     pops_submitted = 0
     pops_failed = 0
@@ -249,14 +257,65 @@ async def _tick_inner(deps: DispatcherDeps, db) -> TickResult:
         if budget_used >= deps.budget_cap:
             break
 
-        next_grab = await queue_mod.pop_next(db)
-        if next_grab is None:
+        head = await queue_mod.peek_next(db)
+        if head is None:
+            break
+        grab = await grabs_storage.get_grab(db, head.grab_id)
+        if grab is None:
+            _log.warning(
+                "budget watcher: queued grab_id=%d not found in grabs table",
+                head.grab_id,
+            )
+            await queue_mod.take(db, head.grab_id)
+            continue
+
+        torrent_bytes = torrent_store.load(grab.torrent_file_path)
+        if torrent_bytes is None:
+            if await queue_mod.take(db, grab.id):
+                pops_attempted += 1
+                pops_failed += 1
+                await torrent_store.fail_missing_file(db, grab)
+            continue
+
+        liveness = await torrent_store.check_still_on_mam(
+            grab.mam_torrent_id, deps.live_mam_token(),
+        )
+        if liveness == "unreachable":
+            _log.info(
+                "budget watcher: holding the queue — couldn't confirm "
+                "tid=%s (grab_id=%d) is still on MAM; retrying next tick",
+                grab.mam_torrent_id, grab.id,
+            )
             break
 
+        # Someone else (a delayed-rotation during an inject) may have
+        # taken this grab while the liveness check was out.
+        if not await queue_mod.take(db, grab.id):
+            continue
         pops_attempted += 1
-        ok = await _resubmit_queued_grab(deps, db, next_grab.grab_id)
-        if ok:
+
+        if liveness == "removed":
+            detail = (
+                f"torrent {grab.mam_torrent_id} was removed from MAM while "
+                "queued; not sent to qBit"
+            )
+            _log.warning("budget watcher: grab_id=%d %s", grab.id, detail)
+            await grabs_storage.set_state(
+                db, grab.id, grabs_storage.STATE_FAILED_TORRENT_GONE,
+                failed_reason=detail,
+            )
+            torrent_store.discard(grab.torrent_file_path)
+            await torrent_store.notify_grab_failed(grab.id, detail)
+            pops_failed += 1
+            continue
+
+        outcome = await _resubmit_queued_grab(
+            deps, db, grab, head, torrent_bytes,
+        )
+        if outcome == "submitted":
             pops_submitted += 1
+        elif outcome == "held":
+            break
         else:
             pops_failed += 1
 
@@ -276,137 +335,86 @@ async def _tick_inner(deps: DispatcherDeps, db) -> TickResult:
 
 
 async def _resubmit_queued_grab(
-    deps: DispatcherDeps, db, grab_id: int
-) -> bool:
-    """Re-fetch a queued grab's .torrent file and submit to qBit.
+    deps: DispatcherDeps,
+    db,
+    grab: grabs_storage.GrabRow,
+    item: queue_mod.QueuedGrab,
+    torrent_bytes: bytes,
+) -> str:
+    """Submit a popped grab's saved bytes to qBit.
 
-    Phase 1 design choice: queued grabs do NOT persist their
-    .torrent bytes to disk (see the dispatcher comment for the
-    rationale). The budget watcher re-fetches at pop time. The
-    cost is one extra MAM HTTP request per pop; the benefit is
-    that a Seshat crash never leaves orphan .torrent files lying
-    around in the data dir.
-
-    Returns True on successful submission, False on any failure.
-    Failed grabs are marked with the appropriate `failed_*` state
-    so the cookie-rotation retry job can find them.
+    Returns "submitted", "held" (qBit unreachable: the grab is put back
+    exactly where it was in the queue, bytes kept, and the drain stops
+    for this tick), or "failed" (a terminal state; the saved file is
+    deleted). The caller has already taken the grab out of the queue.
     """
-    grab = await grabs_storage.get_grab(db, grab_id)
-    if grab is None:
-        _log.warning(
-            f"budget watcher: queued grab_id={grab_id} not found in grabs table"
-        )
-        return False
-
-    fetch_result: GrabResult = await deps.fetch_torrent(
-        grab.mam_torrent_id, deps.live_mam_token()
-    )
-
-    if not fetch_result.success:
-        failed_state = _grab_failure_state(fetch_result)
-        await grabs_storage.set_state(
-            db,
-            grab_id,
-            failed_state,
-            failed_reason=fetch_result.failure_detail,
-        )
-        _log.debug(
-            f"budget watcher: queued grab_id={grab_id} fetch failed "
-            f"({fetch_result.failure_kind}: {fetch_result.failure_detail})"
-        )
-        return False
-
-    torrent_bytes = fetch_result.torrent_bytes or b""
     try:
         qbit_hash = info_hash(torrent_bytes)
     except BencodeError as e:
         await grabs_storage.set_state(
             db,
-            grab_id,
+            grab.id,
             grabs_storage.STATE_FAILED_QBIT_REJECTED,
             failed_reason=f"unparseable torrent file: {e}",
         )
-        return False
+        torrent_store.discard(grab.torrent_file_path)
+        return "failed"
 
-    # Compute the save path based on the folder structure setting —
-    # same logic as the dispatcher's submit path. Without this, queued
-    # grabs land in the bare download root instead of the organized
-    # subfolder, and the pipeline scans the entire root for files.
-    save_path = None
-    if deps.qbit_download_path:
-        from app.orchestrator.download_folders import (
-            compute_download_folder,
-            ensure_folder_exists,
-            translate_path,
-        )
-        # Queued retries operate on raw IRC announce data — series +
-        # title aren't known at this point. Template-mode segments
-        # referencing {series}/{title} drop out as empty per the
-        # template renderer's contract; {author} resolves normally.
-        save_path = compute_download_folder(
-            deps.qbit_download_path,
-            deps.download_folder_structure,
-            author_name=grab.author_blob if grab else "",
-            template=deps.download_folder_template,
-        )
-        if save_path:
-            local_save_path = translate_path(
-                save_path, deps.qbit_path_prefix, deps.local_path_prefix
-            )
-            ensure_folder_exists(local_save_path)
-
-    add_result = await deps.qbit.add_torrent(
-        torrent_bytes, category=deps.qbit_category,
-        save_path=save_path,
-        tags=deps.qbit_tags or None,
+    # Queued retries operate on raw IRC announce data — series +
+    # title aren't known at this point. Template-mode segments
+    # referencing {series}/{title} drop out as empty per the
+    # template renderer's contract; {author} resolves normally.
+    add_result = await add_to_client(
+        deps,
+        grab_id=grab.id,
+        torrent_bytes=torrent_bytes,
+        author_blob=grab.author_blob,
     )
 
     if not add_result.success:
-        failed_state = (
-            grabs_storage.STATE_FAILED_QBIT_REJECTED
-            if add_result.failure_kind == "rejected"
-            else grabs_storage.STATE_FAILED_UNKNOWN
-        )
+        if add_result.failure_kind in ("auth_failed", "network_error"):
+            await queue_mod.restore(db, item)
+            _log.info(
+                "budget watcher: qBit unreachable for queued grab_id=%d "
+                "(%s); kept in the queue",
+                grab.id, add_result.failure_kind,
+            )
+            return "held"
         await grabs_storage.set_state(
             db,
-            grab_id,
-            failed_state,
+            grab.id,
+            _add_failure_state(add_result),
             failed_reason=add_result.failure_detail,
             qbit_hash=qbit_hash,
         )
+        torrent_store.discard(grab.torrent_file_path)
         _log.debug(
-            f"budget watcher: queued grab_id={grab_id} qBit submit failed "
+            f"budget watcher: queued grab_id={grab.id} qBit submit failed "
             f"({add_result.failure_kind}: {add_result.failure_detail})"
         )
-        return False
+        return "failed"
 
     await grabs_storage.set_state(
         db,
-        grab_id,
+        grab.id,
         grabs_storage.STATE_SUBMITTED,
         qbit_hash=qbit_hash,
     )
-    await ledger_mod.record_grab(db, grab_id, qbit_hash)
+    await ledger_mod.record_grab(db, grab.id, qbit_hash)
+    torrent_store.discard(grab.torrent_file_path)
     _log.debug(
-        f"budget watcher: queued grab_id={grab_id} submitted to qBit "
+        f"budget watcher: queued grab_id={grab.id} submitted to qBit "
         f"(hash={qbit_hash})"
     )
-    return True
+    return "submitted"
 
 
-def _grab_failure_state(result: GrabResult) -> str:
-    """Map a GrabResult.failure_kind to a `grabs.state` value.
-
-    Same logic as the dispatcher's helper. Duplicated rather than
-    imported because the dispatcher's version is private and
-    pulling it across module boundaries would couple the watcher
-    to dispatch internals more tightly than is healthy.
-    """
-    kind = result.failure_kind
-    if kind == "cookie_expired":
-        return grabs_storage.STATE_FAILED_COOKIE_EXPIRED
-    if kind == "torrent_not_found":
-        return grabs_storage.STATE_FAILED_TORRENT_GONE
+def _add_failure_state(result: AddResult) -> str:
+    """Map a permanent AddResult failure to a `grabs.state` value."""
+    if result.failure_kind == "rejected":
+        return grabs_storage.STATE_FAILED_QBIT_REJECTED
+    if result.failure_kind == "duplicate":
+        return grabs_storage.STATE_DUPLICATE_IN_QBIT
     return grabs_storage.STATE_FAILED_UNKNOWN
 
 

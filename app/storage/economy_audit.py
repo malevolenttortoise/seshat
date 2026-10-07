@@ -41,6 +41,8 @@ ACTION_VIP = "vip"
 ACTION_UPLOAD = "upload"
 ACTION_PERSONAL_FL = "personal_fl"
 ACTION_BUFFER_GATE_BLOCK = "buffer_gate_block"
+# A freeleech wedge spent through `download.php?fl` (D30).
+ACTION_WEDGE = "wedge"
 
 TRIGGER_SCHEDULED = "scheduled"
 TRIGGER_MANUAL = "manual"

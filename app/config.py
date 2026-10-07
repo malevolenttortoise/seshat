@@ -742,8 +742,9 @@ DEFAULT_SETTINGS = {
     # `manual_wedge_offer_enabled` controls the "use a wedge for
     # this one" checkbox (drains pool, overrides global
     # policy_use_wedge=False on a per-grab basis).
-    # `fl_wedge_offer_enabled` controls the "buy personal FL (50k
-    # BP) for this one" checkbox (calls bonusBuy spendtype=personalFL).
+    # `fl_wedge_offer_enabled` is retired (2026-10-07): it showed a
+    # "buy personal FL" checkbox, but MAM refuses spendtype=personalFL
+    # via the API. Kept so existing settings files still load.
     "mam_economy_manual_wedge_offer_enabled": False,
     "mam_economy_fl_wedge_offer_enabled": False,
 

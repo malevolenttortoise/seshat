@@ -32,6 +32,7 @@ from typing import Optional
 # Grab events (autograb / IRC pickup pipeline).
 GRAB_SUCCESS = "grab.success"
 GRAB_BUFFER_BLOCKED = "grab.buffer_blocked"
+GRAB_FAILED = "grab.failed"
 
 # Pipeline events (post-download, pre-library).
 PIPELINE_DOWNLOAD_COMPLETE = "pipeline.download_complete"
@@ -102,6 +103,21 @@ _REGISTRY_ENTRIES: tuple[EventMeta, ...] = (
         suppressible_during_quiet_hours=False,
         legacy_setting_key="notify_on_buffer_gate_block",
         legacy_requires_master=True,
+    ),
+    EventMeta(
+        # Snatch safety (ADR-0022): a grab whose .torrent Seshat already
+        # holds can't be re-fetched, so when it can't reach qBit (saved
+        # file missing, torrent removed from MAM while queued) the user
+        # has to know. No legacy key: on unless notifications are off.
+        name=GRAB_FAILED,
+        description=(
+            "A queued or delayed grab could not be sent to qBit and "
+            "will not be retried (saved .torrent missing, or the torrent "
+            "was removed from MAM)."
+        ),
+        default_priority=4,
+        default_tags=("warning",),
+        suppressible_during_quiet_hours=False,
     ),
     # ── Pipeline ────────────────────────────────────────────
     EventMeta(
