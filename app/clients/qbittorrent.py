@@ -345,12 +345,24 @@ class QbitClient:
 
         Returns a list of `TorrentInfo` snapshots. Filters by category
         if one is provided. Returns an empty list on auth failure or
-        network errors so the caller (the budget watcher) can degrade
-        gracefully — no surprise exceptions in a long-running poll loop.
+        network errors so callers can degrade gracefully — no surprise
+        exceptions in a long-running poll loop. The budget watcher uses
+        `list_torrents_checked`, which tells a failure from an empty list.
+        """
+        return await self.list_torrents_checked(category) or []
+
+    async def list_torrents_checked(
+        self, category: Optional[str] = None
+    ) -> Optional[list[TorrentInfo]]:
+        """`list_torrents`, but None when the list couldn't be read.
+
+        The snatch ledger must not reconcile against a failed read: an
+        empty list looks like every torrent was removed, which released
+        every active row at once (2026-10 audit issue 09).
         """
         if not await self._ensure_logged_in():
             _log.warning("qBit list_torrents: not authenticated")
-            return []
+            return None
 
         params = {}
         if category:
@@ -372,12 +384,12 @@ class QbitClient:
             # never learns qBit went down.
             self._logged_in = False
             _log.warning(f"qBit list_torrents transport error: {type(e).__name__}: {e}")
-            return []
+            return None
 
         if resp.status_code == 403:
             self._logged_in = False
             _log.info("qBit list_torrents got 403; session expired")
-            return []
+            return None
 
         if resp.status_code != 200:
             # Anything that isn't 200 or 403 (500s, 502 from a reverse
@@ -386,13 +398,13 @@ class QbitClient:
             # reports false until we successfully re-auth.
             self._logged_in = False
             _log.warning(f"qBit list_torrents unexpected HTTP {resp.status_code}")
-            return []
+            return None
 
         try:
             raw = resp.json()
         except json.JSONDecodeError as e:
             _log.warning(f"qBit list_torrents invalid JSON: {e}")
-            return []
+            return None
 
         return [_parse_torrent(t) for t in raw]
 

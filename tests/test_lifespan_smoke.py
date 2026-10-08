@@ -138,8 +138,8 @@ class TestEndToEndPipeline:
 
         # Production-shaped on_announce: bridge IrcClient → dispatcher.
         # Same exact wiring as main.py's lifespan.
-        async def on_announce(announce):
-            await handle_announce(deps, announce)
+        async def on_announce(announce, raw_line=""):
+            await handle_announce(deps, announce, raw_line=raw_line)
 
         config = IrcConfig(
             server="fake",
@@ -280,8 +280,8 @@ class TestEndToEndPipeline:
             qbit=qbit,
         )
 
-        async def on_announce(announce):
-            await handle_announce(deps, announce)
+        async def on_announce(announce, raw_line=""):
+            await handle_announce(deps, announce, raw_line=raw_line)
 
         config = IrcConfig(
             nick="smokebot", account="acct", password="pass",

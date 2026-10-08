@@ -10,7 +10,16 @@ import { api } from "../api";
 import { useTheme } from "../theme";
 import type { Theme } from "../theme";
 import { Spin } from "../components/Spin";
-import { fmtBytes, fmtDuration, fmtNum, fmtRatio, pct } from "../lib/format";
+import {
+  fmtBytes,
+  fmtDuration,
+  fmtMamBudget,
+  fmtMamNotSeeding,
+  fmtNum,
+  fmtRatio,
+  pct,
+  type MamBudgetFields,
+} from "../lib/format";
 import { useVisibleInterval } from "../hooks/useVisibleInterval";
 import { useVisibleEventSource } from "../hooks/useVisibleEventSource";
 import { useSseEvents } from "../providers/SseEventsProvider";
@@ -80,7 +89,7 @@ interface BudgetEntry {
   remaining_seconds?: number;
 }
 
-interface BudgetResponse {
+interface BudgetResponse extends MamBudgetFields {
   budget_used?: number;
   budget_cap?: number;
   next_release_seconds?: number;
@@ -253,7 +262,6 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
   // behavior before ABS existed). Audiobook-specific tiles are added
   // separately from `audiobookStats`.
   const owned = ebookStats?.owned_books ?? 0;
-  const total = ebookStats?.total_books ?? 0;
   const missing = ebookStats?.missing_books ?? 0;
   const upcoming = ebookStats?.upcoming_books ?? 0;
 
@@ -912,6 +920,9 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
             <span style={{ fontSize: 14, color: t.td }}>
               / {b.budget_cap ?? 0}
             </span>
+            <span style={{ fontSize: 12, color: t.td, marginLeft: 12 }}>
+              {fmtMamBudget(b)}
+            </span>
             {(b.next_release_seconds || 0) > 0 && (
               <span
                 style={{ fontSize: 12, color: t.accent, marginLeft: 12 }}
@@ -926,6 +937,11 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
               <span style={{ color: t.warn }}> · {b.queue_size} queued</span>
             )}
           </div>
+          {fmtMamNotSeeding(b) && (
+            <div style={{ fontSize: 12, color: t.warn, marginTop: 2 }}>
+              {fmtMamNotSeeding(b)}
+            </div>
+          )}
         </div>
 
         <div style={hsep} />
@@ -1127,7 +1143,7 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
               />
               <QBtn
                 label={<><Dot color={t.accent} /> Works</>}
-                onClick={() => onNav("works")}
+                onClick={() => onNav("disc-works")}
               />
             </div>
           </div>

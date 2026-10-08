@@ -488,4 +488,12 @@ async def import_add_books(data: dict = Body(...)):
                 await db.close()
         except Exception as e:
             logger.error(f"Import error for '{book_data.get('title')}': {e}")
+    if added:
+        # ADR-0010: imported books can join existing series.
+        from app.discovery.database import recompute_all_series_author_mode
+        db = await get_db()
+        try:
+            await recompute_all_series_author_mode(db, context="Import")
+        finally:
+            await db.close()
     return {"status": "ok", "added": added, "updated": updated}

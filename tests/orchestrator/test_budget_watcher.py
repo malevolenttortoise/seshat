@@ -195,9 +195,11 @@ class TestReconcile:
         finally:
             await db.close()
 
-        # qBit reports nothing — user removed the torrent.
-        qbit = _FakeQbit(torrents=[])
+        # qBit lists it once, then reports nothing — user removed it.
+        qbit = _FakeQbit(torrents=[_info("h_gone", 3600)])
         deps = _make_deps(qbit=qbit)
+        await tick(deps)
+        qbit._torrents = []
 
         result = await tick(deps)
 
@@ -501,3 +503,129 @@ class TestErrorHandling:
         assert result.error is not None
         assert "RuntimeError" in result.error
         assert "simulated qBit outage" in result.error
+
+
+# ─── Issue 09: the ledger stops losing torrents; MAM's count as floor ──
+
+
+class _FailingListQbit(_FakeQbit):
+    """A client whose list call failed (auth / network / bad answer)."""
+
+    async def list_torrents_checked(self, category=None):
+        return None
+
+
+class TestFailedListLeavesTheLedgerAlone:
+    async def test_no_release_and_no_pop(self, temp_db, mam_liveness):
+        db = await get_db()
+        try:
+            for i in range(2):
+                gid = await insert_dummy_grab(db, torrent_id=str(i))
+                await ledger_mod.record_grab(db, gid, f"h{i}")
+                await ledger_mod.update_seeding(db, f"h{i}", 3600)
+            await _queue_saved(db, torrent_id="queued")
+        finally:
+            await db.close()
+
+        qbit = _FailingListQbit()
+        result = await tick(_make_deps(qbit=qbit))
+
+        assert result.error is not None
+        assert result.removed_released == 0
+        assert result.qbit_reachable is False
+        assert result.queue_pops_attempted == 0
+        assert qbit.add_calls == []
+        assert mam_liveness["asked"] == []
+        db = await get_db()
+        try:
+            assert await ledger_mod.count_active(db) == 2
+            assert await queue_mod.size(db) == 1
+        finally:
+            await db.close()
+
+    async def test_an_empty_list_that_is_real_still_releases(self, temp_db):
+        db = await get_db()
+        try:
+            gid = await insert_dummy_grab(db)
+            await ledger_mod.record_grab(db, gid, "h1")
+            await ledger_mod.update_seeding(db, "h1", 3600)
+        finally:
+            await db.close()
+
+        class _EmptyQbit(_FakeQbit):
+            async def list_torrents_checked(self, category=None):
+                return []
+
+        result = await tick(_make_deps(qbit=_EmptyQbit()))
+        assert result.removed_released == 1
+
+
+class TestNeverSeenGrace:
+    async def test_a_row_qbit_never_listed_keeps_counting(self, temp_db):
+        db = await get_db()
+        try:
+            gid = await insert_dummy_grab(db)
+            await ledger_mod.record_grab(db, gid, "h_new")
+        finally:
+            await db.close()
+
+        result = await tick(_make_deps(qbit=_FakeQbit(torrents=[])))
+
+        assert result.removed_released == 0
+        db = await get_db()
+        try:
+            assert await ledger_mod.count_active(db) == 1
+        finally:
+            await db.close()
+
+    async def test_released_once_the_grace_has_passed(self, temp_db):
+        db = await get_db()
+        try:
+            gid = await insert_dummy_grab(db)
+            await ledger_mod.record_grab(db, gid, "h_new")
+            await db.execute(
+                "UPDATE grabs SET submitted_at = datetime('now', '-13 hours') WHERE id = ?",
+                (gid,),
+            )
+            await db.commit()
+        finally:
+            await db.close()
+
+        result = await tick(_make_deps(qbit=_FakeQbit(torrents=[])))
+        assert result.removed_released == 1
+
+
+class TestMamFloorInTheWatcher:
+    async def test_mam_count_at_cap_stops_the_drain(self, temp_db, mam_liveness):
+        from app.rate_limit import mam_floor
+        from app.rate_limit.mam_floor import MamSnatchSummary
+
+        db = await get_db()
+        try:
+            await _queue_saved(db, torrent_id="queued")
+        finally:
+            await db.close()
+        # Seshat's own ledger is empty; MAM counts 5 against a limit of 5.
+        mam_floor.record(MamSnatchSummary(5, 5, 1, None))
+
+        qbit = _FakeQbit()
+        result = await tick(_make_deps(qbit=qbit))
+
+        assert result.queue_pops_attempted == 0
+        assert qbit.add_calls == []
+        assert mam_liveness["asked"] == []
+
+    async def test_reads_mam_at_most_once_an_hour(self, temp_db, monkeypatch):
+        from app.mam import user_status
+
+        calls = []
+
+        async def fake_status(token=None, ttl=300):
+            calls.append(token)
+            raise user_status.UserStatusError("network error: refused")
+
+        monkeypatch.setattr(user_status, "get_user_status", fake_status)
+        deps = _make_deps()
+        await tick(deps)
+        await tick(deps)
+        assert calls == ["test"]

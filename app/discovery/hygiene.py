@@ -2804,6 +2804,22 @@ async def run_all() -> dict[str, Any]:
             "foreign_books_hidden": stats["foreign_books_hidden"],
         })
 
+        # ADR-0010: the jobs above merge, delete and re-point books and
+        # series; bring every series' author mode up to date (not a
+        # numbered job, so the job list and its order are unchanged).
+        from app.discovery.database import recompute_all_series_author_mode
+        for lib in libs:
+            _slug = lib.get("slug")
+            if not _slug:
+                continue
+            _db = await get_library_db(_slug)
+            try:
+                await recompute_all_series_author_mode(
+                    _db, context=f"Hygiene ({_slug})",
+                )
+            finally:
+                await _db.close()
+
         state._hygiene_progress.update({
             "running": False,
             "status": "complete" if not stats["errors"] else "complete (with errors)",

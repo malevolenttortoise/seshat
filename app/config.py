@@ -865,6 +865,36 @@ DEFAULT_SETTINGS = {
 }
 
 
+# Query parameters whose values are secrets. httpx logs every request
+# URL at INFO ("HTTP Request: GET https://...&key=<API key> ..."), and
+# users paste container logs into forum threads when they ask for help
+# (2026-10 audit L2-08; Mark, G34: keep the lines, mask the values).
+_SECRET_QUERY_RE = _re.compile(
+    r"([?&](?:key|token|api_key|apikey|passkey|mam_id)=)[^&\s\"']+",
+    _re.IGNORECASE,
+)
+
+
+def redact_url_secrets(text: str) -> str:
+    """`text` with secret query-parameter values replaced by `***`."""
+    return _SECRET_QUERY_RE.sub(r"\1***", text)
+
+
+class _RedactUrlSecrets(logging.Filter):
+    """Masks secret query values in a record before it's emitted."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            message = record.getMessage()
+        except Exception:
+            return True
+        redacted = redact_url_secrets(message)
+        if redacted != message:
+            record.msg = redacted
+            record.args = ()
+        return True
+
+
 def apply_logging(verbose: bool = False):
     """Configure log levels based on the verbose toggle."""
     level = logging.DEBUG if verbose else logging.INFO
@@ -892,7 +922,10 @@ def apply_logging(verbose: bool = False):
     ]:
         logging.getLogger(name).setLevel(level)
     # httpx is too noisy at DEBUG.
-    logging.getLogger("httpx").setLevel(logging.INFO)
+    httpx_logger = logging.getLogger("httpx")
+    httpx_logger.setLevel(logging.INFO)
+    if not any(isinstance(f, _RedactUrlSecrets) for f in httpx_logger.filters):
+        httpx_logger.addFilter(_RedactUrlSecrets())
     logging.getLogger("seshat").info(
         f"Logging set to {'VERBOSE (DEBUG)' if verbose else 'NORMAL (INFO)'}"
     )

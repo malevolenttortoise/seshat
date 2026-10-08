@@ -61,9 +61,11 @@ class _Collector:
 
     def __init__(self):
         self.announces: list[Announce] = []
+        self.raw_lines: list[str] = []
 
-    async def __call__(self, announce: Announce) -> None:
+    async def __call__(self, announce: Announce, raw_line: str = "") -> None:
         self.announces.append(announce)
+        self.raw_lines.append(raw_line)
 
 
 # ─── parse_irc_line ──────────────────────────────────────────

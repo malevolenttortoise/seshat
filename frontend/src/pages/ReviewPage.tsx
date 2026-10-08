@@ -24,6 +24,7 @@ import { useVisibleInterval } from "../hooks/useVisibleInterval";
 import { useViewport } from "../hooks/useViewport";
 import { useMobileCodepath } from "../components/mobile";
 import MobileReviewPage from "./MobileReviewPage";
+import { storedCoverUrl } from "../lib/covers";
 
 interface ReviewItem {
   id: number;
@@ -915,7 +916,7 @@ function CoverThumb({ item }: { item: ReviewItem }) {
   const activeCover = uniqueCovers[activeIdx] || null;
 
   if (activeCover) {
-    const coverUrl = `/api/v1/covers/${encodeURIComponent(activeCover)}`;
+    const coverUrl = storedCoverUrl(activeCover);
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 4, width: 120 }}>
         <img

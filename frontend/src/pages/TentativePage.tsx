@@ -22,6 +22,7 @@ import { useTheme } from "../theme";
 import { useViewport } from "../hooks/useViewport";
 import { useMobileCodepath } from "../components/mobile";
 import MobileTentativePage from "./MobileTentativePage";
+import { storedCoverUrl } from "../lib/covers";
 
 interface TentativeItem {
   id: number;
@@ -339,7 +340,7 @@ function TentativeCard({
   const when = new Date(item.created_at + "Z").toLocaleString();
 
   const coverUrl = item.cover_path
-    ? `/api/v1/covers/${encodeURIComponent(item.cover_path)}`
+    ? storedCoverUrl(item.cover_path)
     : null;
 
   // When selection mode is active, clicking anywhere on the card

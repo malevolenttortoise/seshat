@@ -11,7 +11,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { useTheme } from "../theme";
-import { fmtNum, pct } from "../lib/format";
+import { fmtNum } from "../lib/format";
 import type {
   Library,
   NavFn,

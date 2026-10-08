@@ -31,6 +31,13 @@ from app.mam.cookie import _do_get
 _log = logging.getLogger("seshat.mam")
 
 MAM_USER_URL = "https://www.myanonamouse.net/jsonLoad.php"
+# Every status read also asks for the snatch summary, MAM's own count of
+# unsatisfied torrents; the snatch budget uses it as a floor
+# (`app.rate_limit.mam_floor`, 2026-10 audit issue 09).
+_STATUS_URL = f"{MAM_USER_URL}?snatch_summary"
+
+# Logged once per process when MAM's response has no usable summary.
+_missing_summary_logged = False
 
 # Default cache TTL in seconds (5 minutes).
 _CACHE_TTL = 300
@@ -171,7 +178,7 @@ async def get_user_status(
     _log.info("Fetching MAM user status from jsonLoad.php")
 
     try:
-        resp = await _do_get(MAM_USER_URL, token=token, timeout=15)
+        resp = await _do_get(_STATUS_URL, token=token, timeout=15)
     except Exception as exc:
         raise UserStatusError(f"network error: {str(exc) or type(exc).__name__}") from exc
 
@@ -225,6 +232,7 @@ async def get_user_status(
         status.wedges,
         status.classname,
     )
+    _record_snatch_summary(data)
     # Fan economic-field deltas out to SSE subscribers. Transition-gated
     # inside the publisher so steady-state polls don't re-fire the
     # event every 60s. Best-effort — never raise out of a status fetch.
@@ -234,6 +242,30 @@ async def get_user_status(
     except Exception:
         _log.exception("mam-stats SSE publish failed (non-fatal)")
     return status
+
+
+def _record_snatch_summary(data: dict) -> None:
+    """Hand MAM's snatch summary to the budget floor; never raises."""
+    global _missing_summary_logged
+    try:
+        from app.rate_limit import mam_floor
+
+        summary = mam_floor.parse_snatch_summary(data)
+        if summary is None:
+            if not _missing_summary_logged:
+                _missing_summary_logged = True
+                _log.warning(
+                    "MAM's jsonLoad.php response has no usable snatch_summary; "
+                    "the snatch budget uses Seshat's own count"
+                )
+            return
+        mam_floor.record(summary)
+        _log.info(
+            "MAM snatch summary: unsatisfied %d/%d (%d not seeding)",
+            summary.unsat_count, summary.unsat_limit, summary.not_seeding,
+        )
+    except Exception:
+        _log.exception("snatch summary record failed (non-fatal)")
 
 
 class UserStatusError(Exception):

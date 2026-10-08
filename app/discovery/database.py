@@ -692,6 +692,10 @@ MIGRATIONS = [
     # stateless and the next hygiene run silently re-hides the book the
     # operator just said they wanted.
     "ALTER TABLE books ADD COLUMN language_swept_at REAL",
+    # ── 2026-10 audit, issue 18 (L4-01): Calibre sync looks every Calibre
+    # book up by `calibre_id` inside its loop; unindexed, 3,696 lookups
+    # took 4.07s on a real library (0.014s with the index).
+    "CREATE INDEX IF NOT EXISTS idx_books_calibre_id ON books(calibre_id)",
 ]
 
 
@@ -1144,6 +1148,25 @@ async def _backfill_series_author_mode(db) -> int:
     await _recompute_series_author(db, sids)
     await db.commit()
     return len(sids)
+
+
+async def recompute_all_series_author_mode(db, *, context: str) -> None:
+    """ADR-0010 catch-up for every series, after a run that may have
+    changed contributors, series membership or visibility.
+
+    Library syncs, source scans, hygiene and bulk resets/imports call it
+    at the end (2026-10 audit issue 10; Mark, G45): until then the only
+    catch-up was the startup backfill, so a mode went stale until the
+    next restart. ~0.13s on a 2,850-series library, and rows that
+    already say the right thing aren't written. Commits; never raises.
+    """
+    try:
+        await _backfill_series_author_mode(db)
+    except Exception:
+        _db_logger.exception(
+            "%s: series author-mode recompute failed (non-fatal; "
+            "the next run or restart catches up)", context,
+        )
 
 
 async def load_contributors(

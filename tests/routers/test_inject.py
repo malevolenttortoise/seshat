@@ -316,3 +316,59 @@ class TestInjectWedgeFlags:
             assert not any("bonusBuy" in str(r.url) for r in fake_mam.requests)
         finally:
             state.dispatcher = None
+
+
+# ─── MAM's own count as the budget floor (2026-10 audit, issue 09) ──
+
+
+class TestMamBudgetFloor:
+    async def test_mam_count_at_its_limit_queues_instead_of_submitting(self, temp_db):
+        from app.rate_limit import mam_floor
+        from app.rate_limit.mam_floor import MamSnatchSummary
+
+        # Seshat's own ledger is empty, but MAM already counts 150
+        # unsatisfied torrents against a limit of 150.
+        mam_floor.record(MamSnatchSummary(150, 150, 3, None))
+        qbit = _FakeQbit()
+        state.dispatcher = _make_deps(qbit=qbit)
+        try:
+            async with _client(_make_app()) as client:
+                resp = await client.post(
+                    "/api/v1/grabs/inject",
+                    json={"torrent_id": "1234", "torrent_name": "Test Book"},
+                )
+            assert resp.json()["action"] == "queue"
+            assert qbit.add_calls == []
+        finally:
+            state.dispatcher = None
+
+    async def test_budget_endpoint_reports_both_counts(self, temp_db):
+        from app.rate_limit import mam_floor
+        from app.rate_limit.mam_floor import MamSnatchSummary
+
+        mam_floor.record(MamSnatchSummary(34, 180, 2, 1791475283.0))
+        state.dispatcher = _make_deps()
+        try:
+            async with _client(_make_app()) as client:
+                body = (await client.get("/api/v1/grabs/budget")).json()
+            assert body["budget_used"] == 34      # MAM's count (Seshat's is 0)
+            assert body["budget_cap"] == 180      # MAM's limit is under the 200 setting
+            assert body["ledger_active"] == 0
+            assert body["mam_unsat"] == 34
+            assert body["mam_limit"] == 180
+            assert body["mam_not_seeding"] == 2
+            assert body["mam_fetched_at"] is not None
+        finally:
+            state.dispatcher = None
+
+    async def test_budget_endpoint_without_a_mam_read(self, temp_db):
+        state.dispatcher = _make_deps()
+        try:
+            async with _client(_make_app()) as client:
+                body = (await client.get("/api/v1/grabs/budget")).json()
+            assert body["budget_used"] == 0
+            assert body["budget_cap"] == 200
+            assert body["mam_unsat"] is None
+            assert body["mam_fetched_at"] is None
+        finally:
+            state.dispatcher = None

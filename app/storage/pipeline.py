@@ -26,6 +26,8 @@ PIPE_METADATA_DONE = "metadata_done"
 PIPE_AWAITING_REVIEW = "awaiting_review"
 PIPE_SUNK = "sunk"
 PIPE_COMPLETE = "complete"
+# Every book the run staged was rejected at review (2026-10 audit issue 11).
+PIPE_REJECTED = "rejected"
 PIPE_FAILED = "failed"
 
 
@@ -92,7 +94,7 @@ async def set_state(
     sets = ["state = ?", "state_updated_at = datetime('now')"]
     params: list = [state]
 
-    if state == PIPE_COMPLETE:
+    if state in (PIPE_COMPLETE, PIPE_REJECTED):
         sets.append("completed_at = datetime('now')")
 
     for field_name, value in [

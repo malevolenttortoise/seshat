@@ -144,8 +144,15 @@ class DelugeClient:
             return AddResult(success=False, failure_kind="unknown", failure_detail=str(e))
 
     async def list_torrents(self, category: Optional[str] = None) -> list[TorrentInfo]:
+        return await self.list_torrents_checked(category) or []
+
+    async def list_torrents_checked(
+        self, category: Optional[str] = None
+    ) -> Optional[list[TorrentInfo]]:
+        """`list_torrents`, but None when the list couldn't be read (the
+        snatch ledger must not reconcile against a failed read)."""
         if not await self._ensure_logged_in():
-            return []
+            return None
         try:
             filter_dict: dict = {}
             if category and self._label_plugin:
@@ -156,9 +163,9 @@ class DelugeClient:
             ])
         except Exception as e:
             _log.warning("Deluge list_torrents failed: %s", e)
-            return []
+            return None
         if not isinstance(result, dict):
-            return []
+            return None
         out: list[TorrentInfo] = []
         for h, t in result.items():
             out.append(TorrentInfo(

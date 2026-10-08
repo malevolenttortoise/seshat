@@ -551,6 +551,20 @@ class TestListTorrents:
         assert result == []
         assert client._logged_in is False
 
+    async def test_checked_list_tells_a_failure_from_empty(self, fake_qbit):
+        # Issue 09: the budget watcher reconciles only against a list
+        # that was actually read; `list_torrents` keeps returning [].
+        client = _make_client(fake_qbit)
+        try:
+            await client.login()
+            assert await client.list_torrents_checked() == []
+            for status in (403, 500):
+                fake_qbit.info_status = status
+                assert await client.list_torrents_checked() is None
+                assert await client.list_torrents() == []
+        finally:
+            await client.aclose()
+
     async def test_seeding_time_parsed_correctly(self, fake_qbit):
         fake_qbit.torrents = [
             {

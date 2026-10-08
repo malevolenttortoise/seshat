@@ -54,6 +54,12 @@ STATE_DOWNLOADING = "downloading"
 STATE_DOWNLOADED = "downloaded"
 STATE_PROCESSING = "processing"
 STATE_COMPLETE = "complete"
+# Every book the grab staged was rejected at review (2026-10 audit
+# issue 11). Terminal. MAM served the bytes, so the torrent ID stays
+# blocked (BLOCKING_STATES, ADR-0022); it is NOT in format dedup's
+# in-flight set, so another format of the book can still be grabbed
+# (Mark, G37). Before this state, rejected grabs sat in `processing`.
+STATE_REJECTED = "rejected"
 
 
 @dataclass(frozen=True)
@@ -163,6 +169,7 @@ async def create_grab(
     is_reingest: bool = False,
     book_format: str = "",
     dedup_key: str = "",
+    policy_tier: str = "",
 ) -> int:
     """Insert a new row in the `grabs` table.
 
@@ -185,14 +192,19 @@ async def create_grab(
     an "in-flight sibling" via the `idx_grabs_dedup_key` index.
     Empty strings are written as NULL — pre-v2.9.0 grabs and reingests
     have no announce-time filetype hint.
+
+    `policy_tier` is the grab policy's tier for this grab (`vip`,
+    `free`, `normal`, ...; `policy/engine.py`), so a grab's economics can
+    be read back later (2026-10 audit issue 11). Empty → NULL: grabs that
+    never went through the policy (adoptions, reingests, older rows).
     """
     cursor = await db.execute(
         """
         INSERT INTO grabs
             (announce_id, mam_torrent_id, torrent_name, category,
              author_blob, state, qbit_hash, is_reingest,
-             book_format, dedup_key)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             book_format, dedup_key, policy_tier)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             announce_id,
@@ -205,6 +217,7 @@ async def create_grab(
             1 if is_reingest else 0,
             (book_format or "").lower() or None,
             dedup_key or None,
+            policy_tier or None,
         ),
     )
     await db.commit()
@@ -350,6 +363,7 @@ BLOCKING_STATES = frozenset({
     STATE_DOWNLOADED,
     STATE_PROCESSING,
     STATE_COMPLETE,
+    STATE_REJECTED,
     STATE_DUPLICATE_IN_QBIT,
     STATE_FAILED_QBIT_REJECTED,
 })

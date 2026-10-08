@@ -43,6 +43,7 @@ from app.orchestrator.download_watcher import (
 )
 from app.orchestrator.pipeline import process_completion
 from app.rate_limit import ledger as ledger_mod
+from app.rate_limit import mam_floor
 from app.rate_limit import queue as queue_mod
 from app.storage import grabs as grabs_storage
 
@@ -103,9 +104,56 @@ async def tick(deps: DispatcherDeps) -> TickResult:
         await db.close()
 
 
+def _never_seen_grace_seconds() -> int:
+    """How long a ledger row qBit has never listed keeps counting.
+
+    Reuses `qbit_missing_grab_grace_hours` (the download watcher's wait
+    for a grab absent from qBit); read per tick, so a save applies at
+    once. 0 releases such a row on the first tick it's missing.
+    """
+    from app.config import load_settings
+    try:
+        hours = float(load_settings().get("qbit_missing_grab_grace_hours", 0) or 0)
+    except (TypeError, ValueError):
+        hours = 0.0
+    return int(max(0.0, hours) * 3600)
+
+
+async def _list_watched(deps: DispatcherDeps):
+    """The watched category's torrents, or None when the read failed."""
+    checked = getattr(deps.qbit, "list_torrents_checked", None)
+    if checked is not None:
+        return await checked(category=deps.qbit_category)
+    return await deps.qbit.list_torrents(category=deps.qbit_category)
+
+
 async def _tick_inner(deps: DispatcherDeps, db) -> TickResult:
+    # ── Phase 0: MAM's own unsatisfied count, at most hourly ─
+    # The budget's floor (`mam_floor`, issue 09). One paced jsonLoad
+    # call an hour; a failure waits the hour too.
+    try:
+        await mam_floor.refresh_if_due(deps.live_mam_token())
+    except Exception:
+        _log.exception("MAM snatch summary refresh failed (non-fatal)")
+
     # ── Phase 1: snapshot qBit ──────────────────────────────
-    qbit_torrents = await deps.qbit.list_torrents(category=deps.qbit_category)
+    qbit_torrents = await _list_watched(deps)
+    if qbit_torrents is None:
+        # A failed read is not "every torrent was removed". Reconciling
+        # against it released every active ledger row at once and let
+        # the queue drain into the freed budget (161 rows on prod in six
+        # such ticks, 2026-10 audit issue 09). Leave the ledger, the
+        # queue and the cached extras alone until qBit answers.
+        return TickResult(
+            qbit_torrents_seen=0,
+            seedtime_released=0,
+            removed_released=0,
+            queue_pops_attempted=0,
+            queue_pops_submitted=0,
+            queue_pops_failed=0,
+            error="qBit torrent list unavailable; ledger and queue left as they are",
+            qbit_reachable=False,
+        )
     qbit_seen = len(qbit_torrents)
     snapshot = {t.hash: t.seeding_seconds for t in qbit_torrents if t.hash}
 
@@ -237,7 +285,8 @@ async def _tick_inner(deps: DispatcherDeps, db) -> TickResult:
 
     # ── Phase 2: reconcile the ledger ───────────────────────
     summary = await ledger_mod.reconcile_with_qbit(
-        db, snapshot, seed_seconds_required=deps.seed_seconds_required
+        db, snapshot, seed_seconds_required=deps.seed_seconds_required,
+        never_seen_grace_seconds=_never_seen_grace_seconds(),
     )
 
     # ── Phase 3: drain the queue while budget has room ──────
@@ -254,7 +303,7 @@ async def _tick_inner(deps: DispatcherDeps, db) -> TickResult:
 
     while True:
         budget_used = await ledger_mod.count_effective(db)
-        if budget_used >= deps.budget_cap:
+        if budget_used >= ledger_mod.effective_cap(deps.budget_cap):
             break
 
         head = await queue_mod.peek_next(db)

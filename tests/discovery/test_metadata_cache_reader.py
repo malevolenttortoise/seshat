@@ -693,3 +693,97 @@ class TestCachedSourceGoodreads:
         source = CachedSource(source_name=SOURCE_GOODREADS)
         result = await source.get_author_books("GR-ANY")
         assert result is None
+
+
+# ─── 2026-10 audit, issue 12: a timed-out cache-HIT scan can resume ──
+
+
+class TestGoodreadsResumeThroughTheCacheReader:
+    """The cache-HIT scan runs on an inner GoodreadsSource. Its resume
+    point used to stay on that throwaway instance, so lookup's retry loop
+    (which reads the wrapper) never resumed and nothing merged."""
+
+    async def _seed(self, monkeypatch):
+        from app.discovery import database as disco_db
+        monkeypatch.setattr(disco_db, "_active_library_slug", "books-lib")
+        await _seed_gr_cache(
+            author_id="GR-SLOW", library_slug="books-lib",
+            pages={1: [
+                {"book_id": f"s{i}", "title": f"Slow {i}", "list_series": None,
+                 "list_series_idx": None, "list_cover": None, "is_audio_list": False}
+                for i in range(3)
+            ]},
+        )
+
+    async def test_the_resume_point_reaches_the_wrapper_and_back(
+        self, gr_reader_under, monkeypatch,
+    ):
+        from app.discovery.sources import goodreads as gr_mod
+        from app.discovery.sources.base import AuthorResult, BookResult
+
+        await self._seed(monkeypatch)
+        seen: list = []
+
+        async def slow_get_author_books(
+            self, author_id, existing_titles=None, owned_titles=None,
+            owned_only=False, start_at=0, cached_raw_books=None,
+        ):
+            seen.append((start_at, self._partial_state, set(self._known_titles)))
+            if start_at == 0:
+                self._partial_state = {
+                    "author_id": author_id, "books": [BookResult(title="Slow 0")],
+                    "series": [], "index": 1, "total": 3,
+                }
+                await asyncio.sleep(30)          # lookup's wait_for cuts it off
+            self._partial_state = None
+            return AuthorResult(name=author_id, books=[BookResult(title="Slow 0")])
+
+        monkeypatch.setattr(gr_mod.GoodreadsSource, "get_author_books", slow_get_author_books)
+        source = CachedSource(source_name=SOURCE_GOODREADS)
+        source._known_titles = {"slow 2"}
+
+        try:
+            await asyncio.wait_for(source.get_author_books("GR-SLOW"), timeout=0.05)
+        except asyncio.TimeoutError:
+            pass
+        assert source._partial_state is not None
+        assert source._partial_state["index"] == 1
+
+        result = await source.get_author_books("GR-SLOW", start_at=1)
+        assert result is not None
+        # The retry ran on a fresh inner instance that was handed the
+        # resume point, and saw the known titles.
+        assert seen[1][0] == 1
+        assert seen[1][1] is not None and seen[1][1]["index"] == 1
+        assert seen[0][2] == seen[1][2] == {"slow 2"}
+        assert source._partial_state is None
+
+
+async def test_the_inner_goodreads_source_carries_the_configured_rate(
+    gr_reader_under, monkeypatch,
+):
+    """It used to be built with rate_limit=0.0, which pinned the shared
+    session at no delay when a scan was the first Goodreads caller."""
+    from app.discovery import database as disco_db
+    from app.discovery.sources import goodreads as gr_mod
+    from app.discovery.sources.base import AuthorResult
+
+    monkeypatch.setattr(disco_db, "_active_library_slug", "books-lib")
+    await _seed_gr_cache(
+        author_id="GR-RATE", library_slug="books-lib",
+        pages={1: [{"book_id": "r1", "title": "Rate One", "list_series": None,
+                    "list_series_idx": None, "list_cover": None, "is_audio_list": False}]},
+    )
+    seen = []
+
+    async def fake_get_author_books(self, author_id, **kwargs):
+        seen.append(self.rate_limit)
+        return AuthorResult(name=author_id)
+
+    monkeypatch.setattr(gr_mod.GoodreadsSource, "get_author_books", fake_get_author_books)
+    monkeypatch.setattr(metadata_cache_reader, "load_settings", lambda: {"rate_goodreads": 2.0}, raising=False)
+    from app import config as app_config
+    monkeypatch.setattr(app_config, "load_settings", lambda: {"rate_goodreads": 2.0})
+
+    await CachedSource(source_name=SOURCE_GOODREADS).get_author_books("GR-RATE")
+    assert seen and seen[0] > 0

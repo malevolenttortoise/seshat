@@ -358,6 +358,34 @@ async def _series_or_404(db, sid: int) -> dict:
     return dict(row)
 
 
+async def _series_author_unchanged(
+    db, sid: int, mode: str, owner: int | None,
+) -> bool:
+    """True when series `sid` already records `mode` / `owner`.
+
+    Also True when the mode matches and the owner differs only because a
+    same-named series already holds that owner: the UNIQUE(name,
+    author_id) fallback below recorded the mode and kept the old owner,
+    and retrying would only log the same warning again.
+    """
+    row = await (await db.execute(
+        "SELECT name, author_mode, author_id FROM series WHERE id = ?", (sid,),
+    )).fetchone()
+    if row is None:
+        return True
+    if row["author_mode"] != mode:
+        return False
+    if row["author_id"] == owner:
+        return True
+    if owner is None:
+        return False
+    clash = await (await db.execute(
+        "SELECT 1 FROM series WHERE name = ? AND author_id = ? AND id != ?",
+        (row["name"], owner, sid),
+    )).fetchone()
+    return clash is not None
+
+
 async def _recompute_series_author(db, sids: Iterable[int]) -> None:
     """Recompute `series.author_mode` + `series.author_id` from current
     membership for each series id passed in (v3.0.0 Phase 6, ADR-0010).
@@ -446,6 +474,13 @@ async def _recompute_series_author(db, sids: Iterable[int]) -> None:
         else:
             mode = "shared"
             owner = None
+
+        # Leave a row that already says this alone: no write, no log.
+        # Library syncs, source scans and hygiene recompute every series
+        # at the end of a run (2026-10 audit issue 10), so this runs over
+        # rows that mostly haven't changed.
+        if await _series_author_unchanged(db, sid, mode, owner):
+            continue
 
         if owner is None:
             # NULL is distinct in SQLite UNIQUE — never collides.

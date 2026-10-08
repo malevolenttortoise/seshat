@@ -1356,6 +1356,58 @@ async def _deliver_prepared(
 # ─── Review-queue resume entrypoint ─────────────────────────────
 
 
+async def settle_reviewed_grab(
+    db: aiosqlite.Connection, grab_id: int,
+) -> Optional[str]:
+    """End a `processing` grab once every review it staged is decided.
+
+    A rejected review used to leave its grab in `processing` and its
+    pipeline run in `awaiting_review` forever (2026-10 audit issue 11).
+    Called after a review is rejected (or claimed for an owned book).
+    Nothing changes while any review of the grab is still open, or when
+    some failed and none was delivered. Otherwise:
+
+      - any review delivered → grab `complete`, run `complete`
+        (a bundle where one book was kept);
+      - every review rejected → grab `rejected`, run `rejected`.
+
+    Returns the grab's new state, or None when it was left alone.
+    """
+    grab = await grabs_storage.get_grab(db, grab_id)
+    if grab is None or grab.state != grabs_storage.STATE_PROCESSING:
+        return None
+    rows = await (await db.execute(
+        "SELECT status FROM book_review_queue WHERE grab_id = ?", (grab_id,),
+    )).fetchall()
+    statuses = {r[0] for r in rows}
+    decided = {
+        review_storage.STATUS_DELIVERED,
+        review_storage.STATUS_REJECTED,
+        review_storage.STATUS_FAILED,
+    }
+    if not statuses or not statuses <= decided:
+        return None
+    if review_storage.STATUS_DELIVERED in statuses:
+        grab_state, run_state = grabs_storage.STATE_COMPLETE, pipe_storage.PIPE_COMPLETE
+    elif statuses == {review_storage.STATUS_REJECTED}:
+        grab_state, run_state = grabs_storage.STATE_REJECTED, pipe_storage.PIPE_REJECTED
+    else:
+        return None
+
+    await grabs_storage.set_state(db, grab_id, grab_state)
+    runs = await (await db.execute(
+        "SELECT id FROM pipeline_runs WHERE grab_id = ? AND state = ?",
+        (grab_id, pipe_storage.PIPE_AWAITING_REVIEW),
+    )).fetchall()
+    for run in runs:
+        await pipe_storage.set_state(db, run[0], run_state)
+    _log.info(
+        "review: grab_id=%d settled as %s (reviews: %s)",
+        grab_id, grab_state, ", ".join(sorted(statuses)),
+    )
+    return grab_state
+
+
 async def deliver_reviewed(
     db: aiosqlite.Connection,
     *,

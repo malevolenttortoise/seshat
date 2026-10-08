@@ -161,3 +161,22 @@ class TestIbdbAuthorGate:
         assert "Wild Wastes" in titles
         assert "Fostering Faust" in titles
         assert "Unrelated Book" not in titles
+
+
+class TestRoleSuffix:
+    async def test_a_role_suffix_still_matches(self, source, monkeypatch):
+        # 2026-10 audit L2-09: a live scan showed `['Snekguy (author)']
+        # don't match ['Snekguy']` and IBDB found nothing.
+        async def fake_get(self, url, params=None, **kwargs):
+            return _FakeResp({"results": [
+                _item("Pinwheel", ["Snekguy (author)"]),
+                _item("Edited Volume", [{"name": "Snekguy (Editor)"}]),
+            ]})
+        monkeypatch.setattr(IbdbSource, "_get", fake_get)
+
+        result = await source.get_author_books("Snekguy")
+        assert result is not None
+        titles = [b.title for b in result.books] + [
+            b.title for sr in result.series for b in sr.books
+        ]
+        assert {"Pinwheel", "Edited Volume"} <= set(titles)

@@ -37,8 +37,6 @@ import { useViewport } from "../hooks/useViewport";
 import { useMobileCodepath } from "../components/mobile";
 import MobileAuthorDetailPage from "./MobileAuthorDetailPage";
 import type {
-  Author,
-  AuthorsResponse,
   Book,
   BookAction,
   BookActionHandler,

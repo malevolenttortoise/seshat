@@ -7,7 +7,137 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
-## [Unreleased]
+## [3.13.0] — 2026-10-08
+
+Phase 2 of the 2026-10 roadmap, the **codebase audit**, wave 3: the
+snatch budget, series author mode, grab records, Goodreads scans and a
+batch of small fixes, built, then checked on the live container. The
+budget stops losing torrents and now counts what MAM counts, a rejected
+review ends its grab, and Goodreads source scans land their books again
+for the first time since about May.
+
+**Behaviour changes to know about:**
+
+- The snatch budget counts the larger of Seshat's number and MAM's own
+  unsatisfied count, against the lower of your cap and MAM's limit (read
+  from MAM about once an hour). It can report more torrents in use than
+  before, and so hold grabs back sooner.
+- A qBit read that fails leaves the budget and the queue alone until
+  qBit answers, instead of freeing every slot.
+- Every Goodreads request waits the rate set on Metadata Sources. A slow
+  rate makes a source scan take longer; a scan cut off by the 5-minute
+  cap now resumes and keeps what it finished.
+- A grab whose books were all rejected at review ends as `rejected`, a
+  new grab state. Anything reading grab states through the API should
+  expect it.
+- `GET /api/v1/grabs/budget` gains `mam_unsat`, `mam_limit`,
+  `mam_not_seeding` and `mam_fetched_at`, and `budget_used` /
+  `budget_cap` now report the values the budget enforces.
+- **Database migrations**: the app database goes to `user_version` 60,
+  each library database to 89. Take a backup before updating, as usual.
+
+### Fixed
+
+- **The snatch budget no longer loses torrents** (audit issue 09). When
+  qBit couldn't be read for one tick (a restart, an expired session, a
+  network blip), the budget watcher treated the empty answer as "every
+  torrent was removed" and freed every slot at once, then drained the
+  queue into them: 161 torrents on one install were lost this way in six
+  such ticks. A failed read now leaves the budget and the queue alone
+  until qBit answers. A torrent qBit hasn't listed yet (seconds after it
+  was added) also keeps its slot for up to `qbit_missing_grab_grace_hours`
+  instead of being freed on the next tick.
+- **A series' author mode now follows every change to its books**
+  (audit issue 10). Per-author / multi-author / shared (ADR-0010) was
+  recomputed only by the series and hide/delete routes, so removing a
+  contributor, merging two books, moving a book between series, applying
+  a series suggestion, pulling a series from Calibre/ABS, a library sync,
+  a source scan, hygiene, a source-data reset or an import could leave it
+  stale until the next restart (sync-made series read "per-author" until
+  then). The single-book actions now recompute the series they touch, and
+  syncs, scans, hygiene, resets and imports finish by recomputing every
+  series (a fraction of a second; unchanged rows aren't rewritten). A
+  series whose owner can't be set because a same-named series already
+  has it now logs that once, not at every startup.
+- **Rejecting a book at review now ends its grab** (audit issue 11). The
+  grab used to stay `processing` and its pipeline run `awaiting_review`
+  forever (about a hundred on one install). A grab whose books are all
+  rejected now ends as `rejected` (a new state); one where another book
+  of the bundle was delivered ends `complete`. The torrent ID stays
+  blocked from being grabbed again (MAM served it), but a rejected grab
+  no longer stops another format of the same book from being grabbed.
+  Existing stuck grabs are settled by the migration below.
+- **IRC announces keep their line** (audit issue 11). `announces.raw` has
+  been empty for every IRC announce since the start; it now holds the
+  line from `#announce`, so a parser problem can be replayed later.
+- **Secrets no longer appear in the container log** (audit issue 13).
+  httpx logs every request URL, which put the Google Books API key in
+  the log. Its request lines stay, with the values of `key`, `token`,
+  `api_key`, `apikey`, `passkey` and `mam_id` shown as `***`.
+- **Goodreads source scans land their books again** (audit issue 12).
+  Since the Goodreads list-page cache arrived (~May), a scan that hit the
+  300 s per-source cap lost its whole Goodreads result: the resume point
+  stayed on a throwaway copy of the source, so the retry never ran, and
+  nothing finished before the cap was merged. The retry now resumes where
+  the cap cut in, and when it gives up (time budget, retry limit, no
+  progress) the books it did finish are merged instead of dropped.
+  Goodreads also fetches the books discovery doesn't have yet before the
+  ones it already knows, so a capped scan spends its time on books that
+  could be new. A check on an unfinished result never removes books
+  Goodreads found on earlier scans.
+- **Goodreads always waits your configured rate** (audit issue 12, found
+  in its live check). The shared Goodreads session took the rate of
+  whichever caller reached it first after a restart: normally the
+  list-page cache worker's 5 s default, and when a source scan came
+  first, no wait at all (its cache path passed 0), which got the session
+  soft-blocked by Goodreads' bot protection within a few pages. Every Goodreads request
+  (scans, the cache worker, the author-ID backfill) now waits the rate
+  set on Metadata Sources, read before each request, so a change applies
+  without a restart. A slow rate makes a scan take longer, but a scan
+  cut off by the 5-minute cap now resumes and keeps what it finished.
+- **IBDB finds books whose byline carries a role** (audit issue 13). An
+  author listed as "Name (author)" didn't match "Name", so IBDB dropped
+  every book for that author.
+- Small fixes (audit issue 13): the Dashboard's Works button opens Works
+  (it fell through to the Pipeline dashboard); stored-cover URLs no
+  longer carry a `//` (the old form still works); 15 unused frontend
+  declarations removed and the TypeScript build now refuses new ones
+  (`noUnusedLocals`).
+
+### Changed
+
+- **The snatch budget uses MAM's own count.** Seshat now asks MAM for its
+  snatch summary (`jsonLoad.php?snatch_summary`) about once an hour, and
+  the budget counts the larger of Seshat's number and MAM's unsatisfied
+  count, against the lower of your cap and MAM's limit. MAM's number
+  covers what Seshat can't see: torrents removed from qBit before 72h of
+  seeding that MAM still counts, duplicates MAM deleted, and MAM's own
+  expiry. Without a read in the last 3 hours the budget is Seshat's own
+  count, as before. The Snatch Budget card shows MAM's count next to
+  Seshat's and says when MAM counts torrents that aren't seeding.
+  `GET /api/v1/grabs/budget` gains `mam_unsat`, `mam_limit`,
+  `mam_not_seeding` and `mam_fetched_at`; `budget_used` and `budget_cap`
+  now report the values the budget enforces.
+
+### Added
+
+- **Grabs record the policy tier they went through** (`grabs.policy_tier`:
+  `vip`, `free`, `wedge`, `normal`), so a grab's economics can be read
+  back later.
+
+### Performance
+
+- **Calibre sync no longer scans the whole books table for every book**
+  (audit issue 18): `books.calibre_id` is indexed (about 4 s → 0.01 s for
+  3,700 books on a real library).
+- A book linked to the grab it came from during a library sync no longer
+  holds the library database's write lock while its quality details are
+  fetched from MAM (audit issue 18).
+
+**Database migrations**: the app database goes to `user_version` 60
+(`grabs` gains `policy_tier`, and grabs stuck in `processing` behind
+rejected reviews are settled); each library database goes to 89 (the
+`calibre_id` index). Take a backup before updating, as usual.
 
 ## [3.12.0] — 2026-10-08
 

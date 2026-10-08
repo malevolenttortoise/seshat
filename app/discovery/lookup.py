@@ -51,6 +51,8 @@ from app.discovery.sources.google_books import GoogleBooksSource
 from app.discovery.sources.audible import AudibleDiscoverySource
 from app.discovery.sources.base import (
     AuthorResult,
+    BookResult,
+    SeriesResult,
     TRUSTED_CREATE_SOURCES,
     contributor_is_author,
 )
@@ -2128,8 +2130,16 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                     # Calibre/ABS-authoritative). Flag the series for a
                     # one-shot author_mode recompute only on a real delta.
                     if not matched_row["owned"]:
-                        if await _heal_contributors(db, matched_row["id"], bk, source_name, roster=roster, stats=roster_stats) and sid_use is not None:
-                            healed_series_ids.add(sid_use)
+                        if await _heal_contributors(db, matched_row["id"], bk, source_name, roster=roster, stats=roster_stats):
+                            # The book's own series, which `_update_existing`
+                            # doesn't always move it out of, and the source's.
+                            own = await (await db.execute(
+                                "SELECT series_id FROM books WHERE id = ?",
+                                (matched_row["id"],),
+                            )).fetchone()
+                            for s_heal in (sid_use, own["series_id"] if own else None):
+                                if s_heal is not None:
+                                    healed_series_ids.add(s_heal)
                     else:
                         # v3.3.0 (ADR-0017) — the OWNED counterpart: instead
                         # of silently overwriting library data, enqueue an
@@ -3751,6 +3761,61 @@ async def _try_source(source, author_name, author_id, our_titles, languages, sou
         return 0
 
 
+async def _merge_unfinished_source(
+    source_name: str, partial: dict, *, author_name: str, author_id: int,
+    our_titles, languages, full_scan: bool, owned_only: bool,
+    series_collector, exclude_audiobooks: bool, linked_author_ids,
+    link_type_by_id,
+) -> int:
+    """Merge the books a timed-out source finished before lookup gave up.
+
+    `partial` is the source's resume point (`_partial_state`): the books
+    and series done so far. Validated like any result, but against the
+    source's whole catalogue (`partial["catalogue"]`) when it has one: a
+    partial result holds the new books first, not the owned ones the
+    check looks for. A failed check here only skips the merge; it never
+    retracts the source's earlier books, as `_try_source` does on a full
+    result, because a partial result is no evidence of a wrong author.
+    """
+    result = AuthorResult(
+        name=author_name,
+        external_id=str(partial.get("author_id") or "") or None,
+        books=list(partial.get("books") or []),
+        series=[
+            SeriesResult(name=s.name, books=list(s.books))
+            for s in (partial.get("series") or [])
+        ],
+    )
+    done = len(result.books) + sum(len(s.books) for s in result.series)
+    if done == 0:
+        return 0
+    catalogue = partial.get("catalogue") or []
+    check = (
+        AuthorResult(name=author_name, books=[BookResult(title=t) for t in catalogue])
+        if catalogue else result
+    )
+    if not await _validate_author(author_name, our_titles, check):
+        logger.info(
+            "  [%s] not merging the %d book(s) finished for %r: the "
+            "catalogue shares no title with the owned books",
+            source_name, done, author_name,
+        )
+        return 0
+    n, u = await _merge_result(
+        author_id, result, source_name, languages,
+        full_scan=full_scan, owned_only=owned_only,
+        series_collector=series_collector,
+        exclude_audiobooks=exclude_audiobooks,
+        linked_author_ids=linked_author_ids, link_type_by_id=link_type_by_id,
+    )
+    logger.info(
+        f"  [{source_name}] merged the {done} book(s) finished before giving "
+        f"up on '{author_name}' ({partial.get('index', '?')}/"
+        f"{partial.get('total', '?')}): {n} new, {u} updated"
+    )
+    return n
+
+
 def _log_source_timeout_summary(timeouts: dict[str, list[str]]) -> None:
     """Emit a single warning per source that hit its wall-clock cap during
     a bulk scan. Each line names the source, count, and author list so the
@@ -3996,6 +4061,10 @@ async def _lookup_author_inner(author_id: int, author_name: str, full_scan: bool
         if on_progress:
             on_progress(visible[0])
     goodreads._on_new_candidate = _on_new_candidate
+    # Goodreads fetches the books discovery doesn't have yet first
+    # (2026-10 audit issue 12; Mark, G47).
+    from app.discovery.sources.goodreads import known_title_keys
+    goodreads._known_titles = known_title_keys(r["title"] for r in all_rows)
     hardcover._on_new_candidate = _on_new_candidate
     kobo._on_new_candidate = _on_new_candidate
     amazon._on_new_candidate = _on_new_candidate
@@ -4145,11 +4214,11 @@ async def _lookup_author_inner(author_id: int, author_name: str, full_scan: bool
                 timeout=timeout,
             )
         except asyncio.TimeoutError:
-            # The source's HTTP requests get cancelled by wait_for.
-            # Anything it merged before the timeout is durable —
-            # _try_source commits incrementally. We just don't know
-            # the exact `n` for this source; conservatively count 0
-            # and let the visible counter re-sync from `total` below.
+            # The source's HTTP requests get cancelled by wait_for, and
+            # nothing it fetched has been merged yet: `_try_source` merges
+            # only after `get_author_books` returns. A source that keeps a
+            # resume point (Goodreads) gets the retry pass below, which
+            # merges what it finished even if it never completes.
             logger.warning(
                 f"  Source '{spec.name}' timed out after {timeout:.0f}s "
                 f"for '{author_name}' — keeping any partial writes, moving on"
@@ -4334,6 +4403,26 @@ async def _lookup_author_inner(author_id: int, author_name: str, full_scan: bool
                 )
                 break
 
+        # Gave up with books still unmerged (budget, retry cap, no
+        # progress, an error): merge the ones it finished rather than
+        # dropping them (2026-10 audit issue 12).
+        leftover = getattr(source, '_partial_state', None)
+        if leftover:
+            source._partial_state = None
+            n = await _merge_unfinished_source(
+                spec.name, leftover,
+                author_name=author_name, author_id=author_id,
+                our_titles=our_titles, languages=languages,
+                full_scan=full_scan, owned_only=owned_only,
+                series_collector=series_collector,
+                exclude_audiobooks=exclude_audiobooks,
+                linked_author_ids=pen_linked, link_type_by_id=link_type_by_id,
+            )
+            total += n
+            visible[0] = total
+            if on_progress:
+                on_progress(total)
+
     # Clear current_book so the next author's scan widget doesn't show
     # the last book of THIS author until its first DETAIL fetch lands.
     state._lookup_progress["current_book"] = ""
@@ -4355,6 +4444,15 @@ async def _lookup_author_inner(author_id: int, author_name: str, full_scan: bool
     # sources so it sees the full per-book picture.
     if series_collector:
         await _compute_series_suggestions(author_id, series_collector)
+
+    # ADR-0010: new books joining series, series reassignment and the
+    # title→series / orphan passes above change series membership.
+    from app.discovery.database import recompute_all_series_author_mode
+    db_mode = await get_db()
+    try:
+        await recompute_all_series_author_mode(db_mode, context="Source scan")
+    finally:
+        await db_mode.close()
 
     # Final author marker write. Retry on `database is locked` because a
     # concurrent MAM scan can hold a writer lock for longer than the

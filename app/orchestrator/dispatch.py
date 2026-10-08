@@ -1418,7 +1418,7 @@ async def _dispatch_with_decision(
 
         rate_decision = decide_grab_action(
             budget_used=budget_used,
-            budget_cap=deps.budget_cap,
+            budget_cap=ledger_mod.effective_cap(deps.budget_cap),
             queue_size=queue_size,
             queue_max=deps.queue_max,
             queue_mode_enabled=deps.queue_mode_enabled,
@@ -1447,7 +1447,7 @@ async def _dispatch_with_decision(
                 queue_size = await queue_mod.size(db)
                 rate_decision = decide_grab_action(
                     budget_used=budget_used,
-                    budget_cap=deps.budget_cap,
+                    budget_cap=ledger_mod.effective_cap(deps.budget_cap),
                     queue_size=queue_size,
                     queue_max=deps.queue_max,
                     queue_mode_enabled=deps.queue_mode_enabled,
@@ -1518,6 +1518,7 @@ async def _dispatch_with_decision(
                 state=initial_state,
                 book_format=book_format,
                 dedup_key=dedup_key,
+                policy_tier=policy_decision.tier,
             )
 
         # A wedge comes from the policy or from `force_fl_wedge` (a user
@@ -1903,7 +1904,7 @@ async def submit_torrent_bytes(
         announce_id = grab.announce_id or 0
         rate_decision = decide_grab_action(
             budget_used=await ledger_mod.count_effective(db),
-            budget_cap=deps.budget_cap,
+            budget_cap=ledger_mod.effective_cap(deps.budget_cap),
             queue_size=await queue_mod.size(db),
             queue_max=deps.queue_max,
             queue_mode_enabled=deps.queue_mode_enabled,
@@ -2117,7 +2118,7 @@ async def grab_uploaded_torrent(
 
         rate_decision = decide_grab_action(
             budget_used=await ledger_mod.count_effective(db),
-            budget_cap=deps.budget_cap,
+            budget_cap=ledger_mod.effective_cap(deps.budget_cap),
             queue_size=await queue_mod.size(db),
             queue_max=deps.queue_max,
             queue_mode_enabled=deps.queue_mode_enabled,
@@ -2151,6 +2152,7 @@ async def grab_uploaded_torrent(
                 state=grabs_storage.STATE_FETCHED,
                 book_format=book_format,
                 dedup_key=normalize_dedup_key(announce.torrent_name, author_blob),
+                policy_tier=policy_decision.tier,
             )
     finally:
         await db.close()

@@ -133,33 +133,6 @@ export default function AuthorTriagePage({ onNav }: AuthorTriagePageProps) {
     setBusy(false);
   };
 
-  const linkAuthorToPerson = async (
-    target_person_id: number, library_slug: string, author_id: number,
-  ) => {
-    setBusy(true);
-    try {
-      const r = await api.post<{
-        status: string;
-        old_person_dropped: boolean;
-      }>(
-        `/discovery/persons/${target_person_id}/link-author`,
-        { library_slug, author_id },
-      );
-      if (r.status === "already_linked") {
-        toast.info("Already linked");
-      } else {
-        toast.success(
-          `Linked to person ${target_person_id}` +
-          (r.old_person_dropped ? " (orphan source person dropped)" : ""),
-        );
-      }
-      await refresh();
-    } catch (e) {
-      toast.error((e as Error).message || "Link failed");
-    }
-    setBusy(false);
-  };
-
   const mergePersons = async (
     canonical_person_id: number, alias_person_id: number,
   ) => {

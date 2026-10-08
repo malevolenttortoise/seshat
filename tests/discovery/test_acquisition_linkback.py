@@ -337,3 +337,40 @@ async def test_old_grab_outside_window_ignored(both_dbs):
         is_audiobook=True,
     )
     assert linked is False
+
+
+# ─── 2026-10 audit, issue 18: no write lock across the MAM lookup ──
+
+
+async def test_library_db_has_no_open_transaction_during_quality_extraction(
+    both_dbs, monkeypatch,
+):
+    """The link-back's quality extraction can make a MAM search (15s
+    timeout); the library DB must not be holding a write transaction."""
+    from app.discovery.acquisition_linkback import link_new_book
+    from app.quality import pipeline as quality_pipeline
+
+    seen: list[bool] = []
+
+    async def fake_extract(app_db, torrent_id):
+        seen.append(both_dbs["library_db"].in_transaction)
+
+    monkeypatch.setattr(quality_pipeline, "extract_for_torrent", fake_extract)
+    await _seed_grab(both_dbs["app_db"])
+    book_id = await _seed_book(both_dbs["library_db"])
+
+    linked = await link_new_book(
+        both_dbs["library_db"], both_dbs["slug"], book_id,
+        "Free Companions", "Snekguy", is_audiobook=True,
+    )
+    assert linked is True
+    assert seen == [False]
+    assert (await _read_book(both_dbs["library_db"], book_id))["mam_status"] == "found"
+
+
+async def test_calibre_id_lookups_use_an_index(both_dbs):
+    plan = await (await both_dbs["library_db"].execute(
+        "EXPLAIN QUERY PLAN SELECT id FROM books WHERE calibre_id = ? AND source = 'calibre'",
+        (1,),
+    )).fetchall()
+    assert any("idx_books_calibre_id" in str(tuple(r)) for r in plan), plan

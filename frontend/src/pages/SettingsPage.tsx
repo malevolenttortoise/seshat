@@ -2036,7 +2036,7 @@ function AudiobookshelfSection({ s, upd, ist, nist, creds, onCredSaved }: {
 
 // ── Discovery MAM Section ─────────────────────────────────────
 
-function DiscMamSection({ s, upd, ist, nist }: { s: S; upd: (k: string, v: unknown) => void; ist: any; nist: any }) {
+function DiscMamSection({ s, upd, nist }: { s: S; upd: (k: string, v: unknown) => void; ist: any; nist: any }) {
   const t = useTheme();
   const [validating, setValidating] = useState(false);
   const [valResult, setValResult] = useState<string | null>(null);

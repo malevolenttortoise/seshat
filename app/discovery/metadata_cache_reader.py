@@ -529,10 +529,17 @@ class CachedSource:
         self._linked_author_names: list[str] = []
         self._owned_titles: list[str] = []
         self._owned_series_names: list[str] = []
-        # `_partial_state` is the Goodreads retry-resume hook. Cache
-        # reads complete in one shot, so this stays None forever; the
-        # retry loop's `partial = getattr(...)` skips us cleanly.
+        # `_partial_state` is the Goodreads retry-resume hook that
+        # `lookup_author`'s retry loop reads off this instance. A cache-HIT
+        # Goodreads scan runs on an inner `GoodreadsSource`, so its resume
+        # point is copied here when the per-source cap cuts it off, and
+        # handed back in on the retry (2026-10 audit issue 12: it used to
+        # stay on the throwaway inner instance, so a timed-out scan never
+        # resumed and merged nothing). Amazon reads leave it None.
         self._partial_state = None
+        # Titles discovery already has for the author (`lookup_author`
+        # sets it); forwarded so Goodreads fetches unknown books first.
+        self._known_titles: set = set()
 
     # `name` is the source-key the merge layer + dispatcher key on.
     # Keep it bound to source_name so a future `CachedSource(source_name="goodreads")`
@@ -695,8 +702,14 @@ class CachedSource:
             "list-page records",
             author_id, library_slug, len(cached_raw_books),
         )
+        from app.config import load_settings
         from app.discovery.sources.goodreads import GoodreadsSource
-        source = GoodreadsSource(rate_limit=0.0)
+        from app.metadata.source_config import get_source_rate_limit
+        # The configured rate, like lookup's live Goodreads source: the
+        # first caller pins the shared session's rate for the process.
+        source = GoodreadsSource(
+            rate_limit=get_source_rate_limit(load_settings(), "goodreads"),
+        )
         # Forward the lookup.py-set per-book progress callback so the
         # scan widget keeps ticking through cache-HIT-driven detail
         # fetches.
@@ -704,6 +717,9 @@ class CachedSource:
             source._on_book = self._on_book
         if self._on_new_candidate is not None:
             source._on_new_candidate = self._on_new_candidate
+        source._known_titles = self._known_titles
+        if start_at > 0 and self._partial_state:
+            source._partial_state = self._partial_state
         try:
             return await source.get_author_books(
                 author_id,
@@ -714,6 +730,9 @@ class CachedSource:
                 cached_raw_books=cached_raw_books,
             )
         finally:
+            # None after a clean run or an error; the resume point when
+            # lookup's wait_for cancelled the call.
+            self._partial_state = source._partial_state
             try:
                 sess = getattr(source, "_session", None)
                 if sess is not None and hasattr(sess, "aclose"):

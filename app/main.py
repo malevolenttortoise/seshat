@@ -497,7 +497,7 @@ def _live_dispatcher() -> Optional[DispatcherDeps]:
     return state.dispatcher
 
 
-async def _on_irc_announce(announce: Announce) -> None:
+async def _on_irc_announce(announce: Announce, raw_line: str = "") -> None:
     """Bridge the IRC callback signature to the dispatcher.
 
     Resolves `state.dispatcher` per announce, so an allow-list change,
@@ -509,12 +509,16 @@ async def _on_irc_announce(announce: Announce) -> None:
     spawned in here that inherits the context) wait in front of scans
     and everything else in the MAM pacer, so a long scan can't hold up
     an autograb.
+
+    `raw_line` is the IRC line the announce came from; it's stored on
+    the announce row (`announces.raw`), empty for every IRC announce
+    until the 2026-10 audit (issue 11, G9).
     """
     deps = state.dispatcher
     if deps is None:
         return
     with mam_pacer.priority(mam_pacer.PRIORITY_IRC):
-        await handle_announce(deps, announce)
+        await handle_announce(deps, announce, raw_line=raw_line)
 
 
 def _build_irc_config(settings: dict, resolved_secrets: dict = None) -> IrcConfig:

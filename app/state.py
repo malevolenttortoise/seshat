@@ -168,6 +168,9 @@ _snatch_budget: Dict[str, Any] = {
     # budget watcher each tick. The dispatcher adds this to the
     # ledger count to avoid over-committing the MAM snatch cap.
     "qbit_extras": 0,
+    # MAM's own snatch summary (unsatisfied count + limit) and when it
+    # was read; owned by `app.rate_limit.mam_floor`. Absent until the
+    # first read.
 }
 
 

@@ -298,10 +298,21 @@ async def book_pull(bid: int, payload: dict = Body(...), slug: str | None = Quer
             sets.append("user_edited_fields=?")
             vals.append(json.dumps(cleared_uef))
 
+        old_series = (await (await db.execute(
+            "SELECT series_id FROM books WHERE id = ?", (bid,),
+        )).fetchone())["series_id"]
         vals.append(bid)
         await db.execute(
             f"UPDATE books SET {', '.join(sets)} WHERE id = ?", vals,
         )
+        if "series_name" in applied:
+            # ADR-0010: pulling the library's series can move the book.
+            new_series = (await (await db.execute(
+                "SELECT series_id FROM books WHERE id = ?", (bid,),
+            )).fetchone())["series_id"]
+            if new_series != old_series:
+                from app.discovery.routers.series import _recompute_series_author
+                await _recompute_series_author(db, {old_series, new_series})
         await db.commit()
 
         return {

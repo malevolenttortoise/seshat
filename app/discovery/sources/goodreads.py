@@ -282,6 +282,35 @@ def _series_from_title_paren(title: str) -> tuple[Optional[str], Optional[float]
 _is_cloudflare_soft_block = _gr_session.is_cloudflare_soft_block
 
 
+def _norm_title(title: str) -> str:
+    """A title for comparison: lower case, no "(...)" / "[...]" (Goodreads'
+    list page appends the series: "Contracts & Cats (Meow: Magical
+    Emporium of Wares #1)"), no punctuation, single spaces."""
+    t = re.sub(r"\([^)]*\)|\[[^\]]*\]", " ", (title or "").lower())
+    t = re.sub(r"[^\w\s]", "", t).strip()
+    return re.sub(r"\s+", " ", t)
+
+
+def known_title_keys(titles) -> set[str]:
+    """Keys for the titles discovery already has, for `_known_titles`.
+
+    Each title counts both whole and up to its first colon, so a stored
+    "Harmony & Home: A Cozy Slice-of-Life Fantasy" knows Goodreads'
+    "Harmony & Home". A Goodreads title is only looked up whole, so
+    "Magic's Toll: Cursebound" stays new next to a stored "Magic's Toll:
+    Fatebound".
+    """
+    keys: set[str] = set()
+    for t in titles:
+        if not t:
+            continue
+        keys.add(_norm_title(t))
+        if ":" in t:
+            keys.add(_norm_title(t.split(":", 1)[0]))
+    keys.discard("")
+    return keys
+
+
 class GoodreadsSource(BaseSource):
     name = "goodreads"
     default_headers = HDR
@@ -304,6 +333,32 @@ class GoodreadsSource(BaseSource):
         # the remainder. Per-source-instance (not global) so pen-name
         # linked pairs or concurrent scans don't cross-contaminate.
         self._partial_state: Optional[dict] = None
+        # Normalized titles of every book discovery already has for the
+        # author being scanned (any source). `lookup_author` sets it per
+        # author; the detail loop fetches the other books first.
+        self._known_titles: set[str] = set()
+
+    def _detail_order(self, raw_books: list, author_id, start_at: int) -> list:
+        """The order the detail loop visits the list-page books in.
+
+        Books no source has come first, then the ones discovery already
+        knows (their detail fetch only backfills this source's link and
+        metadata), so a run cut off by the per-source cap spends its time
+        on books that could be new (2026-10 audit issue 12; Mark, G47).
+        A resume reuses the first call's order, so `start_at` keeps
+        pointing at the same book.
+        """
+        partial = self._partial_state
+        if (
+            start_at > 0 and partial and partial.get("author_id") == author_id
+            and partial.get("order")
+        ):
+            pos = {bid: i for i, bid in enumerate(partial["order"])}
+            return sorted(raw_books, key=lambda rb: pos.get(rb["book_id"], len(pos)))
+        known = self._known_titles or set()
+        if not known:
+            return raw_books
+        return sorted(raw_books, key=lambda rb: _norm_title(rb["title"]) in known)
 
     async def _get(self, url: str, retries: int = 2, **kwargs):
         """Override base `_get` to route through `goodreads_session`.
@@ -973,6 +1028,21 @@ class GoodreadsSource(BaseSource):
             # full metadata Goodreads only exposes per book.
             total = len(raw_books)
             logger.info(f"  Goodreads: found {total} books on list page, fetching details...")
+            raw_books = self._detail_order(raw_books, author_id, start_at)
+            if start_at == 0 and self._known_titles:
+                new_first = sum(
+                    1 for rb in raw_books
+                    if _norm_title(rb["title"]) not in self._known_titles
+                )
+                logger.info(
+                    f"  Goodreads: {new_first} of {total} listed books are new "
+                    f"to discovery; fetching those first"
+                )
+            # Saved with every resume point: the visiting order, and the
+            # whole list's titles (lookup validates a partial result
+            # against them; a partial holds the new books, not the owned).
+            detail_order = [rb["book_id"] for rb in raw_books]
+            catalogue = [rb["title"] for rb in raw_books]
 
             # Inherit from a prior partial state on a resume call;
             # otherwise start fresh. See start_at docstring above.
@@ -1183,6 +1253,8 @@ class GoodreadsSource(BaseSource):
                     ],
                     "index": i + 1,
                     "total": total,
+                    "order": detail_order,
+                    "catalogue": catalogue,
                 }
 
             if any(skipped.values()):

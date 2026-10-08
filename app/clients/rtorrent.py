@@ -119,6 +119,13 @@ class RtorrentClient:
             return AddResult(success=False, failure_kind="network_error", failure_detail=str(e))
 
     async def list_torrents(self, category: Optional[str] = None) -> list[TorrentInfo]:
+        return await self.list_torrents_checked(category) or []
+
+    async def list_torrents_checked(
+        self, category: Optional[str] = None
+    ) -> Optional[list[TorrentInfo]]:
+        """`list_torrents`, but None when the list couldn't be read (the
+        snatch ledger must not reconcile against a failed read)."""
         try:
             proxy = self._get_proxy()
             rows = await asyncio.to_thread(
@@ -133,7 +140,7 @@ class RtorrentClient:
             )
         except Exception as e:
             _log.warning("rTorrent list_torrents failed: %s", e)
-            return []
+            return None
 
         now = int(time.time())
         out: list[TorrentInfo] = []

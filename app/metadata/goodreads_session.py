@@ -208,9 +208,16 @@ class GoodreadsSession:
         *,
         rate_limit: float = _DEFAULT_RATE_LIMIT,
         timeout: float = 45.0,
+        rate_from_settings: bool = False,
     ):
         self.rate_limit = max(0.0, float(rate_limit))
         self.timeout = float(timeout)
+        # The process-wide session (`get_session`) waits the Metadata
+        # Sources Goodreads rate, read before every request, so every
+        # caller (scans, the list-page cache worker, the author-ID
+        # backfill) honours it and a change applies without a restart
+        # (Mark, G50). `rate_limit` is then only the fallback.
+        self._rate_from_settings = rate_from_settings
         self._curl: Any = None
         self._httpx: Optional[httpx.AsyncClient] = None
         self._curl_init_attempted = False
@@ -236,10 +243,24 @@ class GoodreadsSession:
             )
         return self._httpx
 
+    def current_rate(self) -> float:
+        """Seconds to wait before the next request."""
+        if self._rate_from_settings:
+            try:
+                from app.config import load_settings
+                from app.metadata.source_config import get_source_rate_limit
+                configured = get_source_rate_limit(load_settings(), "goodreads")
+                if configured > 0:
+                    return configured
+            except Exception:
+                pass
+        return self.rate_limit
+
     async def _sleep_with_jitter(self) -> None:
-        if self.rate_limit > 0:
+        rate = self.current_rate()
+        if rate > 0:
             jitter = random.uniform(*_JITTER_RANGE)
-            await asyncio.sleep(self.rate_limit + jitter)
+            await asyncio.sleep(rate + jitter)
 
     async def get(self, url: str, **kwargs) -> Any:
         """Rate-limited GET with uniform soft-block detection.
@@ -334,18 +355,23 @@ _SESSION_LOCK = asyncio.Lock()
 async def get_session(rate_limit: Optional[float] = None) -> GoodreadsSession:
     """Lazy module-level singleton getter.
 
-    `rate_limit` is the configured value from `source_rate_limits` —
-    typically passed by the caller (e.g. `lookup.py` reads it once per
-    scan). If omitted, falls back to the conservative 5s default. The
-    first caller to set a non-None value pins the session's rate limit
-    for the process lifetime; subsequent overrides are ignored.
+    The session waits the Metadata Sources Goodreads rate, read before
+    each request (G50). `rate_limit` is only the fallback for when that
+    can't be read: the first caller's value, or the 5s default when it
+    is missing or not positive.
     """
     global _SESSION
     if _SESSION is None:
         async with _SESSION_LOCK:
             if _SESSION is None:
-                rl = rate_limit if rate_limit is not None else _DEFAULT_RATE_LIMIT
-                _SESSION = GoodreadsSession(rate_limit=rl)
+                # A missing or non-positive rate means "not configured":
+                # pinning 0 would send every Goodreads request in the
+                # process back to back. The cache reader's inner source
+                # passed 0.0, and when a scan was the first Goodreads
+                # caller after a restart, Cloudflare soft-blocked within
+                # a few pages (2026-10-08 live check, audit issue 12).
+                rl = rate_limit if rate_limit and rate_limit > 0 else _DEFAULT_RATE_LIMIT
+                _SESSION = GoodreadsSession(rate_limit=rl, rate_from_settings=True)
     return _SESSION
 
 

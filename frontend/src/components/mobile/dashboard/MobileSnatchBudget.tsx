@@ -7,7 +7,13 @@
 // progress bar + remaining-time label.
 import { useTheme } from "../../../theme";
 import { useViewport } from "../../../hooks/useViewport";
-import { fmtDuration, fmtNum } from "../../../lib/format";
+import {
+  fmtDuration,
+  fmtMamBudget,
+  fmtMamNotSeeding,
+  fmtNum,
+  type MamBudgetFields,
+} from "../../../lib/format";
 import { RADIUS, scaleFor } from "../tokens";
 
 export interface BudgetEntry {
@@ -22,7 +28,7 @@ export interface BudgetEntry {
 // when no torrent is currently waiting to release into the budget),
 // so accept both null and undefined here. Same shape both desktop
 // dashboards consume.
-export interface BudgetData {
+export interface BudgetData extends MamBudgetFields {
   budget_used?: number;
   budget_cap?: number;
   next_release_seconds?: number | null;
@@ -79,7 +85,9 @@ export function MobileSnatchBudget({ budget }: MobileSnatchBudgetProps) {
             / {cap}
           </span>
         </div>
-        <span style={{ fontSize: s.type.caption, color: t.td }}>budget</span>
+        <span style={{ fontSize: s.type.caption, color: t.td }}>
+          {fmtMamBudget(budget)}
+        </span>
       </div>
 
       {/* Cap fill bar */}
@@ -129,6 +137,12 @@ export function MobileSnatchBudget({ budget }: MobileSnatchBudgetProps) {
           <div style={{ color: t.text, fontWeight: 700 }}>{fmtNum(queue)}</div>
         </div>
       </div>
+
+      {fmtMamNotSeeding(budget) && (
+        <div style={{ fontSize: s.type.caption, color: t.ylw }}>
+          {fmtMamNotSeeding(budget)}
+        </div>
+      )}
 
       {next > 0 && (
         <div
