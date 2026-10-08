@@ -72,6 +72,32 @@ def _is_mam_url(url: str) -> bool:
         return False
     return host == "myanonamouse.net" or host.endswith(".myanonamouse.net")
 
+
+def is_mam_cover_url(url: str) -> bool:
+    """True if `url` is a MAM cover image: a MAM host AND a `/t/p/` path.
+
+    `_is_mam_url` only checks the host, so on its own it would send the
+    session cookie to any MAM path. Cover fetches take URLs from stored
+    rows (`books.cover_url` is operator-editable), and a `cover_url` of
+    `/tor/download.php?tid=…` fetched with the cookie would be a snatch.
+    Covers live at `https://cdn.myanonamouse.net/t/p/<ts>/large/<tid>.jpeg`
+    (`torrent_info.mam_cover_url`), so a fetch that attaches the cookie to
+    a stored URL checks this first.
+    """
+    if not _is_mam_url(url):
+        return False
+    try:
+        path = urlparse(url).path or ""
+    except Exception:
+        return False
+    # httpx collapses dot segments (`/t/p/../../tor/…` goes out as
+    # `/tor/…`) and a server may decode `%2e`, so neither is allowed;
+    # real cover paths contain neither.
+    if ".." in path or "%" in path or "\\" in path:
+        return False
+    return path.startswith("/t/p/")
+
+
 # Numeric category id for "Ebooks" — used by the validation probe to
 # constrain the test search payload. The exact value doesn't matter
 # much (we don't read any of the results), but we need a valid category
@@ -292,6 +318,10 @@ def build_headers(token: str) -> dict[str, str]:
     Public so the grab path (`mam.grab`) can reuse the exact same
     header set when fetching .torrent files. Keeping the construction
     in one place means a UA change or a header tweak is a single edit.
+
+    The `curl/8.0` User-Agent is load-bearing: it's the UA known to work
+    against MAM end-to-end. Don't change it without running a full scan
+    first; UA-based rejection has bitten us before.
     """
     return {
         "Content-Type": "application/json",
@@ -307,6 +337,10 @@ def get_client() -> httpx.AsyncClient:
     client binds to whichever loop is active at creation time.
     Seshat runs one uvicorn loop for the whole process lifetime, so
     this is safe.
+
+    The ONE MAM client: the discovery source used to keep its own copy
+    (removed in the 2026-10 audit, L1-07). `http2=False` is deliberate:
+    HTTP/1.1 is what's been verified against MAM.
     """
     global _client
     if _client is None:
@@ -410,7 +444,14 @@ async def _do_post(
 
     Automatically rotates the in-memory token if the response carries
     a new `mam_id` cookie.
+
+    HOST GATE: same as `_do_get` — the session cookie never goes to a
+    non-MAM host.
     """
+    if not _is_mam_url(url):
+        raise ValueError(
+            f"_do_post refuses non-MAM URL (cookie would leak): {url!r}"
+        )
     effective_token = resolve_token(token)
     response = await get_client().post(
         url,

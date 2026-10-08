@@ -380,11 +380,16 @@ async def _resolve_phash_from_url(
     resolution_meta: dict,
 ) -> Optional[str]:
     """Fetch URL via auth-aware client (MAM CDN-compatible) and hash bytes."""
-    from app.mam.cookie import _do_get, _is_mam_url
+    from app.mam.cookie import _do_get, _is_mam_url, is_mam_cover_url
     from app.mam.cover_hash import hash_image_bytes
 
     resolution_meta["cover_url"] = url
     if _is_mam_url(url):
+        # The cookie goes only to a MAM cover path; a stored cover_url
+        # pointing elsewhere on MAM (a download link) is never fetched.
+        if not is_mam_cover_url(url):
+            resolution_meta["error"] = "cover_url is a MAM link but not a cover image; not fetched"
+            return None
         resp = await _do_get(url, token=token, timeout=15)
     else:
         # External source (Goodreads / Hardcover / etc.) — no MAM auth needed.

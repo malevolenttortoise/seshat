@@ -82,6 +82,17 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   up on goodreads.com and openlibrary.org; those tests now stub it.
   Only loopback fakes and in-process clients remain.
 
+- **One MAM connection; the cookie goes only where it belongs.**
+  Discovery's MAM searches used their own HTTP client beside the one
+  the rest of Seshat uses; they now share it (same headers, timeouts
+  and cookie rotation), so there is one place every MAM request passes
+  through. Its POST requests now refuse a non-MAM address, as its GETs
+  already did, so the session cookie can't be sent elsewhere. And a
+  book's stored cover URL is fetched with the cookie only when it is a
+  MAM cover image (`/t/p/…`): a cover URL edited to point at any other
+  MAM page, such as a download link, is never fetched, so a scan or a
+  debug match can't download a torrent through it.
+
 - **Autograbs wait for MAM's search before deciding.** A new torrent
   reaches #announce about a second after MAM adds it, before MAM's
   search API lists it, so every IRC autograb's lookup came back "not

@@ -225,16 +225,15 @@ def _no_real_mam(monkeypatch):
     with a junk `mam_id`, twice per push in CI (one per Python
     version). The tests passed only because they fail open on errors.
 
-    Both MAM clients (`app.mam.cookie` and the discovery source's own)
-    start every test as a client whose transport refuses with a
-    ConnectError — the same "network down" the fail-open paths already
-    handle. The getters fall back to it after an app-lifespan shutdown
-    nulls the client, instead of lazily building a real one. A test
-    that installs its own client (`fake_mam`, or setting `_client`
-    directly) still gets it: the patched getters return `_client`
-    whenever it is set.
+    The one MAM client (`app.mam.cookie`'s; the discovery source's own
+    copy was removed in the 2026-10 audit, L1-07) starts every test as
+    a client whose transport refuses with a ConnectError — the same
+    "network down" the fail-open paths already handle. The getter falls
+    back to it after an app-lifespan shutdown nulls the client, instead
+    of lazily building a real one. A test that installs its own client
+    (`fake_mam`, or setting `_client` directly) still gets it: the
+    patched getter returns `_client` whenever it is set.
     """
-    from app.discovery.sources import mam as disco_mam
     from app.mam import cookie, search_pacer, torrent_info
 
     # The torrent-info cache is module-level with a 120s TTL, so a test
@@ -257,9 +256,8 @@ def _no_real_mam(monkeypatch):
         )
 
     guard = httpx.AsyncClient(transport=httpx.MockTransport(_refuse))
-    for mod, getter in ((cookie, "get_client"), (disco_mam, "_get_client")):
-        monkeypatch.setattr(mod, "_client", guard)
-        monkeypatch.setattr(mod, getter, lambda mod=mod: mod._client or guard)
+    monkeypatch.setattr(cookie, "_client", guard)
+    monkeypatch.setattr(cookie, "get_client", lambda: cookie._client or guard)
     yield guard
 
 

@@ -23,10 +23,10 @@ import pytest
 from app.discovery.sources.mam import (
     _BUNDLE_PROMOTE_TS_FLOOR,
     _description_contains_title,
-    _handle_response_cookie,
     _is_bundle,
     _strip_to_lines,
 )
+from app.mam.cookie import handle_response_cookie
 
 
 def _make_response(headers: list, body: str = "x") -> httpx.Response:
@@ -257,7 +257,7 @@ class TestDeletionSentinelNotRotated:
                 "mam_id=deleted; expires=Thu, 01 Jan 1970 00:00:01 GMT; "
                 "Max-Age=0; path=/; domain=.myanonamouse.net",
             )])
-            await _handle_response_cookie(resp)
+            await handle_response_cookie(resp)
 
             assert cookie_mod._current_token == "VALID_OLD_MAM_ID"
         finally:

@@ -23,6 +23,11 @@ The user-visible shape, reported on the MAM forum 2026-09-13:
 
 These tests pin the corrected behavior: ONE token authority, explicit
 argument wins, and rotations observed here land in the shared slot.
+
+Since the 2026-10 audit (L1-07) the module has no HTTP client either:
+its search and description calls go through `app.mam.cookie._do_post`,
+so the tests drive those two calls against a recorder installed on the
+cookie module's client.
 """
 import httpx
 import pytest
@@ -44,7 +49,7 @@ def clean_token():
 
 
 def _install_recorder(monkeypatch, *, set_cookie: str = "") -> list:
-    """Route this module's HTTP layer through a MockTransport.
+    """Route the one MAM client (`app.mam.cookie`'s) through a MockTransport.
 
     Returns a list that receives the outbound `Cookie` header of every
     request, so a test can assert which token actually hit the wire.
@@ -57,7 +62,7 @@ def _install_recorder(monkeypatch, *, set_cookie: str = "") -> list:
         return httpx.Response(200, headers=headers, text='{"data":[]}')
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    monkeypatch.setattr(disc_mam, "_get_client", lambda: client)
+    monkeypatch.setattr(cookie_mod, "_client", client)
     return sent
 
 
@@ -72,19 +77,17 @@ class TestExplicitTokenWins:
         cookie_mod.set_current_token("DEAD_ROTATED_TOKEN")
 
         # The router resolves the freshly-saved cookie and passes it in.
-        await disc_mam._do_post(
-            disc_mam.MAM_SEARCH_URL, "FRESHLY_PASTED_TOKEN", "{}"
-        )
+        await disc_mam._mam_search("FRESHLY_PASTED_TOKEN", "Author", "Title")
 
         assert sent == ["mam_id=FRESHLY_PASTED_TOKEN"]
 
-    async def test_get_uses_explicit_token_over_stale_global(
+    async def test_description_uses_explicit_token_over_stale_global(
         self, clean_token, monkeypatch
     ):
         sent = _install_recorder(monkeypatch)
         cookie_mod.set_current_token("DEAD_ROTATED_TOKEN")
 
-        await disc_mam._do_get(disc_mam.MAM_SEARCH_URL, "FRESHLY_PASTED_TOKEN")
+        await disc_mam._fetch_torrent_description("FRESHLY_PASTED_TOKEN", "123")
 
         assert sent == ["mam_id=FRESHLY_PASTED_TOKEN"]
 
@@ -99,7 +102,7 @@ class TestExplicitTokenWins:
         sent = _install_recorder(monkeypatch)
         cookie_mod.set_current_token("LIVE_TOKEN")
 
-        await disc_mam._do_post(disc_mam.MAM_SEARCH_URL, "", "{}")
+        await disc_mam._mam_search("", "Author", "Title")
 
         assert sent == ["mam_id=LIVE_TOKEN"]
 
@@ -114,7 +117,7 @@ class TestRotationSharesOneSlot:
         )
         cookie_mod.set_current_token("ORIGINAL")
 
-        await disc_mam._do_post(disc_mam.MAM_SEARCH_URL, "ORIGINAL", "{}")
+        await disc_mam._mam_search("ORIGINAL", "Author", "Title")
 
         # Before the fix this landed in a private global and
         # app.mam.cookie never learned about it, so MAM Status and
@@ -142,13 +145,31 @@ class TestRotationSharesOneSlot:
         cookie_mod.set_current_token("ORIGINAL")
         cookie_mod.set_rotation_callback(fake_callback)
 
-        await disc_mam._do_post(disc_mam.MAM_SEARCH_URL, "ORIGINAL", "{}")
+        await disc_mam._mam_search("ORIGINAL", "Author", "Title")
 
         assert persisted == ["ROTATED_BY_SEARCH"]
 
 
 class TestNoParallelTokenState:
     """Guard against reintroducing a second token authority."""
+
+    def test_module_has_no_http_client_of_its_own(self):
+        """One MAM HTTP stack (audit L1-07): a second client is a second
+        place to forget the host gate, the pacing or the rotation."""
+        for name in (
+            "_client",
+            "_get_client",
+            "_do_get",
+            "_do_post",
+            "_build_headers",
+            "_handle_response_cookie",
+            "aclose_session",
+        ):
+            assert not hasattr(disc_mam, name), (
+                f"{name} is back in app.discovery.sources.mam. MAM requests "
+                "go through app.mam.cookie's client."
+            )
+        assert disc_mam.MAM_SEARCH_URL is cookie_mod.MAM_SEARCH_URL
 
     def test_module_has_no_private_token_globals(self):
         for name in (

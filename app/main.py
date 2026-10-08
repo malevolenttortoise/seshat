@@ -1366,15 +1366,6 @@ async def lifespan(app: FastAPI):
             await aclose_session()
         except Exception:
             _log.exception("error closing MAM cookie session during shutdown")
-        # The discovery domain holds its own long-lived httpx.AsyncClient
-        # for MAM metadata calls — separate from the cookie-module one
-        # that aclose_session() above closes. Close it explicitly so we
-        # don't leak the transport.
-        try:
-            from app.discovery.sources.mam import aclose_session as disc_mam_aclose
-            await disc_mam_aclose()
-        except Exception:
-            _log.exception("error closing discovery MAM session during shutdown")
         # Best-effort final flush of any pending discovery digest events
         # so a restart doesn't lose notifications queued during the day.
         # No-op when ntfy_digest_enabled=false (force=True still drains

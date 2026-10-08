@@ -569,3 +569,88 @@ class TestDoGetHostGate:
             await _do_get(
                 "https://attacker.com/myanonamouse.net", token="t"
             )
+
+
+def _recording_client(monkeypatch) -> list:
+    """Install a client on `app.mam.cookie` that records every request."""
+    import httpx
+
+    from app.mam import cookie
+
+    sent: list = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(str(request.url))
+        return httpx.Response(200, text='{"data":[]}')
+
+    monkeypatch.setattr(
+        cookie, "_client", httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    )
+    return sent
+
+
+class TestDoPostHostGate:
+    """`_do_post` has `_do_get`'s host gate (audit L1-07): the session
+    cookie never goes to a non-MAM host, and nothing is sent."""
+
+    @pytest.mark.asyncio
+    async def test_rejects_non_mam_url_without_sending(self, monkeypatch):
+        from app.mam.cookie import _do_post
+        sent = _recording_client(monkeypatch)
+        with pytest.raises(ValueError, match="non-MAM URL"):
+            await _do_post("https://attacker.com/search", token="t", payload="{}")
+        assert sent == []
+
+    @pytest.mark.asyncio
+    async def test_rejects_substring_bypass(self, monkeypatch):
+        from app.mam.cookie import _do_post
+        sent = _recording_client(monkeypatch)
+        with pytest.raises(ValueError, match="non-MAM URL"):
+            await _do_post(
+                "https://attacker.com/?u=myanonamouse.net", token="t", payload="{}"
+            )
+        assert sent == []
+
+    @pytest.mark.asyncio
+    async def test_mam_search_url_still_sent(self, monkeypatch):
+        from app.mam.cookie import MAM_SEARCH_URL, _do_post
+        sent = _recording_client(monkeypatch)
+        resp = await _do_post(MAM_SEARCH_URL, token="t", payload="{}")
+        assert resp.status_code == 200
+        assert sent == [MAM_SEARCH_URL]
+
+
+class TestIsMamCoverUrl:
+    """Only a MAM host with a `/t/p/` path may carry the cookie on a
+    cover fetch; a stored `cover_url` that is a download link must not."""
+
+    def test_cdn_cover_path(self):
+        from app.mam.cookie import is_mam_cover_url
+        from app.mam.torrent_info import mam_cover_url
+        assert is_mam_cover_url(mam_cover_url("1275070")) is True
+        assert is_mam_cover_url(
+            "https://cdn.myanonamouse.net/t/p/1700000000/large/456.jpeg"
+        ) is True
+
+    def test_download_link_is_not_a_cover(self):
+        from app.mam.cookie import is_mam_cover_url
+        assert is_mam_cover_url(
+            "https://www.myanonamouse.net/tor/download.php?tid=456"
+        ) is False
+        assert is_mam_cover_url(
+            "https://cdn.myanonamouse.net/tor/download.php?tid=456"
+        ) is False
+
+    def test_dot_segments_and_encodings_rejected(self):
+        from app.mam.cookie import is_mam_cover_url
+        for url in (
+            "https://cdn.myanonamouse.net/t/p/../../tor/download.php?tid=456",
+            "https://cdn.myanonamouse.net/t/p/%2e%2e/%2e%2e/tor/download.php",
+            "https://cdn.myanonamouse.net/t/p/..\\..\\tor/download.php",
+        ):
+            assert is_mam_cover_url(url) is False, url
+
+    def test_non_mam_host_rejected(self):
+        from app.mam.cookie import is_mam_cover_url
+        assert is_mam_cover_url("https://attacker.com/t/p/1/large/2.jpeg") is False
+        assert is_mam_cover_url("") is False
