@@ -9,6 +9,33 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Fixed
+
+- **The snatch budget no longer loses torrents** (audit issue 09). When
+  qBit couldn't be read for one tick (a restart, an expired session, a
+  network blip), the budget watcher treated the empty answer as "every
+  torrent was removed" and freed every slot at once, then drained the
+  queue into them: 161 torrents on one install were lost this way in six
+  such ticks. A failed read now leaves the budget and the queue alone
+  until qBit answers. A torrent qBit hasn't listed yet (seconds after it
+  was added) also keeps its slot for up to `qbit_missing_grab_grace_hours`
+  instead of being freed on the next tick.
+
+### Changed
+
+- **The snatch budget uses MAM's own count.** Seshat now asks MAM for its
+  snatch summary (`jsonLoad.php?snatch_summary`) about once an hour, and
+  the budget counts the larger of Seshat's number and MAM's unsatisfied
+  count, against the lower of your cap and MAM's limit. MAM's number
+  covers what Seshat can't see: torrents removed from qBit before 72h of
+  seeding that MAM still counts, duplicates MAM deleted, and MAM's own
+  expiry. Without a read in the last 3 hours the budget is Seshat's own
+  count, as before. The Snatch Budget card shows MAM's count next to
+  Seshat's and says when MAM counts torrents that aren't seeding.
+  `GET /api/v1/grabs/budget` gains `mam_unsat`, `mam_limit`,
+  `mam_not_seeding` and `mam_fetched_at`; `budget_used` and `budget_cap`
+  now report the values the budget enforces.
+
 ## [3.12.0] — 2026-10-08
 
 Phase 2 of the 2026-10 roadmap, the **codebase audit**, waves 1 and 2:

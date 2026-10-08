@@ -98,6 +98,18 @@ class TorrentClient(Protocol):
         category: Optional[str] = None,
     ) -> list[TorrentInfo]: ...
 
+    async def list_torrents_checked(
+        self,
+        category: Optional[str] = None,
+    ) -> Optional[list[TorrentInfo]]:
+        """Like `list_torrents`, but None when the list couldn't be read.
+
+        `list_torrents` returns `[]` on any failure, which is
+        indistinguishable from "no torrents"; the budget watcher needs
+        the difference so a failed read doesn't release the ledger.
+        """
+        ...
+
     async def get_torrent(self, torrent_hash: str) -> Optional[TorrentInfo]: ...
 
     async def list_torrent_files(self, torrent_hash: str) -> list[str]:

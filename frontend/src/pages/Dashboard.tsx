@@ -7,7 +7,15 @@ import { Btn } from "../components/Btn";
 import { Spin } from "../components/Spin";
 import { api } from "../api";
 import { useTheme } from "../theme";
-import { fmtNum, fmtBytes, fmtRatio, fmtDuration } from "../lib/format";
+import {
+  fmtNum,
+  fmtBytes,
+  fmtRatio,
+  fmtDuration,
+  fmtMamBudget,
+  fmtMamNotSeeding,
+  type MamBudgetFields,
+} from "../lib/format";
 import { useVisibleInterval } from "../hooks/useVisibleInterval";
 import { useViewport } from "../hooks/useViewport";
 import { useMobileCodepath } from "../components/mobile";
@@ -32,7 +40,7 @@ interface BudgetEntry {
   grab_id: number | null; torrent_name: string; author_blob: string;
   seeding_seconds: number; remaining_seconds: number; source: string;
 }
-interface BudgetResponse {
+interface BudgetResponse extends MamBudgetFields {
   budget_used: number; budget_cap: number; ledger_active: number;
   qbit_extras: number; queue_size: number; seed_seconds_required: number;
   next_release_seconds: number | null; entries: BudgetEntry[];
@@ -229,11 +237,15 @@ function DesktopPipelineDashboard({ onNav }: DashboardProps) {
                   {budget.budget_used}
                 </span>
                 <span style={{ fontSize: 16, color: t.textDim }}>/ {budget.budget_cap}</span>
+                <span style={{ fontSize: 12, color: t.textDim, marginLeft: 8 }}>{fmtMamBudget(budget)}</span>
               </div>
               <div style={{ fontSize: 11, color: t.textDim, marginTop: 4 }}>
                 {budget.ledger_active} Seshat + {budget.qbit_extras} manual
                 {budget.queue_size > 0 && <span style={{ color: t.warn, marginLeft: 8 }}>{budget.queue_size} queued</span>}
               </div>
+              {fmtMamNotSeeding(budget) && (
+                <div style={{ fontSize: 11, color: t.warn, marginTop: 4 }}>{fmtMamNotSeeding(budget)}</div>
+              )}
               {budget.next_release_seconds !== null && (
                 <div style={{ fontSize: 12, color: t.accent, marginTop: 6 }}>
                   Next release in {fmtDuration(budget.next_release_seconds)}

@@ -134,6 +134,10 @@ async def count_effective(db: aiosqlite.Connection) -> int:
     cached number is a lower bound that drifts upward as new manual
     adds arrive — safer than ignoring them entirely because the
     budget watcher always reconciles on its next pass.
+
+    MAM's own unsatisfied count is the floor when Seshat has a fresh
+    read of it (`mam_floor`, 2026-10 audit issue 09): MAM keeps counting
+    torrents Seshat can no longer see (removed from qBit before 72h).
     """
     active = await count_active(db)
     try:
@@ -141,7 +145,14 @@ async def count_effective(db: aiosqlite.Connection) -> int:
         extras = int(_state._snatch_budget.get("qbit_extras", 0) or 0)
     except Exception:
         extras = 0
-    return active + max(0, extras)
+    from app.rate_limit import mam_floor
+    return mam_floor.floor_count(active + max(0, extras))
+
+
+def effective_cap(setting_cap: int) -> int:
+    """The cap every budget check uses: the setting, or MAM's limit if lower."""
+    from app.rate_limit import mam_floor
+    return mam_floor.effective_cap(setting_cap)
 
 
 async def list_active(db: aiosqlite.Connection) -> list[LedgerRow]:
@@ -189,6 +200,7 @@ async def reconcile_with_qbit(
     db: aiosqlite.Connection,
     qbit_torrents: dict[str, int],
     seed_seconds_required: int,
+    never_seen_grace_seconds: int = 0,
 ) -> dict[str, int]:
     """Synchronize ledger state with the latest qBit snapshot.
 
@@ -202,6 +214,11 @@ async def reconcile_with_qbit(
         `seedtime_reached`.
       - if the hash is NOT in qbit_torrents → the user removed it
         (or qBit lost it); mark released, reason `removed_from_qbit`.
+        Except a row qBit has never listed (`last_check_at` NULL):
+        that is usually a torrent qBit hasn't shown yet, seconds after
+        the add (100 rows on prod were released 5–50s after their grab,
+        2026-10 audit issue 09). It keeps counting until
+        `never_seen_grace_seconds` have passed since the grab.
 
     Returns a small `dict[str, int]` summary the budget watcher can
     log: `{"updated": N, "released_seedtime": N, "released_removed": N}`.
@@ -212,6 +229,13 @@ async def reconcile_with_qbit(
     active = await list_active(db)
 
     for row in active:
+        if (
+            row.qbit_hash not in qbit_torrents
+            and row.last_check_at is None
+            and never_seen_grace_seconds > 0
+            and await _seconds_since_grab(db, row.grab_id) < never_seen_grace_seconds
+        ):
+            continue
         if row.qbit_hash in qbit_torrents:
             new_seconds = qbit_torrents[row.qbit_hash]
             await update_seeding(db, row.qbit_hash, new_seconds)
@@ -235,6 +259,23 @@ async def reconcile_with_qbit(
 
 
 # ─── Helpers ─────────────────────────────────────────────────
+
+
+async def _seconds_since_grab(db: aiosqlite.Connection, grab_id: int) -> float:
+    """Seconds since the grab was submitted (or grabbed).
+
+    Unknown → infinity, so a row with no readable grab time is released
+    as before rather than held forever.
+    """
+    cursor = await db.execute(
+        "SELECT (julianday('now') - julianday(COALESCE(submitted_at, grabbed_at)))"
+        " * 86400.0 FROM grabs WHERE id = ?",
+        (grab_id,),
+    )
+    row = await cursor.fetchone()
+    if row is None or row[0] is None:
+        return float("inf")
+    return float(row[0])
 
 
 def _row_to_ledger(row) -> LedgerRow:

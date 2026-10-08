@@ -158,3 +158,33 @@ class TestUserStatusCookieRotation:
 
         await get_user_status(token="old_cookie")
         assert get_current_token() == "new_rotated_cookie"
+
+
+# ─── Snatch summary (2026-10 audit, issue 09) ──────────────
+
+
+class TestSnatchSummary:
+    async def test_every_status_read_asks_for_the_summary(self, fake_mam):
+        await get_user_status(token="tok")
+        urls = [str(r.url) for r in fake_mam.requests if "jsonLoad.php" in str(r.url)]
+        assert urls and all("snatch_summary" in u for u in urls)
+
+    async def test_summary_reaches_the_budget_floor(self, fake_mam):
+        from app.rate_limit import mam_floor
+
+        body = json.loads(DEFAULT_USER_STATUS_BODY)
+        body["snatch_summary"] = {
+            "created": 1791475283,
+            "inactUnsat": {"count": 2},
+            "unsat": {"name": "Unsatisfied", "count": 40, "limit": 150, "size": 1},
+        }
+        fake_mam.user_status.body = json.dumps(body).encode()
+        await get_user_status(token="tok")
+        s = mam_floor.current()
+        assert (s.unsat_count, s.unsat_limit, s.not_seeding) == (40, 150, 2)
+
+    async def test_no_summary_records_nothing(self, fake_mam):
+        from app.rate_limit import mam_floor
+
+        await get_user_status(token="tok")
+        assert mam_floor.current() is None

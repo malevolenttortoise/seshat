@@ -177,18 +177,27 @@ async def snatch_budget():
         # Sort by remaining time ascending (closest to release first).
         entries.sort(key=lambda e: e["remaining_seconds"])
 
-        budget_used = len(active_rows) + max(0, extras_count)
+        # MAM's own unsatisfied count is the floor and its limit can
+        # lower the cap (2026-10 audit issue 09); both null when Seshat
+        # has no fresh read of MAM's snatch summary.
+        from app.rate_limit import mam_floor
+        mam = mam_floor.current()
+        budget_used = mam_floor.floor_count(len(active_rows) + max(0, extras_count))
         next_release = entries[0]["remaining_seconds"] if entries else None
 
         return {
             "budget_used": budget_used,
-            "budget_cap": deps.budget_cap,
+            "budget_cap": ledger_mod.effective_cap(deps.budget_cap),
             "ledger_active": len(active_rows),
             "qbit_extras": extras_count,
             "queue_size": queue_size,
             "seed_seconds_required": deps.seed_seconds_required,
             "next_release_seconds": next_release,
             "entries": entries,
+            "mam_unsat": mam.unsat_count if mam else None,
+            "mam_limit": mam.unsat_limit if mam else None,
+            "mam_not_seeding": mam.not_seeding if mam else None,
+            "mam_fetched_at": mam_floor.fetched_at() if mam else None,
         }
     finally:
         await db.close()

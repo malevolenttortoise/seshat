@@ -55,3 +55,31 @@ export const timeAgo = (ts: number | null | undefined): string => {
 /** Date string → YYYY-MM-DD (truncating time component) */
 export const fmtDate = (d: string | null | undefined): string =>
   d && d.length >= 10 ? d.substring(0, 10) : d || "";
+
+// ─── Snatch budget ──────────────────────────────────────────
+
+/** The MAM-side fields of `/v1/grabs/budget` (2026-10 audit issue 09). */
+export interface MamBudgetFields {
+  mam_unsat?: number | null;
+  mam_limit?: number | null;
+  mam_not_seeding?: number | null;
+  mam_fetched_at?: number | null;
+}
+
+/** "MAM: 34 / 200 (12:31)", or "MAM: —" when Seshat has no fresh read. */
+export function fmtMamBudget(b: MamBudgetFields): string {
+  if (b.mam_unsat === null || b.mam_unsat === undefined) return "MAM: —";
+  const at = b.mam_fetched_at
+    ? new Date(b.mam_fetched_at * 1000).toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "";
+  return `MAM: ${b.mam_unsat} / ${b.mam_limit ?? "—"}${at ? ` (${at})` : ""}`;
+}
+
+/** "MAM counts 2 not seeding (removed early)", or "" when there are none. */
+export function fmtMamNotSeeding(b: MamBudgetFields): string {
+  const n = b.mam_not_seeding ?? 0;
+  return n > 0 ? `MAM counts ${n} not seeding (removed early)` : "";
+}

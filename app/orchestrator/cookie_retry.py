@@ -179,7 +179,7 @@ async def _retry_grab(
         return None
     rate_decision = decide_grab_action(
         budget_used=await ledger_mod.count_effective(db),
-        budget_cap=deps.budget_cap,
+        budget_cap=ledger_mod.effective_cap(deps.budget_cap),
         queue_size=await queue_mod.size(db),
         queue_max=deps.queue_max,
         queue_mode_enabled=deps.queue_mode_enabled,

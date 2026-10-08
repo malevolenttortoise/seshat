@@ -227,6 +227,18 @@ def _no_leaked_mam_scan_claim():
 
 
 @pytest.fixture(autouse=True)
+def _no_leaked_mam_snatch_summary():
+    """Every test starts and ends with no MAM snatch summary (issue 09):
+    one a test recorded would raise every later test's budget count to
+    MAM's number, or hold off the watcher's next read for an hour."""
+    from app import state
+
+    state._snatch_budget.pop("mam", None)
+    yield
+    state._snatch_budget.pop("mam", None)
+
+
+@pytest.fixture(autouse=True)
 def _no_real_mam(monkeypatch):
     """The suite never talks to the real MAM.
 
