@@ -278,10 +278,15 @@ export default function MamPage() {
           </Section>
 
           <Section
-            title="Seshat's MAM traffic"
-            subtitle="Every request Seshat sends to MAM (searches, downloads, covers, account checks) goes out one at a time, spaced by MAM's Rate (s) in Settings → Metadata Sources (at least 1 second). IRC autograbs go first."
+            title="MAM traffic"
+            subtitle="Seshat's requests to MAM, one at a time."
           >
             <KV label="Requests, last minute">{status.requests_last_minute ?? 0}</KV>
+            <p style={{ fontSize: 12, color: theme.textDim, marginTop: 10 }}>
+              Searches, downloads, covers and account checks all wait their
+              turn, spaced by MAM's Rate (s) in Settings → Metadata Sources
+              (at least 1 second). IRC autograbs go first.
+            </p>
           </Section>
 
           <EconomySections />
