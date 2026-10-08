@@ -36,17 +36,21 @@ State transitions written by this module:
 from __future__ import annotations
 
 import asyncio
+import dataclasses
+import json
 import logging
 import random
 import time
 import weakref
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Awaitable, Callable, Optional, Protocol
 
 import aiosqlite
 
 from app.clients.base import AddResult, TorrentClient
 from app.filter.gate import Announce, Decision, FilterConfig, evaluate_announce
+from app.mam import pacer as mam_pacer
 from app.mam.cookie import fingerprint as cookie_fingerprint
 from app.mam.grab import GrabResult
 from app.mam.torrent_meta import BencodeError, info_hash, read_mam_comment
@@ -148,12 +152,19 @@ def grab_claim_lock() -> asyncio.Lock:
 # held: a background task polls on this schedule (cumulative seconds
 # after the announce: 5, 15, 30, 60, 120, 180, 300, 420, 600) and grabs
 # once MAM lists it. If MAM still doesn't by the end, the grab goes
-# ahead on the announce's word (VIP|Normal). In memory only: a restart
-# mid-wait loses the grab, though its announce row is already written.
+# ahead on the announce's word (VIP|Normal). The wait runs in memory and
+# is also a `pending_holds` row (kind 'index_wait', the announce as
+# JSON), so after a restart the hold-release loop resumes it on the rest
+# of the schedule (`resume_index_waits`, audit issue 26).
 _INDEX_WAIT_DELAYS_S: tuple[float, ...] = (5, 10, 15, 30, 60, 60, 120, 120, 180)
 _index_sleep: Callable[[float], Awaitable[None]] = asyncio.sleep  # test seam
 # Strong refs: the event loop only keeps weak ones to running tasks.
 _held_grabs: set[asyncio.Task] = set()
+# Index-wait rows created before this process started have no task: they
+# were mid-wait at a restart. Rows this process created always have one.
+_process_started_at: str = holds_storage._utc_now_iso()
+# Rows already resumed by this process (their task owns them now).
+_resumed_hold_ids: set[int] = set()
 # Held grabs finish in the background, so two could otherwise run the
 # grab path at once and both slip past the format-dedup gate (each sees
 # no in-flight sibling yet). Every allowed IRC announce's grab runs
@@ -591,6 +602,17 @@ async def _hold_for_index(
             decision=decision,
             filetype=(announce.filetype or "").lower().strip(),
         )
+        hold_id = await holds_storage.create_index_wait(
+            db,
+            announce_id=announce_id,
+            torrent_id=announce.torrent_id,
+            torrent_name=announce.torrent_name,
+            category=announce.category,
+            author_blob=announce.author_blob,
+            book_format=announce.filetype,
+            payload=_index_wait_payload(announce, decision, raw_line),
+            wait_seconds=int(sum(_INDEX_WAIT_DELAYS_S)),
+        )
     finally:
         await db.close()
     _emit(deps, "announce_recorded", {"announce_id": announce_id})
@@ -603,6 +625,7 @@ async def _hold_for_index(
     task = asyncio.create_task(_grab_once_indexed(
         deps, announce,
         raw_line=raw_line, decision=decision, announce_id=announce_id,
+        hold_id=hold_id,
     ))
     _held_grabs.add(task)
     task.add_done_callback(_held_grabs.discard)
@@ -611,10 +634,18 @@ async def _hold_for_index(
     )
 
 
-async def _wait_for_index(deps: DispatcherDeps, torrent_id: str) -> bool:
-    """Poll MAM's search until it lists `torrent_id`. False if it never did."""
-    waited = 0.0
-    for delay in _INDEX_WAIT_DELAYS_S:
+async def _wait_for_index(
+    deps: DispatcherDeps,
+    torrent_id: str,
+    delays: tuple[float, ...] = _INDEX_WAIT_DELAYS_S,
+    waited: float = 0.0,
+) -> bool:
+    """Poll MAM's search until it lists `torrent_id`. False if it never did.
+
+    `delays` / `waited`: a wait resumed after a restart polls only the
+    rest of the schedule, counting from when the announce arrived.
+    """
+    for delay in delays:
         await _index_sleep(delay)
         waited += delay
         try:
@@ -634,11 +665,22 @@ async def _grab_once_indexed(
     *,
     raw_line: str,
     decision: Decision,
-    announce_id: int,
+    announce_id: Optional[int],
+    hold_id: Optional[int] = None,
+    delays: tuple[float, ...] = _INDEX_WAIT_DELAYS_S,
+    waited: float = 0.0,
 ) -> None:
-    """The held grab: wait for MAM's index, then run the grab path."""
+    """The held grab: wait for MAM's index, then run the grab path.
+
+    Its `pending_holds` row (`hold_id`) is resolved however it ends:
+    released once the grab path ran, dropped if a kill switch stopped
+    it or it failed.
+    """
+    outcome: Optional[str] = None   # the released row's reason
     try:
-        indexed = await _wait_for_index(deps, announce.torrent_id)
+        indexed = await _wait_for_index(
+            deps, announce.torrent_id, delays=delays, waited=waited,
+        )
         # The wait can run for minutes: a settings save may have
         # replaced the dispatcher (grab policy, excluded uploaders,
         # budget), and the kill switches may have flipped.
@@ -658,7 +700,7 @@ async def _grab_once_indexed(
                 "VIP" if announce.vip else "Normal",
             )
         async with _announce_grab_lock():
-            await _dispatch_with_decision(
+            result = await _dispatch_with_decision(
                 deps,
                 announce=announce,
                 raw_line=raw_line,
@@ -669,8 +711,120 @@ async def _grab_once_indexed(
                 announce_id=announce_id,
                 trust_announce=not indexed,
             )
+        outcome = (
+            f"{'indexed' if indexed else 'trust_announce'}:"
+            f"{result.action}:grab_{result.grab_id}"
+        )
     except Exception:
         _log.exception("held grab of tid=%s failed", announce.torrent_id)
+    finally:
+        if hold_id is not None:
+            await _resolve_index_wait(deps, hold_id, outcome)
+
+
+async def _resolve_index_wait(
+    deps: DispatcherDeps, hold_id: int, outcome: Optional[str],
+) -> None:
+    try:
+        db = await deps.db_factory()
+        try:
+            if outcome is None:
+                await holds_storage.drop_holds(
+                    db, [hold_id], reason="index_wait_dropped",
+                )
+            else:
+                await holds_storage.mark_released(db, hold_id, reason=outcome)
+        finally:
+            await db.close()
+    except Exception:
+        _log.exception("index-wait hold %s: couldn't record its end", hold_id)
+
+
+def _index_wait_payload(announce: Announce, decision: Decision, raw_line: str) -> str:
+    return json.dumps({
+        "announce": dataclasses.asdict(announce),
+        "decision": dataclasses.asdict(decision),
+        "raw_line": raw_line,
+    })
+
+
+def _from_payload(cls, data: dict):
+    """Rebuild a frozen dataclass from its JSON dict (lists back to tuples;
+    keys a later version doesn't know are ignored)."""
+    names = {f.name for f in dataclasses.fields(cls)}
+    return cls(**{
+        k: tuple(v) if isinstance(v, list) else v
+        for k, v in data.items() if k in names
+    })
+
+
+def _remaining_index_delays(waited: float) -> tuple[float, ...]:
+    """The rest of the poll schedule, as delays, `waited` seconds in.
+
+    Past the end, one check right away: MAM may well list it by now, and
+    if not the grab goes ahead on the announce's word as usual.
+    """
+    marks: list[float] = []
+    total = 0.0
+    for d in _INDEX_WAIT_DELAYS_S:
+        total += d
+        marks.append(total)
+    ahead = [m for m in marks if m > waited]
+    if not ahead:
+        return (0.0,)
+    delays = [ahead[0] - waited]
+    delays += [b - a for a, b in zip(ahead, ahead[1:])]
+    return tuple(delays)
+
+
+async def resume_index_waits(deps: DispatcherDeps) -> int:
+    """Resume grabs that were waiting for MAM's index when Seshat stopped.
+
+    Called from the hold-release loop. A pending index-wait row created
+    before this process started has no task; this starts one on the rest
+    of the schedule, at IRC priority, with the live dispatcher. Returns
+    how many it resumed.
+    """
+    db = await deps.db_factory()
+    try:
+        rows = await holds_storage.list_index_waits_created_before(
+            db, _process_started_at,
+        )
+    finally:
+        await db.close()
+    resumed = 0
+    for row in rows:
+        if row.id in _resumed_hold_ids:
+            continue
+        _resumed_hold_ids.add(row.id)
+        try:
+            data = json.loads(row.payload)
+            announce = _from_payload(Announce, data["announce"])
+            decision = _from_payload(Decision, data["decision"])
+            raw_line = data.get("raw_line", "")
+            created = datetime.strptime(row.created_at, "%Y-%m-%d %H:%M:%S")
+            waited = max(0.0, (
+                datetime.now(timezone.utc) - created.replace(tzinfo=timezone.utc)
+            ).total_seconds())
+        except Exception:
+            _log.exception("index-wait hold %s: unreadable; dropping it", row.id)
+            await _resolve_index_wait(deps, row.id, None)
+            continue
+        _log.info(
+            "resuming held grab of tid=%s after a restart (%ds since the announce)",
+            announce.torrent_id, int(waited),
+        )
+        with mam_pacer.priority(mam_pacer.PRIORITY_IRC):
+            task = asyncio.create_task(_grab_once_indexed(
+                deps, announce,
+                raw_line=raw_line, decision=decision,
+                announce_id=row.announce_id, hold_id=row.id,
+                delays=_remaining_index_delays(waited), waited=waited,
+            ))
+        _held_grabs.add(task)
+        task.add_done_callback(_held_grabs.discard)
+        resumed += 1
+    return resumed
 
 
 def _current_dispatcher(held: DispatcherDeps) -> DispatcherDeps:

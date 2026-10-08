@@ -30,7 +30,7 @@ from typing import Callable, Optional
 
 from app.database import get_db
 from app.filter.gate import Announce
-from app.orchestrator.dispatch import DispatcherDeps, inject_grab
+from app.orchestrator.dispatch import DispatcherDeps, inject_grab, resume_index_waits
 from app.orchestrator.format_dedup import (
     evaluate_format_dedup,
     lookup_dedup_siblings,
@@ -45,7 +45,16 @@ async def tick(deps: DispatcherDeps) -> int:
     (released or dropped) this tick.
 
     Tests drive this directly; the supervised loop wraps it.
+
+    It also resumes grabs that were waiting for MAM's index when Seshat
+    last stopped (`resume_index_waits`, audit issue 26); those aren't
+    counted here.
     """
+    try:
+        await resume_index_waits(deps)
+    except Exception:
+        _log.exception("hold_release: resuming index-wait holds failed")
+
     db = await get_db()
     try:
         due = await holds_storage.list_due(db)

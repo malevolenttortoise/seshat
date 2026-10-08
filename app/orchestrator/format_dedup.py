@@ -386,7 +386,8 @@ async def lookup_dedup_siblings(
 
         cur = await db.execute(
             "SELECT id, book_format FROM pending_holds "
-            "WHERE dedup_key = ? AND state = 'pending'",
+            "WHERE dedup_key = ? AND state = 'pending' "
+            "AND kind = 'format_dedup'",
             (dedup_key,),
         )
         for row in await cur.fetchall():

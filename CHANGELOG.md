@@ -82,6 +82,17 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   up on goodreads.com and openlibrary.org; those tests now stub it.
   Only loopback fakes and in-process clients remain.
 
+- **An autograb waiting for MAM's search survives a restart.** An
+  allowed IRC announce that MAM's search doesn't list yet waits up to
+  10 minutes for it (see "Autograbs wait for MAM's search" below). That
+  wait lived only in memory, so updating or restarting the container
+  mid-wait dropped the grab, leaving only its announce row. The wait is
+  now also recorded in the database, and after a restart Seshat picks
+  it up within a minute on the rest of its schedule, with your current
+  settings, and grabs it once (or, if MAM never lists it, on the
+  announce's VIP/Normal word, as before). Database: `pending_holds`
+  gains `kind` and `payload` columns; existing rows are unchanged.
+
 - **Sending books to the pipeline and approving tentatives in bulk no
   longer time out.** Both grabbed every item inside one request; a
   31-row bulk approve already took about two minutes, so through the
