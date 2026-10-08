@@ -92,6 +92,25 @@ class TestIrcBridge:
         await main._on_irc_announce(_make_announce(torrent_id=TID))
         assert await _announce_rows() == []
 
+    async def test_announce_requests_go_first_in_the_mam_pacer(
+        self, temp_db, mam_search, monkeypatch,
+    ):
+        """Issue 05: an announce's MAM lookups queue ahead of scans."""
+        from app.mam import pacer
+
+        seen: list[int] = []
+
+        async def fake_handle(deps, announce):
+            seen.append(pacer._priority.get())
+
+        monkeypatch.setattr(main, "handle_announce", fake_handle)
+        state.dispatcher = _sanderson_deps()
+
+        await main._on_irc_announce(_make_announce(torrent_id=TID))
+
+        assert seen == [pacer.PRIORITY_IRC]
+        assert pacer._priority.get() == pacer.PRIORITY_NORMAL
+
 
 class TestHeldGrab:
     async def test_policy_saved_during_the_index_wait_applies(self, temp_db, mam_index):

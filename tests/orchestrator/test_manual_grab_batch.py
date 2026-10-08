@@ -4,7 +4,7 @@ The batch rules: the cap counts both kinds and is enforced by the
 server; the "Use wedges" toggle is refused outright when the batch
 needs more wedges than the account may spend (D9: nothing is spent,
 nothing starts); and 30 rows never burst MAM — preview and Grab all
-both go through the pacer gap.
+(lookups, covers and downloads) all go through the MAM pacer.
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ import pytest
 from fastapi import FastAPI
 
 from app import state
-from app.mam import search_pacer, torrent_info
+from app.mam import pacer, torrent_info
 from app.mam.grab import GrabResult
 from app.orchestrator import manual_grab
 from app.routers.manual_grab import router
@@ -179,17 +179,23 @@ class TestBatchPacing:
         times: list[float] = []
 
         async def fake_post(url, token=None, payload=None, timeout=15):
-            times.append(fake_clock["now"])
-            tid = json.loads(payload)["tor"]["id"]
-            return _Resp({"data": [_item(tid, title=f"Book {tid}")]})
+            async def answer():
+                times.append(fake_clock["now"])
+                tid = json.loads(payload)["tor"]["id"]
+                return _Resp({"data": [_item(tid, title=f"Book {tid}")]})
+
+            return await pacer.paced(answer)   # as the real _do_post is
 
         async def fake_cover(torrent_id, *, dest_dir, basename="cover-mam", token=""):
-            times.append(fake_clock["now"])
-            return None
+            async def download():
+                times.append(fake_clock["now"])
+                return None
+
+            return await pacer.paced(download)   # the real one's _do_get is paced
 
         monkeypatch.setattr(torrent_info, "_do_post", fake_post)
         monkeypatch.setattr(covers_mod, "fetch_mam_cover", fake_cover)
-        monkeypatch.setattr(search_pacer, "gap_seconds", lambda: 2.0)
+        monkeypatch.setattr(pacer, "gap_seconds", lambda: 2.0)
         return times
 
     @staticmethod
@@ -211,3 +217,37 @@ class TestBatchPacing:
         assert [r.status for r in job.rows] == ["submitted"] * 30
         assert len(timed_mam) == 30   # inject_grab's own lookups were cache hits
         assert min(self._gaps(timed_mam)) >= 2.0
+
+    async def test_grab_all_spaces_its_downloads_on_a_warm_cache(
+        self, temp_db, timed_mam, fake_clock, monkeypatch,
+    ):
+        """Every lookup a cache hit (the rows were just previewed), so only
+        the downloads reach MAM, and the real `fetch_torrent` paces them
+        (ADR-0023 promised this; until issue 05 nothing did)."""
+        from app.mam import cookie, grab
+
+        downloads: list[float] = []
+
+        def mam(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/tor/download.php":
+                downloads.append(fake_clock["now"])
+                return httpx.Response(200, content=MINIMAL_BENCODED_TORRENT)
+            return httpx.Response(404)
+
+        monkeypatch.setattr(
+            cookie, "_client", httpx.AsyncClient(transport=httpx.MockTransport(mam)),
+        )
+        tids = [str(7000 + i) for i in range(3)]
+        for tid in tids:   # the preview warmed the cache
+            await torrent_info.get_torrent_info(tid, token="t")
+        deps = _make_deps(budget_cap=1000)
+        deps.fetch_torrent = grab.fetch_torrent
+
+        job = await _run_job(deps, *[
+            manual_grab.GrabRequestItem(kind="link", value=t) for t in tids
+        ])
+
+        assert [r.status for r in job.rows] == ["submitted"] * 3
+        assert len(timed_mam) == 3   # the warm-up lookups only
+        assert len(downloads) == 3
+        assert min(self._gaps(downloads)) >= 2.0

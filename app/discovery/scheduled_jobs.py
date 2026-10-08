@@ -280,229 +280,243 @@ async def mam_scheduler_loop() -> None:
         elapsed_min = (time.time() - last_scan_at) / 60
         if elapsed_min < interval:
             continue
-        if state._mam_scan_progress.get("running"):
+        claim = state.claim_mam_scan("scheduled")
+        if claim is None:
             continue
-        # Defer ONLY on a library sync — concurrent author scans are
-        # tolerated because WAL + busy_timeout absorb the small per-row
-        # contention. Library sync holds the write lock for tens of
-        # seconds during bulk inserts, longer than busy_timeout will wait.
-        if state._library_sync_in_progress:
-            logger.debug("MAM scheduled scan deferred — library sync in progress")
-            continue
-
-        last_val = s.get("last_mam_validated_at") or 0
-        if time.time() - last_val > 86400:
-            logger.info("MAM daily validation check...")
-            vr = await mam_validate(mam_token, True)
-            if vr["success"]:
-                s["last_mam_validated_at"] = time.time()
-                s["mam_validation_ok"] = True
-            else:
-                s["mam_validation_ok"] = False
-            save_settings(s)
-            if not vr["success"]:
-                logger.error(
-                    f"MAM validation failed — skipping scan: {vr['message']}"
-                )
-                last_scan_at = time.time()
-                continue
-
-        # Multi-library: tally remaining books per library, scan each.
-        # Without this, the tick only operated on the active library
-        # and the user had to flip active to ABS between ticks to get
-        # audiobook coverage (Mark added 66 audiobooks, never saw any
-        # MAM coverage on them until manually scanning the ABS lib).
-        per_lib_remaining: dict[str, int] = {}
-        libs_to_scan: list[dict] = []
-        for lib in state._discovered_libraries:
-            slug = lib["slug"]
-            ldb = await get_db(slug=slug)
-            try:
-                # Auto-release: a book stamped is_unreleased=1 with an
-                # expected_date that has now arrived stops looking like
-                # "Upcoming" and starts looking like a normal Missing book
-                # eligible for MAM scanning. Without this flip, books would
-                # sit in the Upcoming bucket forever (or until a source scan
-                # rewrote the row), invisible to the MAM scanner. Runs in
-                # the same per-library loop as the count below so freshly
-                # released books are picked up the same tick they age in.
-                # `localtime` so a book whose expected_date is "today" in
-                # Mark's timezone flips at local-midnight rather than
-                # waiting up to 24h for UTC to catch up.
-                await ldb.execute(
-                    "UPDATE books SET is_unreleased=0 "
-                    "WHERE is_unreleased=1 "
-                    "AND expected_date IS NOT NULL "
-                    "AND substr(expected_date, 1, 10) <= date('now', 'localtime')"
-                )
-                await ldb.commit()
-                rem_row = await (await ldb.execute(
-                    f"SELECT COUNT(*) FROM books WHERE {_NEEDS_SCAN_BASIC_BARE}"
-                )).fetchone()
-                count = rem_row[0] if rem_row else 0
-            finally:
-                await ldb.close()
-            per_lib_remaining[slug] = count
-            if count > 0:
-                libs_to_scan.append(lib)
-
-        total_remaining = sum(per_lib_remaining.values())
-        if total_remaining == 0:
-            logger.info(
-                "MAM scheduled scan: no books need scanning across any library"
-            )
+        try:
+            ran = await _scheduled_mam_scan(s, mam_token)
+        finally:
+            state.release_mam_scan(claim)
+        if ran:
             last_scan_at = time.time()
-            continue
 
-        # 150 books/library/tick — fixed budget per library so a busy
-        # library doesn't starve a quiet one.
-        per_lib_limit = 150
-        scan_total = sum(
-            min(per_lib_limit, per_lib_remaining[lib["slug"]])
-            for lib in libs_to_scan
-        )
+
+async def _scheduled_mam_scan(s: dict, mam_token: str) -> bool:
+    """One scheduled MAM scan, run while holding the one-scan claim.
+
+    False: deferred (a library sync holds the write lock), so the loop
+    tries again next minute. True: scanned, nothing to scan, or MAM
+    failed validation, so the loop waits a full interval.
+    """
+    # Defer ONLY on a library sync — concurrent author scans are
+    # tolerated because WAL + busy_timeout absorb the small per-row
+    # contention. Library sync holds the write lock for tens of
+    # seconds during bulk inserts, longer than busy_timeout will wait.
+    if state._library_sync_in_progress:
+        logger.debug("MAM scheduled scan deferred — library sync in progress")
+        return False
+
+    last_val = s.get("last_mam_validated_at") or 0
+    if time.time() - last_val > 86400:
+        logger.info("MAM daily validation check...")
+        vr = await mam_validate(mam_token, True)
+        if vr["success"]:
+            s["last_mam_validated_at"] = time.time()
+            s["mam_validation_ok"] = True
+        else:
+            s["mam_validation_ok"] = False
+        save_settings(s)
+        if not vr["success"]:
+            logger.error(
+                f"MAM validation failed — skipping scan: {vr['message']}"
+            )
+            return True
+
+    # Multi-library: tally remaining books per library, scan each.
+    # Without this, the tick only operated on the active library
+    # and the user had to flip active to ABS between ticks to get
+    # audiobook coverage (Mark added 66 audiobooks, never saw any
+    # MAM coverage on them until manually scanning the ABS lib).
+    per_lib_remaining: dict[str, int] = {}
+    libs_to_scan: list[dict] = []
+    for lib in state._discovered_libraries:
+        slug = lib["slug"]
+        ldb = await get_db(slug=slug)
+        try:
+            # Auto-release: a book stamped is_unreleased=1 with an
+            # expected_date that has now arrived stops looking like
+            # "Upcoming" and starts looking like a normal Missing book
+            # eligible for MAM scanning. Without this flip, books would
+            # sit in the Upcoming bucket forever (or until a source scan
+            # rewrote the row), invisible to the MAM scanner. Runs in
+            # the same per-library loop as the count below so freshly
+            # released books are picked up the same tick they age in.
+            # `localtime` so a book whose expected_date is "today" in
+            # Mark's timezone flips at local-midnight rather than
+            # waiting up to 24h for UTC to catch up.
+            await ldb.execute(
+                "UPDATE books SET is_unreleased=0 "
+                "WHERE is_unreleased=1 "
+                "AND expected_date IS NOT NULL "
+                "AND substr(expected_date, 1, 10) <= date('now', 'localtime')"
+            )
+            await ldb.commit()
+            rem_row = await (await ldb.execute(
+                f"SELECT COUNT(*) FROM books WHERE {_NEEDS_SCAN_BASIC_BARE}"
+            )).fetchone()
+            count = rem_row[0] if rem_row else 0
+        finally:
+            await ldb.close()
+        per_lib_remaining[slug] = count
+        if count > 0:
+            libs_to_scan.append(lib)
+
+    total_remaining = sum(per_lib_remaining.values())
+    if total_remaining == 0:
         logger.info(
-            f"MAM scheduled scan starting: {scan_total} books across "
-            f"{len(libs_to_scan)} libraries "
-            f"({total_remaining} total remaining)"
+            "MAM scheduled scan: no books need scanning across any library"
         )
+        return True
 
-        # Reset cancel flag so a stale cancel from a prior tick doesn't
-        # preempt this one. Cancel flow: /mam/scan/cancel flips this to
-        # True; the closure below surfaces it to mam_scan_batch as its
-        # cancel_check and aborts at the next per-book boundary.
-        state._scheduled_mam_cancel_requested = False
-        state._mam_scan_progress = {
-            "running": True, "scanned": 0, "total": scan_total,
-            "found": 0, "possible": 0, "not_found": 0,
-            "errors": 0, "current_book": "",
-            "current_library": "",
-            "status": "scanning", "type": "scheduled",
-            "remaining": total_remaining,
-        }
+    # 150 books/library/tick — fixed budget per library so a busy
+    # library doesn't starve a quiet one.
+    per_lib_limit = 150
+    scan_total = sum(
+        min(per_lib_limit, per_lib_remaining[lib["slug"]])
+        for lib in libs_to_scan
+    )
+    logger.info(
+        f"MAM scheduled scan starting: {scan_total} books across "
+        f"{len(libs_to_scan)} libraries "
+        f"({total_remaining} total remaining)"
+    )
 
-        def _sched_cancel_check() -> bool:
-            return state._scheduled_mam_cancel_requested
+    # Reset cancel flag so a stale cancel from a prior tick doesn't
+    # preempt this one. Cancel flow: /mam/scan/cancel flips this to
+    # True; the closure below surfaces it to mam_scan_batch as its
+    # cancel_check and aborts at the next per-book boundary.
+    state._scheduled_mam_cancel_requested = False
+    state._mam_scan_progress = {
+        "running": True, "scanned": 0, "total": scan_total,
+        "found": 0, "possible": 0, "not_found": 0,
+        "errors": 0, "current_book": "",
+        "current_library": "",
+        "status": "scanning", "type": "scheduled",
+        "remaining": total_remaining,
+    }
 
-        agg = {"scanned": 0, "found": 0, "possible": 0,
-               "not_found": 0, "errors": 0}
-        last_error: str | None = None
-        from app.discovery.routers.mam import _active_content_type
-        for lib in libs_to_scan:
-            if state._scheduled_mam_cancel_requested:
-                break
-            slug = lib["slug"]
-            lib_name = lib.get("display_name") or lib.get("name") or slug
-            state._mam_scan_progress["current_library"] = lib_name
-            ct = lib.get("content_type", "ebook")
-            lib_limit = min(per_lib_limit, per_lib_remaining[slug])
+    def _sched_cancel_check() -> bool:
+        return state._scheduled_mam_cancel_requested
 
-            # Closure captures the per-library baseline so progress
-            # accumulates across libraries instead of resetting.
-            base_scanned = agg["scanned"]
-            base_found = agg["found"]
-            base_possible = agg["possible"]
-            base_not_found = agg["not_found"]
-            base_errors = agg["errors"]
+    agg = {"scanned": 0, "found": 0, "possible": 0,
+           "not_found": 0, "errors": 0}
+    last_error: str | None = None
+    from app.discovery.routers.mam import _active_content_type
+    for lib in libs_to_scan:
+        if state._scheduled_mam_cancel_requested:
+            break
+        slug = lib["slug"]
+        lib_name = lib.get("display_name") or lib.get("name") or slug
+        state._mam_scan_progress["current_library"] = lib_name
+        ct = lib.get("content_type", "ebook")
+        lib_limit = min(per_lib_limit, per_lib_remaining[slug])
 
-            def _sched_progress(stats: dict) -> None:
-                state._mam_scan_progress.update({
-                    "scanned": base_scanned + stats["scanned"],
-                    "found": base_found + stats["found"],
-                    "possible": base_possible + stats["possible"],
-                    "not_found": base_not_found + stats["not_found"],
-                    "errors": base_errors + stats["errors"],
-                    "current_book": stats.get("current_book", ""),
-                })
+        # Closure captures the per-library baseline so progress
+        # accumulates across libraries instead of resetting.
+        base_scanned = agg["scanned"]
+        base_found = agg["found"]
+        base_possible = agg["possible"]
+        base_not_found = agg["not_found"]
+        base_errors = agg["errors"]
 
-            ldb = await get_db(slug=slug)
-            try:
-                logger.info(
-                    f"MAM scheduled scan: '{lib_name}' "
-                    f"({ct}, {lib_limit} books)"
-                )
-                result = await mam_scan_batch(
-                    ldb, session_id=mam_token, limit=lib_limit,
-                    delay=s.get("rate_mam", 2), skip_ip_update=True,
-                    format_priority=s.get(
-                        "audiobook_format_priority"
-                        if ct == "audiobook"
-                        else "mam_format_priority"
-                    ),
-                    on_progress=_sched_progress,
-                    cancel_check=_sched_cancel_check,
-                    lang_ids=_resolve_mam_languages(
-                        s.get("languages", ["English"])
-                    ),
-                    content_type=ct,
-                )
-                agg["scanned"] += result.get("scanned", 0)
-                agg["found"] += result.get("found", 0)
-                agg["possible"] += result.get("possible", 0)
-                agg["not_found"] += result.get("not_found", 0)
-                agg["errors"] += result.get("errors", 0)
-                err = result.get("error")
-                await ldb.execute(
-                    "INSERT INTO sync_log "
-                    "(sync_type, started_at, finished_at, status, "
-                    "books_found, books_new) VALUES (?,?,?,?,?,?)",
-                    (
-                        "mam", time.time(), time.time(),
-                        "cancelled" if state._scheduled_mam_cancel_requested
-                        else "complete" if not err
-                        else "error",
-                        result.get("scanned", 0), result.get("found", 0),
-                    ),
-                )
-                await ldb.commit()
-                if err:
-                    last_error = f"{lib_name}: {err}"
-                    logger.error(f"MAM scheduled scan '{lib_name}' error: {err}")
-                    # Continue to other libraries — one failure
-                    # shouldn't stall the rest. (IP-registration
-                    # failures DO bail out at the source layer below
-                    # because every library would hit the same wall.)
-                    if "IP registration failed" in str(err):
-                        break
-            except Exception as e:
-                last_error = f"{lib_name}: {e}"
-                logger.error(
-                    f"MAM scheduled scan '{lib_name}' exception: {e}",
-                    exc_info=True,
-                )
-                agg["errors"] += 1
-            finally:
-                await ldb.close()
+        def _sched_progress(stats: dict) -> None:
+            state._mam_scan_progress.update({
+                "scanned": base_scanned + stats["scanned"],
+                "found": base_found + stats["found"],
+                "possible": base_possible + stats["possible"],
+                "not_found": base_not_found + stats["not_found"],
+                "errors": base_errors + stats["errors"],
+                "current_book": stats.get("current_book", ""),
+            })
 
-        was_cancelled = state._scheduled_mam_cancel_requested
-        state._mam_scan_progress.update({
-            "running": False,
-            "current_library": "",
-            "status": (
-                "cancelled" if was_cancelled
-                else "complete" if last_error is None
-                else f"error: {last_error}"
-            ),
-        })
-        if was_cancelled:
-            logger.info("MAM scheduled scan cancelled by user")
-        logger.info(
-            f"MAM scheduled scan done: {agg['scanned']} scanned, "
-            f"{agg['found']} found across {len(libs_to_scan)} libraries"
-        )
-        # Skip the ntfy "scan complete" when the user cancelled —
-        # they already know, and a false "done!" push would be noise.
-        if last_error is None and not was_cancelled:
-            try:
-                await notify_mam_scan_complete(
-                    scanned=agg["scanned"], found=agg["found"],
-                    possible=agg["possible"], not_found=agg["not_found"],
-                )
-            except Exception:
-                logger.debug(
-                    "MAM scheduled scan notify failed", exc_info=True
-                )
-        last_scan_at = time.time()
+        ldb = await get_db(slug=slug)
+        try:
+            logger.info(
+                f"MAM scheduled scan: '{lib_name}' "
+                f"({ct}, {lib_limit} books)"
+            )
+            result = await mam_scan_batch(
+                ldb, session_id=mam_token, limit=lib_limit,
+                delay=s.get("rate_mam", 2), skip_ip_update=True,
+                format_priority=s.get(
+                    "audiobook_format_priority"
+                    if ct == "audiobook"
+                    else "mam_format_priority"
+                ),
+                on_progress=_sched_progress,
+                cancel_check=_sched_cancel_check,
+                lang_ids=_resolve_mam_languages(
+                    s.get("languages", ["English"])
+                ),
+                content_type=ct,
+            )
+            agg["scanned"] += result.get("scanned", 0)
+            agg["found"] += result.get("found", 0)
+            agg["possible"] += result.get("possible", 0)
+            agg["not_found"] += result.get("not_found", 0)
+            agg["errors"] += result.get("errors", 0)
+            err = result.get("error")
+            await ldb.execute(
+                "INSERT INTO sync_log "
+                "(sync_type, started_at, finished_at, status, "
+                "books_found, books_new) VALUES (?,?,?,?,?,?)",
+                (
+                    "mam", time.time(), time.time(),
+                    "cancelled" if state._scheduled_mam_cancel_requested
+                    else "complete" if not err
+                    else "error",
+                    result.get("scanned", 0), result.get("found", 0),
+                ),
+            )
+            await ldb.commit()
+            if err:
+                last_error = f"{lib_name}: {err}"
+                logger.error(f"MAM scheduled scan '{lib_name}' error: {err}")
+                # Continue to other libraries — one failure
+                # shouldn't stall the rest. (IP-registration
+                # failures DO bail out at the source layer below
+                # because every library would hit the same wall.)
+                if "IP registration failed" in str(err):
+                    break
+        except Exception as e:
+            last_error = f"{lib_name}: {e}"
+            logger.error(
+                f"MAM scheduled scan '{lib_name}' exception: {e}",
+                exc_info=True,
+            )
+            agg["errors"] += 1
+        finally:
+            await ldb.close()
+
+    was_cancelled = state._scheduled_mam_cancel_requested
+    state._mam_scan_progress.update({
+        "running": False,
+        "current_library": "",
+        "status": (
+            "cancelled" if was_cancelled
+            else "complete" if last_error is None
+            else f"error: {last_error}"
+        ),
+    })
+    if was_cancelled:
+        logger.info("MAM scheduled scan cancelled by user")
+    logger.info(
+        f"MAM scheduled scan done: {agg['scanned']} scanned, "
+        f"{agg['found']} found across {len(libs_to_scan)} libraries"
+    )
+    # Skip the ntfy "scan complete" when the user cancelled —
+    # they already know, and a false "done!" push would be noise.
+    if last_error is None and not was_cancelled:
+        try:
+            await notify_mam_scan_complete(
+                scanned=agg["scanned"], found=agg["found"],
+                possible=agg["possible"], not_found=agg["not_found"],
+            )
+        except Exception:
+            logger.debug(
+                "MAM scheduled scan notify failed", exc_info=True
+            )
+    return True
 
 
 def add_discovery_jobs(

@@ -215,6 +215,18 @@ def _no_leaked_dispatcher():
 
 
 @pytest.fixture(autouse=True)
+def _no_leaked_mam_scan_claim():
+    """Every test starts and ends with no MAM scan holding the one-scan
+    claim (issue 05); a scan task a test left unfinished would otherwise
+    refuse every later test's scan."""
+    from app import state
+
+    state._mam_scan_claim = None
+    yield
+    state._mam_scan_claim = None
+
+
+@pytest.fixture(autouse=True)
 def _no_real_mam(monkeypatch):
     """The suite never talks to the real MAM.
 
@@ -234,15 +246,25 @@ def _no_real_mam(monkeypatch):
     (`fake_mam`, or setting `_client` directly) still gets it: the
     patched getter returns `_client` whenever it is set.
     """
-    from app.mam import cookie, search_pacer, torrent_info
+    import asyncio
+
+    from app.mam import cookie, pacer, torrent_info
 
     # The torrent-info cache is module-level with a 120s TTL, so a test
     # could see torrent IDs (and their authors) cached by an earlier one
     # — which is how a CI-only deadlock hid behind test order.
     torrent_info.invalidate_cache()
-    # Manual Grab's pacer remembers when the last MAM call ended; a
+    # The MAM pacer remembers when the last MAM request ended; a
     # leftover timestamp would make the next test sleep the real gap.
-    search_pacer.reset()
+    # Every request through `app.mam.cookie` is paced (issue 05), so
+    # its waits are skipped suite-wide; tests that check the spacing
+    # install a fake clock (`fake_clock` in the Manual Grab tests).
+    pacer.reset()
+
+    async def _no_wait(_seconds: float) -> None:
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(pacer, "_sleep", _no_wait)
     # Same for the live session token: `DispatcherDeps.live_mam_token()`
     # prefers it over the deps' own token, so a cookie rotated by one
     # test (`test_user_status`) leaked into every later dispatch — the

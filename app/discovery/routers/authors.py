@@ -2781,12 +2781,6 @@ async def scan_authors_mam(data: dict = Body(...)):
     state._mam_scan_progress so the Dashboard scan widget shows
     progress in real time.
     """
-    from app.discovery.sources.mam import (
-        _NEEDS_SCAN_BASIC_ALIASED,
-        check_book as mam_check_book,
-        _resolve_mam_languages,
-    )
-    from app.discovery.cross_library import libraries_for
     from app import state
 
     author_ids = data.get("author_ids", [])
@@ -2796,15 +2790,33 @@ async def scan_authors_mam(data: dict = Body(...)):
         return {"error": "No authors specified"}
 
     s = load_settings()
-    from app.discovery.routers.mam import (
-        _get_mam_token, _mam_ready, _stop_mam_scan_on_auth_error,
-    )
+    from app.discovery.routers.mam import _mam_ready
     if not await _mam_ready(s):
         return {"error": "MAM not configured or not enabled"}
     if not s.get("mam_scanning_enabled", True):
         return {"error": "MAM scanning is disabled — enable it in Settings"}
-    if state._mam_scan_progress.get("running"):
+    claim = state.claim_mam_scan("authors_bulk")
+    if claim is None:
         return {"error": "A MAM scan is already running"}
+    try:
+        return await _start_authors_mam_scan(
+            claim, s, author_ids, author_names, content_type,
+        )
+    finally:
+        state.release_mam_scan_unless_handed_off(claim)
+
+
+async def _start_authors_mam_scan(
+    claim, s: dict, author_ids: list, author_names, content_type,
+) -> dict:
+    from app.discovery.sources.mam import (
+        _NEEDS_SCAN_BASIC_ALIASED,
+        check_book as mam_check_book,
+        _resolve_mam_languages,
+    )
+    from app.discovery.cross_library import libraries_for
+    from app import state
+    from app.discovery.routers.mam import _get_mam_token, _stop_mam_scan_on_auth_error
 
     # Build target library list. content_type=None preserves the
     # pre-v2.3.7 active-library-only behavior for callers that haven't
@@ -2981,6 +2993,7 @@ async def scan_authors_mam(data: dict = Body(...)):
             })
 
     state._mam_scan_task = asyncio.create_task(_do())
+    state.hand_mam_scan_to(claim, state._mam_scan_task)
     return {
         "status": "started",
         "total": total,

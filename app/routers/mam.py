@@ -2,7 +2,9 @@
 MAM user status + cookie management endpoints.
 
     GET  /api/v1/mam/status      — ratio, wedges, class, seedbonus,
-                                    plus current cookie freshness
+                                    plus current cookie freshness and
+                                    Seshat's MAM requests in the last
+                                    minute
     POST /api/v1/mam/refresh     — force a fresh fetch (bypass cache)
     POST /api/v1/mam/validate    — run the cookie validation flow and
                                     record the result on settings.json
@@ -27,10 +29,11 @@ import time
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.config import load_settings, save_settings
 from app.mam import cookie as mam_cookie
+from app.mam import pacer as mam_pacer
 from app.mam.user_status import (
     UserStatusError,
     get_user_status,
@@ -56,6 +59,10 @@ class MamStatusResponse(BaseModel):
     uploaded_bytes: Optional[int] = None
     downloaded_bytes: Optional[int] = None
     error: Optional[str] = None
+    # Seshat's own MAM traffic: requests (any kind) started in the last
+    # 60s, from the one MAM pacer (audit issue 05). Filled on every
+    # build of the response, whatever else it reports.
+    requests_last_minute: int = Field(default_factory=mam_pacer.requests_last_minute)
 
 
 class ValidateResponse(BaseModel):

@@ -306,6 +306,75 @@ _mam_scan_progress: Dict[str, Any] = {
 }
 _mam_full_scan_task: Optional[asyncio.Task] = None
 
+
+# ─── One MAM scan at a time (audit issue 05, G25) ────────────
+# Every MAM scan entry point (the manual, full, test and scheduled scans,
+# a book / author / several authors' books, the legacy single-book scan)
+# claims this before it does anything else and keeps it until its scan
+# ends. Debug-match doesn't: it's a read-only trace, and the MAM pacer
+# bounds the request rate whoever is asking. Before this, each entry
+# point checked `_mam_scan_progress["running"]` and set it after several
+# awaits, so two starts could both pass, and `/full-scan` and the
+# single-book scan didn't check at all.
+#
+# The claim is synchronous (check-and-set with no await between), so
+# two requests can't both get it. A scan that runs in a background task
+# hands the claim to the task (`hand_mam_scan_to`), which releases it
+# when it finishes, however it finishes.
+
+
+class MamScanClaim:
+    __slots__ = ("kind", "task")
+
+    def __init__(self, kind: str) -> None:
+        self.kind = kind
+        self.task: Optional[asyncio.Task] = None
+
+
+_mam_scan_claim: Optional[MamScanClaim] = None
+
+
+def mam_scan_running() -> bool:
+    """True while any MAM scan holds the claim or reports itself running."""
+    global _mam_scan_claim
+    claim = _mam_scan_claim
+    if claim is not None:
+        if claim.task is not None and claim.task.done():
+            _mam_scan_claim = None   # its done-callback hasn't run yet
+        else:
+            return True
+    for task in (_mam_scan_task, _mam_full_scan_task):
+        if task is not None and not task.done():
+            return True
+    return bool(_mam_scan_progress.get("running"))
+
+
+def claim_mam_scan(kind: str) -> Optional[MamScanClaim]:
+    """Take the one-scan claim, or None when a scan is already running."""
+    global _mam_scan_claim
+    if mam_scan_running():
+        return None
+    _mam_scan_claim = MamScanClaim(kind)
+    return _mam_scan_claim
+
+
+def release_mam_scan(claim: MamScanClaim) -> None:
+    global _mam_scan_claim
+    if _mam_scan_claim is claim:
+        _mam_scan_claim = None
+
+
+def hand_mam_scan_to(claim: MamScanClaim, task: asyncio.Task) -> None:
+    """The scan continues in `task`; the claim ends when the task does."""
+    claim.task = task
+    task.add_done_callback(lambda _t: release_mam_scan(claim))
+
+
+def release_mam_scan_unless_handed_off(claim: MamScanClaim) -> None:
+    """For an entry point's `finally`: release unless a task now owns it."""
+    if claim.task is None:
+        release_mam_scan(claim)
+
 # v2.16.0 Data Hygiene action state. One coordinator runs at most one
 # Hygiene chain at a time; the same dict is mutated as each of the 6
 # sub-jobs progresses, with `extra.jobs` carrying per-job rolling

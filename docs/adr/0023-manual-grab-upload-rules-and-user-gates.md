@@ -1,7 +1,11 @@
 # 0023. Manual Grab: what an upload must prove, and which gates a user grab skips
 
-- Status: Accepted
+- Status: Accepted; pacing line amended 2026-10-08
 - Date: 2026-10-06
+
+> **Amended 2026-10-08 (codebase audit, issue 05).** The pacer is no longer Manual Grab's alone: every MAM
+> HTTP request Seshat makes goes through it (see the pacing paragraph under Decision). The audit found Grab
+> all paced only its lookups, and a cache hit skipped even that, so its downloads were never paced.
 
 ## Context
 
@@ -28,7 +32,7 @@ An upload never calls MAM's download endpoint. Its bytes go through `submit_torr
 
 **A manual grab is the user's decision, informed by the preview.** Manual Grab skips claim-for-owned and format-priority dedup (never claimed, never held). The preview shows owned and in-flight siblings and leaves those rows unticked, so ticking one is the decision to grab. A `my_snatched` row is the one exception that asks twice: ticking it opens a confirm, and only that confirm sets `override_mam_snatched` for that row.
 
-**MAM lookups are paced.** `tor.id` takes a single ID (MAM's API reference), so a batch needs one search call per row. Preview lookups, cover fetches and Grab all go through one server-side pacer at the `rate_mam` gap.
+**MAM lookups are paced.** `tor.id` takes a single ID (MAM's API reference), so a batch needs one search call per row. Preview lookups, cover fetches and Grab all go through one server-side pacer at the `rate_mam` gap. *(Amended 2026-10-08:)* that pacer (`app/mam/pacer.py`) sits inside `app.mam.cookie`'s client, so every MAM HTTP request goes through it, from any caller: discovery scans, grabs and their `download.php`, account and economy calls, covers. One request at a time, `rate_mam` apart (floored at 1s), IRC announces first in the queue. A torrent-info or account cache hit makes no request and so doesn't wait.
 
 ## Consequences
 

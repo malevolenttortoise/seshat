@@ -1050,7 +1050,6 @@ async def scan_books_mam(data: dict = Body(...), slug: str | None = Query(None))
     scans were invisible everywhere except the Logs tab.
     """
     from app.config import load_settings
-    from app.discovery.sources.mam import check_book as mam_check_book, _resolve_mam_languages
     from app import state
 
     book_ids = data.get("book_ids", [])
@@ -1058,17 +1057,26 @@ async def scan_books_mam(data: dict = Body(...), slug: str | None = Query(None))
         return {"error": "No books specified"}
 
     s = load_settings()
-    from app.discovery.routers.mam import (
-        _get_mam_token, _mam_ready, _stop_mam_scan_on_auth_error,
-    )
+    from app.discovery.routers.mam import _mam_ready
     if not await _mam_ready(s):
         return {"error": "MAM not configured or not enabled"}
     if not s.get("mam_scanning_enabled", True):
         return {"error": "MAM scanning is disabled — enable it in Settings"}
-    if state._mam_scan_progress.get("running"):
+    claim = state.claim_mam_scan("books_bulk")
+    if claim is None:
         return {"error": "A MAM scan is already running"}
-    if state._mam_scan_task and not state._mam_scan_task.done():
-        return {"error": "A MAM scan is already running"}
+    try:
+        return await _start_books_mam_scan(claim, book_ids, s, slug)
+    finally:
+        state.release_mam_scan_unless_handed_off(claim)
+
+
+async def _start_books_mam_scan(
+    claim, book_ids: list, s: dict, slug: str | None,
+) -> dict:
+    from app.discovery.sources.mam import check_book as mam_check_book, _resolve_mam_languages
+    from app import state
+    from app.discovery.routers.mam import _get_mam_token, _stop_mam_scan_on_auth_error
 
     # Pre-fetch book rows + resolve scan settings BEFORE spawning the
     # task so we can return total count + reject early on missing IDs.
@@ -1201,6 +1209,7 @@ async def scan_books_mam(data: dict = Body(...), slug: str | None = Query(None))
             await bdb.close()
 
     state._mam_scan_task = asyncio.create_task(_do_scan())
+    state.hand_mam_scan_to(claim, state._mam_scan_task)
     return {"status": "started", "total": len(book_rows)}
 
 

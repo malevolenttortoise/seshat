@@ -47,6 +47,7 @@ from app.mam.cookie import (
     set_current_token,
     set_rotation_callback,
 )
+from app.mam import pacer as mam_pacer
 from app.mam.grab import fetch_torrent
 from app.mam.irc import IrcClient, IrcConfig
 from app.orchestrator.budget_watcher import run_loop as budget_watcher_loop
@@ -503,11 +504,17 @@ async def _on_irc_announce(announce: Announce) -> None:
     a grab-policy save or a new excluded uploader reaches the next
     announce. The dispatcher's own try/except keeps a single bad
     announce from killing the listener.
+
+    An announce's MAM requests (and a grab held for MAM's index, a task
+    spawned in here that inherits the context) wait in front of scans
+    and everything else in the MAM pacer, so a long scan can't hold up
+    an autograb.
     """
     deps = state.dispatcher
     if deps is None:
         return
-    await handle_announce(deps, announce)
+    with mam_pacer.priority(mam_pacer.PRIORITY_IRC):
+        await handle_announce(deps, announce)
 
 
 def _build_irc_config(settings: dict, resolved_secrets: dict = None) -> IrcConfig:

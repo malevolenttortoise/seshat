@@ -86,4 +86,6 @@ This glossary is **seeded, not complete** — only the most stable, load-bearing
 ## Cross-cutting
 
 - **MAM economy** — the discipline of minimizing MAM API and tracker calls to respect rate limits and ToS. Drives the attempted-set ([ADR-0005](docs/adr/0005-backfill-attempted-set.md)), unavailable stubs, and qBit add-stagger.
+- **MAM pacer** — the one queue every MAM HTTP request goes through (`app/mam/pacer.py`, inside `app.mam.cookie`'s client): one request at a time, `rate_mam` apart (at least 1s), **Announce** dispatch first in line. The only thing that bounds Seshat's total MAM request rate; the MAM page shows its requests-per-minute count (see [ADR-0023](docs/adr/0023-manual-grab-upload-rules-and-user-gates.md), amended).
+- **Scan claim** — only one MAM scan runs at a time: every scan entry point (manual, full, test, scheduled, books, authors, one author, one book) takes the claim before it starts and holds it until the scan ends; debug-match doesn't need it (`state.claim_mam_scan`).
 - **Path aliasing** — translating a qBittorrent `save_path` (`/data/...`) to Seshat's local view (`/downloads/...`) via `translate_path()`.

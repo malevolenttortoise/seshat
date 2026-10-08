@@ -37,6 +37,8 @@ from urllib.parse import urlparse
 
 import httpx
 
+from app.mam import pacer
+
 _log = logging.getLogger("seshat.mam.cookie")
 
 
@@ -372,6 +374,14 @@ async def aclose_session() -> None:
             _client = None
 
 
+def _path_for_log(url: str) -> str:
+    """The URL's path, for the pacer's debug line (no query: no tids, no keys)."""
+    try:
+        return urlparse(url).path or url
+    except Exception:
+        return "?"
+
+
 def resolve_token(explicit: Optional[str]) -> str:
     """Pick the token to use for a request.
 
@@ -413,17 +423,24 @@ async def _do_get(
     would leak credentials. All legitimate callers either use a
     MAM_*_URL constant or have already host-checked their input via
     `_is_mam_url` before calling.
+
+    PACED: every request waits its turn in `app.mam.pacer` (one MAM
+    request at a time, `rate_mam` apart), as does `_do_post`.
     """
     if not _is_mam_url(url):
         raise ValueError(
             f"_do_get refuses non-MAM URL (cookie would leak): {url!r}"
         )
     effective_token = resolve_token(token)
-    response = await get_client().get(
-        url, headers=build_headers(effective_token), timeout=timeout
-    )
-    await handle_response_cookie(response)
-    return response
+
+    async def _request() -> httpx.Response:
+        response = await get_client().get(
+            url, headers=build_headers(effective_token), timeout=timeout
+        )
+        await handle_response_cookie(response)
+        return response
+
+    return await pacer.paced(_request, label=f"GET {_path_for_log(url)}")
 
 
 async def _do_post(
@@ -453,14 +470,18 @@ async def _do_post(
             f"_do_post refuses non-MAM URL (cookie would leak): {url!r}"
         )
     effective_token = resolve_token(token)
-    response = await get_client().post(
-        url,
-        headers=build_headers(effective_token),
-        content=payload,
-        timeout=timeout,
-    )
-    await handle_response_cookie(response)
-    return response
+
+    async def _request() -> httpx.Response:
+        response = await get_client().post(
+            url,
+            headers=build_headers(effective_token),
+            content=payload,
+            timeout=timeout,
+        )
+        await handle_response_cookie(response)
+        return response
+
+    return await pacer.paced(_request, label=f"POST {_path_for_log(url)}")
 
 
 # ─── Validation flow ─────────────────────────────────────────

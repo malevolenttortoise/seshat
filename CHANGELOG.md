@@ -82,6 +82,25 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   up on goodreads.com and openlibrary.org; those tests now stub it.
   Only loopback fakes and in-process clients remain.
 
+- **Every MAM request waits its turn; one MAM scan at a time.**
+  Nothing used to bound how fast Seshat talked to MAM as a whole. A
+  discovery scan spaced its searches by the MAM rate setting but sent
+  its description lookups and cover downloads in between with no gap
+  (about 20–26 requests a minute at a 3-second setting, where 20 was
+  intended); Manual Grab's "Grab all" paced its lookups but not its
+  downloads; and a full scan could run alongside another scan,
+  doubling the rate and overwriting the scan widget. Now every request
+  Seshat sends to MAM (searches, downloads, covers, account and
+  bonus-point calls, from any feature) goes out one at a time, spaced
+  by MAM's Rate (s) in Metadata Sources (at least 1 second), with IRC
+  autograbs at the front of the queue. Scans are a little slower for
+  it. Only one MAM scan runs at a time: the full scan and the
+  single-book scan now refuse to start while another scan is running,
+  as the other scans already did, and two scans started at the same
+  moment can no longer both slip through. Debug match still runs during
+  a scan. The MAM page shows how many requests Seshat sent in the last
+  minute.
+
 - **One MAM connection; the cookie goes only where it belongs.**
   Discovery's MAM searches used their own HTTP client beside the one
   the rest of Seshat uses; they now share it (same headers, timeouts

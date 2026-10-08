@@ -43,6 +43,7 @@ interface MamStatus {
   uploaded_bytes: number | null;
   downloaded_bytes: number | null;
   error: string | null;
+  requests_last_minute: number;
 }
 
 interface ValidateResponse {
@@ -82,6 +83,10 @@ export default function MamPage() {
   // push doesn't cover (cookie_age_seconds, last_validated_at)
   // and acts as a safety net if the stream were ever to desync.
   useVisibleInterval(load, 300_000);
+  // The MAM traffic count is per minute, so refresh it more often. GET
+  // /status serves the account fields from a 5-minute cache, so this
+  // adds no MAM requests of its own.
+  useVisibleInterval(load, 15_000);
 
   // Live mam-stats: patch the economic fields in place so the UI
   // reflects ratio/seedbonus/wedges immediately after a buy or on
@@ -270,6 +275,13 @@ export default function MamPage() {
                 <Badge tone="warn">NO</Badge>
               )}
             </KV>
+          </Section>
+
+          <Section
+            title="Seshat's MAM traffic"
+            subtitle="Every request Seshat sends to MAM (searches, downloads, covers, account checks) goes out one at a time, spaced by MAM's Rate (s) in Settings → Metadata Sources (at least 1 second). IRC autograbs go first."
+          >
+            <KV label="Requests, last minute">{status.requests_last_minute ?? 0}</KV>
           </Section>
 
           <EconomySections />

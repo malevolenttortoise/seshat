@@ -12,8 +12,9 @@ Two halves, both behind `app/routers/manual_grab.py`:
     memory (D14): a restart loses the rows it hadn't reached; every row
     it did reach is an ordinary grab.
 
-Every MAM request made here goes through `search_pacer` (lookups and
-covers), so a batch never bursts. A paste grab is
+Every MAM request made here is paced (`app.mam.pacer`, one at a time,
+`rate_mam` apart: lookups, covers and Grab all's downloads alike), so a
+batch never bursts. A paste grab is
 `inject_grab` with the preview's metadata filled in, claim-for-owned
 and format dedup off (the preview showed the user what they own;
 ADR-0023), and the snatch-safety guards of ADR-0022 untouched.
@@ -395,11 +396,8 @@ async def cover_url_for(torrent_id: str, token: str) -> Optional[str]:
     if (folder / _NO_COVER_MARKER).exists():
         return None
     _prune_covers()
-    path = await search_pacer.paced(
-        lambda: fetch_mam_cover(
-            torrent_id, dest_dir=folder, basename="cover-mam", token=token,
-        ),
-        label=f"cover tid={torrent_id}",
+    path = await fetch_mam_cover(
+        torrent_id, dest_dir=folder, basename="cover-mam", token=token,
     )
     if path is None:
         try:
@@ -443,7 +441,7 @@ class WedgeBudget:
 async def wedge_budget(deps: DispatcherDeps, *, fresh: bool = False) -> Optional[WedgeBudget]:
     """The account's wedges and the reserve the policy keeps back.
 
-    `fresh=True` re-reads MAM (through the pacer) instead of the cached
+    `fresh=True` re-reads MAM (paced like every request) instead of the cached
     status: Grab all checks the batch against it, and the cached count
     can be minutes old. None when the account can't be read.
     """
@@ -452,9 +450,7 @@ async def wedge_budget(deps: DispatcherDeps, *, fresh: bool = False) -> Optional
         return None
     try:
         if fresh:
-            status = await search_pacer.paced(
-                lambda: get_user_status(token=token, ttl=0), label="user status (fresh)",
-            )
+            status = await get_user_status(token=token, ttl=0)
         else:
             status = await search_pacer.paced_user_status(token)
     except UserStatusError:
