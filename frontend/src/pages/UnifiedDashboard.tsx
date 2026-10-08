@@ -262,7 +262,6 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
   // behavior before ABS existed). Audiobook-specific tiles are added
   // separately from `audiobookStats`.
   const owned = ebookStats?.owned_books ?? 0;
-  const total = ebookStats?.total_books ?? 0;
   const missing = ebookStats?.missing_books ?? 0;
   const upcoming = ebookStats?.upcoming_books ?? 0;
 
@@ -1144,7 +1143,7 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
               />
               <QBtn
                 label={<><Dot color={t.accent} /> Works</>}
-                onClick={() => onNav("works")}
+                onClick={() => onNav("disc-works")}
               />
             </div>
           </div>

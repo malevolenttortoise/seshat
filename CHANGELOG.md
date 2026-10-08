@@ -43,6 +43,18 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **IRC announces keep their line** (audit issue 11). `announces.raw` has
   been empty for every IRC announce since the start; it now holds the
   line from `#announce`, so a parser problem can be replayed later.
+- **Secrets no longer appear in the container log** (audit issue 13).
+  httpx logs every request URL, which put the Google Books API key in
+  the log. Its request lines stay, with the values of `key`, `token`,
+  `api_key`, `apikey`, `passkey` and `mam_id` shown as `***`.
+- **IBDB finds books whose byline carries a role** (audit issue 13). An
+  author listed as "Name (author)" didn't match "Name", so IBDB dropped
+  every book for that author.
+- Small fixes (audit issue 13): the Dashboard's Works button opens Works
+  (it fell through to the Pipeline dashboard); stored-cover URLs no
+  longer carry a `//` (the old form still works); 15 unused frontend
+  declarations removed and the TypeScript build now refuses new ones
+  (`noUnusedLocals`).
 
 ### Changed
 

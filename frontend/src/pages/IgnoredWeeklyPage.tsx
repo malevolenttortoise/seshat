@@ -12,6 +12,7 @@ import { useTheme } from "../theme";
 import { useViewport } from "../hooks/useViewport";
 import { useMobileCodepath } from "../components/mobile";
 import MobileIgnoredWeeklyPage from "./MobileIgnoredWeeklyPage";
+import { storedCoverUrl } from "../lib/covers";
 
 interface TorrentEntry {
   torrent_name: string;
@@ -155,7 +156,7 @@ function DesktopIgnoredWeeklyPage() {
                         >
                           {t.cover_path && (
                             <img
-                              src={`/api/v1/covers/${encodeURIComponent(t.cover_path)}`}
+                              src={storedCoverUrl(t.cover_path)}
                               alt=""
                               style={{ width: 50, height: 75, objectFit: "cover", borderRadius: 4, flexShrink: 0 }}
                               onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}

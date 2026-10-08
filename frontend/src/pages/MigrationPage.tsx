@@ -7,7 +7,7 @@
 //
 // After migration completes: resume torrents, then scan for empty
 // leftover folders and offer to clean them up.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Btn } from "../components/Btn";
 import { Section } from "../components/Section";
 import { Spin } from "../components/Spin";

@@ -7,6 +7,7 @@ publication date. Positioned as a supplementary source for ISBN and
 publisher backfill when primary sources miss.
 """
 import logging
+import re
 from typing import Optional
 
 from app.discovery.sources.base import BaseSource, AuthorResult, SeriesResult, BookResult
@@ -190,17 +191,32 @@ def _extract_results(data) -> list:
     return []
 
 
+# IBDB appends a role to some bylines ("Snekguy (author)"), which then
+# failed the author match and dropped every book for that author
+# (2026-10 audit L2-09).
+_ROLE_SUFFIX = re.compile(
+    r"\s*\((?:author|editor|illustrator|translator|narrator|contributor|"
+    r"foreword|introduction|afterword|compiler|adapter)s?\)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _strip_role(name: str) -> str:
+    return _ROLE_SUFFIX.sub("", name).strip()
+
+
 def _extract_authors(item: dict) -> list[str]:
-    """Extract author names from various IBDB response shapes."""
+    """Extract author names from various IBDB response shapes, without a
+    trailing role like "(author)"."""
     authors = item.get("authors") or item.get("author") or []
     if isinstance(authors, str):
-        return [authors]
+        return [_strip_role(authors)]
     if isinstance(authors, list):
         out = []
         for a in authors:
             if isinstance(a, str):
-                out.append(a)
+                out.append(_strip_role(a))
             elif isinstance(a, dict):
-                out.append(a.get("name", str(a)))
+                out.append(_strip_role(a.get("name", str(a))))
         return out
     return []

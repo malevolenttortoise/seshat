@@ -105,18 +105,6 @@ const PIPELINE_NAV = [
   { id: "filters",          label: "Filters",       icon: "🎯" },
 ];
 
-const WIDE_PAGES = new Set([
-  "dashboard", "disc-dashboard", "pipe-dashboard",
-  "disc-library", "disc-authors", "disc-author-detail",
-  "disc-missing", "disc-upcoming", "disc-mam", "disc-metadata",
-  "disc-series", "disc-series-browse", "disc-series-detail",
-  "disc-hidden", "disc-importexport", "disc-works",
-  "author-triage", "persons-manager",
-  "pipe-review", "pipe-tentative", "pipe-ignored", "pipe-authors",
-  "pipe-delayed", "pipe-manual-grab", "pipe-migration", "replacement-opportunities",
-  "logs", "database",
-]);
-
 // v3.8.3 — the desktop horizontal navbar (logo + section switcher +
 // full nav items + 280px global search + right-rail icons) is roughly
 // 1700px wide once Discovery's section is active. Below that it

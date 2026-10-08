@@ -42,6 +42,11 @@ async def serve_cover(cover_path: str):
     # Also allow /tmp for tentative covers stored in temp staging
     allowed_roots.add(Path("/tmp").resolve())
 
+    # The UI sends the absolute path without its leading "/" so the URL
+    # has no `//` (2026-10 audit L4-04); the old `//`-shaped URL still
+    # works. A relative path would otherwise resolve against the cwd.
+    if not cover_path.startswith("/"):
+        cover_path = "/" + cover_path
     target = Path(cover_path).resolve()
 
     # Security: target must be under one of the allowed roots.

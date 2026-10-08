@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, slugQuery } from "../api";
 import { useTheme } from "../theme";
-import { fmtDuration, fmtNum } from "../lib/format";
+import { fmtNum } from "../lib/format";
 import { BookSidebar } from "../components/BookSidebar";
 import { toast } from "../lib/toast";
 import {
@@ -31,8 +31,6 @@ import {
   MobileBackButton,
 } from "../components/mobile";
 import type {
-  Author,
-  AuthorsResponse,
   Book,
   BookAction,
   MamStatusResponse,
