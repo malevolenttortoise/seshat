@@ -24,7 +24,7 @@ from app import state
 from app.database import get_db
 from app.mam.cookie import get_current_token as _get_mam_token
 from app.metadata.text_clean import description_to_plain_text
-from app.orchestrator.pipeline import deliver_reviewed
+from app.orchestrator.pipeline import deliver_reviewed, settle_reviewed_grab
 from app.storage import grabs as grabs_storage
 from app.storage import review_queue as review_storage
 
@@ -651,6 +651,7 @@ async def claim_for_owned(
             db, review_id, review_storage.STATUS_REJECTED,
             decision_note=note,
         )
+        await settle_reviewed_grab(db, row.grab_id)
         _log.info(
             "claim-for-owned: review_id=%d claimed grab=%d tid=%s for "
             "%s:%d",
@@ -693,6 +694,9 @@ async def reject(review_id: int, body: RejectRequest) -> ReviewActionResponse:
             db, review_id, review_storage.STATUS_REJECTED,
             decision_note=body.note or "user rejected",
         )
+        # The grab ends here unless another book in it is still under
+        # review (2026-10 audit issue 11).
+        await settle_reviewed_grab(db, row.grab_id)
         return ReviewActionResponse(
             ok=True, id=review_id, status=review_storage.STATUS_REJECTED,
         )

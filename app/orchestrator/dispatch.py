@@ -1518,6 +1518,7 @@ async def _dispatch_with_decision(
                 state=initial_state,
                 book_format=book_format,
                 dedup_key=dedup_key,
+                policy_tier=policy_decision.tier,
             )
 
         # A wedge comes from the policy or from `force_fl_wedge` (a user
@@ -2151,6 +2152,7 @@ async def grab_uploaded_torrent(
                 state=grabs_storage.STATE_FETCHED,
                 book_format=book_format,
                 dedup_key=normalize_dedup_key(announce.torrent_name, author_blob),
+                policy_tier=policy_decision.tier,
             )
     finally:
         await db.close()

@@ -102,7 +102,11 @@ CREATE TABLE IF NOT EXISTS grabs (
     -- in-flight or owned siblings of the same book regardless of
     -- format. Both NULL on pre-v2.9.0 grabs — see migration backfill.
     book_format       TEXT,
-    dedup_key         TEXT
+    dedup_key         TEXT,
+    -- The grab policy's tier when the grab went through (`vip`, `free`,
+    -- `normal`, ...). NULL for grabs that never met the policy and for
+    -- rows from before the 2026-10 audit (issue 11).
+    policy_tier       TEXT
 );
 
 CREATE TABLE IF NOT EXISTS snatch_ledger (
@@ -1030,6 +1034,54 @@ MIGRATIONS: list[str] = [
     # format-dedup holds and keep the default.
     "ALTER TABLE pending_holds ADD COLUMN kind TEXT NOT NULL DEFAULT 'format_dedup'",
     "ALTER TABLE pending_holds ADD COLUMN payload TEXT",
+    # ── 2026-10 audit, issue 11: grab record-keeping ─────────────────
+    # The policy tier a grab went through (`policy/engine.py` always said
+    # the caller stores it; nothing did).
+    "ALTER TABLE grabs ADD COLUMN policy_tier TEXT",
+    # A rejected review never ended its grab: the grab stayed
+    # `processing` and its pipeline run `awaiting_review` forever (~100
+    # on one install). Settle the existing ones once, by the rule the
+    # reject endpoint now applies (Mark, G46): every review rejected →
+    # `rejected`; any delivered and none still open → `complete`. The
+    # pipeline runs go first, while their grabs still read `processing`.
+    """UPDATE pipeline_runs
+          SET state = 'rejected', state_updated_at = datetime('now'),
+              completed_at = datetime('now')
+        WHERE state = 'awaiting_review'
+          AND grab_id IN (
+              SELECT g.id FROM grabs g
+               WHERE g.state = 'processing'
+                 AND EXISTS (SELECT 1 FROM book_review_queue r
+                              WHERE r.grab_id = g.id)
+                 AND NOT EXISTS (SELECT 1 FROM book_review_queue r
+                                  WHERE r.grab_id = g.id
+                                    AND r.status <> 'rejected'))""",
+    """UPDATE pipeline_runs
+          SET state = 'complete', state_updated_at = datetime('now'),
+              completed_at = datetime('now')
+        WHERE state = 'awaiting_review'
+          AND grab_id IN (
+              SELECT g.id FROM grabs g
+               WHERE g.state = 'processing'
+                 AND EXISTS (SELECT 1 FROM book_review_queue r
+                              WHERE r.grab_id = g.id AND r.status = 'delivered')
+                 AND NOT EXISTS (SELECT 1 FROM book_review_queue r
+                                  WHERE r.grab_id = g.id
+                                    AND r.status NOT IN ('delivered', 'rejected', 'failed')))""",
+    """UPDATE grabs
+          SET state = 'rejected', state_updated_at = datetime('now')
+        WHERE state = 'processing'
+          AND EXISTS (SELECT 1 FROM book_review_queue r WHERE r.grab_id = grabs.id)
+          AND NOT EXISTS (SELECT 1 FROM book_review_queue r
+                           WHERE r.grab_id = grabs.id AND r.status <> 'rejected')""",
+    """UPDATE grabs
+          SET state = 'complete', state_updated_at = datetime('now')
+        WHERE state = 'processing'
+          AND EXISTS (SELECT 1 FROM book_review_queue r
+                       WHERE r.grab_id = grabs.id AND r.status = 'delivered')
+          AND NOT EXISTS (SELECT 1 FROM book_review_queue r
+                           WHERE r.grab_id = grabs.id
+                             AND r.status NOT IN ('delivered', 'rejected', 'failed'))""",
 ]
 
 

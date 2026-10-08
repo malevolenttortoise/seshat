@@ -125,6 +125,8 @@ class TestUploadGrab:
         assert grab["state"] == grabs_storage.STATE_SUBMITTED
         assert grab["torrent_name"] == "The Way of Kings"
         assert grab["author_blob"] == "Brandon Sanderson"
+        # Issue 11: the policy tier the grab went through is kept.
+        assert grab["policy_tier"] in {"vip", "free", "wedge", "normal"}
 
     async def test_my_snatched_is_expected_not_refused(self, temp_db, mam_search, me):
         mam_search["items"][TID] = _item(my_snatched=1)

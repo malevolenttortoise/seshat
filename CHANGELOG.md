@@ -32,6 +32,17 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   series (a fraction of a second; unchanged rows aren't rewritten). A
   series whose owner can't be set because a same-named series already
   has it now logs that once, not at every startup.
+- **Rejecting a book at review now ends its grab** (audit issue 11). The
+  grab used to stay `processing` and its pipeline run `awaiting_review`
+  forever (about a hundred on one install). A grab whose books are all
+  rejected now ends as `rejected` (a new state); one where another book
+  of the bundle was delivered ends `complete`. The torrent ID stays
+  blocked from being grabbed again (MAM served it), but a rejected grab
+  no longer stops another format of the same book from being grabbed.
+  Existing stuck grabs are settled by the migration below.
+- **IRC announces keep their line** (audit issue 11). `announces.raw` has
+  been empty for every IRC announce since the start; it now holds the
+  line from `#announce`, so a parser problem can be replayed later.
 
 ### Changed
 
@@ -47,6 +58,16 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `GET /api/v1/grabs/budget` gains `mam_unsat`, `mam_limit`,
   `mam_not_seeding` and `mam_fetched_at`; `budget_used` and `budget_cap`
   now report the values the budget enforces.
+
+### Added
+
+- **Grabs record the policy tier they went through** (`grabs.policy_tier`:
+  `vip`, `free`, `wedge`, `normal`), so a grab's economics can be read
+  back later.
+
+**Database migration** (`user_version` 60): `grabs` gains `policy_tier`,
+and grabs stuck in `processing` behind rejected reviews are settled.
+Take a backup before updating, as usual.
 
 ## [3.12.0] — 2026-10-08
 

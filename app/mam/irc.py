@@ -243,7 +243,9 @@ class IrcClient:
         dashboard polls.
 
     The `on_announce` callback is awaited for every successfully-parsed
-    announce. Parser failures (announces that don't match the regex)
+    announce, with the IRC line it was parsed from (the PRIVMSG text as
+    received, formatting codes included; stored as `announces.raw`).
+    Parser failures (announces that don't match the regex)
     are logged at debug and dropped — they're typically MouseBot
     status messages or non-torrent PRIVMSGs we don't care about.
 
@@ -254,7 +256,7 @@ class IrcClient:
     def __init__(
         self,
         config: IrcConfig,
-        on_announce: Callable[[Announce], Awaitable[None]],
+        on_announce: Callable[[Announce, str], Awaitable[None]],
         *,
         connect_fn: Optional[ConnectFn] = None,
     ) -> None:
@@ -787,7 +789,7 @@ class IrcClient:
         )
 
         try:
-            await self.on_announce(announce)
+            await self.on_announce(announce, msg.trailing)
             self.announces_dispatched += 1
         except Exception:
             _log.exception(

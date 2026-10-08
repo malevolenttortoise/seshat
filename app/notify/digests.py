@@ -73,7 +73,8 @@ async def daily_accepted(ctx: DigestContext) -> bool:
             FROM grabs
             WHERE grabbed_at >= datetime('now', '-24 hours')
               AND state IN ('pending_queue','fetched','submitted',
-                            'downloading','downloaded','processing','complete')
+                            'downloading','downloaded','processing','complete',
+                            'rejected')
             ORDER BY grabbed_at DESC
             LIMIT 20
             """

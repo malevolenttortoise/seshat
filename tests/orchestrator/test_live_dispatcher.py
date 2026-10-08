@@ -100,7 +100,7 @@ class TestIrcBridge:
 
         seen: list[int] = []
 
-        async def fake_handle(deps, announce):
+        async def fake_handle(deps, announce, raw_line=""):
             seen.append(pacer._priority.get())
 
         monkeypatch.setattr(main, "handle_announce", fake_handle)
