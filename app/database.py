@@ -533,7 +533,13 @@ CREATE TABLE IF NOT EXISTS pending_holds (
     release_at        TEXT NOT NULL,
     state             TEXT NOT NULL DEFAULT 'pending',
     resolved_at       TEXT,
-    resolution_reason TEXT
+    resolution_reason TEXT,
+    -- 'format_dedup' (above) or 'index_wait': an allowed IRC announce
+    -- waiting for MAM's search to list it (D37), kept so a restart
+    -- mid-wait resumes it; `payload` is that announce + its filter
+    -- decision as JSON (audit issue 26).
+    kind              TEXT NOT NULL DEFAULT 'format_dedup',
+    payload           TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_pending_holds_state_release
     ON pending_holds(state, release_at);
@@ -1016,6 +1022,14 @@ MIGRATIONS: list[str] = [
     )""",
     "CREATE INDEX IF NOT EXISTS idx_source_author_blacklist_lookup "
     "ON source_author_blacklist(source, source_author_id)",
+    # ── 2026-10 audit, issue 26: index-wait holds survive a restart ───
+    # An allowed IRC announce MAM's search doesn't list yet waits up to
+    # 10 minutes for it (D37). That wait lived only in memory, so a
+    # restart dropped the grab. It's now also a `pending_holds` row of
+    # kind 'index_wait' carrying the announce as JSON; existing rows are
+    # format-dedup holds and keep the default.
+    "ALTER TABLE pending_holds ADD COLUMN kind TEXT NOT NULL DEFAULT 'format_dedup'",
+    "ALTER TABLE pending_holds ADD COLUMN payload TEXT",
 ]
 
 

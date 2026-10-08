@@ -273,14 +273,30 @@ def _parse_json_field(value) -> dict:
     return {}
 
 
-def _parse_ownership_id(value) -> int:
-    """Extract the uploader user ID from the `ownership` field.
+def _ownership_list(value) -> list:
+    """Decode MAM's `ownership` field to `[user_id, "username"]`.
 
-    MAM returns ownership as `[user_id, "username"]`.
+    The live search API sends it JSON-encoded inside the JSON response,
+    like `author_info`: `"ownership": "[12345,\"SomeUploader\"]"` (seen
+    2026-10-07). MAM's API reference documents `owner` / `owner_name`
+    instead, but the live response has neither. While this only
+    accepted a list, every uploader parsed as empty and the
+    excluded-uploader guard never fired. A decoded list is accepted too.
     """
-    if isinstance(value, list) and len(value) >= 1:
+    if isinstance(value, str):
         try:
-            return int(value[0])
+            value = json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            return []
+    return value if isinstance(value, list) else []
+
+
+def _parse_ownership_id(value) -> int:
+    """Extract the uploader user ID from the `ownership` field."""
+    owner = _ownership_list(value)
+    if len(owner) >= 1:
+        try:
+            return int(owner[0])
         except (ValueError, TypeError):
             pass
     return 0
@@ -288,8 +304,9 @@ def _parse_ownership_id(value) -> int:
 
 def _parse_ownership_name(value) -> str:
     """Extract the uploader username from the `ownership` field."""
-    if isinstance(value, list) and len(value) >= 2:
-        return str(value[1])
+    owner = _ownership_list(value)
+    if len(owner) >= 2 and owner[1] is not None:
+        return str(owner[1])
     return ""
 
 

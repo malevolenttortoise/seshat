@@ -64,8 +64,14 @@ def _write_settings(path: Path, overrides: dict) -> None:
 @pytest.fixture(autouse=True)
 def _clear_user_status_cache():
     invalidate_cache()
+    economy_scheduler._last_checked.clear()
     yield
     invalidate_cache()
+    economy_scheduler._last_checked.clear()
+
+
+def _calls(fake_mam, endpoint: str) -> int:
+    return sum(endpoint in str(r.url) for r in fake_mam.requests)
 
 
 @pytest.fixture
@@ -232,8 +238,9 @@ class TestVipTickBuy:
         assert "Not enough bonus" in (rows[0].message or "")
 
         settings = config.load_settings()
-        # Failures do NOT advance the shared timestamp — we want the
-        # next tick to retry immediately once the user's BP recovers.
+        # Failures do NOT advance the shared "last bought" timestamp;
+        # the in-memory "last checked" stamp makes the retry wait one
+        # interval (see TestOncePerInterval).
         assert settings["mam_economy_last_vip_buy_at"] == 0
 
     async def test_insufficient_bonus_skip_writes_audit(
@@ -384,3 +391,128 @@ class TestAmountFormatter:
 
     def test_none_stays_none(self):
         assert economy_scheduler._format_gb(None) is None
+
+
+# ─── One evaluation per interval (audit L1-11) ─────────────
+
+
+class TestOncePerInterval:
+    """Once the interval has passed, a tick that doesn't buy used to
+    re-fetch jsonLoad.php (uncached) and write another audit row every
+    60s wake, and retry a refused bonusBuy.php every minute."""
+
+    async def test_no_trigger_checks_mam_once(
+        self, temp_db, isolated_settings, fake_mam, stub_token
+    ):
+        _write_settings(isolated_settings, {
+            "mam_economy_upload_enabled": True,
+            "mam_economy_upload_ratio_trigger": True,
+            "mam_economy_upload_ratio_floor": 0.5,
+        })
+        stub_token("tok")
+
+        assert await economy_scheduler.upload_tick() == "skip_no_trigger"
+        assert await economy_scheduler.upload_tick() is None
+
+        assert _calls(fake_mam, "jsonLoad.php") == 1
+        assert len(await _audit_rows()) == 1
+
+    async def test_insufficient_bonus_checks_mam_once(
+        self, temp_db, isolated_settings, fake_mam, stub_token
+    ):
+        _write_settings(isolated_settings, {
+            "mam_economy_vip_enabled": True,
+            "mam_economy_vip_weeks": 4,
+        })
+        stub_token("tok")
+        fake_mam.user_status.body = (
+            b'{"seedbonus":100,"wedges":1,"ratio":2.0,'
+            b'"username":"t","uid":1,"uploaded_bytes":0,'
+            b'"downloaded_bytes":0}'
+        )
+
+        await economy_scheduler.vip_tick()
+        await economy_scheduler.vip_tick()
+
+        assert _calls(fake_mam, "jsonLoad.php") == 1
+
+    async def test_refused_buy_is_not_retried_next_minute(
+        self, temp_db, isolated_settings, fake_mam, stub_token
+    ):
+        _write_settings(isolated_settings, {"mam_economy_vip_enabled": True})
+        stub_token("tok")
+        fake_mam.bonus_buy.body = b'{"success":false,"error":"Not enough bonus, s1"}'
+
+        assert await economy_scheduler.vip_tick() == economy_audit.OUTCOME_FAILURE
+        assert await economy_scheduler.vip_tick() is None
+
+        assert _calls(fake_mam, "bonusBuy.php") == 1
+
+    async def test_unreachable_status_is_not_retried_next_minute(
+        self, temp_db, isolated_settings, fake_mam, stub_token
+    ):
+        _write_settings(isolated_settings, {"mam_economy_vip_enabled": True})
+        stub_token("tok")
+        fake_mam.user_status.status = 503
+
+        await economy_scheduler.vip_tick()
+        await economy_scheduler.vip_tick()
+
+        assert _calls(fake_mam, "jsonLoad.php") == 1
+
+    async def test_checks_again_once_the_interval_has_passed(
+        self, temp_db, isolated_settings, fake_mam, stub_token, monkeypatch
+    ):
+        _write_settings(isolated_settings, {
+            "mam_economy_upload_enabled": True,
+            "mam_economy_upload_interval_hours": 6,
+            "mam_economy_upload_ratio_trigger": True,
+            "mam_economy_upload_ratio_floor": 0.5,
+        })
+        stub_token("tok")
+        now = [1_000_000.0]
+        monkeypatch.setattr(economy_scheduler.time, "time", lambda: now[0])
+
+        await economy_scheduler.upload_tick()
+        now[0] += 6 * 3600 - 60
+        await economy_scheduler.upload_tick()
+        now[0] += 60
+        await economy_scheduler.upload_tick()
+
+        assert _calls(fake_mam, "jsonLoad.php") == 2
+
+    async def test_editing_the_settings_rearms_the_check(
+        self, temp_db, isolated_settings, fake_mam, stub_token
+    ):
+        _write_settings(isolated_settings, {
+            "mam_economy_upload_enabled": True,
+            "mam_economy_upload_ratio_trigger": True,
+            "mam_economy_upload_ratio_floor": 0.5,
+        })
+        stub_token("tok")
+        await economy_scheduler.upload_tick()
+
+        _write_settings(isolated_settings, {
+            "mam_economy_upload_enabled": True,
+            "mam_economy_upload_ratio_trigger": True,
+            "mam_economy_upload_ratio_floor": 0.6,
+        })
+        await economy_scheduler.upload_tick()
+
+        assert _calls(fake_mam, "jsonLoad.php") == 2
+
+    async def test_dry_run_sim_buys_once_and_switching_it_off_rearms(
+        self, temp_db, isolated_settings, fake_mam, stub_token
+    ):
+        _write_settings(isolated_settings, {
+            "mam_economy_vip_enabled": True, "mam_economy_dry_run": True,
+        })
+        stub_token("tok")
+        await economy_scheduler.vip_tick()
+        await economy_scheduler.vip_tick()
+        assert _calls(fake_mam, "jsonLoad.php") == 1
+        assert _calls(fake_mam, "bonusBuy.php") == 0
+
+        _write_settings(isolated_settings, {"mam_economy_vip_enabled": True})
+        assert await economy_scheduler.vip_tick() == economy_audit.OUTCOME_SUCCESS
+        assert _calls(fake_mam, "bonusBuy.php") == 1

@@ -27,7 +27,7 @@ from pydantic import BaseModel, Field, model_validator
 from app import state
 from app.mam.torrent_id import extract_torrent_id
 from app.mam.torrent_meta import BencodeError, read_mam_comment
-from app.orchestrator import manual_grab
+from app.orchestrator import jobs, manual_grab
 
 # base64 of a 1 MB .torrent, plus slack. Uploads travel as base64 in
 # JSON (D18): no multipart dependency, and .torrent files are tiny.
@@ -166,11 +166,7 @@ async def wedges() -> dict:
 async def grab_status(job_id: str) -> dict:
     job = manual_grab.get_job(job_id)
     if job is None:
-        raise HTTPException(
-            404,
-            "No such batch. Seshat may have restarted; anything it had "
-            "already grabbed is in the grab history.",
-        )
+        raise HTTPException(404, jobs.GONE_MESSAGE)
     return job.to_dict()
 
 

@@ -115,8 +115,16 @@ async def _fetch_and_hash_url(
     if not url:
         return None
     try:
-        from app.mam.cookie import _is_mam_url
-        if _is_mam_url(url) and token:
+        from app.mam.cookie import _is_mam_url, is_mam_cover_url
+        if _is_mam_url(url):
+            # The cookie goes only to a MAM cover path: a stored
+            # `cover_url` pointing anywhere else on MAM (a download link)
+            # is not fetched at all, with or without the cookie.
+            if not is_mam_cover_url(url):
+                _log.info("cover URL not fetched (not a MAM cover path): %s", url)
+                return None
+            if not token:
+                return None
             from app.mam.cookie import _do_get
             resp = await _do_get(url, token=token, timeout=15)
         else:

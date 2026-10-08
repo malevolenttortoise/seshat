@@ -237,7 +237,7 @@ async def put_state(body: MetadataSourcesState) -> PutResponse:
     try:
         from app.main import _build_dispatcher
         resolved = await _resolve_secrets_lazy()
-        state.dispatcher = await _build_dispatcher(settings, resolved)
+        state.replace_dispatcher(await _build_dispatcher(settings, resolved))
         rebuilt = True
     except Exception:
         _log.exception(
@@ -343,7 +343,7 @@ async def reset_to_defaults() -> MetadataSourcesResponse:
     try:
         from app.main import _build_dispatcher
         resolved = await _resolve_secrets_lazy()
-        state.dispatcher = await _build_dispatcher(settings, resolved)
+        state.replace_dispatcher(await _build_dispatcher(settings, resolved))
         dispatcher_rebuilt = True
     except Exception:
         _log.exception(

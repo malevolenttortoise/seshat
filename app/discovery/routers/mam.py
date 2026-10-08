@@ -27,6 +27,8 @@ Other endpoints in this router: /validate (test session), /status
 import asyncio
 import logging
 import time
+from typing import Optional
+
 from fastapi import APIRouter, HTTPException, Query
 
 from app.config import load_settings, save_settings
@@ -162,9 +164,18 @@ async def mam_scan_endpoint(limit: int = Query(None, ge=1)):
         return {"error": "MAM not configured or not enabled"}
     if not s.get("mam_scanning_enabled", True):
         return {"error": "MAM scanning is disabled — enable it in Settings"}
-    if state._mam_scan_progress.get("running"):
+    claim = state.claim_mam_scan("manual")
+    if claim is None:
         return {"error": "A MAM scan is already running"}
+    try:
+        return await _start_mam_scan(claim, s, limit)
+    finally:
+        state.release_mam_scan_unless_handed_off(claim)
 
+
+async def _start_mam_scan(
+    claim: state.MamScanClaim, s: dict, limit: Optional[int],
+) -> dict:
     # Per-library snapshots. List of (lib_dict, [book_id, ...]) so the
     # async task below has everything it needs without re-querying.
     # Iteration order matches `_discovered_libraries` (configured order).
@@ -339,6 +350,7 @@ async def mam_scan_endpoint(limit: int = Query(None, ge=1)):
         await _notify_mam_done()
 
     state._mam_scan_task = asyncio.create_task(_do_scan())
+    state.hand_mam_scan_to(claim, state._mam_scan_task)
     return {"status": "started", "total": scan_total,
             "libraries": [lib["slug"] for lib, _ in per_lib_snapshots]}
 
@@ -417,22 +429,26 @@ async def mam_test_scan():
         return {"error": "MAM not configured or not enabled"}
     if not s.get("mam_scanning_enabled", True):
         return {"error": "MAM scanning is disabled — enable it in Settings"}
-    if state._mam_scan_task and not state._mam_scan_task.done():
+    claim = state.claim_mam_scan("test")
+    if claim is None:
         return {"error": "A MAM scan is already running — wait for it to finish"}
-    db = await get_db()
     try:
-        _ct = _active_content_type()
-        result = await mam_scan_batch(
-            db, session_id=token, limit=10,
-            delay=s.get("rate_mam", 2),
-            skip_ip_update=True,
-            format_priority=s.get("audiobook_format_priority" if _ct == "audiobook" else "mam_format_priority"),
-            lang_ids=_resolve_mam_languages(s.get("languages", ["English"])),
-            content_type=_ct,
-        )
-        return result
+        db = await get_db()
+        try:
+            _ct = _active_content_type()
+            result = await mam_scan_batch(
+                db, session_id=token, limit=10,
+                delay=s.get("rate_mam", 2),
+                skip_ip_update=True,
+                format_priority=s.get("audiobook_format_priority" if _ct == "audiobook" else "mam_format_priority"),
+                lang_ids=_resolve_mam_languages(s.get("languages", ["English"])),
+                content_type=_ct,
+            )
+            return result
+        finally:
+            await db.close()
     finally:
-        await db.close()
+        state.release_mam_scan(claim)
 
 
 @router.post("/full-scan")
@@ -451,8 +467,21 @@ async def mam_full_scan_start():
     and can resume from where it left off. Like the manual scan, only
     blocks on a concurrent Calibre sync, not on author scans — see the
     `_wait_for_other_writers` rationale in /api/mam/scan above.
-    """
 
+    Refused while any other MAM scan runs (one at a time, issue 05):
+    until the 2026-10 audit it started alongside one, overwrote the scan
+    widget's progress and doubled the search rate.
+    """
+    claim = state.claim_mam_scan("full_scan")
+    if claim is None:
+        return {"error": "A MAM scan is already running"}
+    try:
+        return await _start_full_scan(claim)
+    finally:
+        state.release_mam_scan_unless_handed_off(claim)
+
+
+async def _start_full_scan(claim: state.MamScanClaim) -> dict:
     # Snapshot which libraries we'll scan + start a per-library
     # scan_log entry for each. Each call to mam_start_full_scan
     # writes its own (book_ids_snapshot) tied to that library's DB.
@@ -579,6 +608,7 @@ async def mam_full_scan_start():
             raise
 
     state._mam_full_scan_task = asyncio.create_task(_full_scan_loop())
+    state.hand_mam_scan_to(claim, state._mam_full_scan_task)
     return {
         "status": "started",
         "scan_ids": [sr["id"] for _, sr in started],
@@ -712,6 +742,21 @@ async def mam_books_endpoint(section: str = "upload", search: str = "",
         await db.close()
 
 
+async def _stop_mam_scan_on_auth_error(db, check: dict) -> None:
+    """End a bulk MAM scan on MAM's 401/403: commit what was written and
+    show the error in the scan widget (the batch scanner's wording)."""
+    from app import state
+
+    detail = check.get("error") or "MAM auth error"
+    logger.error(f"MAM auth error — stopping scan: {detail}")
+    await db.commit()
+    state._mam_scan_progress["errors"] = state._mam_scan_progress.get("errors", 0) + 1
+    state._mam_scan_progress.update({
+        "running": False, "status": f"error: {detail}",
+        "current_book": "", "current_library": "",
+    })
+
+
 @router.post("/scan-book/{book_id}")
 async def mam_scan_single_book(book_id: int, slug: str | None = Query(None)):
     """Re-scan a single book against MAM, ignoring its existing mam_status.
@@ -734,9 +779,13 @@ async def mam_scan_single_book(book_id: int, slug: str | None = Query(None)):
         return {"error": "MAM not configured or not enabled"}
     if not s.get("mam_scanning_enabled", True):
         return {"error": "MAM scanning is disabled — enable it in Settings"}
+    claim = state.claim_mam_scan("book")
+    if claim is None:
+        return {"error": "A MAM scan is already running"}
 
-    db = await get_db(slug)
+    db = None
     try:
+        db = await get_db(slug)
         # series JOIN required so series_name reaches check_book →
         # Fix E (series-bundle promote) can fire. UAT 2026-05-11
         # round 4 — see books.py:scan_books_mam comment for full
@@ -809,7 +858,9 @@ async def mam_scan_single_book(book_id: int, slug: str | None = Query(None)):
             "passes_tried": check.get("passes_tried", []),
         }
     finally:
-        await db.close()
+        if db is not None:
+            await db.close()
+        state.release_mam_scan(claim)
 
 
 @router.post("/scan-author/{author_id}")
@@ -834,11 +885,19 @@ async def mam_scan_single_author(author_id: int, slug: str | None = None):
         raise HTTPException(400, "MAM not configured or not enabled")
     if not s.get("mam_scanning_enabled", True):
         raise HTTPException(400, "MAM scanning is disabled — enable it in Settings")
-    if state._mam_scan_progress.get("running"):
+    claim = state.claim_mam_scan("author")
+    if claim is None:
         raise HTTPException(409, "A MAM scan is already running")
-    if state._mam_scan_task and not state._mam_scan_task.done():
-        raise HTTPException(409, "A MAM scan is already running")
+    try:
+        return await _start_author_scan(claim, s, token, author_id, slug)
+    finally:
+        state.release_mam_scan_unless_handed_off(claim)
 
+
+async def _start_author_scan(
+    claim: state.MamScanClaim, s: dict, token: str,
+    author_id: int, slug: Optional[str],
+) -> dict:
     from app.discovery.database import get_active_library as _active, set_active_library as _set_active
     original_slug = _active()
     target_slug = slug or original_slug
@@ -929,6 +988,9 @@ async def mam_scan_single_author(author_id: int, slug: str | None = None):
                     1 if check.get("mam_is_bundle") else 0,
                     bid,
                 ))
+                # Commit per book, before the next book's paced MAM searches
+                # (audit L4-05; see books.py's bulk scan).
+                await bdb.commit()
                 state._mam_scan_progress["scanned"] += 1
                 if check["status"] == "found":
                     state._mam_scan_progress["found"] += 1
@@ -936,6 +998,10 @@ async def mam_scan_single_author(author_id: int, slug: str | None = None):
                     state._mam_scan_progress["possible"] += 1
                 elif check["status"] == "not_found":
                     state._mam_scan_progress["not_found"] += 1
+                elif check["status"] == "auth_error":
+                    # Dead cookie: stop (see books.py).
+                    await _stop_mam_scan_on_auth_error(bdb, check)
+                    return
             await bdb.commit()
             state._mam_scan_progress.update({"running": False, "status": "complete"})
             await _notify_mam_done()
@@ -951,6 +1017,7 @@ async def mam_scan_single_author(author_id: int, slug: str | None = None):
                 _set_active(original_slug)
 
     state._mam_scan_task = asyncio.create_task(_do_scan())
+    state.hand_mam_scan_to(claim, state._mam_scan_task)
     return {"status": "started", "author": author_name, "total": len(book_rows)}
 
 

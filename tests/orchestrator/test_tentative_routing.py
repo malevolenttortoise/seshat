@@ -9,6 +9,8 @@ capture an `ignored_torrents_seen` row.
 Both rows are visible in the weekly review queue so the user can
 change their mind.
 """
+import pytest
+
 from app.database import get_db
 from app.filter.gate import Announce, FilterConfig
 from app.filter.normalize import normalize_category
@@ -134,3 +136,58 @@ class TestIgnoredSeenCapture:
             assert seen[0].mam_torrent_id == "9100"
         finally:
             await db.close()
+
+
+# ─── Cover fetches for skipped announces (audit L1-15) ───────
+
+
+@pytest.fixture
+def cover_fetches(monkeypatch, tmp_path):
+    """Record MAM cover fetches instead of making them; covers land
+    under a tmp staging path."""
+    from app.metadata import covers
+
+    calls: list[str] = []
+
+    async def fake_fetch(torrent_id, *, dest_dir, basename="cover-mam", token=""):
+        calls.append(torrent_id)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        path = dest_dir / f"{basename}.jpg"
+        path.write_bytes(b"x" * 200)
+        return path
+
+    monkeypatch.setattr(covers, "fetch_mam_cover", fake_fetch)
+    return calls
+
+
+def _staged_deps(tmp_path) -> DispatcherDeps:
+    from dataclasses import replace
+    return replace(_deps(), staging_path=str(tmp_path))
+
+
+class TestSkipCovers:
+    async def test_ignored_author_fetches_no_cover(self, temp_db, cover_fetches, tmp_path):
+        announce = Announce(
+            torrent_id="9200", torrent_name="Book by ignored",
+            category="Ebooks - Fantasy", author_blob="Ignored Author",
+        )
+        result = await handle_announce(_staged_deps(tmp_path), announce)
+        assert result.reason == "ignored_author"
+        assert cover_fetches == []
+
+    async def test_tentative_fetches_its_cover_once(self, temp_db, cover_fetches, tmp_path):
+        announce = Announce(
+            torrent_id="9201", torrent_name="Unknown Book",
+            category="Ebooks - Fantasy", author_blob="Nobody Famous",
+        )
+        deps = _staged_deps(tmp_path)
+        await handle_announce(deps, announce)
+        await handle_announce(deps, announce)  # re-announce
+
+        assert cover_fetches == ["9201"]
+        db = await get_db()
+        try:
+            [row] = await tentative_storage.list_tentative(db)
+        finally:
+            await db.close()
+        assert row.cover_path and row.cover_path.endswith("cover-mam.jpg")

@@ -183,3 +183,70 @@ class TestBackfill:
         u2, _ = await cph.backfill_cover_phashes_from_paths(disc_db)
         assert u1 == 1
         assert u2 == 0  # row already populated, second pass is no-op
+
+
+# ─── The cookie goes only to MAM cover paths (audit L1-07) ──────
+
+_MAM_DOWNLOAD_URL = "https://www.myanonamouse.net/tor/download.php?tid=456"
+_MAM_COVER_URL = "https://cdn.myanonamouse.net/t/p/1700000000/large/456.jpeg"
+
+
+def _record_mam_requests(monkeypatch) -> list:
+    """Answer every request on the MAM client with a JPEG; record its URL
+    and the cookie it carried."""
+    import httpx
+
+    from app.mam import cookie
+
+    sent: list = []
+    jpeg = _make_jpeg_bytes()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append((str(request.url), request.headers.get("cookie")))
+        return httpx.Response(200, content=jpeg)
+
+    monkeypatch.setattr(
+        cookie, "_client", httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    )
+    return sent
+
+
+class TestStoredCoverUrlNeverSnatches:
+    """`books.cover_url` is operator-editable. A value pointing at a MAM
+    download link must not be fetched: with the session cookie it would
+    be a snatch. Both fetchers that read stored URLs are covered."""
+
+    @pytest.mark.asyncio
+    async def test_scan_cover_fetch_skips_download_link(self, monkeypatch):
+        sent = _record_mam_requests(monkeypatch)
+        assert await cph._fetch_and_hash_url(_MAM_DOWNLOAD_URL, token="t") is None
+        assert sent == []
+
+    @pytest.mark.asyncio
+    async def test_scan_cover_fetch_still_fetches_a_cover(self, monkeypatch):
+        sent = _record_mam_requests(monkeypatch)
+        assert await cph._fetch_and_hash_url(_MAM_COVER_URL, token="t") is not None
+        assert sent == [(_MAM_COVER_URL, "mam_id=t")]
+
+    @pytest.mark.asyncio
+    async def test_debug_match_cover_fetch_skips_download_link(self, monkeypatch):
+        from app.routers.mam import _resolve_phash_from_url
+        sent = _record_mam_requests(monkeypatch)
+        meta: dict = {"source": None, "error": None}
+        h = await _resolve_phash_from_url(
+            url=_MAM_DOWNLOAD_URL, token="t", resolution_meta=meta,
+        )
+        assert h is None
+        assert sent == []
+        assert "not fetched" in meta["error"]
+
+    @pytest.mark.asyncio
+    async def test_debug_match_cover_fetch_still_fetches_a_cover(self, monkeypatch):
+        from app.routers.mam import _resolve_phash_from_url
+        sent = _record_mam_requests(monkeypatch)
+        meta: dict = {"source": None, "error": None}
+        h = await _resolve_phash_from_url(
+            url=_MAM_COVER_URL, token="t", resolution_meta=meta,
+        )
+        assert h is not None
+        assert sent == [(_MAM_COVER_URL, "mam_id=t")]

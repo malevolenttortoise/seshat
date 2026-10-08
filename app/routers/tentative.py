@@ -8,6 +8,9 @@ Tentative torrent HTTP endpoints.
     POST /api/v1/tentative/{id}/reject  — mark rejected + put the author
                                           on the weekly tentative-review
                                           list (3-tier taxonomy)
+    POST /api/v1/tentative/bulk/approve — approve many, as a background
+                                          job (ADR-0024); poll
+                                          GET …/bulk/approve/{job_id}
 
 Approval is the only path that burns a MAM snatch for a tentative
 torrent — up until that moment we've only kept the torrent ID and
@@ -24,6 +27,7 @@ from pydantic import BaseModel
 from app import state
 from app.database import get_db
 from app.filter.gate import split_authors
+from app.orchestrator import jobs
 from app.orchestrator.auto_train import train_author
 from app.orchestrator.dispatch import inject_grab
 from app.storage import authors as authors_storage
@@ -132,16 +136,23 @@ async def _pending_ids(db, subset: Optional[list[int]]) -> list[int]:
     return [rid for rid in pending_ids if rid in wanted]
 
 
-@router.post("/bulk/approve", response_model=BulkResponse)
-async def bulk_approve(body: Optional[BulkRequest] = None) -> BulkResponse:
-    """Approve many tentative torrents in one call.
+APPROVE_JOB = "tentative_bulk_approve"
+
+
+@router.post("/bulk/approve")
+async def bulk_approve(body: Optional[BulkRequest] = None) -> dict:
+    """Approve many tentative torrents, as a background job (ADR-0024).
 
     Each approval fetches a .torrent from MAM (same path as the
     single-item approve), so this DOES burn snatches — the caller
     UI is expected to confirm with the user before invoking.
 
     `body.ids=None` → approve every pending row. Failures on
-    individual items don't halt the batch.
+    individual items don't halt the batch. Every MAM request is paced,
+    so a batch takes minutes: this returns the job at once (`job_id`,
+    per-row `rows`); poll `GET /bulk/approve/{job_id}` until `done`,
+    then `result` holds the old response (`processed` / `failed` /
+    `errors`).
     """
     if state.dispatcher is None:
         raise HTTPException(status_code=503, detail="dispatcher not initialized")
@@ -152,26 +163,54 @@ async def bulk_approve(body: Optional[BulkRequest] = None) -> BulkResponse:
     finally:
         await db.close()
 
-    processed = 0
-    failed = 0
-    errors: list[str] = []
-    for tid in ids:
-        try:
-            result = await approve(tid)
-            if result.ok:
-                processed += 1
-            else:
+    rows = [
+        {"id": tid, "status": "pending", "ok": None, "error": None}
+        for tid in ids
+    ]
+
+    async def _approve_all(job: jobs.BatchJob) -> dict:
+        processed = 0
+        failed = 0
+        errors: list[str] = []
+        for row in job.rows:
+            tid = row["id"]
+            row["status"] = "working"
+            try:
+                result = await approve(tid)
+                row["ok"], row["error"] = result.ok, result.error
+                if result.ok:
+                    processed += 1
+                else:
+                    failed += 1
+                    errors.append(f"tid={tid}: {result.error or 'unknown failure'}")
+            except Exception as e:
                 failed += 1
-                errors.append(f"tid={tid}: {result.error or 'unknown failure'}")
-        except Exception as e:
-            failed += 1
-            errors.append(f"tid={tid}: {type(e).__name__}: {e}")
-            _log.exception(
-                "bulk tentative approve: tid=%d crashed (non-fatal)", tid,
-            )
-    _log.info("bulk tentative approve: processed=%d failed=%d",
-              processed, failed)
-    return BulkResponse(processed=processed, failed=failed, errors=errors[:20])
+                row["ok"], row["error"] = False, f"{type(e).__name__}: {e}"
+                errors.append(f"tid={tid}: {type(e).__name__}: {e}")
+                _log.exception(
+                    "bulk tentative approve: tid=%d crashed (non-fatal)", tid,
+                )
+            row["status"] = "done"
+        _log.info("bulk tentative approve: processed=%d failed=%d",
+                  processed, failed)
+        return BulkResponse(
+            processed=processed, failed=failed, errors=errors[:20],
+        ).model_dump()
+
+    if not rows:
+        return jobs.finished_batch_job(
+            APPROVE_JOB, BulkResponse(processed=0, failed=0).model_dump(),
+        ).to_dict()
+    return jobs.start_batch_job(APPROVE_JOB, rows, _approve_all).to_dict()
+
+
+@router.get("/bulk/approve/{job_id}")
+async def bulk_approve_status(job_id: str) -> dict:
+    """A bulk-approve job's progress; `result` holds the outcome once `done`."""
+    job = jobs.get_batch_job(job_id, APPROVE_JOB)
+    if job is None:
+        raise HTTPException(status_code=404, detail=jobs.GONE_MESSAGE)
+    return job.to_dict()
 
 
 @router.post("/bulk/reject", response_model=BulkResponse)

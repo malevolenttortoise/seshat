@@ -475,6 +475,13 @@ class TestBuildDownloadUrl:
             == "https://www.myanonamouse.net/tor/download.php?tid=1233592"
         )
 
+    def test_id_is_url_encoded(self):
+        # Audit L1-13: an ID carrying `&fl=1` must not reach MAM as a
+        # wedge request past the dispatcher's `_wedge_for` guard.
+        url = build_download_url("123&fl=1")
+        assert "&fl=1" not in url
+        assert url.endswith("tid=123%26fl%3D1")
+
     def test_with_announce_roundtrip(self):
         # The torrent_id captured from a real announce should produce
         # a valid download URL when passed back to build_download_url.

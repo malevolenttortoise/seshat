@@ -168,6 +168,64 @@ def _undo_module_reloads():
                 current[key] = value
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _no_real_network():
+    """No test reaches a real host: DNS, TCP connects and curl_cffi are
+    refused for anything but loopback (see `tests/_network_guard.py`)."""
+    from tests import _network_guard
+
+    mp = pytest.MonkeyPatch()
+    _network_guard.install(mp)
+    yield
+    mp.undo()
+
+
+@pytest.fixture(autouse=True)
+def _fail_on_real_network_attempt():
+    """Fail the test that tried, naming the host, even when the code
+    under test swallowed the refusal and failed open."""
+    from tests import _network_guard
+
+    _network_guard.attempts.clear()
+    yield
+    tried = list(_network_guard.attempts)
+    _network_guard.attempts.clear()
+    if tried:
+        pytest.fail(
+            "test tried to reach the real network: " + "; ".join(tried),
+            pytrace=False,
+        )
+
+
+@pytest.fixture(autouse=True)
+def _no_leaked_dispatcher():
+    """Every test starts and ends with no published dispatcher.
+
+    The IRC bridge, the background loops and held index-wait grabs
+    resolve `state.dispatcher` when they use it (issue 01), so one a
+    test left behind would be what a later test's held grab dispatches
+    with. The metadata-sources PUT tests build a real one and never
+    clear it.
+    """
+    from app import state
+
+    state.dispatcher = None
+    yield
+    state.dispatcher = None
+
+
+@pytest.fixture(autouse=True)
+def _no_leaked_mam_scan_claim():
+    """Every test starts and ends with no MAM scan holding the one-scan
+    claim (issue 05); a scan task a test left unfinished would otherwise
+    refuse every later test's scan."""
+    from app import state
+
+    state._mam_scan_claim = None
+    yield
+    state._mam_scan_claim = None
+
+
 @pytest.fixture(autouse=True)
 def _no_real_mam(monkeypatch):
     """The suite never talks to the real MAM.
@@ -179,25 +237,34 @@ def _no_real_mam(monkeypatch):
     with a junk `mam_id`, twice per push in CI (one per Python
     version). The tests passed only because they fail open on errors.
 
-    Both MAM clients (`app.mam.cookie` and the discovery source's own)
-    start every test as a client whose transport refuses with a
-    ConnectError — the same "network down" the fail-open paths already
-    handle. The getters fall back to it after an app-lifespan shutdown
-    nulls the client, instead of lazily building a real one. A test
-    that installs its own client (`fake_mam`, or setting `_client`
-    directly) still gets it: the patched getters return `_client`
-    whenever it is set.
+    The one MAM client (`app.mam.cookie`'s; the discovery source's own
+    copy was removed in the 2026-10 audit, L1-07) starts every test as
+    a client whose transport refuses with a ConnectError — the same
+    "network down" the fail-open paths already handle. The getter falls
+    back to it after an app-lifespan shutdown nulls the client, instead
+    of lazily building a real one. A test that installs its own client
+    (`fake_mam`, or setting `_client` directly) still gets it: the
+    patched getter returns `_client` whenever it is set.
     """
-    from app.discovery.sources import mam as disco_mam
-    from app.mam import cookie, search_pacer, torrent_info
+    import asyncio
+
+    from app.mam import cookie, pacer, torrent_info
 
     # The torrent-info cache is module-level with a 120s TTL, so a test
     # could see torrent IDs (and their authors) cached by an earlier one
     # — which is how a CI-only deadlock hid behind test order.
     torrent_info.invalidate_cache()
-    # Manual Grab's pacer remembers when the last MAM call ended; a
+    # The MAM pacer remembers when the last MAM request ended; a
     # leftover timestamp would make the next test sleep the real gap.
-    search_pacer.reset()
+    # Every request through `app.mam.cookie` is paced (issue 05), so
+    # its waits are skipped suite-wide; tests that check the spacing
+    # install a fake clock (`fake_clock` in the Manual Grab tests).
+    pacer.reset()
+
+    async def _no_wait(_seconds: float) -> None:
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(pacer, "_sleep", _no_wait)
     # Same for the live session token: `DispatcherDeps.live_mam_token()`
     # prefers it over the deps' own token, so a cookie rotated by one
     # test (`test_user_status`) leaked into every later dispatch — the
@@ -211,9 +278,8 @@ def _no_real_mam(monkeypatch):
         )
 
     guard = httpx.AsyncClient(transport=httpx.MockTransport(_refuse))
-    for mod, getter in ((cookie, "get_client"), (disco_mam, "_get_client")):
-        monkeypatch.setattr(mod, "_client", guard)
-        monkeypatch.setattr(mod, getter, lambda mod=mod: mod._client or guard)
+    monkeypatch.setattr(cookie, "_client", guard)
+    monkeypatch.setattr(cookie, "get_client", lambda: cookie._client or guard)
     yield guard
 
 

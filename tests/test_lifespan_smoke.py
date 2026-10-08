@@ -44,7 +44,7 @@ from app.orchestrator.dispatch import DispatcherDeps, handle_announce
 from app.rate_limit import ledger as ledger_mod
 from app.storage import grabs as grabs_storage
 from tests.fake_irc import FakeIrc, drive_sasl_handshake
-from tests.fake_mam import FakeMAM
+from tests.fake_mam import DEFAULT_TORRENT_INFO_BODY, FakeMAM
 
 
 # A real fixture announce line in MAM's post-2026-08-11 format.
@@ -108,6 +108,12 @@ class TestEndToEndPipeline:
         # The FilterConfig allows the real fixture's category
         # (Audiobooks - Fantasy) and author (Peter V Brett) so
         # the announce makes it past the filter.
+        #
+        # MAM's search already lists the announced torrent; an
+        # unlisted one would be held for the index wait (D37).
+        fake_mam.search.body = DEFAULT_TORRENT_INFO_BODY.replace(
+            b'"id":"965093"', b'"id":"1233592"',
+        )
 
         qbit = _SmokeQbit()
 

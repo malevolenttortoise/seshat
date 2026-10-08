@@ -29,12 +29,15 @@ returns clear status codes.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 from typing import Awaitable, Callable, Optional
 from urllib.parse import urlparse
 
 import httpx
+
+from app.mam import pacer
 
 _log = logging.getLogger("seshat.mam.cookie")
 
@@ -70,6 +73,32 @@ def _is_mam_url(url: str) -> bool:
     if not host:
         return False
     return host == "myanonamouse.net" or host.endswith(".myanonamouse.net")
+
+
+def is_mam_cover_url(url: str) -> bool:
+    """True if `url` is a MAM cover image: a MAM host AND a `/t/p/` path.
+
+    `_is_mam_url` only checks the host, so on its own it would send the
+    session cookie to any MAM path. Cover fetches take URLs from stored
+    rows (`books.cover_url` is operator-editable), and a `cover_url` of
+    `/tor/download.php?tid=…` fetched with the cookie would be a snatch.
+    Covers live at `https://cdn.myanonamouse.net/t/p/<ts>/large/<tid>.jpeg`
+    (`torrent_info.mam_cover_url`), so a fetch that attaches the cookie to
+    a stored URL checks this first.
+    """
+    if not _is_mam_url(url):
+        return False
+    try:
+        path = urlparse(url).path or ""
+    except Exception:
+        return False
+    # httpx collapses dot segments (`/t/p/../../tor/…` goes out as
+    # `/tor/…`) and a server may decode `%2e`, so neither is allowed;
+    # real cover paths contain neither.
+    if ".." in path or "%" in path or "\\" in path:
+        return False
+    return path.startswith("/t/p/")
+
 
 # Numeric category id for "Ebooks" — used by the validation probe to
 # constrain the test search payload. The exact value doesn't matter
@@ -164,6 +193,17 @@ def get_current_token() -> str:
     rotation captured the expected new value.
     """
     return _current_token or ""
+
+
+def fingerprint(token: str) -> int:
+    """A stable ID for a cookie value that doesn't reveal it.
+
+    Stored as `grabs.failed_with_cookie_id` when a download fails on an
+    expired cookie, so the cookie-retry job retries only once the live
+    cookie is a different one. 56 bits of SHA-256, which fits SQLite's
+    signed 64-bit INTEGER.
+    """
+    return int.from_bytes(hashlib.sha256(token.encode()).digest()[:7], "big")
 
 
 async def get_active_token() -> str:
@@ -280,6 +320,10 @@ def build_headers(token: str) -> dict[str, str]:
     Public so the grab path (`mam.grab`) can reuse the exact same
     header set when fetching .torrent files. Keeping the construction
     in one place means a UA change or a header tweak is a single edit.
+
+    The `curl/8.0` User-Agent is load-bearing: it's the UA known to work
+    against MAM end-to-end. Don't change it without running a full scan
+    first; UA-based rejection has bitten us before.
     """
     return {
         "Content-Type": "application/json",
@@ -295,6 +339,10 @@ def get_client() -> httpx.AsyncClient:
     client binds to whichever loop is active at creation time.
     Seshat runs one uvicorn loop for the whole process lifetime, so
     this is safe.
+
+    The ONE MAM client: the discovery source used to keep its own copy
+    (removed in the 2026-10 audit, L1-07). `http2=False` is deliberate:
+    HTTP/1.1 is what's been verified against MAM.
     """
     global _client
     if _client is None:
@@ -324,6 +372,14 @@ async def aclose_session() -> None:
             _log.warning(f"Error closing MAM client: {e}")
         finally:
             _client = None
+
+
+def _path_for_log(url: str) -> str:
+    """The URL's path, for the pacer's debug line (no query: no tids, no keys)."""
+    try:
+        return urlparse(url).path or url
+    except Exception:
+        return "?"
 
 
 def resolve_token(explicit: Optional[str]) -> str:
@@ -367,17 +423,24 @@ async def _do_get(
     would leak credentials. All legitimate callers either use a
     MAM_*_URL constant or have already host-checked their input via
     `_is_mam_url` before calling.
+
+    PACED: every request waits its turn in `app.mam.pacer` (one MAM
+    request at a time, `rate_mam` apart), as does `_do_post`.
     """
     if not _is_mam_url(url):
         raise ValueError(
             f"_do_get refuses non-MAM URL (cookie would leak): {url!r}"
         )
     effective_token = resolve_token(token)
-    response = await get_client().get(
-        url, headers=build_headers(effective_token), timeout=timeout
-    )
-    await handle_response_cookie(response)
-    return response
+
+    async def _request() -> httpx.Response:
+        response = await get_client().get(
+            url, headers=build_headers(effective_token), timeout=timeout
+        )
+        await handle_response_cookie(response)
+        return response
+
+    return await pacer.paced(_request, label=f"GET {_path_for_log(url)}")
 
 
 async def _do_post(
@@ -398,16 +461,27 @@ async def _do_post(
 
     Automatically rotates the in-memory token if the response carries
     a new `mam_id` cookie.
+
+    HOST GATE: same as `_do_get` — the session cookie never goes to a
+    non-MAM host.
     """
+    if not _is_mam_url(url):
+        raise ValueError(
+            f"_do_post refuses non-MAM URL (cookie would leak): {url!r}"
+        )
     effective_token = resolve_token(token)
-    response = await get_client().post(
-        url,
-        headers=build_headers(effective_token),
-        content=payload,
-        timeout=timeout,
-    )
-    await handle_response_cookie(response)
-    return response
+
+    async def _request() -> httpx.Response:
+        response = await get_client().post(
+            url,
+            headers=build_headers(effective_token),
+            content=payload,
+            timeout=timeout,
+        )
+        await handle_response_cookie(response)
+        return response
+
+    return await pacer.paced(_request, label=f"POST {_path_for_log(url)}")
 
 
 # ─── Validation flow ─────────────────────────────────────────

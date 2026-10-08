@@ -178,24 +178,23 @@ async def _run_post_save_hooks(settings: dict[str, Any]) -> None:
     except Exception:
         _log.exception("discovery post-save hooks failed (non-fatal)")
 
-    # Pipeline-side hook: rebuild the dispatcher so live IRC /
-    # qBit / snatch-budget loops read the new settings without
-    # a container restart. Only runs when the dispatcher is live
-    # — e.g. during tests the dispatcher is None and we skip.
+    # Pipeline-side hook: rebuild the dispatcher. The IRC listener and
+    # the background loops (budget watcher, cookie retry, review
+    # timeout, hold release, held index-wait grabs) resolve
+    # `state.dispatcher` on every announce / tick, so they pick the new
+    # settings up without a container restart. Only runs when the
+    # dispatcher is live — e.g. during tests the dispatcher is None and
+    # we skip.
     if state.dispatcher is None:
         return
     try:
         from app.main import (  # type: ignore
             _build_dispatcher, _resolve_secrets,
         )
-        old_enricher = getattr(state.dispatcher, "metadata_enricher", None)
         resolved_secrets = await _resolve_secrets()
-        state.dispatcher = await _build_dispatcher(settings, resolved_secrets)
-        if old_enricher is not None:
-            try:
-                await old_enricher.aclose()
-            except Exception:
-                pass
+        state.replace_dispatcher(
+            await _build_dispatcher(settings, resolved_secrets)
+        )
         _log.info("dispatcher rebuilt after settings patch")
     except Exception:
         _log.exception(

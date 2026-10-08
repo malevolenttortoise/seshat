@@ -17,6 +17,8 @@ never by fetching anything twice.
 from __future__ import annotations
 
 import asyncio
+import json
+from dataclasses import replace
 
 import pytest
 
@@ -26,6 +28,7 @@ from app.mam.torrent_info import (
     TorrentInfo,
     TorrentInfoError,
     TorrentNotFoundError,
+    invalidate_cache,
 )
 from app.orchestrator import cookie_retry, dispatch
 from app.orchestrator.dispatch import DispatchResult, handle_announce, inject_grab
@@ -37,6 +40,8 @@ from tests.orchestrator.test_dispatch import (
     _make_deps,
     _make_filter_config,
 )
+from tests.orchestrator.test_manual_grab import TID as MG_TID
+from tests.orchestrator.test_manual_grab import mam_search  # noqa: F401
 
 TID = "1234"
 HASH = "a" * 40
@@ -382,15 +387,18 @@ class TestRemovedFromMam:
         assert deps.fetch_torrent.calls == []  # type: ignore[attr-defined]
         assert await _grab_ids() == []
 
-    async def test_irc_announce_fails_open_on_not_found(self, temp_db, mam_says):
-        # A fresh announce can beat MAM's search index; not-found on the
-        # IRC path must not drop a real upload.
+    async def test_irc_announce_fails_open_on_not_found(self, temp_db, mam_says, monkeypatch):
+        # A fresh announce beats MAM's search index: the grab waits for
+        # it (D37), and a torrent MAM still doesn't list when the wait
+        # runs out is grabbed anyway rather than dropping a real upload.
         mam_says["answer"] = TorrentNotFoundError("not found in search results")
+        monkeypatch.setattr(dispatch, "_index_sleep", lambda s: asyncio.sleep(0))
         deps = _irc_deps()
 
         result = await handle_announce(deps, _make_announce(TID))
+        assert result.reason == "waiting_for_mam_index"
+        await asyncio.gather(*list(dispatch._held_grabs))
 
-        assert result.reason == "ok"
         assert len(deps.fetch_torrent.calls) == 1  # type: ignore[attr-defined]
 
     async def test_transient_lookup_failure_fails_open(self, temp_db, mam_says):
@@ -401,6 +409,158 @@ class TestRemovedFromMam:
 
         assert result.reason == "ok"
         assert len(deps.fetch_torrent.calls) == 1  # type: ignore[attr-defined]
+
+
+# ─── excluded uploader ───────────────────────────────────────
+
+
+def _search_body(**overrides) -> bytes:
+    item = {
+        "id": TID, "title": "The Way of Kings", "catname": "Ebooks - Fantasy",
+        "size": "1000", "vip": "0", "free": "0", "fl_vip": "0",
+        "personal_freeleech": "0", "my_snatched": "0",
+        "author_info": '{"1": "Brandon Sanderson"}',
+    }
+    item.update(overrides)
+    return json.dumps({"perpage": 1, "found": 1, "data": [item]}).encode()
+
+
+class TestExcludedUploader:
+    """Your own uploads are never grabbed (MAM counts that as a re-snatch).
+    Runs the real search-API parse through FakeMAM: `ownership` arrives as
+    a JSON string (live, 2026-10-07), and the guard was inert while the
+    parser only accepted a list."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh_info_cache(self):
+        invalidate_cache()
+        yield
+        invalidate_cache()
+
+    async def test_irc_announce_refused_without_fetch(self, temp_db, fake_mam):
+        fake_mam.search.body = _search_body(ownership='[12345,"MyAccount"]')
+        deps = replace(_irc_deps(), excluded_uploaders=frozenset({"myaccount"}))
+
+        result = await handle_announce(deps, _make_announce(TID))
+
+        assert result.action == "skip"
+        assert result.reason == "excluded_uploader:MyAccount"
+        assert deps.fetch_torrent.calls == []  # type: ignore[attr-defined]
+        assert await _grab_ids() == []
+
+    async def test_inject_refused_without_fetch(self, temp_db, fake_mam):
+        fake_mam.search.body = _search_body(ownership='[12345,"MyAccount"]')
+        deps = replace(_make_deps(), excluded_uploaders=frozenset({"myaccount"}))
+
+        result = await inject_grab(deps, torrent_id=TID)
+
+        assert result.reason == "excluded_uploader:MyAccount"
+        assert deps.fetch_torrent.calls == []  # type: ignore[attr-defined]
+
+    async def test_other_uploader_grabs_once(self, temp_db, fake_mam):
+        fake_mam.search.body = _search_body(ownership='[1,"SomeoneElse"]')
+        deps = replace(_irc_deps(), excluded_uploaders=frozenset({"myaccount"}))
+
+        result = await handle_announce(deps, _make_announce(TID))
+
+        assert result.reason == "ok"
+        assert len(deps.fetch_torrent.calls) == 1  # type: ignore[attr-defined]
+
+    async def test_refusal_is_recorded_on_the_announce_row(self, temp_db, fake_mam):
+        # Audit L2-07: the row used to keep the filter's `allow`.
+        fake_mam.search.body = _search_body(ownership='[12345,"MyAccount"]')
+        deps = replace(_irc_deps(), excluded_uploaders=frozenset({"myaccount"}))
+
+        result = await handle_announce(deps, _make_announce(TID))
+
+        assert await _announce_decision(result.announce_id) == (
+            "skip", "excluded_uploader:MyAccount",
+        )
+        assert result.error == "The uploader is on your excluded-uploaders list."
+
+
+# ─── one torrent-ID form (audit L1-13) ───────────────────────
+
+
+class TestTorrentIdForm:
+    @pytest.mark.parametrize("asked", [" 1234", "1234 ", "01234"])
+    async def test_other_spellings_of_a_grabbed_id_are_refused(
+        self, temp_db, mam_says, asked,
+    ):
+        await _seed_grab(grabs_storage.STATE_SUBMITTED, qbit_hash=HASH)
+        deps = _make_deps()
+
+        result = await inject_grab(deps, torrent_id=asked)
+
+        assert result.reason == "already_grabbed"
+        assert deps.fetch_torrent.calls == []  # type: ignore[attr-defined]
+
+    async def test_id_carrying_a_wedge_flag_is_refused_as_invalid(
+        self, temp_db, mam_says,
+    ):
+        deps = _make_deps()
+
+        result = await inject_grab(deps, torrent_id="1234&fl=1")
+
+        assert (result.action, result.reason) == ("skip", "invalid_torrent_id")
+        assert result.error
+        assert deps.fetch_torrent.calls == []  # type: ignore[attr-defined]
+        assert mam_says["calls"] == []
+        assert await _grab_ids() == []
+
+    async def test_normalised_id_is_what_gets_fetched(self, temp_db, mam_says):
+        deps = _make_deps()
+        await inject_grab(deps, torrent_id=" 01234 ")
+        assert [c[0] for c in deps.fetch_torrent.calls] == [TID]  # type: ignore[attr-defined]
+
+
+# ─── one torrent-info lookup per grab (audit L1-14) ─────────
+
+
+class TestOneLookupPerGrab:
+    """`get_torrent_info` caches only successes, so a failing lookup used
+    to be repeated by the snatch guard, co-author auto-train and the
+    economic context. Counted at MAM's search endpoint (`mam_search`)."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh_info_cache(self):
+        invalidate_cache()
+        yield
+        invalidate_cache()
+
+    @staticmethod
+    def _wedge_policy_deps(**kw):
+        from app.policy.engine import PolicyConfig
+        deps = _make_deps(**kw)
+        deps.policy_config = PolicyConfig(use_wedge=True)  # eco ctx needs the lookup
+        return deps
+
+    async def test_inject_with_mam_unreachable_searches_once(self, temp_db, mam_search):
+        import httpx
+        mam_search["items"][MG_TID] = httpx.ConnectError("down")
+        deps = self._wedge_policy_deps()
+
+        result = await inject_grab(deps, torrent_id=MG_TID)
+
+        assert mam_search["calls"] == [MG_TID]
+        assert result.reason == "ok"  # fails open, as before
+
+    async def test_irc_with_mam_unreachable_searches_once(self, temp_db, mam_search):
+        import httpx
+        mam_search["items"][MG_TID] = httpx.ConnectError("down")
+        deps = self._wedge_policy_deps(
+            filter_config=_make_filter_config(allowed=["Brandon Sanderson"]),
+        )
+
+        result = await handle_announce(deps, _make_announce(MG_TID))
+
+        assert mam_search["calls"] == [MG_TID]
+        assert result.reason == "ok"
+
+    async def test_found_torrent_searches_once(self, temp_db, mam_search):
+        deps = self._wedge_policy_deps()
+        await inject_grab(deps, torrent_id=MG_TID)
+        assert mam_search["calls"] == [MG_TID]
 
 
 # ─── cookie-retry job ────────────────────────────────────────

@@ -14,6 +14,12 @@ Holds also get dropped synchronously by the dispatcher whenever a
 higher-priority arrival preempts them (the Delves case: AZW3 sits in
 a hold, EPUB arrives 57s later, AZW3 hold dies before its timer fires).
 
+Since the 2026-10 audit (issue 26) the table also holds a second kind of
+row, `kind = 'index_wait'`: an allowed IRC announce waiting for MAM's
+search to list it (D37), so a restart mid-wait resumes it. Those rows
+carry the announce as JSON in `payload`; the format-dedup queries here
+and in `format_dedup.py` only ever see `kind = 'format_dedup'`.
+
 Invariant: at most one row per `dedup_key` is in `state = 'pending'`
 at any time. The dispatcher enforces this by preempting any existing
 lower-priority hold for the same dedup_key when inserting a new one.
@@ -36,6 +42,9 @@ _log = logging.getLogger("seshat.storage.holds")
 STATE_PENDING = "pending"
 STATE_RELEASED = "released"
 STATE_DROPPED = "dropped"
+
+KIND_FORMAT_DEDUP = "format_dedup"
+KIND_INDEX_WAIT = "index_wait"
 
 
 @dataclass(frozen=True)
@@ -199,6 +208,7 @@ async def list_due(
                release_at, state
         FROM pending_holds
         WHERE state = '{STATE_PENDING}' AND release_at <= ?
+          AND kind = '{KIND_FORMAT_DEDUP}'
         ORDER BY release_at ASC
         """,
         (now_iso,),
@@ -219,4 +229,82 @@ async def list_due(
             state=r["state"],
         )
         for r in rows
+    ]
+
+
+# ─── Index-wait holds (audit issue 26) ───────────────────────
+
+
+@dataclass(frozen=True)
+class IndexWaitRow:
+    """A pending index-wait hold: the announce to resume, and when it came."""
+    id: int
+    announce_id: Optional[int]
+    torrent_id: str
+    created_at: str
+    payload: str
+
+
+async def create_index_wait(
+    db: aiosqlite.Connection,
+    *,
+    announce_id: Optional[int],
+    torrent_id: str,
+    torrent_name: str,
+    category: str,
+    author_blob: str,
+    book_format: str,
+    payload: str,
+    wait_seconds: int,
+) -> int:
+    """Record an announce waiting for MAM's index; `release_at` is the end
+    of the wait (informational: the resume logic works from `created_at`).
+    """
+    cursor = await db.execute(
+        """
+        INSERT INTO pending_holds
+            (announce_id, dedup_key, media_type, book_format,
+             torrent_id, torrent_name, category, author_blob,
+             release_at, state, kind, payload)
+        VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            announce_id,
+            f"{KIND_INDEX_WAIT}:{torrent_id}",
+            (book_format or "").lower(),
+            torrent_id,
+            torrent_name,
+            category or None,
+            author_blob or None,
+            _utc_future_iso(wait_seconds),
+            STATE_PENDING,
+            KIND_INDEX_WAIT,
+            payload,
+        ),
+    )
+    await db.commit()
+    return cursor.lastrowid or 0
+
+
+async def list_index_waits_created_before(
+    db: aiosqlite.Connection, created_before: str,
+) -> list[IndexWaitRow]:
+    """Pending index-wait holds created before `created_before` (UTC, the
+    same format as `created_at`): the ones no task in this process owns."""
+    cursor = await db.execute(
+        f"""
+        SELECT id, announce_id, torrent_id, created_at, payload
+        FROM pending_holds
+        WHERE state = '{STATE_PENDING}' AND kind = '{KIND_INDEX_WAIT}'
+          AND created_at < ?
+        ORDER BY created_at ASC
+        """,
+        (created_before,),
+    )
+    return [
+        IndexWaitRow(
+            id=r["id"], announce_id=r["announce_id"], torrent_id=r["torrent_id"],
+            created_at=r["created_at"], payload=r["payload"] or "",
+        )
+        for r in await cursor.fetchall()
     ]

@@ -8,6 +8,7 @@
 // Send-to-pipeline is still available per-card via MobileBookCard.
 import { useCallback, useEffect, useState } from "react";
 import { api, slugQuery } from "../api";
+import { runBatchJob } from "../lib/batchJob";
 import { useTheme } from "../theme";
 import { usePersist } from "../hooks/usePersist";
 import { BookSidebar } from "../components/BookSidebar";
@@ -274,7 +275,7 @@ export default function MobileMAMPage({ onNav }: { onNav: NavFn }) {
   const sendToPipeline: SendToPipelineFn = async (bookIds) => {
     if (!bookIds || !bookIds.length) return;
     try {
-      const r = await api.post<SendToPipelineResponse>(
+      const r = await runBatchJob<SendToPipelineResponse>(
         "/discovery/send-to-pipeline",
         { book_ids: bookIds },
       );

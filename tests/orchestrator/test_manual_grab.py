@@ -1,7 +1,8 @@
 """Manual Grab, slice A — paste a MAM link, preview it, grab it.
 
 MAM's search API is faked at the HTTP seam (`torrent_info._do_post`), so
-the real torrent-info cache and the real pacer run; every search call is
+the real torrent-info cache runs; the fakes take their turn in the real
+MAM pacer, as the real `_do_post` does (issue 05). Every search call is
 counted. Refusals are proven by asserting `fetch_torrent` was NOT
 called — never by fetching anything twice (ADR-0022, ADR-0023).
 """
@@ -13,7 +14,7 @@ import json
 import pytest
 
 from app.database import get_db
-from app.mam import search_pacer, torrent_info
+from app.mam import pacer, search_pacer, torrent_info
 from app.mam.torrent_id import extract_torrent_id
 from app.orchestrator import dispatch, manual_grab
 from app.orchestrator.dispatch import inject_grab
@@ -62,12 +63,15 @@ def mam_search(monkeypatch):
     box: dict = {"items": {TID: _item()}, "calls": []}
 
     async def fake_post(url, token=None, payload=None, timeout=15):
-        tid = json.loads(payload)["tor"]["id"]
-        box["calls"].append(tid)
-        answer = box["items"].get(tid)
-        if isinstance(answer, Exception):
-            raise answer
-        return _Resp({"data": [answer] if answer else []})
+        async def answer_it():
+            tid = json.loads(payload)["tor"]["id"]
+            box["calls"].append(tid)
+            answer = box["items"].get(tid)
+            if isinstance(answer, Exception):
+                raise answer
+            return _Resp({"data": [answer] if answer else []})
+
+        return await pacer.paced(answer_it)   # as the real _do_post is
 
     monkeypatch.setattr(torrent_info, "_do_post", fake_post)
     return box
@@ -82,8 +86,8 @@ def fake_clock(monkeypatch):
         clock["sleeps"].append(seconds)
         clock["now"] += seconds
 
-    monkeypatch.setattr(search_pacer, "_clock", lambda: clock["now"])
-    monkeypatch.setattr(search_pacer, "_sleep", fake_sleep)
+    monkeypatch.setattr(pacer, "_clock", lambda: clock["now"])
+    monkeypatch.setattr(pacer, "_sleep", fake_sleep)
     return clock
 
 
@@ -107,11 +111,14 @@ def covers(monkeypatch):
     calls: list[str] = []
 
     async def fake_fetch(torrent_id, *, dest_dir, basename="cover-mam", token=""):
-        calls.append(torrent_id)
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        path = dest_dir / f"{basename}.jpg"
-        path.write_bytes(b"\xff\xd8" + b"0" * 200)
-        return path
+        async def download():
+            calls.append(torrent_id)
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            path = dest_dir / f"{basename}.jpg"
+            path.write_bytes(b"\xff\xd8" + b"0" * 200)
+            return path
+
+        return await pacer.paced(download)   # the real one's _do_get is paced
 
     monkeypatch.setattr(covers_mod, "fetch_mam_cover", fake_fetch)
     return calls
@@ -167,6 +174,7 @@ class TestExtractTorrentId:
     @pytest.mark.parametrize("value", [
         "1274788",
         "  1274788 ",
+        "01274788",
         "https://www.myanonamouse.net/t/1274788",
         "https://www.myanonamouse.net/t/1274788#torDetMainCon",
         "https://www.myanonamouse.net/tor/download.php?tid=1274788",
@@ -174,7 +182,9 @@ class TestExtractTorrentId:
     def test_accepts(self, value):
         assert extract_torrent_id(value) == "1274788"
 
-    @pytest.mark.parametrize("value", ["", "abc", "https://www.goodreads.com/book/show/7235533"])
+    @pytest.mark.parametrize("value", [
+        "", "abc", "1274788&fl=1", "https://www.goodreads.com/book/show/7235533",
+    ])
     def test_rejects(self, value):
         assert extract_torrent_id(value) is None
 
@@ -183,34 +193,7 @@ class TestExtractTorrentId:
 
 
 class TestPacer:
-    async def test_spaces_calls_by_the_gap(self, fake_clock, monkeypatch):
-        monkeypatch.setattr(search_pacer, "gap_seconds", lambda: 2.0)
-
-        async def call():
-            fake_clock["starts"].append(fake_clock["now"])
-
-        for _ in range(4):
-            await search_pacer.paced(call)
-        starts = fake_clock["starts"]
-        assert [b - a for a, b in zip(starts, starts[1:])] == [2.0, 2.0, 2.0]
-
-    async def test_concurrent_callers_are_serialized(self, fake_clock, monkeypatch):
-        monkeypatch.setattr(search_pacer, "gap_seconds", lambda: 2.0)
-
-        async def call():
-            fake_clock["starts"].append(fake_clock["now"])
-
-        await asyncio.gather(*(search_pacer.paced(call) for _ in range(5)))
-        starts = sorted(fake_clock["starts"])
-        assert all(b - a >= 2.0 for a, b in zip(starts, starts[1:]))
-
-    def test_gap_is_rate_mam_floored_at_one_second(self, monkeypatch):
-        monkeypatch.setattr(search_pacer, "load_settings", lambda: {"rate_mam": 0})
-        assert search_pacer.gap_seconds() == 1.0
-        monkeypatch.setattr(search_pacer, "load_settings", lambda: {"rate_mam": 3})
-        assert search_pacer.gap_seconds() == 3.0
-        monkeypatch.setattr(search_pacer, "load_settings", lambda: {})
-        assert search_pacer.gap_seconds() == 2.0
+    """The pacer itself is tested in tests/mam/test_pacer.py."""
 
     async def test_cache_hit_skips_the_pacer(self, mam_search, fake_clock):
         await search_pacer.paced_torrent_info(TID, "tok")
@@ -300,7 +283,7 @@ class TestPreview:
         assert row.freeleech is True and row.wedge_eligible is False
 
     async def test_lookup_and_cover_are_paced(self, temp_db, mam_search, fake_clock, covers, monkeypatch):
-        monkeypatch.setattr(search_pacer, "gap_seconds", lambda: 2.0)
+        monkeypatch.setattr(pacer, "gap_seconds", lambda: 2.0)
         mam_search["items"]["2"] = _item("2", title="Words of Radiance")
         await manual_grab.preview_link(_make_deps(), TID)
         await manual_grab.preview_link(_make_deps(), "2")

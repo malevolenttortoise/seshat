@@ -38,8 +38,6 @@ import time
 from typing import Callable, Optional
 from urllib.parse import urlencode
 
-import httpx
-
 from app import state
 from app.mam import cookie as mam_cookie
 from app.metadata.scoring import score_match_with_breakdown
@@ -49,7 +47,7 @@ logger = logging.getLogger("seshat.discovery.mam")
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-MAM_SEARCH_URL = "https://www.myanonamouse.net/tor/js/loadSearchJSONbasic.php"
+MAM_SEARCH_URL = mam_cookie.MAM_SEARCH_URL
 MAM_BROWSE_BASE = "https://www.myanonamouse.net/tor/browse.php"
 MAM_TORRENT_BASE = "https://www.myanonamouse.net/t"
 # MAM_DYNIP_URL lives in app.mam.cookie now — IP registration delegates
@@ -990,53 +988,14 @@ def _pick_best_result(
 
 
 # ---------------------------------------------------------------------------
-# HTTP layer (sync helpers + Session + auth flow)
+# HTTP layer: app.mam.cookie's
 # ---------------------------------------------------------------------------
-
-def _build_headers(token: str) -> dict:
-    """Build headers for MAM API requests.
-
-    The `curl/8.0` User-Agent is intentional and load-bearing — it's the UA
-    we know works against MAM end-to-end. Don't change it without running a
-    full scan first; subtle UA-based rejection has bitten us before.
-
-    The IP- (or ASN-)locked `mam_id` cookie is the ONLY auth mechanism;
-    the same token will be rejected if the requesting IP differs from the
-    one that generated it. See register_ip() and the `skip_ip_update`
-    setting for the network-binding workflow.
-    """
-    return {
-        "Content-Type": "application/json",
-        "User-Agent": "curl/8.0",
-        "Cookie": f"mam_id={token}",
-    }
-
-
-# ---------------------------------------------------------------------------
-# HTTP layer (async — httpx.AsyncClient)
-# ---------------------------------------------------------------------------
-# Native async HTTP via a single process-wide httpx.AsyncClient.
-#
-# Two non-obvious choices, both load-bearing — do NOT change without running
-# a full MAM scan end-to-end first:
-#
-#   1. Search POSTs use `content=<string>` (raw body), NOT `data=<dict>`
-#      (form-url-encoded) and NOT `json=<dict>` (re-serialized by httpx).
-#      MAM will happily accept the request and return HTTP 200 with a
-#      zero-byte body when the search payload is form-encoded — looks like
-#      auth failure but isn't. The fix is sending the exact JSON bytes
-#      produced by json.dumps at the call site.
-#
-#   2. http2=False is explicit. httpx can speak HTTP/2 when `h2` is
-#      installed; we pin HTTP/1.1 because that's what's been verified
-#      against MAM and we don't want variable transport behavior.
-#
-# Connection reuse matters for throughput: a 100-book scan with the 5-pass
-# cascade fires hundreds of requests, and each fresh TCP+TLS handshake
-# costs 50-150ms. Sharing one client across the process drops that to a
-# single handshake per batch.
-
-_client: Optional[httpx.AsyncClient] = None
+# This module has no HTTP client of its own. Every MAM request goes through
+# `mam_cookie._do_post` (one process-wide httpx.AsyncClient, the
+# `curl/8.0` headers, the raw-JSON `content=` body, the host gate, the token
+# resolution and the rotation capture). Until the 2026-10 audit (L1-07) it
+# kept a duplicate client with its own `_do_get` / `_do_post`; one HTTP
+# stack means one place to pace MAM traffic and one place to test it.
 
 # ── Cookie auto-rotation state ──────────────────────────────
 # There is NONE in this module, deliberately. `app.mam.cookie` is the
@@ -1081,85 +1040,6 @@ _client: Optional[httpx.AsyncClient] = None
 # Search JSON API + tor.id + description flag — explicitly TOS-allowed.
 # Future re-enable IF MAM exposes filelist via the documented API:
 # project_seshat_filelist_future_reenable.md.
-
-
-# Rotation capture is app.mam.cookie's job. Re-exported here under the
-# name this module's callers/tests already use, so every request made
-# through `_do_get`/`_do_post` below feeds the ONE shared token slot and
-# the ONE debounced persistence path.
-#
-# app.mam.cookie's version is strictly better than the local one it
-# replaced: its debounce cancels-and-reschedules (last rotation always
-# lands) rather than hard-gating on a 60s window, which silently DROPPED
-# any rotation arriving inside the window.
-_handle_response_cookie = mam_cookie.handle_response_cookie
-
-
-def _get_client() -> httpx.AsyncClient:
-    """Lazy-initialized module-level httpx.AsyncClient for connection reuse.
-
-    MUST be called from within a running asyncio event loop — the client
-    binds to whichever loop is active at creation time. Seshat runs one
-    uvicorn loop for the whole process lifetime, so this is safe.
-    """
-    global _client
-    if _client is None:
-        _client = httpx.AsyncClient(
-            http2=False,
-            timeout=httpx.Timeout(20.0, connect=10.0),
-            follow_redirects=True,
-        )
-        logger.debug("MAM httpx.AsyncClient created")
-    return _client
-
-
-async def aclose_session() -> None:
-    """Tear down the module-level AsyncClient.
-
-    Called from main.py's lifespan() during app shutdown. Safe to call
-    multiple times — subsequent calls are no-ops. The `a` prefix is
-    deliberate: callers must `await` this to actually close the
-    underlying transport.
-    """
-    global _client
-    if _client is not None:
-        try:
-            await _client.aclose()
-            logger.debug("MAM httpx.AsyncClient closed")
-        except Exception as e:
-            logger.warning(f"Error closing MAM client: {e}")
-        finally:
-            _client = None
-
-
-async def _do_get(url: str, token: str, timeout: int = 15) -> httpx.Response:
-    """Async GET to a MAM endpoint with standard headers + cookie rotation."""
-    # Explicit token wins; fall back to app.mam.cookie's live rotated
-    # value. Reversing these two is the v3.10.0 stale-cookie bug — see
-    # the "Cookie auto-rotation state" note above.
-    effective = mam_cookie.resolve_token(token)
-    resp = await _get_client().get(
-        url, headers=_build_headers(effective), timeout=timeout
-    )
-    await _handle_response_cookie(resp)
-    return resp
-
-
-async def _do_post(url: str, token: str, payload: str, timeout: int = 20) -> httpx.Response:
-    """Async POST to a MAM endpoint with standard headers + cookie rotation.
-
-    `payload` MUST be a pre-serialized JSON string. Sent via httpx
-    `content=` so the body bytes go on the wire untouched. See the module
-    header for why `data=<dict>` and `json=<dict>` both break the search
-    API in subtle ways.
-    """
-    # Explicit token wins — see `_do_get`.
-    effective = mam_cookie.resolve_token(token)
-    resp = await _get_client().post(
-        url, headers=_build_headers(effective), content=payload, timeout=timeout
-    )
-    await _handle_response_cookie(resp)
-    return resp
 
 
 # ── Connection validation ───────────────────────────────────
@@ -1273,7 +1153,7 @@ async def _mam_search(
     })
 
     try:
-        resp = await _do_post(MAM_SEARCH_URL, token, payload)
+        resp = await mam_cookie._do_post(MAM_SEARCH_URL, token, payload)
         if resp.status_code in (401, 403):
             raise _AuthError(f"HTTP {resp.status_code}")
         resp.raise_for_status()
@@ -1663,7 +1543,7 @@ async def _fetch_torrent_description(
         }
     )
     try:
-        resp = await _do_post(MAM_SEARCH_URL, token, payload)
+        resp = await mam_cookie._do_post(MAM_SEARCH_URL, token, payload)
         if resp.status_code != 200 or not resp.text:
             return None
         data = resp.json()

@@ -12,8 +12,9 @@ Two halves, both behind `app/routers/manual_grab.py`:
     memory (D14): a restart loses the rows it hadn't reached; every row
     it did reach is an ordinary grab.
 
-Every MAM request made here goes through `search_pacer` (lookups and
-covers), so a batch never bursts. A paste grab is
+Every MAM request made here is paced (`app.mam.pacer`, one at a time,
+`rate_mam` apart: lookups, covers and Grab all's downloads alike), so a
+batch never bursts. A paste grab is
 `inject_grab` with the preview's metadata filled in, claim-for-owned
 and format dedup off (the preview showed the user what they own;
 ADR-0023), and the snatch-safety guards of ADR-0022 untouched.
@@ -35,6 +36,7 @@ from app.mam import search_pacer
 from app.mam.torrent_id import extract_torrent_id
 from app.mam.torrent_info import TorrentInfo, TorrentInfoError, TorrentNotFoundError
 from app.mam.user_status import UserStatusError, get_user_status
+from app.orchestrator import jobs
 from app.orchestrator.dispatch import (
     DispatcherDeps,
     DispatchResult,
@@ -395,11 +397,8 @@ async def cover_url_for(torrent_id: str, token: str) -> Optional[str]:
     if (folder / _NO_COVER_MARKER).exists():
         return None
     _prune_covers()
-    path = await search_pacer.paced(
-        lambda: fetch_mam_cover(
-            torrent_id, dest_dir=folder, basename="cover-mam", token=token,
-        ),
-        label=f"cover tid={torrent_id}",
+    path = await fetch_mam_cover(
+        torrent_id, dest_dir=folder, basename="cover-mam", token=token,
     )
     if path is None:
         try:
@@ -443,7 +442,7 @@ class WedgeBudget:
 async def wedge_budget(deps: DispatcherDeps, *, fresh: bool = False) -> Optional[WedgeBudget]:
     """The account's wedges and the reserve the policy keeps back.
 
-    `fresh=True` re-reads MAM (through the pacer) instead of the cached
+    `fresh=True` re-reads MAM (paced like every request) instead of the cached
     status: Grab all checks the batch against it, and the cached count
     can be minutes old. None when the account can't be read.
     """
@@ -452,9 +451,7 @@ async def wedge_budget(deps: DispatcherDeps, *, fresh: bool = False) -> Optional
         return None
     try:
         if fresh:
-            status = await search_pacer.paced(
-                lambda: get_user_status(token=token, ttl=0), label="user status (fresh)",
-            )
+            status = await get_user_status(token=token, ttl=0)
         else:
             status = await search_pacer.paced_user_status(token)
     except UserStatusError:
@@ -517,27 +514,19 @@ class Job:
         }
 
 
-_JOB_TTL_S = 3600
-_jobs: dict[str, Job] = {}
-_tasks: set[asyncio.Task] = set()
+# The shared in-memory job registry (`app.orchestrator.jobs`): an hour
+# after it finishes a job is forgotten; a restart forgets them all.
+_registry = jobs.JobRegistry()
+_jobs: dict[str, Job] = _registry.jobs
+_tasks: set[asyncio.Task] = _registry.tasks
 
 
 def get_job(job_id: str) -> Optional[Job]:
-    return _jobs.get(job_id)
-
-
-def _prune_jobs() -> None:
-    now = time.time()
-    for jid in [
-        jid for jid, j in _jobs.items()
-        if j.done and j.finished_at and now - j.finished_at > _JOB_TTL_S
-    ]:
-        _jobs.pop(jid, None)
+    return _registry.get(job_id)
 
 
 def start_job(deps: DispatcherDeps, items: list[GrabRequestItem]) -> Job:
     """Create the job and start grabbing in the background."""
-    _prune_jobs()
     job = Job(
         id=uuid.uuid4().hex,
         created_at=time.time(),
@@ -546,10 +535,7 @@ def start_job(deps: DispatcherDeps, items: list[GrabRequestItem]) -> Job:
             for i, item in enumerate(items)
         ],
     )
-    _jobs[job.id] = job
-    task = asyncio.create_task(_run_job(deps, job, items))
-    _tasks.add(task)
-    task.add_done_callback(_tasks.discard)
+    _registry.add(job, _run_job(deps, job, items))
     return job
 
 

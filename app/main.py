@@ -47,6 +47,7 @@ from app.mam.cookie import (
     set_current_token,
     set_rotation_callback,
 )
+from app.mam import pacer as mam_pacer
 from app.mam.grab import fetch_torrent
 from app.mam.irc import IrcClient, IrcConfig
 from app.orchestrator.budget_watcher import run_loop as budget_watcher_loop
@@ -491,6 +492,31 @@ async def _debounced_persist_rotation() -> None:
 # MAM staff. See feedback_mam_mbsc_filelist_tos.md.
 
 
+def _live_dispatcher() -> Optional[DispatcherDeps]:
+    """The dispatcher as of now; what every background loop resolves per tick."""
+    return state.dispatcher
+
+
+async def _on_irc_announce(announce: Announce) -> None:
+    """Bridge the IRC callback signature to the dispatcher.
+
+    Resolves `state.dispatcher` per announce, so an allow-list change,
+    a grab-policy save or a new excluded uploader reaches the next
+    announce. The dispatcher's own try/except keeps a single bad
+    announce from killing the listener.
+
+    An announce's MAM requests (and a grab held for MAM's index, a task
+    spawned in here that inherits the context) wait in front of scans
+    and everything else in the MAM pacer, so a long scan can't hold up
+    an autograb.
+    """
+    deps = state.dispatcher
+    if deps is None:
+        return
+    with mam_pacer.priority(mam_pacer.PRIORITY_IRC):
+        await handle_announce(deps, announce)
+
+
 def _build_irc_config(settings: dict, resolved_secrets: dict = None) -> IrcConfig:
     """Construct an IrcConfig from a settings snapshot.
 
@@ -595,12 +621,12 @@ async def lifespan(app: FastAPI):
 
     # ── Background loops (supervised) ────────────────────────
     #
-    # Both loops capture the dispatcher singleton at startup time.
-    # If a settings change rebuilds the dispatcher, the loops will
-    # need to be restarted — that plumbing lives with the Settings
-    # UI in Phase 3.
-
-    deps_for_loops = state.dispatcher
+    # Every loop is handed `_live_dispatcher`, not the dispatcher
+    # itself: a settings / credential / metadata-source save replaces
+    # `state.dispatcher`, and each loop resolves it again on every tick
+    # (the IRC bridge on every announce). A copy captured here would
+    # keep startup's allow list, grab policy and excluded uploaders for
+    # the life of the process.
 
     # Budget watcher: polls qBit, reconciles ledger, drains queue.
     # Auto-disabled if qBit isn't configured (the loop would just
@@ -611,7 +637,7 @@ async def lifespan(app: FastAPI):
         )
 
         async def _budget_loop_factory():
-            await budget_watcher_loop(deps_for_loops, interval_seconds=interval)
+            await budget_watcher_loop(_live_dispatcher, interval_seconds=interval)
 
         state._budget_watcher_task = state.supervised_task(
             _budget_loop_factory, name="snatch-budget-watcher"
@@ -631,14 +657,7 @@ async def lifespan(app: FastAPI):
     irc_enabled = settings.get("mam_irc_enabled", True)
     irc_config = _build_irc_config(settings, resolved_secrets)
     if irc_enabled and irc_config.auth_mode != "none" and irc_config.nick:
-        async def _on_announce(announce: Announce) -> None:
-            # Bridge the IRC callback signature to the dispatcher.
-            # The dispatcher's own try/except keeps a single bad
-            # announce from killing the listener; this thin wrapper
-            # is just signature glue.
-            await handle_announce(deps_for_loops, announce)
-
-        irc_client = IrcClient(irc_config, _on_announce)
+        irc_client = IrcClient(irc_config, _on_irc_announce)
         state.irc_client = irc_client
 
         async def _irc_loop_factory():
@@ -693,7 +712,7 @@ async def lifespan(app: FastAPI):
         )
 
         async def _cookie_retry_loop_factory():
-            await cookie_retry_loop(deps_for_loops, interval_seconds=retry_seconds)
+            await cookie_retry_loop(_live_dispatcher, interval_seconds=retry_seconds)
 
         state._cookie_retry_task = state.supervised_task(
             _cookie_retry_loop_factory, name="cookie-retry"
@@ -712,7 +731,7 @@ async def lifespan(app: FastAPI):
 
         async def _review_timeout_factory():
             await review_timeout_loop(
-                deps_for_loops, interval_seconds=review_interval
+                _live_dispatcher, interval_seconds=review_interval
             )
 
         state._review_timeout_task = state.supervised_task(
@@ -737,7 +756,7 @@ async def lifespan(app: FastAPI):
 
     async def _hold_release_factory():
         await hold_release_loop(
-            deps_for_loops, interval_seconds=hold_release_interval,
+            _live_dispatcher, interval_seconds=hold_release_interval,
         )
 
     state._hold_release_task = state.supervised_task(
@@ -1315,6 +1334,7 @@ async def lifespan(app: FastAPI):
             "_cookie_keepalive_task",
             "_cookie_retry_task",
             "_review_timeout_task",
+            "_hold_release_task",
             "_mam_scheduler_task",
             "_digest_scheduler_task",
             "_economy_vip_task",
@@ -1353,15 +1373,6 @@ async def lifespan(app: FastAPI):
             await aclose_session()
         except Exception:
             _log.exception("error closing MAM cookie session during shutdown")
-        # The discovery domain holds its own long-lived httpx.AsyncClient
-        # for MAM metadata calls — separate from the cookie-module one
-        # that aclose_session() above closes. Close it explicitly so we
-        # don't leak the transport.
-        try:
-            from app.discovery.sources.mam import aclose_session as disc_mam_aclose
-            await disc_mam_aclose()
-        except Exception:
-            _log.exception("error closing discovery MAM session during shutdown")
         # Best-effort final flush of any pending discovery digest events
         # so a restart doesn't lose notifications queued during the day.
         # No-op when ntfy_digest_enabled=false (force=True still drains

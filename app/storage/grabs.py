@@ -237,6 +237,7 @@ async def set_state(
     failed_reason: Optional[str] = None,
     qbit_hash: Optional[str] = None,
     torrent_file_path: Optional[str] = None,
+    failed_with_cookie_id: Optional[int] = None,
 ) -> None:
     """Transition a grab to a new state.
 
@@ -244,6 +245,8 @@ async def set_state(
     when transitioning to `STATE_SUBMITTED`. Optional fields are
     only written if explicitly passed (so re-calling for state-only
     updates doesn't clobber the hash or file path).
+    `failed_with_cookie_id` is `app.mam.cookie.fingerprint()` of the
+    cookie a `failed_cookie_expired` download was refused with.
     """
     sets = ["state = ?", "state_updated_at = datetime('now')"]
     params: list = [state]
@@ -259,6 +262,9 @@ async def set_state(
     if torrent_file_path is not None:
         sets.append("torrent_file_path = ?")
         params.append(torrent_file_path)
+    if failed_with_cookie_id is not None:
+        sets.append("failed_with_cookie_id = ?")
+        params.append(failed_with_cookie_id)
 
     params.append(grab_id)
     await db.execute(

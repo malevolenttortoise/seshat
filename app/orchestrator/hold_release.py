@@ -26,11 +26,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional
+from typing import Callable, Optional
 
 from app.database import get_db
 from app.filter.gate import Announce
-from app.orchestrator.dispatch import DispatcherDeps, inject_grab
+from app.orchestrator.dispatch import DispatcherDeps, inject_grab, resume_index_waits
 from app.orchestrator.format_dedup import (
     evaluate_format_dedup,
     lookup_dedup_siblings,
@@ -45,7 +45,16 @@ async def tick(deps: DispatcherDeps) -> int:
     (released or dropped) this tick.
 
     Tests drive this directly; the supervised loop wraps it.
+
+    It also resumes grabs that were waiting for MAM's index when Seshat
+    last stopped (`resume_index_waits`, audit issue 26); those aren't
+    counted here.
     """
+    try:
+        await resume_index_waits(deps)
+    except Exception:
+        _log.exception("hold_release: resuming index-wait holds failed")
+
     db = await get_db()
     try:
         due = await holds_storage.list_due(db)
@@ -159,7 +168,7 @@ async def tick(deps: DispatcherDeps) -> int:
 
 
 async def run_loop(
-    deps: DispatcherDeps,
+    get_deps: Callable[[], Optional[DispatcherDeps]],
     *,
     interval_seconds: int = 60,
     stop_event: Optional[asyncio.Event] = None,
@@ -172,13 +181,19 @@ async def run_loop(
     granularity is "within a minute of the release_at timestamp",
     not "instant". Per-tick cost is one indexed query + one decision
     per due hold, so any reasonable interval scales.
+
+    `get_deps` is called at the start of every tick (main.py passes
+    `lambda: state.dispatcher`), so a settings save that rebuilds the
+    dispatcher reaches the next tick. None (shutdown) skips the tick.
     """
     _log.info("hold_release loop started (interval=%ss)", interval_seconds)
     while True:
         if stop_event is not None and stop_event.is_set():
             break
         try:
-            await tick(deps)
+            deps = get_deps()
+            if deps is not None:
+                await tick(deps)
         except Exception:
             _log.exception("hold_release: tick raised; sleeping and retrying")
         try:

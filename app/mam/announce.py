@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import re
 from typing import Optional
+from urllib.parse import quote
 
 from app.filter.gate import Announce
 
@@ -255,7 +256,12 @@ def build_download_url(torrent_id: str, *, use_fl_wedge: bool = False) -> str:
     wedge on this torrent, making the download free. The policy engine
     decides whether to set this flag.
     """
-    url = f"https://www.myanonamouse.net/tor/download.php?tid={torrent_id}"
+    # Encoded so a stray `&fl=1` inside an ID can never add a wedge past
+    # the dispatcher's `_wedge_for` guard (digits are unchanged).
+    url = (
+        "https://www.myanonamouse.net/tor/download.php?tid="
+        + quote(str(torrent_id), safe="")
+    )
     if use_fl_wedge:
         url += "&fl=1"
     return url
