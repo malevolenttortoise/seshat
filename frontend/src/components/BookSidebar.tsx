@@ -14,6 +14,7 @@ import { useTheme } from "../theme";
 import { useViewport } from "../hooks/useViewport";
 import { useMobileCodepath } from "./mobile";
 import { api } from "../api";
+import { runBatchJob } from "../lib/batchJob";
 import { Ic } from "../icons";
 import { fmtDate } from "../lib/format";
 import { openCoverLightbox } from "../lib/lightbox";
@@ -459,7 +460,7 @@ export function BookSidebar({
     }
 
     try {
-      const r = await api.post<SendToPipelineResponse>(
+      const r = await runBatchJob<SendToPipelineResponse>(
         "/discovery/send-to-pipeline",
         {
           book_ids: [book.id],

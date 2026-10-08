@@ -82,6 +82,23 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   up on goodreads.com and openlibrary.org; those tests now stub it.
   Only loopback fakes and in-process clients remain.
 
+- **Sending books to the pipeline and approving tentatives in bulk no
+  longer time out.** Both grabbed every item inside one request; a
+  31-row bulk approve already took about two minutes, so through the
+  reverse proxy the page showed an error while the server carried on.
+  With every MAM request now paced, these batches take longer still.
+  Both now start a background job and the page checks on it until it
+  finishes, then reports the same outcome as before, as Manual Grab's
+  "Grab all" already did. A send of a single book from the sidebar
+  goes the same way and reports about a second later. Like Manual
+  Grab's, the job lives in memory: a restart loses the items it hadn't
+  reached yet; everything it did reach is an ordinary grab. API change
+  (ADR-0024): `POST /api/discovery/send-to-pipeline` and
+  `POST /api/v1/tentative/bulk/approve` now return a job (`job_id`,
+  `done`, per-row `rows`, and once done `result`, the old response);
+  poll `GET …/send-to-pipeline/{job_id}` and
+  `GET …/tentative/bulk/approve/{job_id}`. `inject-batch` is unchanged.
+
 - **Every MAM request waits its turn; one MAM scan at a time.**
   Nothing used to bound how fast Seshat talked to MAM as a whole. A
   discovery scan spaced its searches by the MAM rate setting but sent

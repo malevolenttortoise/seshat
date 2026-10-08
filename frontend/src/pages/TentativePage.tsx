@@ -17,6 +17,7 @@ import { useVisibleInterval } from "../hooks/useVisibleInterval";
 import { Section } from "../components/Section";
 import { Spin } from "../components/Spin";
 import { api } from "../api";
+import { runBatchJob } from "../lib/batchJob";
 import { useTheme } from "../theme";
 import { useViewport } from "../hooks/useViewport";
 import { useMobileCodepath } from "../components/mobile";
@@ -142,10 +143,13 @@ function DesktopTentativePage() {
     setBulkBusy(true);
     setError(null);
     try {
-      const r = await api.post<{ processed: number; failed: number; errors: string[] }>(
-        `/v1/tentative/bulk/${action}`,
-        ids === null ? {} : { ids },
-      );
+      // Approve grabs from MAM, so it runs as a job (ADR-0024); reject
+      // and dismiss answer at once.
+      type Bulk = { processed: number; failed: number; errors: string[] };
+      const body = ids === null ? {} : { ids };
+      const r = action === "approve"
+        ? await runBatchJob<Bulk>("/v1/tentative/bulk/approve", body)
+        : await api.post<Bulk>(`/v1/tentative/bulk/${action}`, body);
       if (r.failed > 0) {
         // Past-tense verb: Approve→Approved, Reject→Rejected,
         // Dismiss→Dismissed (one 'e', not two 's's).

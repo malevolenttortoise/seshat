@@ -4,6 +4,7 @@
 // instead of acting.
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { runBatchJob } from "../lib/batchJob";
 import { useTheme } from "../theme";
 import { useVisibleInterval } from "../hooks/useVisibleInterval";
 import {
@@ -101,7 +102,12 @@ export default function MobileTentativePage() {
     if (!confirm(`${verb} ${sel.size} torrent(s)?`)) return;
     setBulkBusy(true);
     try {
-      await api.post(`/v1/tentative/bulk/${action}`, { ids: [...sel] });
+      // Approve grabs from MAM, so it runs as a job (ADR-0024).
+      if (action === "approve") {
+        await runBatchJob("/v1/tentative/bulk/approve", { ids: [...sel] });
+      } else {
+        await api.post(`/v1/tentative/bulk/${action}`, { ids: [...sel] });
+      }
       setSel(new Set());
       setSelMode(false);
       await refresh();

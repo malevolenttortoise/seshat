@@ -16,6 +16,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useTheme } from "../theme";
 import type { Theme } from "../theme";
 import { api, slugQuery } from "../api";
+import { runBatchJob } from "../lib/batchJob";
 import { usePersist } from "../hooks/usePersist";
 import { Btn } from "../components/Btn";
 import { Load } from "../components/Load";
@@ -119,7 +120,7 @@ interface BulkScanSourcesResponse {
   message?: string;
 }
 
-// POST /discovery/send-to-pipeline
+// The finished send job's `result` (POST /discovery/send-to-pipeline, ADR-0024)
 interface SendToPipelineResponse {
   sent?: number;
   skipped?: number;
@@ -454,7 +455,7 @@ function DesktopMAMPage({ onNav }: { onNav: NavFn }) {
     if (!bookIds || !bookIds.length) return;
     setBusy(true);
     try {
-      const r = await api.post<SendToPipelineResponse>(
+      const r = await runBatchJob<SendToPipelineResponse>(
         "/discovery/send-to-pipeline",
         { book_ids: bookIds },
       );

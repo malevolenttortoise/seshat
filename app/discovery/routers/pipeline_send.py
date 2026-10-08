@@ -7,6 +7,15 @@ can send it to the pipeline for automatic download and processing.
 Supports both single-book sends and bulk sends. Calls `inject_grab`
 directly (no HTTP round-trip) since both domains live in the same
 process.
+
+    POST /api/discovery/send-to-pipeline           start a send job
+    GET  /api/discovery/send-to-pipeline/{job_id}  its progress; `result`
+                                                   once done
+
+A send runs as an in-memory background job (ADR-0024): every grab's MAM
+requests are paced, so a bulk send takes minutes, longer than a reverse
+proxy waits for one request. The job's `result` is what this endpoint
+used to return in one response.
 """
 import json
 import logging
@@ -18,6 +27,7 @@ from app.config import load_settings
 from app.database import get_db as get_pipeline_db
 from app.discovery.database import get_db as get_discovery_db
 from app.mam.torrent_id import extract_torrent_id
+from app.orchestrator import jobs
 from app.orchestrator.auto_train import train_author
 from app.orchestrator.dispatch import inject_grab
 
@@ -25,12 +35,18 @@ logger = logging.getLogger("seshat.discovery")
 
 router = APIRouter(prefix="/api/discovery", tags=["pipeline-send"])
 
+SEND_JOB = "send_to_pipeline"
+
 @router.post("/send-to-pipeline")
 async def send_to_pipeline(data: dict = Body(...)):
     """Send one or more books to the pipeline for download.
 
     Accepts a list of book IDs. Only books with mam_status="found"
     are sent — others are silently skipped.
+
+    Returns the job (`job_id`, `done`, per-row `rows`); poll
+    `GET /send-to-pipeline/{job_id}` until `done`, then read `result`.
+    Nothing-to-send answers with a job that is already done.
 
     `use_wedge_override=True` forces `&fl=1` on every grab in the
     batch, one wedge per torrent (never on one that's already free or
@@ -78,134 +94,163 @@ async def send_to_pipeline(data: dict = Body(...)):
     skipped = len(rows) - len(found_rows)
 
     if not found_rows:
-        return {
+        return jobs.finished_batch_job(SEND_JOB, {
             "sent": 0,
             "skipped": skipped,
             "message": "No books with 'Found' MAM status to send",
+        }).to_dict()
+
+    rows = [
+        {
+            "book_id": r["id"], "torrent_id": str(r["mam_torrent_id"]),
+            "title": r["title"] or "", "status": "pending", "ok": None, "error": None,
+        }
+        for r in found_rows
+    ]
+
+    async def _send(job: jobs.BatchJob) -> dict:
+        submitted = 0
+        failed = 0
+        results = []
+
+        for row, r in zip(job.rows, found_rows):
+            row["status"] = "working"
+            reported = len(results)
+            try:
+                tid = extract_torrent_id(str(r["mam_torrent_id"]))
+                if tid is None:
+                    results.append({"torrent_id": str(r["mam_torrent_id"]), "ok": False, "error": "bad torrent ID"})
+                    failed += 1
+                    continue
+
+                author = r["author_name"] or ""
+
+                # Auto-train the author in the pipeline's allow-list.
+                if author:
+                    pdb = await get_pipeline_db()
+                    try:
+                        await train_author(pdb, author, source="discovery")
+                    except Exception:
+                        pass
+                    finally:
+                        await pdb.close()
+
+                try:
+                    # v2.9.0 — feed the first MAM format (e.g. "epub" from a
+                    # comma-joined "epub,azw3") into inject_grab so the dedup
+                    # gate can recognize the format. Without this hint the
+                    # gate falls through to allow because filetype is empty.
+                    mam_formats_csv = (r["mam_formats"] or "").strip().lower()
+                    filetype_hint = (mam_formats_csv.split(",")[0] or "").strip()
+
+                    result = await inject_grab(
+                        state.dispatcher,
+                        torrent_id=tid,
+                        torrent_name=(r["title"] or "").strip(),
+                        category=(r["mam_category"] or "").strip(),
+                        author_blob=author,
+                        filetype=filetype_hint,
+                        # Phase 5: pass clean book metadata so download-folder
+                        # template-mode (`{author}/{series}/{title}`) renders
+                        # with the real values instead of the noisy torrent
+                        # filename. Empty for standalones — the template
+                        # renderer drops the {series} segment cleanly.
+                        series_name=(r["series_name"] or "").strip(),
+                        book_title=(r["title"] or "").strip(),
+                        raw_line=f"discovery:{r['mam_torrent_id']}",
+                        force_fl_wedge=use_wedge_override,
+                        apply_format_dedup=not override_format_dedup,
+                        override_mam_snatched=override_mam_snatched,
+                    )
+                    ok = result.action in ("submit", "queue") and result.error is None
+
+                    # Persist discovery metadata on the grab row for the enricher.
+                    if ok and result.grab_id:
+                        metadata = {}
+                        if r["isbn"]:
+                            metadata["isbn"] = r["isbn"]
+                        if r["cover_url"]:
+                            metadata["cover_url"] = r["cover_url"]
+                        if r["description"]:
+                            metadata["description"] = r["description"]
+                        if r["page_count"]:
+                            metadata["page_count"] = r["page_count"]
+                        if r["series_name"]:
+                            metadata["series_name"] = r["series_name"]
+                        if r["series_index"]:
+                            metadata["series_index"] = r["series_index"]
+                        # Include which discovery-side sources contributed to
+                        # this book's record. `books.source_url` is a JSON
+                        # dict `{"goodreads": "https://...", "hardcover":
+                        # "https://...", ...}` populated as sources respond
+                        # during lookup. The pipeline uses the keys to render
+                        # "via discovery (goodreads, hardcover)" on the review
+                        # card instead of the opaque "via source_metadata".
+                        if r["source_url"]:
+                            try:
+                                src_map = json.loads(r["source_url"])
+                                if isinstance(src_map, dict) and src_map:
+                                    metadata["sources_used"] = sorted(
+                                        k for k in src_map if k
+                                    )
+                            except (ValueError, TypeError):
+                                pass
+                        if metadata:
+                            try:
+                                pdb = await get_pipeline_db()
+                                try:
+                                    await pdb.execute(
+                                        "UPDATE grabs SET source_metadata = ? WHERE id = ?",
+                                        (json.dumps(metadata), result.grab_id),
+                                    )
+                                    await pdb.commit()
+                                finally:
+                                    await pdb.close()
+                            except Exception:
+                                logger.warning("Failed to persist metadata for grab_id=%s", result.grab_id, exc_info=True)
+
+                    results.append({"torrent_id": tid, "ok": ok, "action": result.action, "error": result.error})
+                    if ok:
+                        submitted += 1
+                    else:
+                        failed += 1
+                except Exception as e:
+                    results.append({"torrent_id": tid, "ok": False, "error": str(e)})
+                    failed += 1
+            finally:
+                outcome = results[-1] if len(results) > reported else {}
+                row.update(
+                    status="done", ok=outcome.get("ok", False),
+                    error=outcome.get("error"),
+                )
+
+        # Notification
+        try:
+            from app.discovery.notify import notify_pipeline_sent
+            await notify_pipeline_sent(submitted, skipped)
+        except Exception:
+            pass
+
+        logger.info(f"Send-to-pipeline: {submitted} submitted, {failed} failed, {skipped} skipped")
+
+        return {
+            "sent": submitted,
+            "skipped": skipped,
+            "failed": failed,
+            "message": f"Sent {submitted} to pipeline" + (f", {skipped} skipped (not Found)" if skipped else ""),
+            "results": results,
         }
 
-    submitted = 0
-    failed = 0
-    results = []
+    return jobs.start_batch_job(SEND_JOB, rows, _send).to_dict()
 
-    for r in found_rows:
-        tid = extract_torrent_id(str(r["mam_torrent_id"]))
-        if tid is None:
-            results.append({"torrent_id": str(r["mam_torrent_id"]), "ok": False, "error": "bad torrent ID"})
-            failed += 1
-            continue
 
-        author = r["author_name"] or ""
-
-        # Auto-train the author in the pipeline's allow-list.
-        if author:
-            pdb = await get_pipeline_db()
-            try:
-                await train_author(pdb, author, source="discovery")
-            except Exception:
-                pass
-            finally:
-                await pdb.close()
-
-        try:
-            # v2.9.0 — feed the first MAM format (e.g. "epub" from a
-            # comma-joined "epub,azw3") into inject_grab so the dedup
-            # gate can recognize the format. Without this hint the
-            # gate falls through to allow because filetype is empty.
-            mam_formats_csv = (r["mam_formats"] or "").strip().lower()
-            filetype_hint = (mam_formats_csv.split(",")[0] or "").strip()
-
-            result = await inject_grab(
-                state.dispatcher,
-                torrent_id=tid,
-                torrent_name=(r["title"] or "").strip(),
-                category=(r["mam_category"] or "").strip(),
-                author_blob=author,
-                filetype=filetype_hint,
-                # Phase 5: pass clean book metadata so download-folder
-                # template-mode (`{author}/{series}/{title}`) renders
-                # with the real values instead of the noisy torrent
-                # filename. Empty for standalones — the template
-                # renderer drops the {series} segment cleanly.
-                series_name=(r["series_name"] or "").strip(),
-                book_title=(r["title"] or "").strip(),
-                raw_line=f"discovery:{r['mam_torrent_id']}",
-                force_fl_wedge=use_wedge_override,
-                apply_format_dedup=not override_format_dedup,
-                override_mam_snatched=override_mam_snatched,
-            )
-            ok = result.action in ("submit", "queue") and result.error is None
-
-            # Persist discovery metadata on the grab row for the enricher.
-            if ok and result.grab_id:
-                metadata = {}
-                if r["isbn"]:
-                    metadata["isbn"] = r["isbn"]
-                if r["cover_url"]:
-                    metadata["cover_url"] = r["cover_url"]
-                if r["description"]:
-                    metadata["description"] = r["description"]
-                if r["page_count"]:
-                    metadata["page_count"] = r["page_count"]
-                if r["series_name"]:
-                    metadata["series_name"] = r["series_name"]
-                if r["series_index"]:
-                    metadata["series_index"] = r["series_index"]
-                # Include which discovery-side sources contributed to
-                # this book's record. `books.source_url` is a JSON
-                # dict `{"goodreads": "https://...", "hardcover":
-                # "https://...", ...}` populated as sources respond
-                # during lookup. The pipeline uses the keys to render
-                # "via discovery (goodreads, hardcover)" on the review
-                # card instead of the opaque "via source_metadata".
-                if r["source_url"]:
-                    try:
-                        src_map = json.loads(r["source_url"])
-                        if isinstance(src_map, dict) and src_map:
-                            metadata["sources_used"] = sorted(
-                                k for k in src_map if k
-                            )
-                    except (ValueError, TypeError):
-                        pass
-                if metadata:
-                    try:
-                        pdb = await get_pipeline_db()
-                        try:
-                            await pdb.execute(
-                                "UPDATE grabs SET source_metadata = ? WHERE id = ?",
-                                (json.dumps(metadata), result.grab_id),
-                            )
-                            await pdb.commit()
-                        finally:
-                            await pdb.close()
-                    except Exception:
-                        logger.warning("Failed to persist metadata for grab_id=%s", result.grab_id, exc_info=True)
-
-            results.append({"torrent_id": tid, "ok": ok, "action": result.action, "error": result.error})
-            if ok:
-                submitted += 1
-            else:
-                failed += 1
-        except Exception as e:
-            results.append({"torrent_id": tid, "ok": False, "error": str(e)})
-            failed += 1
-
-    # Notification
-    try:
-        from app.discovery.notify import notify_pipeline_sent
-        await notify_pipeline_sent(submitted, skipped)
-    except Exception:
-        pass
-
-    logger.info(f"Send-to-pipeline: {submitted} submitted, {failed} failed, {skipped} skipped")
-
-    return {
-        "sent": submitted,
-        "skipped": skipped,
-        "failed": failed,
-        "message": f"Sent {submitted} to pipeline" + (f", {skipped} skipped (not Found)" if skipped else ""),
-        "results": results,
-    }
+@router.get("/send-to-pipeline/{job_id}")
+async def send_to_pipeline_status(job_id: str):
+    """A send job's progress; `result` holds the outcome once `done`."""
+    job = jobs.get_batch_job(job_id, SEND_JOB)
+    if job is None:
+        raise HTTPException(404, jobs.GONE_MESSAGE)
+    return job.to_dict()
 
 
 @router.get("/pipeline/status")

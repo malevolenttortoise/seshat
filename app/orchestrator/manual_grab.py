@@ -36,6 +36,7 @@ from app.mam import search_pacer
 from app.mam.torrent_id import extract_torrent_id
 from app.mam.torrent_info import TorrentInfo, TorrentInfoError, TorrentNotFoundError
 from app.mam.user_status import UserStatusError, get_user_status
+from app.orchestrator import jobs
 from app.orchestrator.dispatch import (
     DispatcherDeps,
     DispatchResult,
@@ -513,27 +514,19 @@ class Job:
         }
 
 
-_JOB_TTL_S = 3600
-_jobs: dict[str, Job] = {}
-_tasks: set[asyncio.Task] = set()
+# The shared in-memory job registry (`app.orchestrator.jobs`): an hour
+# after it finishes a job is forgotten; a restart forgets them all.
+_registry = jobs.JobRegistry()
+_jobs: dict[str, Job] = _registry.jobs
+_tasks: set[asyncio.Task] = _registry.tasks
 
 
 def get_job(job_id: str) -> Optional[Job]:
-    return _jobs.get(job_id)
-
-
-def _prune_jobs() -> None:
-    now = time.time()
-    for jid in [
-        jid for jid, j in _jobs.items()
-        if j.done and j.finished_at and now - j.finished_at > _JOB_TTL_S
-    ]:
-        _jobs.pop(jid, None)
+    return _registry.get(job_id)
 
 
 def start_job(deps: DispatcherDeps, items: list[GrabRequestItem]) -> Job:
     """Create the job and start grabbing in the background."""
-    _prune_jobs()
     job = Job(
         id=uuid.uuid4().hex,
         created_at=time.time(),
@@ -542,10 +535,7 @@ def start_job(deps: DispatcherDeps, items: list[GrabRequestItem]) -> Job:
             for i, item in enumerate(items)
         ],
     )
-    _jobs[job.id] = job
-    task = asyncio.create_task(_run_job(deps, job, items))
-    _tasks.add(task)
-    task.add_done_callback(_tasks.discard)
+    _registry.add(job, _run_job(deps, job, items))
     return job
 
 
