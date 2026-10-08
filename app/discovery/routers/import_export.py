@@ -32,6 +32,7 @@ from fastapi import APIRouter, Body, HTTPException, Query
 from fastapi.responses import Response
 
 from app.config import load_settings
+from app.metadata import source_gate
 from app.discovery.database import get_db, HF
 
 logger = logging.getLogger("seshat.discovery")
@@ -128,7 +129,8 @@ async def _fetch_goodreads_book(book_id: str) -> dict:
     from app.metadata import goodreads_session
 
     session = await goodreads_session.get_session()
-    r = await session.get(f"https://www.goodreads.com/book/show/{book_id}")
+    with source_gate.caller(source_gate.CALLER_URL_IMPORT):
+        r = await session.get(f"https://www.goodreads.com/book/show/{book_id}")
     if goodreads_session.is_cloudflare_soft_block(r):
         logger.info(
             "Goodreads paste-URL import: soft-blocked at network layer "
@@ -201,8 +203,11 @@ async def _fetch_hardcover_book(slug: str) -> dict:
         search(query: $q, query_type: "Book", per_page: 10, page: 1) { ids }
     }"""
     async with httpx.AsyncClient(timeout=30, headers=headers) as client:
-        r = await client.post("https://api.hardcover.app/v1/graphql",
-            json={"query": search_query, "variables": {"q": search_term}})
+        with source_gate.caller(source_gate.CALLER_URL_IMPORT):
+            r = await source_gate.request("hardcover", lambda: client.post(
+                "https://api.hardcover.app/v1/graphql",
+                json={"query": search_query, "variables": {"q": search_term}},
+            ))
         r.raise_for_status()
 
     data = r.json()
@@ -224,8 +229,11 @@ async def _fetch_hardcover_book(slug: str) -> dict:
         }
     }}"""
     async with httpx.AsyncClient(timeout=30, headers=headers) as client:
-        r = await client.post("https://api.hardcover.app/v1/graphql",
-            json={"query": detail_query, "variables": {"ids": [int(i) for i in ids_list[:10]]}})
+        with source_gate.caller(source_gate.CALLER_URL_IMPORT):
+            r = await source_gate.request("hardcover", lambda: client.post(
+                "https://api.hardcover.app/v1/graphql",
+                json={"query": detail_query, "variables": {"ids": [int(i) for i in ids_list[:10]]}},
+            ))
         r.raise_for_status()
 
     bdata = r.json()

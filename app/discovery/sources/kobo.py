@@ -37,6 +37,7 @@ from datetime import datetime
 from typing import Optional
 from lxml import html
 from app.discovery.sources.base import BaseSource, AuthorResult, BookResult, SeriesResult
+from app.metadata import source_gate
 
 logger = logging.getLogger("seshat.discovery.kobo")
 BASE = "https://www.kobo.com"
@@ -145,11 +146,11 @@ class KoboSource(BaseSource):
             self._session = _create_scraper()
         return self._session
 
-    def _fetch_sync(self, url: str) -> Optional[str]:
+    def _fetch_sync(self, url: str) -> tuple[Optional[int], Optional[str]]:
+        """(status, body on a 200); (None, None) on a transport error."""
         session = self._get_session()
         if not session:
-            return None
-        time.sleep(self.rate_limit)
+            return None, None
         try:
             # 30s read timeout. Cloudflare-fronted Kobo detail pages
             # can take 15-25s when the challenge resolver does extra
@@ -159,14 +160,20 @@ class KoboSource(BaseSource):
             # is allowed to take.
             r = session.get(url, timeout=30)
             if r.status_code == 200:
-                return r.text
-            return None
+                return r.status_code, r.text
+            return r.status_code, None
         except Exception as e:
             logger.debug(f"  Kobo fetch error: {e}")
-            return None
+            return None, None
 
     async def _fetch(self, url: str) -> Optional[str]:
-        return await asyncio.to_thread(self._fetch_sync, url)
+        # In Kobo's turn (the source gate: the Metadata Sources rate since
+        # the last Kobo request from any caller, so the concurrent book
+        # fetches below no longer multiply the rate, G72).
+        async with source_gate.turn(self.name) as turn:
+            status, text = await asyncio.to_thread(self._fetch_sync, url)
+            turn.status(status)
+        return text
 
     async def _get_book_details(self, kobo_url: str) -> dict:
         """Fetch a Kobo book detail page and extract structured metadata.
@@ -616,9 +623,10 @@ class KoboSource(BaseSource):
             # Pass 2c — parallel detail fetches. Bounded by
             # asyncio.Semaphore so we don't fire more than
             # `self.concurrency` simultaneous cloudscraper sessions.
-            # Each worker still does its own rate_limit sleep inside
-            # `_fetch_sync`, so the effective request rate is
-            # ~concurrency/rate_limit (default ~1.33 req/s).
+            # Every fetch waits Kobo's turn in the source gate, so the
+            # request rate is one per Metadata Sources rate whatever the
+            # concurrency (G72: ~0.33 req/s at 3s; it used to be
+            # ~concurrency/rate_limit, ~1.33 req/s).
             if detail_rbs:
                 sem = asyncio.Semaphore(self.concurrency)
                 on_book = getattr(self, '_on_book', None)

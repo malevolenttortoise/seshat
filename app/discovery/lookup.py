@@ -34,6 +34,7 @@ from typing import Any, Optional
 from difflib import SequenceMatcher
 import aiosqlite
 from app.config import load_settings
+from app.metadata import source_gate
 from app.discovery.database import get_db, write_book_authors, resolve_or_create_author
 from app.discovery.sources.hardcover import HardcoverSource
 from app.discovery.sources.openlibrary import OpenLibrarySource
@@ -372,15 +373,12 @@ def _src_audible():      return audible
 SOURCES: list[SourceSpec] = [
     SourceSpec("goodreads",    "primary",       300.0, _src_goodreads,    True),
     SourceSpec("hardcover",    "primary",       180.0, _src_hardcover,    True),
-    # Kobo: 180s (was 300s through v2.10.10). Per-book detail fetches
-    # now run with bounded concurrency (default 4 via the v2.11.0
-    # asyncio.Semaphore refactor in `app/discovery/sources/kobo.py`),
-    # so the ~125s sequential floor that justified the 300s cap is
-    # gone. Sanderson's 80-book bibliography drops from ~220s to ~60s
-    # at the default concurrency/rate-limit ratio. 180s leaves ~3×
-    # headroom over the new typical, matching Hardcover's primary-tier
-    # timeout shape.
-    SourceSpec("kobo",         "secondary",     180.0, _src_kobo,         True),
+    # Kobo: 600s (180s from v2.11.0, 300s before). Since the 2026-10
+    # audit every Kobo request waits Kobo's turn in the source gate, so
+    # the concurrent detail fetches no longer multiply the rate: ~0.33
+    # requests/s at the 3s rate instead of ~1.33, and an author with more
+    # than ~55 books would hit 180s (G72).
+    SourceSpec("kobo",         "secondary",     600.0, _src_kobo,         True),
     # Amazon: 600s timeout (was 180s through v2.11.0 stage 5+). The
     # curl_cffi Chrome 120 TLS impersonation defeats Akamai's bot
     # gate, but the 30s rate-limit (required to stay under Akamai's
@@ -3748,6 +3746,7 @@ async def _try_source(source, author_name, author_id, our_titles, languages, sou
             return 0
 
         n, u = await _merge_result(author_id, full, source_name, languages, full_scan=full_scan, owned_only=owned_only, series_collector=series_collector, on_new_book=on_new_book, exclude_audiobooks=exclude_audiobooks, linked_author_ids=linked_author_ids, link_type_by_id=link_type_by_id)
+        source_gate.count_merged(source_name, created=n, updated=u)
         parts = []
         if n > 0: parts.append(f"{n} new")
         if u > 0: parts.append(f"{u} updated")
@@ -3808,6 +3807,7 @@ async def _merge_unfinished_source(
         exclude_audiobooks=exclude_audiobooks,
         linked_author_ids=linked_author_ids, link_type_by_id=link_type_by_id,
     )
+    source_gate.count_merged(source_name, created=n, updated=u)
     logger.info(
         f"  [{source_name}] merged the {done} book(s) finished before giving "
         f"up on '{author_name}' ({partial.get('index', '?')}/"
@@ -3835,6 +3835,7 @@ def _log_source_timeout_summary(timeouts: dict[str, list[str]]) -> None:
         )
 
 
+@source_gate.as_caller(source_gate.CALLER_SCAN)
 async def lookup_author(author_id: int, author_name: str, full_scan: bool = False, on_progress=None, timeout_collector: dict | None = None):
     """Scan all enabled sources for one author and merge results.
 
@@ -4225,6 +4226,7 @@ async def _lookup_author_inner(author_id: int, author_name: str, full_scan: bool
             )
             if timeout_collector is not None:
                 timeout_collector.setdefault(spec.name, []).append(author_name)
+            source_gate.count_capped(spec.name)
             # Tag this source for the retry pass below. Only sources that
             # expose a `_partial_state` attribute actually benefit from
             # the retry (Goodreads is the only one today), but listing

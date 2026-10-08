@@ -135,13 +135,14 @@ def register_goodreads_canary(scheduler: AsyncIOScheduler) -> None:
     (cf_clearance typically lasts hours-to-days).
     """
     async def _canary():
-        from app.metadata import goodreads_session, id_cache
+        from app.metadata import goodreads_session, id_cache, source_gate
         from app.notifications import bus, events
 
         _log.info("goodreads canary tick")
         try:
             session = await goodreads_session.get_session()
-            resp = await session.get("https://www.goodreads.com/book/show/5907")
+            with source_gate.caller(source_gate.CALLER_PROBE):
+                resp = await session.get("https://www.goodreads.com/book/show/5907")
             soft_blocked = goodreads_session.is_cloudflare_soft_block(resp)
         except Exception:
             _log.exception("goodreads canary fetch crashed")

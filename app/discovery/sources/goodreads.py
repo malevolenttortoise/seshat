@@ -370,9 +370,8 @@ class GoodreadsSource(BaseSource):
         uniformly across all callers.
 
         Differences from the base implementation:
-          - Rate limit + jitter live in `goodreads_session` (single
-            source of truth). The base's `self.rate_limit` is still
-            honored — `get_session()` reads it on first call.
+          - Pacing lives in the source gate the session goes through
+            (the Metadata Sources rate, per request, any caller).
           - Soft-block (HTTP 202 / empty 2xx body) raises
             `httpx.HTTPStatusError` so the existing broad
             `except Exception` handlers in `_get_book_details` and
@@ -412,7 +411,7 @@ class GoodreadsSource(BaseSource):
                     raise
 
         # Production path: route through the central goodreads_session.
-        session = await _gr_session.get_session(rate_limit=self.rate_limit)
+        session = await _gr_session.get_session()
         last_exc: Optional[Exception] = None
         for attempt in range(retries + 1):
             try:

@@ -21,6 +21,8 @@ import logging
 import re
 import httpx
 
+from app.metadata import source_gate
+
 
 _SENSITIVE_QUERY_PARAMS = ("key", "apikey", "api_key", "token", "password", "secret")
 _REDACT_RX = re.compile(
@@ -191,8 +193,9 @@ class BaseSource:
         """Initialize the source.
 
         Args:
-            rate_limit: Seconds to wait before each request (throttles requests
-                       to avoid getting rate-limited by the source API).
+            rate_limit: Kept for callers and tests that pass it; pacing is
+                       the source gate's job (`app.metadata.source_gate`),
+                       which reads the Metadata Sources rate per request.
         """
         self.rate_limit = rate_limit
         self.logger = logging.getLogger(f"seshat.discovery.{self.name}")
@@ -220,14 +223,16 @@ class BaseSource:
         return self._get_client()
 
     async def _get(self, url: str, retries: int = 2, **kwargs) -> httpx.Response:
-        """HTTP GET with per-source rate limiting and retry/backoff.
+        """HTTP GET in the source's turn, with retry/backoff.
 
-        Waits `rate_limit` seconds before each attempt. On failure,
-        retries up to `retries` times with exponentially increasing
-        backoff: 3s → 6s → 12s, capped at 12s. The exponential
-        schedule clears Goodreads' rate-limit window (~6s recovery)
-        which a fixed shorter backoff would miss, causing real
-        503-affected books to silently get skipped.
+        Each attempt waits for the source's turn (`source_gate`: the
+        Metadata Sources rate since the last request to this source from
+        any caller) and is counted there. On failure, retries up to
+        `retries` times with exponentially increasing backoff: 3s → 6s →
+        12s, capped at 12s. The exponential schedule clears Goodreads'
+        rate-limit window (~6s recovery) which a fixed shorter backoff
+        would miss, causing real 503-affected books to silently get
+        skipped.
 
         Subclasses with custom request patterns (POST, GraphQL, etc.) can
         either call this with their own URL construction or implement their
@@ -250,8 +255,9 @@ class BaseSource:
         """
         for attempt in range(retries + 1):
             try:
-                await asyncio.sleep(self.rate_limit)
-                resp = await self.client.get(url, **kwargs)
+                async with source_gate.turn(self.name) as t:
+                    resp = await self.client.get(url, **kwargs)
+                    t.status(resp.status_code)
                 resp.raise_for_status()
                 return resp
             except Exception as e:

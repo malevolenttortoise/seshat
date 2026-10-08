@@ -41,6 +41,8 @@ import time
 import urllib.parse
 from typing import Any
 
+from app.metadata import source_gate
+
 logger = logging.getLogger("seshat.discovery.amazon.author_id_resolver")
 
 
@@ -181,6 +183,9 @@ def record_amazon_soft_block(
     timestamp only if the new cooldown extends past the current one.
     """
     global _blocked_until, _block_reason, _block_count
+    # The request that showed the block counts as blocked in the source
+    # counters (its turn first counted it by status, often a 200).
+    source_gate.mark_last_blocked("amazon")
     cooldown = (
         retry_after_s if retry_after_s is not None
         else _BLOCK_COOLDOWN_DEFAULT_S
@@ -311,7 +316,9 @@ async def _tier1_book_pivot(
         return None
     url = _DP_URL_TEMPLATE.format(asin=asin)
     try:
-        resp = await session.get(url, timeout=timeout)
+        resp = await source_gate.request(
+            "amazon", lambda: session.get(url, timeout=timeout),
+        )
     except Exception as exc:  # network, TLS, etc. — log + fall through
         logger.debug("tier1: GET %s failed: %s", url, exc)
         return None
@@ -411,7 +418,10 @@ async def _tier2_vanity_url(
         return None
     url = _VANITY_URL_TEMPLATE.format(slug=slug)
     try:
-        resp = await session.get(url, timeout=timeout, allow_redirects=True)
+        resp = await source_gate.request(
+            "amazon",
+            lambda: session.get(url, timeout=timeout, allow_redirects=True),
+        )
     except Exception as exc:
         logger.debug("tier2 vanity: GET %s failed: %s", url, exc)
         return None
@@ -488,7 +498,9 @@ async def _tier2_search(
     for params in variants:
         url = f"{_SEARCH_URL}?{urllib.parse.urlencode(params)}"
         try:
-            resp = await session.get(url, timeout=timeout)
+            resp = await source_gate.request(
+                "amazon", lambda: session.get(url, timeout=timeout),
+            )
         except Exception as exc:
             logger.debug("tier2 search: GET %s failed: %s", url, exc)
             continue

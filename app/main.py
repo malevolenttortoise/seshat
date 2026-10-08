@@ -282,11 +282,15 @@ def _build_metadata_enricher(
     )
     rs = resolved_secrets or {}
     hardcover_key = rs.get("hardcover_api_key") or ""
+    google_books_key = (
+        rs.get("google_books_api_key") or settings.get("google_books_api_key") or ""
+    )
     audible_region = (settings.get("audible_region") or "us").lower()
     return MetadataEnricher(
         cfg,
         hardcover_api_key=hardcover_key,
         audible_region=audible_region,
+        google_books_api_key=google_books_key,
     )
 
 
@@ -1263,6 +1267,12 @@ async def lifespan(app: FastAPI):
     state._economy_upload_task = state.supervised_task(
         upload_autobuy_loop, name="economy-upload-autobuy"
     )
+    # Per-source request counters (audit issue 15): collected in memory
+    # by the source gate, written to the app DB every minute.
+    from app.metadata import source_gate
+    state._source_counter_flush_task = state.supervised_task(
+        source_gate.flush_loop, name="source-counter-flush"
+    )
     _log.info(
         "MAM scheduler + digest scheduler + economy auto-buy tasks started"
     )
@@ -1348,6 +1358,7 @@ async def lifespan(app: FastAPI):
             "_metadata_cache_amazon_worker_task",
             # v3.4.0 slice 03 — Goodreads list-page cache worker.
             "_metadata_cache_goodreads_worker_task",
+            "_source_counter_flush_task",
         ):
             task = getattr(state, task_attr, None)
             if task is not None and not task.done():
@@ -1357,6 +1368,13 @@ async def lifespan(app: FastAPI):
                 except (asyncio.CancelledError, Exception):
                     pass
                 setattr(state, task_attr, None)
+
+        # Write the source counts the flush loop hadn't reached yet.
+        try:
+            from app.metadata import source_gate
+            await source_gate.flush()
+        except Exception:
+            _log.exception("error writing source counters during shutdown")
 
         # Tear down whatever the dispatcher owns. The qBit client
         # holds an httpx.AsyncClient; the cookie module holds

@@ -59,6 +59,7 @@ from bs4 import BeautifulSoup
 from app.config import CALIBRE_DB_PATH
 from app.discovery.database import get_db
 from app.metadata import goodreads_session
+from app.metadata import source_gate
 from app.metadata.author_names import normalize_author_name
 from app.metadata.goodreads_id_resolver import (
     ResolveQuery, resolve_goodreads_id,
@@ -450,6 +451,7 @@ async def resolve_author_via_calibre_coauthor(
         return None
 
 
+@source_gate.as_caller(source_gate.CALLER_BACKFILL)
 async def backfill_missing_author_ids(*, limit: Optional[int] = None) -> dict:
     """Sweep every author missing `goodreads_id` whose books have at
     least one resolvable identifier, and resolve via

@@ -122,7 +122,7 @@ class TestSessionGetIntegration:
 
     @pytest.mark.asyncio
     async def test_200_response_marks_active(self, gr_session_module, monkeypatch):
-        session = gr_session_module.GoodreadsSession(rate_limit=0)
+        session = gr_session_module.GoodreadsSession()
         # Force the httpx fallback path (no curl_cffi).
         monkeypatch.setattr(session, "_get_curl", lambda: None)
 
@@ -138,7 +138,7 @@ class TestSessionGetIntegration:
 
     @pytest.mark.asyncio
     async def test_202_response_marks_soft_blocked(self, gr_session_module, monkeypatch):
-        session = gr_session_module.GoodreadsSession(rate_limit=0)
+        session = gr_session_module.GoodreadsSession()
         monkeypatch.setattr(session, "_get_curl", lambda: None)
 
         class FakeClient:
@@ -158,7 +158,7 @@ class TestSessionGetIntegration:
         # state on legitimate 404s.
         gr_session_module.mark_active(last_status=200)
 
-        session = gr_session_module.GoodreadsSession(rate_limit=0)
+        session = gr_session_module.GoodreadsSession()
         monkeypatch.setattr(session, "_get_curl", lambda: None)
 
         class FakeClient:

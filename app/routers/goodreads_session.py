@@ -34,6 +34,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from app.metadata import goodreads_session as gr
+from app.metadata import source_gate
 
 _log = logging.getLogger("seshat.routers.goodreads_session")
 
@@ -126,7 +127,8 @@ async def _probe_one(book_id: str) -> ProbeResult:
     session = await gr.get_session()
     started = time.monotonic()
     try:
-        resp = await session.get(f"https://www.goodreads.com/book/show/{book_id}")
+        with source_gate.caller(source_gate.CALLER_PROBE):
+            resp = await session.get(f"https://www.goodreads.com/book/show/{book_id}")
     except Exception as e:
         # Transport-layer failure (timeout, DNS, TLS) — still report as
         # a probe outcome so the user sees something actionable.

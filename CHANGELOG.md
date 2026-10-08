@@ -7,6 +7,53 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [Unreleased]
+
+Phase 2 of the 2026-10 roadmap, the codebase audit, wave 4a: the
+**metadata sources**. Every request to a source now goes through one
+gate that paces and counts it.
+
+**Behaviour changes to know about:**
+
+- **A source's Rate on Metadata Sources is now the minimum gap between
+  any two requests to that source, from anything in Seshat** (scans, the
+  cache workers, enrichment, the Goodreads ID resolver, the author-ID
+  backfill, URL import). Before, each part of Seshat kept its own pace or
+  none, and enrichment ignored the setting entirely. Expect scans to take
+  longer while a cache worker is busy with the same source, Kobo to run
+  at a quarter of its old request rate (its concurrency setting no longer
+  speeds it up), and a grab's enrichment to wait when it has to reach
+  Amazon or Goodreads live. Enrichment goes ahead of scans and workers,
+  and the wait no longer counts against its timeouts.
+- Kobo's per-author scan cap goes from 3 to 10 minutes.
+- **Database migration**: the app database goes to `user_version` 61 (a
+  new `source_counters` table). Take a backup before updating, as usual.
+
+### Added
+
+- **Per-source traffic counts** (audit issue 15): every request to a
+  metadata source is counted per day, source and caller: requests, OK,
+  blocked, errors, timeouts; scans add the books they created and updated
+  and the times a source hit its scan time cap. Goodreads splits by
+  request kind (book pages, list pages, autocomplete). The Metadata
+  Sources panel shows today by caller and the last 7 days for the
+  selected source (`GET /api/v1/metadata-sources/traffic`). Kept 90 days.
+- ADR-0025: source access stays within tiers 0–1 (no challenge solving,
+  no borrowed browser cookies, no proxies or grey API routes), enforced
+  through one gate per source.
+
+### Fixed
+
+- Enrichment's Google Books sent no API key, so Google billed it to its
+  shared anonymous quota (429s). It now uses the stored key.
+- Hardcover's discovery queries ignored the Rate setting (they skipped the
+  wait entirely); the Goodreads ID resolver's autocomplete lookups ran on
+  their own unpaced client.
+- Goodreads enrichment's book page could never load within enrichment's
+  15-second timeout once the Goodreads rate was above 15 seconds.
+
+---
+
 ## [3.13.0] — 2026-10-08
 
 Phase 2 of the 2026-10 roadmap, the **codebase audit**, wave 3: the

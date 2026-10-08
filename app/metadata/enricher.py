@@ -36,6 +36,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
+from app.metadata import source_gate
 from app.metadata.record import MetaRecord
 from app.metadata.scoring import score_match
 from app.metadata.sources.base import MetaSource
@@ -235,6 +236,7 @@ class MetadataEnricher:
         audiobook_sources: Optional[list[MetaSource]] = None,
         hardcover_api_key: str = "",
         audible_region: str = "us",
+        google_books_api_key: str = "",
     ):
         self.config = config
         if sources is not None:
@@ -245,6 +247,7 @@ class MetadataEnricher:
                 config.priority, config,
                 hardcover_api_key=hardcover_api_key,
                 audible_region=audible_region,
+                google_books_api_key=google_books_api_key,
             )
         if audiobook_sources is not None:
             self._audiobook_sources = audiobook_sources
@@ -253,6 +256,7 @@ class MetadataEnricher:
                 config.audiobook_priority, config,
                 hardcover_api_key=hardcover_api_key,
                 audible_region=audible_region,
+                google_books_api_key=google_books_api_key,
             )
 
     async def enrich(
@@ -315,7 +319,28 @@ class MetadataEnricher:
             return None
         if not title and not author:
             return None
+        # G78: enrichment's requests go ahead of scans and the cache
+        # workers in each source's queue, and time spent waiting for a
+        # source's turn (up to its Metadata Sources rate: 30s for
+        # Goodreads, 100s for Amazon on one install) doesn't count against
+        # the per-book budget or a source's timeout.
+        with source_gate.caller(source_gate.CALLER_ENRICHMENT), \
+                source_gate.measure_turn_waits() as turn_waits:
+            return await self._enrich(
+                title=title, author=author, isbn=isbn, asin=asin,
+                mam_torrent_id=mam_torrent_id, mam_token=mam_token,
+                audiobook=audiobook, skip_mam=skip_mam,
+                author_goodreads_id=author_goodreads_id,
+                author_amazon_id=author_amazon_id,
+                library_slug=library_slug, turn_waits=turn_waits,
+            )
 
+    async def _enrich(
+        self, *, title: str, author: str, isbn: str, asin: str,
+        mam_torrent_id: str, mam_token: str, audiobook: bool,
+        skip_mam: bool, author_goodreads_id: str, author_amazon_id: str,
+        library_slug: str, turn_waits: source_gate.TurnWaits,
+    ) -> Optional[MetaRecord]:
         # Audiobook title cleanup. Publisher decorations on MAM
         # filenames ("Halo: Empty Throne [Halo 36]", "(Unabridged)")
         # don't match Audible's catalog title. Strip them before the
@@ -370,11 +395,14 @@ class MetadataEnricher:
         # Wall-clock start for the global per-book budget. Enforced
         # before each source so a stuck source can't blow the cap and
         # threaded into _safe_search so each per-source timeout is
-        # clamped to the remaining budget.
+        # clamped to the remaining budget. Turn waits don't count (G78).
         budget_started_at = asyncio.get_event_loop().time()
 
         for src in sources:
-            elapsed = asyncio.get_event_loop().time() - budget_started_at
+            elapsed = (
+                asyncio.get_event_loop().time() - budget_started_at
+                - turn_waits.seconds()
+            )
             remaining = self.config.per_book_budget - elapsed
             if remaining <= 0:
                 _log.info(
@@ -462,6 +490,7 @@ class MetadataEnricher:
                 if cleaned and cleaned != title:
                     elapsed_after = (
                         asyncio.get_event_loop().time() - budget_started_at
+                        - turn_waits.seconds()
                     )
                     remaining_after = (
                         self.config.per_book_budget - elapsed_after
@@ -587,7 +616,8 @@ class MetadataEnricher:
         if max_wait is not None:
             timeout = min(timeout, max(0.5, max_wait))
         try:
-            return await asyncio.wait_for(
+            # Time spent waiting for the source's turn isn't counted (G78).
+            return await source_gate.wait_for_excluding_turns(
                 source.search_book(
                     title, author,
                     isbn=isbn, asin=asin,
@@ -628,6 +658,7 @@ def _build_default_sources(
     *,
     hardcover_api_key: str = "",
     audible_region: str = "us",
+    google_books_api_key: str = "",
 ) -> list[MetaSource]:
     """Instantiate the priority-ordered source list.
 
@@ -687,7 +718,14 @@ def _build_default_sources(
             out.append(cls(api_key=hardcover_api_key))
         elif name == "audible":
             out.append(cls(region=audible_region))
+        elif name == "google_books":
+            # Without the key Google bills the call to its shared
+            # anonymous project, which is out of quota (429s): the 2026-10
+            # audit found enrichment had never sent it.
+            out.append(cls(api_key=google_books_api_key))
         else:
+            # Pacing isn't the source's: every request waits its turn in
+            # the source gate at the Metadata Sources rate (G71).
             out.append(cls())
     return out
 

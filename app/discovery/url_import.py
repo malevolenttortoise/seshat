@@ -34,6 +34,8 @@ from typing import Optional
 import httpx
 from fastapi import HTTPException
 
+from app.metadata import source_gate
+
 logger = logging.getLogger("seshat.discovery.url_import")
 
 
@@ -138,7 +140,9 @@ async def fetch_openlibrary_isbn(isbn: str) -> dict:
     }
     headers = {"Accept": "application/json", "User-Agent": _FIREFOX_UA}
     async with httpx.AsyncClient(timeout=20, headers=headers) as client:
-        r = await client.get("https://openlibrary.org/api/books", params=params)
+        r = await source_gate.request("openlibrary", lambda: client.get(
+            "https://openlibrary.org/api/books", params=params,
+        ))
         r.raise_for_status()
     data = r.json()
     payload = data.get(f"ISBN:{normalized}")
@@ -212,16 +216,18 @@ async def fetch_openlibrary_work(work_key: str) -> dict:
         raise HTTPException(400, "Work key required")
     headers = {"Accept": "application/json", "User-Agent": _FIREFOX_UA}
     async with httpx.AsyncClient(timeout=20, headers=headers) as client:
-        work_resp = await client.get(f"https://openlibrary.org/works/{work_key}.json")
+        work_resp = await source_gate.request("openlibrary", lambda: client.get(
+            f"https://openlibrary.org/works/{work_key}.json",
+        ))
         if work_resp.status_code == 404:
             raise HTTPException(404, f"No Open Library work {work_key}")
         work_resp.raise_for_status()
         work = work_resp.json()
 
-        editions_resp = await client.get(
+        editions_resp = await source_gate.request("openlibrary", lambda: client.get(
             f"https://openlibrary.org/works/{work_key}/editions.json",
             params={"limit": 1},
-        )
+        ))
     title = (work.get("title") or "").strip()
 
     # Description can be a string or {value: str} dict
@@ -248,7 +254,9 @@ async def fetch_openlibrary_work(work_key: str) -> dict:
             if akey:
                 try:
                     async with httpx.AsyncClient(timeout=10, headers=headers) as ac:
-                        ar = await ac.get(f"https://openlibrary.org{akey}.json")
+                        ar = await source_gate.request("openlibrary", lambda: ac.get(
+                            f"https://openlibrary.org{akey}.json",
+                        ))
                         if ar.status_code == 200:
                             author_name = (ar.json().get("name") or "").strip()
                             if author_name:
@@ -315,10 +323,10 @@ async def fetch_google_books_volume(volume_id: str) -> dict:
         params["key"] = api_key
     headers = {"Accept": "application/json", "User-Agent": _FIREFOX_UA}
     async with httpx.AsyncClient(timeout=20, headers=headers) as client:
-        r = await client.get(
+        r = await source_gate.request("google_books", lambda: client.get(
             f"https://www.googleapis.com/books/v1/volumes/{volume_id}",
             params=params,
-        )
+        ))
         if r.status_code == 404:
             raise HTTPException(404, f"No Google Books volume {volume_id}")
         if r.status_code == 503:
@@ -386,7 +394,9 @@ async def fetch_ibdb_book(uuid: str) -> dict:
         raise HTTPException(400, "Book UUID required")
     headers = {"Accept": "application/json", "User-Agent": _FIREFOX_UA}
     async with httpx.AsyncClient(timeout=20, headers=headers) as client:
-        r = await client.get(f"https://ibdb.dev/api/book/{uuid}")
+        r = await source_gate.request("ibdb", lambda: client.get(
+            f"https://ibdb.dev/api/book/{uuid}",
+        ))
         if r.status_code == 404:
             raise HTTPException(404, f"No IBDB book {uuid}")
         r.raise_for_status()
@@ -455,7 +465,9 @@ async def fetch_amazon_book(asin: str) -> dict:
     async with httpx.AsyncClient(
         timeout=30, headers=headers, follow_redirects=True,
     ) as client:
-        r = await client.get(f"https://www.amazon.com/dp/{asin}")
+        r = await source_gate.request("amazon", lambda: client.get(
+            f"https://www.amazon.com/dp/{asin}",
+        ))
         if r.status_code == 503:
             raise HTTPException(
                 503,
@@ -617,6 +629,11 @@ async def fetch_by_url(url: str) -> dict:
     new branches (amazon, openlibrary*, google_books, kobo, ibdb) use
     the fetchers defined in this module.
     """
+    with source_gate.caller(source_gate.CALLER_URL_IMPORT):
+        return await _fetch_by_url(url)
+
+
+async def _fetch_by_url(url: str) -> dict:
     parsed = parse_url(url)
     if parsed is None:
         raise HTTPException(
@@ -667,14 +684,14 @@ async def _fetch_openlibrary_edition(edition_key: str) -> dict:
     """
     headers = {"Accept": "application/json", "User-Agent": _FIREFOX_UA}
     async with httpx.AsyncClient(timeout=20, headers=headers) as client:
-        r = await client.get(
+        r = await source_gate.request("openlibrary", lambda: client.get(
             "https://openlibrary.org/api/books",
             params={
                 "bibkeys": f"OLID:{edition_key}",
                 "jscmd": "data",
                 "format": "json",
             },
-        )
+        ))
         r.raise_for_status()
     data = r.json()
     payload = data.get(f"OLID:{edition_key}")

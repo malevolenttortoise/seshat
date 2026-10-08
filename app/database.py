@@ -689,6 +689,30 @@ CREATE INDEX IF NOT EXISTS idx_replacement_enactments_opp
 CREATE INDEX IF NOT EXISTS idx_replacement_enactments_active
     ON replacement_enactments(library_slug, restored_at)
     WHERE failed_at IS NULL;
+
+-- 2026-10 audit wave 4 (issue 15, G62 / G79 / G81) — what every request to
+-- a metadata source came back with, per local day × source × caller
+-- (scan, worker, enrichment, resolver, backfill, probe, url_import) ×
+-- kind (Goodreads only: book_page / list_page / autocomplete / other).
+-- `created` / `updated` / `capped` are scan results: books a scan made or
+-- changed from that source, and the times it hit its scan time cap.
+-- Written by `app.metadata.source_gate` (in-memory, flushed every
+-- minute); rows older than 90 days are pruned there.
+CREATE TABLE IF NOT EXISTS source_counters (
+    day       TEXT NOT NULL,
+    source    TEXT NOT NULL,
+    caller    TEXT NOT NULL,
+    kind      TEXT NOT NULL DEFAULT '',
+    requests  INTEGER NOT NULL DEFAULT 0,
+    ok        INTEGER NOT NULL DEFAULT 0,
+    blocks    INTEGER NOT NULL DEFAULT 0,
+    errors    INTEGER NOT NULL DEFAULT 0,
+    timeouts  INTEGER NOT NULL DEFAULT 0,
+    created   INTEGER NOT NULL DEFAULT 0,
+    updated   INTEGER NOT NULL DEFAULT 0,
+    capped    INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, source, caller, kind)
+);
 """
 
 
@@ -1082,6 +1106,22 @@ MIGRATIONS: list[str] = [
           AND NOT EXISTS (SELECT 1 FROM book_review_queue r
                            WHERE r.grab_id = grabs.id
                              AND r.status NOT IN ('delivered', 'rejected', 'failed'))""",
+    # ── 2026-10 audit wave 4, issue 15: per-source request counters ──
+    """CREATE TABLE IF NOT EXISTS source_counters (
+        day       TEXT NOT NULL,
+        source    TEXT NOT NULL,
+        caller    TEXT NOT NULL,
+        kind      TEXT NOT NULL DEFAULT '',
+        requests  INTEGER NOT NULL DEFAULT 0,
+        ok        INTEGER NOT NULL DEFAULT 0,
+        blocks    INTEGER NOT NULL DEFAULT 0,
+        errors    INTEGER NOT NULL DEFAULT 0,
+        timeouts  INTEGER NOT NULL DEFAULT 0,
+        created   INTEGER NOT NULL DEFAULT 0,
+        updated   INTEGER NOT NULL DEFAULT 0,
+        capped    INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (day, source, caller, kind)
+    )""",
 ]
 
 

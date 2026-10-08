@@ -245,7 +245,7 @@ export function MetadataSourcesPanel() {
           <strong style={{ color: t.text2 }}>Scan</strong> — sources run during library-side author scanning to find books you don't have yet.
         </div>
         <div>
-          <strong style={{ color: t.text2 }}>Rate (s)</strong> — seconds to wait between requests to this source. Higher = gentler on the upstream, slower scans. Leave at default if unsure.
+          <strong style={{ color: t.text2 }}>Rate (s)</strong> — the minimum gap between any two requests to this source, from anything in Seshat (scans, the cache workers, enrichment). Higher = gentler on the upstream, slower scans. Leave at default if unsure.
         </div>
         <div style={{ marginTop: 6, color: t.textDim }}>
           Priority is top-to-bottom; drag rows to reorder. MAM is always first and free — its row is locked.
@@ -696,7 +696,7 @@ function SourceDetailPane({
           }}
         />
         <span style={{ fontSize: 11, color: t.textDim, fontStyle: "italic" }}>
-          Seconds to wait between requests. Higher = gentler upstream.
+          Minimum gap between any two requests to this source, from any part of Seshat.
         </span>
       </div>
 
@@ -759,6 +759,8 @@ function SourceDetailPane({
           );
         })}
       </div>
+
+      {!locked && <SourceTrafficCard sourceName={sourceName} display={meta.display} />}
 
       {/* Source-specific sub-sections */}
       {sourceName === "amazon" && (
@@ -1687,6 +1689,174 @@ function CacheStatusCard({ sourceKey }: { sourceKey: "amazon" | "goodreads" }) {
         }}>
           {err}
         </div>
+      )}
+    </div>
+  );
+}
+
+
+// ─── Source traffic (2026-10 audit, issue 15) ────────────────────
+//
+// What every request to this source came back with, whoever sent it
+// (scan, cache worker, enrichment, resolver, backfill, probe, URL
+// import): today by caller, and the daily totals for the last 7 days.
+// Goodreads' rows split by request kind. Counts are written once a
+// minute; the endpoint writes the pending ones before answering.
+
+interface TrafficCounts {
+  requests: number; ok: number; blocks: number; errors: number;
+  timeouts: number; created: number; updated: number; capped: number;
+}
+interface TrafficRow extends TrafficCounts { caller: string; kind: string }
+interface TrafficDay extends TrafficCounts { day: string }
+interface TrafficSource {
+  today: TrafficCounts;
+  today_rows: TrafficRow[];
+  daily: TrafficDay[];
+}
+interface TrafficResponse {
+  today: string;
+  days: string[];
+  sources: Record<string, TrafficSource>;
+}
+
+const CALLER_LABELS: Record<string, string> = {
+  scan: "Scans", worker: "Cache worker", enrichment: "Enrichment",
+  resolver: "ID resolver", backfill: "Author-ID backfill",
+  probe: "Probe / canary", url_import: "URL import", other: "Other",
+};
+const KIND_LABELS: Record<string, string> = {
+  book_page: "book pages", list_page: "list pages",
+  autocomplete: "autocomplete", other: "other pages",
+};
+
+function _dayLabel(day: string, today: string): string {
+  if (day === today) return "Today";
+  const d = new Date(`${day}T12:00:00`);
+  return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+}
+
+function SourceTrafficCard({ sourceName, display }: { sourceName: string; display: string }) {
+  const t = useTheme();
+  const [data, setData] = useState<TrafficResponse | null>(null);
+  const [err, setErr] = useState<string>("");
+
+  useEffect(() => {
+    let cancelled = false;
+    const fetchTraffic = async () => {
+      try {
+        const r = await api.get<TrafficResponse>("/v1/metadata-sources/traffic?days=8");
+        if (!cancelled) { setData(r); setErr(""); }
+      } catch (e) {
+        if (!cancelled && !api.isAbort(e)) {
+          setErr(e instanceof Error ? e.message : "Traffic fetch failed");
+        }
+      }
+    };
+    fetchTraffic();
+    const timer = setInterval(fetchTraffic, 60_000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [sourceName]);
+
+  const src = data?.sources[sourceName];
+  const cell = { padding: "3px 8px", textAlign: "right" as const, fontVariantNumeric: "tabular-nums" as const };
+  const head = {
+    ...cell, color: t.textDim, fontSize: 10, fontWeight: 700,
+    textTransform: "uppercase" as const, letterSpacing: 0.4,
+  };
+  const num = (n: number, tone?: "warn" | "err") => (
+    <td style={{ ...cell, color: n > 0 && tone ? (tone === "err" ? t.err : t.warn) : t.text2 }}>
+      {n > 0 ? n.toLocaleString() : "·"}
+    </td>
+  );
+  const outcomeCells = (c: TrafficCounts) => (
+    <>
+      {num(c.requests)}{num(c.ok)}{num(c.blocks, "err")}{num(c.errors, "warn")}{num(c.timeouts, "warn")}
+    </>
+  );
+  const outcomeHeads = (
+    <>
+      <th style={head}>Requests</th><th style={head}>OK</th><th style={head}>Blocked</th>
+      <th style={head}>Errors</th><th style={head}>Timeouts</th>
+    </>
+  );
+  const table = {
+    width: "100%", borderCollapse: "collapse" as const, fontSize: 12,
+    background: t.bg3, border: `1px solid ${t.borderL}`, borderRadius: 6,
+  };
+  const label = { ...cell, textAlign: "left" as const, color: t.text };
+  const rows = (src?.today_rows ?? []).filter(r => r.requests > 0);
+  const scanBooks = src?.today ?? null;
+
+  return (
+    <div style={{
+      display: "flex", flexDirection: "column", gap: 8,
+      padding: "10px 4px 12px 0",
+      borderTop: `1px solid ${t.borderL}`, marginTop: 4, fontSize: 12,
+    }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+        <span style={{ color: t.textDim, fontWeight: 600 }}>{display} traffic</span>
+        <span style={{ color: t.textDim, fontSize: 11 }}>
+          every request Seshat sent, by who sent it
+        </span>
+      </div>
+      {err && <span style={{ color: t.err }}>{err}</span>}
+      {!data && !err && <span style={{ color: t.textDim }}>Loading…</span>}
+      {data && (
+        <>
+          {rows.length === 0 ? (
+            <span style={{ color: t.textDim }}>No requests to {display} yet today.</span>
+          ) : (
+            <table style={table}>
+              <thead>
+                <tr><th style={{ ...head, textAlign: "left" }}>Today</th>{outcomeHeads}</tr>
+              </thead>
+              <tbody>
+                {rows.map(r => (
+                  <tr key={`${r.caller}/${r.kind}`}>
+                    <td style={label}>
+                      {CALLER_LABELS[r.caller] ?? r.caller}
+                      {r.kind && <span style={{ color: t.textDim }}> · {KIND_LABELS[r.kind] ?? r.kind}</span>}
+                    </td>
+                    {outcomeCells(r)}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {scanBooks && (scanBooks.created + scanBooks.updated + scanBooks.capped) > 0 && (
+            <span style={{ color: t.textDim }}>
+              Scans today: <b style={{ color: t.text2 }}>{scanBooks.created}</b> new,{" "}
+              <b style={{ color: t.text2 }}>{scanBooks.updated}</b> updated
+              {scanBooks.capped > 0 && (
+                <>, hit the time cap <b style={{ color: t.warn }}>{scanBooks.capped}</b>×</>
+              )}
+            </span>
+          )}
+          <table style={table}>
+            <thead>
+              <tr>
+                <th style={{ ...head, textAlign: "left" }}>Last 7 days</th>{outcomeHeads}
+                <th style={head}>New</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.days.map(day => {
+                const d = src?.daily.find(x => x.day === day);
+                const c: TrafficCounts = d ?? {
+                  requests: 0, ok: 0, blocks: 0, errors: 0, timeouts: 0,
+                  created: 0, updated: 0, capped: 0,
+                };
+                return (
+                  <tr key={day}>
+                    <td style={label}>{_dayLabel(day, data.today)}</td>
+                    {outcomeCells(c)}{num(c.created)}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </>
       )}
     </div>
   );

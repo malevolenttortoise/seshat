@@ -53,6 +53,7 @@ import aiosqlite
 
 from app import config as app_config
 from app import state
+from app.metadata import source_gate
 from app.discovery import metadata_cache
 from app.discovery.amazon_author_id_resolver import (
     amazon_block_remaining_s,
@@ -1559,7 +1560,9 @@ async def _run_warmup(session: Any) -> None:
     /stores/author hit. Research-supported humanizer; failures are
     non-fatal — we proceed even if the warmup didn't complete."""
     try:
-        resp = await session.get(_WARMUP_URL, timeout=15.0)
+        resp = await source_gate.request(
+            "amazon", lambda: session.get(_WARMUP_URL, timeout=15.0),
+        )
         status = getattr(resp, "status_code", None)
         logger.debug(
             "metadata_cache_worker: warmup %s → %s",
@@ -1710,6 +1713,7 @@ async def recover_stuck_in_progress(source_name: str) -> int:
 # ─── Tick ──────────────────────────────────────────────────────
 
 
+@source_gate.as_caller(source_gate.CALLER_WORKER)
 async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
     """One worker iteration. Never raises — every error path returns
     a TickResult with `outcome=...` so `run_loop` can decide the next
@@ -2261,6 +2265,7 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
 _GR_SOFT_BLOCK_COOLDOWN_S = 300.0
 
 
+@source_gate.as_caller(source_gate.CALLER_WORKER)
 async def tick_goodreads() -> TickResult:
     """v3.4.0 slice 03 — Goodreads cache worker tick (ADR-0018).
 

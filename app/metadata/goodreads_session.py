@@ -15,10 +15,11 @@ routes its requests through this module so:
     `goodreads_session_state` runtime flag, which the enricher dispatcher
     reads to skip Goodreads on subsequent calls until the user clears it
     via the Settings panel.
-  - Conservative rate-limit jitter (5s + 0-1s uniform jitter by default)
-    is applied uniformly so request density never spikes — Cloudflare
-    flags density-based patterns even when the per-request fingerprint
-    is clean.
+  - Every request waits Goodreads' turn in the source gate
+    (`app.metadata.source_gate`): the Metadata Sources rate since the
+    last Goodreads request from any caller, plus 0-1s of jitter, read
+    per request. The gate counts each request by kind (book page, list
+    page, autocomplete).
 
 **Phase A (v2.13.0)** — curl_cffi alone, no cookie injection. UAT will
 measure whether Chrome120 fingerprint impersonation is enough to clear
@@ -44,13 +45,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import random
 import time
 from typing import Any, Optional
 
 import httpx
 
 from app.config import load_settings, save_settings
+from app.metadata import source_gate
 
 _log = logging.getLogger("seshat.metadata.goodreads_session")
 
@@ -68,11 +69,6 @@ _DEFAULT_HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
     "Accept-Encoding": "gzip, deflate, br",
 }
-
-# Conservative default per Mark's Phase-A design: 5s + 0-1s jitter.
-# Tunable via the user-facing source_rate_limits setting (existing).
-_DEFAULT_RATE_LIMIT = 5.0
-_JITTER_RANGE = (0.0, 1.0)
 
 
 def is_cloudflare_soft_block(resp: Any) -> bool:
@@ -193,7 +189,7 @@ class GoodreadsSession:
     Wraps a curl_cffi AsyncSession when available, httpx.AsyncClient
     otherwise. Exposes a `get()` method that:
 
-      - Applies rate-limit + jitter before the request
+      - Waits Goodreads' turn in the source gate, which counts the request
       - Detects Cloudflare soft-block on the response
       - Writes the `goodreads_session_state` runtime flag on transition
       - Returns the raw response object on success (caller parses body)
@@ -203,25 +199,11 @@ class GoodreadsSession:
     underlying TCP+TLS session can be reused.
     """
 
-    def __init__(
-        self,
-        *,
-        rate_limit: float = _DEFAULT_RATE_LIMIT,
-        timeout: float = 45.0,
-        rate_from_settings: bool = False,
-    ):
-        self.rate_limit = max(0.0, float(rate_limit))
+    def __init__(self, *, timeout: float = 45.0):
         self.timeout = float(timeout)
-        # The process-wide session (`get_session`) waits the Metadata
-        # Sources Goodreads rate, read before every request, so every
-        # caller (scans, the list-page cache worker, the author-ID
-        # backfill) honours it and a change applies without a restart
-        # (Mark, G50). `rate_limit` is then only the fallback.
-        self._rate_from_settings = rate_from_settings
         self._curl: Any = None
         self._httpx: Optional[httpx.AsyncClient] = None
         self._curl_init_attempted = False
-        self._lock = asyncio.Lock()
 
     def _get_curl(self):
         """Lazy curl_cffi session (None if curl_cffi not installed)."""
@@ -243,27 +225,8 @@ class GoodreadsSession:
             )
         return self._httpx
 
-    def current_rate(self) -> float:
-        """Seconds to wait before the next request."""
-        if self._rate_from_settings:
-            try:
-                from app.config import load_settings
-                from app.metadata.source_config import get_source_rate_limit
-                configured = get_source_rate_limit(load_settings(), "goodreads")
-                if configured > 0:
-                    return configured
-            except Exception:
-                pass
-        return self.rate_limit
-
-    async def _sleep_with_jitter(self) -> None:
-        rate = self.current_rate()
-        if rate > 0:
-            jitter = random.uniform(*_JITTER_RANGE)
-            await asyncio.sleep(rate + jitter)
-
     async def get(self, url: str, **kwargs) -> Any:
-        """Rate-limited GET with uniform soft-block detection.
+        """GET in Goodreads' turn, with uniform soft-block detection.
 
         Returns the raw response object. Does NOT raise on non-200; the
         caller (parser) decides what to do with non-200 responses. We
@@ -273,24 +236,28 @@ class GoodreadsSession:
         it on later to inject cf_clearance + _session_id2 + UA from the
         encrypted store with no caller changes.
         """
-        async with self._lock:
-            await self._sleep_with_jitter()
-
         cookie_header = _build_cookie_header()
         headers = dict(kwargs.pop("headers", {}))
         if cookie_header:
             headers["Cookie"] = cookie_header
 
         resp = None
-        curl = self._get_curl()
-        if curl is not None:
-            # curl_cffi accepts headers via `headers=` and shares the
-            # rest of the httpx-ish kwargs interface (params, etc.).
-            merged_headers = {**_DEFAULT_HEADERS, **headers}
-            resp = await curl.get(url, headers=merged_headers, **kwargs)
-        else:
-            client = self._get_httpx()
-            resp = await client.get(url, headers=headers, **kwargs)
+        async with source_gate.turn(
+            "goodreads", kind=source_gate.goodreads_kind(url),
+        ) as turn:
+            curl = self._get_curl()
+            if curl is not None:
+                # curl_cffi accepts headers via `headers=` and shares the
+                # rest of the httpx-ish kwargs interface (params, etc.).
+                merged_headers = {**_DEFAULT_HEADERS, **headers}
+                resp = await curl.get(url, headers=merged_headers, **kwargs)
+            else:
+                client = self._get_httpx()
+                resp = await client.get(url, headers=headers, **kwargs)
+            if is_cloudflare_soft_block(resp):
+                turn.block()
+            else:
+                turn.status(getattr(resp, "status_code", None))
 
         # Update runtime state based on the response.
         status = getattr(resp, "status_code", None)
@@ -352,26 +319,20 @@ _SESSION: Optional[GoodreadsSession] = None
 _SESSION_LOCK = asyncio.Lock()
 
 
-async def get_session(rate_limit: Optional[float] = None) -> GoodreadsSession:
+async def get_session() -> GoodreadsSession:
     """Lazy module-level singleton getter.
 
-    The session waits the Metadata Sources Goodreads rate, read before
-    each request (G50). `rate_limit` is only the fallback for when that
-    can't be read: the first caller's value, or the 5s default when it
-    is missing or not positive.
+    Pacing isn't the session's job: every request waits Goodreads' turn
+    in the source gate at the Metadata Sources rate, read per request.
+    (Until the 2026-10 audit the session slept its own rate, pinned by
+    whichever caller came first; once that was the cache reader's 0.0
+    and Goodreads went out back to back, issue 12 / G50.)
     """
     global _SESSION
     if _SESSION is None:
         async with _SESSION_LOCK:
             if _SESSION is None:
-                # A missing or non-positive rate means "not configured":
-                # pinning 0 would send every Goodreads request in the
-                # process back to back. The cache reader's inner source
-                # passed 0.0, and when a scan was the first Goodreads
-                # caller after a restart, Cloudflare soft-blocked within
-                # a few pages (2026-10-08 live check, audit issue 12).
-                rl = rate_limit if rate_limit and rate_limit > 0 else _DEFAULT_RATE_LIMIT
-                _SESSION = GoodreadsSession(rate_limit=rl, rate_from_settings=True)
+                _SESSION = GoodreadsSession()
     return _SESSION
 
 

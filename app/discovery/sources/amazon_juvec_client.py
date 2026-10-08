@@ -44,6 +44,7 @@ import logging
 import random
 from typing import Any
 
+from app.metadata import source_gate
 from app.discovery.sources.amazon_widget_parser import (
     AllBooksPageData,
     JuvecResponse,
@@ -326,10 +327,11 @@ class JuvecClient:
         while attempt <= self.max_retries:
             attempt += 1
             try:
-                resp = await self.session.post(
-                    _JUVEC_URL,
-                    json=body,
-                    timeout=self.timeout,
+                resp = await source_gate.request(
+                    "amazon",
+                    lambda: self.session.post(
+                        _JUVEC_URL, json=body, timeout=self.timeout,
+                    ),
                 )
             except Exception as exc:
                 last_exc = exc

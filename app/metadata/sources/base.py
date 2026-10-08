@@ -9,8 +9,10 @@ and just want metadata to enrich it.
 
 Shared concerns that live in this base:
   - httpx.AsyncClient lifecycle (lazy-created, aclose on shutdown)
-  - A rate-limited `_get()` helper (asyncio.sleep before each request,
-    exponential backoff on 5xx/network errors)
+  - A `_get()` helper that sends each attempt in the source's turn
+    (`app.metadata.source_gate`: the Metadata Sources rate since the
+    last request to the source from any caller, counted there), with
+    exponential backoff on 5xx/network errors
   - Hooks for test injection: subclasses read self._get / self.client
     so tests can swap in a fake transport on the httpx client.
 
@@ -32,6 +34,7 @@ from typing import Optional
 
 import httpx
 
+from app.metadata import source_gate
 from app.metadata.record import MetaRecord
 
 
@@ -45,6 +48,8 @@ class MetaSource:
     follow_redirects: bool = True
 
     def __init__(self, *, rate_limit: float = 1.0):
+        # Kept for callers and tests that pass it; the source gate paces
+        # requests at the Metadata Sources rate.
         self.rate_limit = rate_limit
         self.logger = logging.getLogger(f"seshat.metadata.{self.name}")
         self._client: Optional[httpx.AsyncClient] = None
@@ -70,7 +75,7 @@ class MetaSource:
     async def _get(
         self, url: str, *, retries: int = 2, **kwargs
     ) -> httpx.Response:
-        """Rate-limited GET with exponential backoff on failure.
+        """GET in the source's turn, with exponential backoff on failure.
 
         Retries up to `retries` additional attempts with 3s → 6s → 12s
         waits. Re-raises the final exception on terminal failure so the
@@ -79,9 +84,9 @@ class MetaSource:
         """
         for attempt in range(retries + 1):
             try:
-                if self.rate_limit > 0:
-                    await asyncio.sleep(self.rate_limit)
-                resp = await self.client.get(url, **kwargs)
+                async with source_gate.turn(self.name) as t:
+                    resp = await self.client.get(url, **kwargs)
+                    t.status(resp.status_code)
                 resp.raise_for_status()
                 return resp
             except Exception as e:

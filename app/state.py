@@ -104,6 +104,10 @@ _metadata_cache_amazon_worker_task: Optional[asyncio.Task] = None
 # no escalation tiers (GR has no Akamai-class IP-level cooldown).
 _metadata_cache_goodreads_worker_task: Optional[asyncio.Task] = None
 
+# 2026-10 audit wave 4 — writes the per-source request counters
+# (`app.metadata.source_gate`) to the app DB once a minute.
+_source_counter_flush_task: Optional[asyncio.Task] = None
+
 
 # ─── Cookie keep-alive state ────────────────────────────────
 # Long-running background loop that hits MAM's search endpoint on a

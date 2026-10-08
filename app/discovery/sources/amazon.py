@@ -46,6 +46,7 @@ from app.discovery.amazon_author_id_resolver import (
     resolve_amazon_author_id,
     parse_retry_after,
 )
+from app.metadata import source_gate
 from app.discovery.sources.base import (
     AuthorResult,
     BaseSource,
@@ -403,7 +404,9 @@ class AmazonSource(BaseSource):
     ) -> AllBooksPageData:
         url = _ALLBOOKS_URL_TEMPLATE.format(author_id=author_id)
         try:
-            resp = await session.get(url, timeout=30.0)
+            resp = await source_gate.request(
+                "amazon", lambda: session.get(url, timeout=30.0),
+            )
         except Exception as exc:
             raise _AllBooksFetchError(f"transport error: {exc}") from exc
 

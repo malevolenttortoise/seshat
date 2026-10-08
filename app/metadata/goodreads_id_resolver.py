@@ -51,9 +51,11 @@ from __future__ import annotations
 import logging
 import urllib.parse
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 import httpx
+
+from app.metadata import source_gate
 
 _log = logging.getLogger("seshat.metadata.goodreads_id_resolver")
 
@@ -104,6 +106,11 @@ async def resolve_goodreads_id(
 ) -> ResolveResult:
     """Run the tiered resolver chain. First hit wins.
 
+    Every tier's request waits its source's turn in the source gate
+    (Goodreads, Hardcover, OpenLibrary) and counts there, under the
+    caller that ran the resolver (a scan, enrichment, the backfill), or
+    `resolver` when none did.
+
     `client` is optional — tests inject an `httpx.AsyncClient` with a
     `MockTransport` to drive scenarios. Production callers can pass
     a shared client to amortize connection pooling across calls.
@@ -115,6 +122,18 @@ async def resolve_goodreads_id(
     bypasses both read and write — useful for the canary which
     explicitly wants a live probe of the resolver chain.
     """
+    with source_gate.caller(source_gate.CALLER_RESOLVER):
+        return await _resolve_goodreads_id(
+            query, client=client, use_cache=use_cache,
+        )
+
+
+async def _resolve_goodreads_id(
+    query: ResolveQuery,
+    *,
+    client: Optional[httpx.AsyncClient],
+    use_cache: bool,
+) -> ResolveResult:
     from app.metadata import id_cache
 
     if use_cache:
@@ -270,6 +289,21 @@ async def resolve_goodreads_id(
                 pass
 
 
+async def _autocomplete(client: httpx.AsyncClient, url: str) -> Any:
+    """One `auto_complete` request, in Goodreads' turn."""
+    from app.metadata import goodreads_session  # avoid circular import at module load
+
+    async with source_gate.turn(
+        "goodreads", kind=source_gate.KIND_AUTOCOMPLETE,
+    ) as turn:
+        resp = await client.get(url)
+        if goodreads_session.is_cloudflare_soft_block(resp):
+            turn.block()
+        else:
+            turn.status(resp.status_code)
+    return resp
+
+
 async def _tier1_auto_complete(
     client: httpx.AsyncClient, identifier: str
 ) -> Optional[str]:
@@ -293,7 +327,7 @@ async def _tier1_auto_complete(
     from app.metadata import goodreads_session  # avoid circular import at module load
 
     try:
-        resp = await client.get(_GOODREADS_AUTO_COMPLETE + identifier)
+        resp = await _autocomplete(client, _GOODREADS_AUTO_COMPLETE + identifier)
     except Exception as e:
         _log.debug("resolver: tier1 auto_complete network error: %s", e)
         return None
@@ -366,7 +400,7 @@ async def _tier4_auto_complete_title(
 
     encoded_title = urllib.parse.quote(title.strip())
     try:
-        resp = await client.get(_GOODREADS_AUTO_COMPLETE + encoded_title)
+        resp = await _autocomplete(client, _GOODREADS_AUTO_COMPLETE + encoded_title)
     except Exception as e:
         _log.debug("resolver: tier4 auto_complete network error: %s", e)
         return None
@@ -498,13 +532,15 @@ async def _tier2_hardcover_book_mappings(
                 "Authorization": token,
             },
         ) as client:
-            resp = await client.post(
-                _HARDCOVER_API,
-                json={
-                    "query": _HARDCOVER_BOOK_MAPPINGS_QUERY,
-                    "variables": {"ident_kind": where_clause},
-                },
-            )
+            async with source_gate.turn("hardcover") as turn:
+                resp = await client.post(
+                    _HARDCOVER_API,
+                    json={
+                        "query": _HARDCOVER_BOOK_MAPPINGS_QUERY,
+                        "variables": {"ident_kind": where_clause},
+                    },
+                )
+                turn.status(resp.status_code)
     except Exception as e:
         _log.debug("resolver: tier2 hardcover network error: %s", e)
         return None
@@ -546,14 +582,14 @@ async def _tier3_openlibrary(
     typically doesn't). When present, return the first goodreads_id.
     """
     try:
-        resp = await client.get(
+        resp = await source_gate.request("openlibrary", lambda: client.get(
             _OPENLIBRARY_BOOKS,
             params={
                 "bibkeys": f"ISBN:{isbn}",
                 "jscmd": "data",
                 "format": "json",
             },
-        )
+        ))
     except Exception as e:
         _log.debug("resolver: tier3 openlibrary network error: %s", e)
         return None

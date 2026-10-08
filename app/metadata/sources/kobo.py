@@ -20,12 +20,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-import time
 from datetime import datetime
 from typing import Optional
 
 from lxml import html
 
+from app.metadata import source_gate
 from app.metadata.record import MetaRecord
 from app.metadata.sources.base import MetaSource
 from app.metadata.text_clean import description_to_plain_text
@@ -79,22 +79,26 @@ class KoboSource(MetaSource):
             self._session = _create_scraper()
         return self._session
 
-    def _fetch_sync(self, url: str) -> Optional[str]:
+    def _fetch_sync(self, url: str) -> tuple[Optional[int], Optional[str]]:
+        """(status, body on a 200); (None, None) on a transport error."""
         session = self._get_session()
         if not session:
-            return None
-        time.sleep(self.rate_limit)
+            return None, None
         try:
             r = session.get(url, timeout=self.default_timeout)
             if r.status_code == 200:
-                return r.text
-            return None
+                return r.status_code, r.text
+            return r.status_code, None
         except Exception as e:
             _log.debug("kobo fetch error: %s", e)
-            return None
+            return None, None
 
     async def _fetch(self, url: str) -> Optional[str]:
-        return await asyncio.to_thread(self._fetch_sync, url)
+        # In Kobo's turn (the source gate's Metadata Sources rate).
+        async with source_gate.turn(self.name) as turn:
+            status, text = await asyncio.to_thread(self._fetch_sync, url)
+            turn.status(status)
+        return text
 
     async def search_book(
         self, title: str, author: str, **_,

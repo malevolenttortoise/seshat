@@ -25,12 +25,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-import time
 from datetime import datetime
 from typing import Optional
 
 import requests
 
+from app.metadata import source_gate
 from app.metadata.record import MetaRecord
 from app.metadata.sources.base import MetaSource
 from app.metadata.text_clean import description_to_plain_text
@@ -97,21 +97,28 @@ class AmazonSource(MetaSource):
             self._session.headers.update(_HEADERS)
         return self._session
 
-    def _fetch_sync(self, url: str, params: dict = None) -> Optional[str]:
+    def _fetch_sync(
+        self, url: str, params: dict = None,
+    ) -> tuple[Optional[int], Optional[str]]:
+        """(status, body on a 200); (None, None) on a transport error."""
         session = self._get_session()
-        time.sleep(self.rate_limit)
         try:
             r = session.get(url, params=params, timeout=self.default_timeout)
             if r.status_code == 200:
-                return r.text
+                return r.status_code, r.text
             _log.info("amazon: HTTP %d for %s", r.status_code, url)
-            return None
+            return r.status_code, None
         except Exception as e:
             _log.debug("amazon fetch error: %s", e)
-            return None
+            return None, None
 
     async def _fetch(self, url: str, params: dict = None) -> Optional[str]:
-        return await asyncio.to_thread(self._fetch_sync, url, params)
+        # In Amazon's turn (the source gate's Metadata Sources rate, any
+        # caller); the thread runs only the request.
+        async with source_gate.turn(self.name) as turn:
+            status, text = await asyncio.to_thread(self._fetch_sync, url, params)
+            turn.status(status)
+        return text
 
     def is_cheap_for(
         self,
@@ -674,7 +681,9 @@ class AmazonSource(MetaSource):
 
         url = _ALLBOOKS_URL_TEMPLATE.format(author_id=author_id)
         try:
-            resp = await session.get(url, timeout=30.0)
+            resp = await source_gate.request(
+                "amazon", lambda: session.get(url, timeout=30.0),
+            )
         except Exception as e:
             _log.debug("amazon author-store fetch error: %s", e)
             return None

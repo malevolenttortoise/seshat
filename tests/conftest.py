@@ -239,6 +239,26 @@ def _no_leaked_mam_snatch_summary():
 
 
 @pytest.fixture(autouse=True)
+def _no_source_gate_waits(monkeypatch):
+    """Every request to a metadata source waits its turn in the source
+    gate at the Metadata Sources rate (2026-10 audit wave 4, G71), up to
+    100s for Amazon. Those waits are skipped suite-wide, and each test
+    starts with no remembered turn and no uncounted requests; tests of the
+    gate itself install a fake clock (`tests/metadata/test_source_gate.py`)."""
+    import asyncio
+
+    from app.metadata import source_gate
+
+    async def _no_wait(_seconds: float) -> None:
+        await asyncio.sleep(0)
+
+    source_gate.reset()
+    monkeypatch.setattr(source_gate, "_sleep", _no_wait)
+    yield
+    source_gate.reset()
+
+
+@pytest.fixture(autouse=True)
 def _no_real_mam(monkeypatch):
     """The suite never talks to the real MAM.
 

@@ -39,6 +39,7 @@ import re
 import httpx, logging
 from typing import Optional
 from app.discovery.sources.base import BaseSource, AuthorResult, BookResult, SeriesResult, Contributor
+from app.metadata import source_gate
 
 logger = logging.getLogger("seshat.discovery.hardcover")
 API = "https://api.hardcover.app/v1/graphql"
@@ -354,6 +355,11 @@ class HardcoverSource(BaseSource):
     async def _query(self, query: str, variables: dict = None) -> dict:
         """POST a GraphQL query with retry on transient failures.
 
+        Each attempt goes in Hardcover's turn (`source_gate`, G61: the
+        Metadata Sources rate between any two Hardcover requests, under
+        its documented 60/min, burst-10 free plan). Until the 2026-10
+        audit these POSTs skipped the rate sleep entirely.
+
         Up to 3 attempts, 2s → 4s backoff. Retries fire on:
           - httpx.TransportError (network-layer / connection reset)
           - httpx.ReadTimeout / WriteTimeout / ConnectTimeout
@@ -373,7 +379,9 @@ class HardcoverSource(BaseSource):
         last_err = None
         for attempt in range(3):
             try:
-                resp = await self.client.post(API, json=payload)
+                async with source_gate.turn(self.name) as t:
+                    resp = await self.client.post(API, json=payload)
+                    t.status(resp.status_code)
                 resp.raise_for_status()
                 data = resp.json()
                 if "errors" in data:

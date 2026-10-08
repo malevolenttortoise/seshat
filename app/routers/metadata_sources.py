@@ -186,6 +186,14 @@ async def get_state() -> MetadataSourcesResponse:
     )
 
 
+@router.get("/traffic")
+async def get_traffic(days: int = 8) -> dict[str, Any]:
+    """What every request to each source came back with (audit issue 15):
+    today by caller, and the daily totals for the last `days` days."""
+    from app.metadata import source_gate
+    return await source_gate.traffic_summary(max(1, min(days, 90)))
+
+
 @router.put("", response_model=PutResponse)
 async def put_state(body: MetadataSourcesState) -> PutResponse:
     # Validate that every name referenced in the priority lists has
