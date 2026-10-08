@@ -9,7 +9,91 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [3.12.0] — 2026-10-08
+
+Phase 2 of the 2026-10 roadmap, the **codebase audit**, waves 1 and 2:
+the MAM-traffic safety work and the bugs the audit turned up, built,
+then checked on the live container. Every request Seshat makes to MAM
+now goes through one queue, background jobs see settings and cookies
+you save without a restart, and the batch grabs no longer time out. Two
+earlier fixes ride along: autograbs waiting for MAM's search index
+before deciding on a wedge, and excluded uploaders actually being
+excluded.
+
+**Behaviour changes to know about:**
+
+- Every MAM request waits its turn, `rate_mam` apart (at least 1 s), IRC
+  autograbs first. A discovery scan is about 15–20% slower for it (about
+  20 requests a minute at the default 3 s).
+- Only one MAM scan runs at a time. The full scan and the single-book
+  scan now refuse while another scan runs, as the others already did.
+- `POST /api/discovery/send-to-pipeline` and
+  `POST /api/v1/tentative/bulk/approve` return a background job to poll
+  instead of the finished result (ADR-0024). Seshat's own pages handle
+  it; `inject-batch` is unchanged.
+- An allowed IRC announce MAM's search doesn't list yet is grabbed once
+  it's listed, up to 10 minutes later.
+- Torrents uploaded by accounts on your excluded-uploaders list are now
+  skipped: the check never matched before.
+- **Database migration** (`user_version` 55): `pending_holds` gains two
+  columns. Take a backup before updating, as usual.
+
+### Added
+
+- **How much Seshat talks to MAM.** The MAM page has a new "MAM
+  traffic" section: how many requests Seshat sent to MAM in the last
+  minute (searches, downloads, covers, account checks), refreshed every
+  15 seconds without adding any MAM requests of its own.
+  `GET /api/v1/mam/status` gains `requests_last_minute`.
+
+### Changed
+
+- **Every MAM request waits its turn; one MAM scan at a time.**
+  Nothing used to bound how fast Seshat talked to MAM as a whole. A
+  discovery scan spaced its searches by the MAM rate setting but sent
+  its description lookups and cover downloads in between with no gap
+  (about 20–26 requests a minute at a 3-second setting, where 20 was
+  intended); Manual Grab's "Grab all" paced its lookups but not its
+  downloads; and a full scan could run alongside another scan,
+  doubling the rate and overwriting the scan widget. Now every request
+  Seshat sends to MAM (searches, downloads, covers, account and
+  bonus-point calls, from any feature) goes out one at a time, spaced
+  by MAM's Rate (s) in Metadata Sources (at least 1 second), with IRC
+  autograbs at the front of the queue. Scans are a little slower for
+  it. Only one MAM scan runs at a time: the full scan and the
+  single-book scan now refuse to start while another scan is running,
+  as the other scans already did, and two scans started at the same
+  moment can no longer both slip through. Debug match still runs during
+  a scan.
+
+- **Sending books to the pipeline and approving tentatives in bulk no
+  longer time out.** Both grabbed every item inside one request; a
+  31-row bulk approve already took about two minutes, so through the
+  reverse proxy the page showed an error while the server carried on.
+  With every MAM request now paced, these batches take longer still.
+  Both now start a background job and the page checks on it until it
+  finishes, then reports the same outcome as before, as Manual Grab's
+  "Grab all" already did. A send of a single book from the sidebar
+  goes the same way and reports about a second later. Like Manual
+  Grab's, the job lives in memory: a restart loses the items it hadn't
+  reached yet; everything it did reach is an ordinary grab. API change
+  (ADR-0024): `POST /api/discovery/send-to-pipeline` and
+  `POST /api/v1/tentative/bulk/approve` now return a job (`job_id`,
+  `done`, per-row `rows`, and once done `result`, the old response);
+  poll `GET …/send-to-pipeline/{job_id}` and
+  `GET …/tentative/bulk/approve/{job_id}`. `inject-batch` is unchanged.
+
 ### Fixed
+
+- **Excluded uploaders were never excluded.** MAM's search API sends
+  the uploader as `ownership`, a JSON-encoded string
+  (`"[12345,\"Name\"]"`), not a list, and not the `owner` /
+  `owner_name` fields its API page documents. Seshat only accepted a
+  list, so every uploader read as blank and the **Excluded Uploaders**
+  setting (Settings → Snatch Budget) never matched anything: announces,
+  injects and Manual Grab could all grab your own uploads, which MAM
+  counts as a re-snatch. The uploader now parses on every path, and the
+  list works as described.
 
 - **Settings now reach IRC grabs without a restart.** The IRC listener
   and the background jobs (snatch-budget watcher, cookie retry, review
@@ -25,19 +109,34 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   metadata enricher is closed 15 minutes later instead of at once, so a
   job still finishing a download isn't cut off mid-request.
 
-- **Cookie retry respects dry run, the snatch budget and a dead
-  cookie.** The job that re-tries grabs which failed on an expired MAM
-  cookie ran every 5 minutes regardless of dry run, retried with the
-  same dead cookie every time (one refused download per stuck grab, every
-  5 minutes, for the whole outage), and added straight to qBit past the
-  snatch budget, the queue and the qBit add stagger. Now it does nothing
-  while dry run is on; it remembers which cookie each grab failed with
-  and retries only once the cookie has changed; and it asks the snatch
-  budget first: over budget the grab is downloaded into the queue with
-  its .torrent kept, and with the queue full too it waits for the next
-  run without contacting MAM. A retried grab is added to qBit with your
-  save path and tags, and sends the "New book grabbed" notification like
-  any other grab.
+- **Autograbs wait for MAM's search before deciding.** A new torrent
+  reaches #announce about a second after MAM adds it, before MAM's
+  search API lists it, so every IRC autograb's lookup came back "not
+  found". Since 3.11.0's no-blind-wedges fix, that meant **no wedge on
+  any autograb**: the grab policy's wedges were effectively off, and
+  non-VIP grabs counted against your ratio. The same miss also blinded
+  the excluded-uploader and "already snatched on MAM" checks for
+  autograbs. Now an allowed announce MAM doesn't list yet is held: its
+  announce row is written straight away, and the grab runs in the
+  background once MAM lists the torrent (checked at 5s, 15s, 30s, 1m,
+  2m, 3m, 5m, 7m and 10m). If MAM still doesn't list it after 10
+  minutes, the announce's own VIP / Normal flag decides, so a Normal
+  torrent gets its wedge. Held grabs are kept in memory: a restart
+  during the wait drops that grab. If MAM's search can't be reached at
+  all, the grab goes ahead without waiting, as before. When the grab
+  policy would have wedged but the free status is unknown, the log now
+  says so instead of grabbing paid in silence.
+
+- **An autograb waiting for MAM's search survives a restart.** An
+  allowed IRC announce that MAM's search doesn't list yet waits up to
+  10 minutes for it (see "Autograbs wait for MAM's search" below). That
+  wait lived only in memory, so updating or restarting the container
+  mid-wait dropped the grab, leaving only its announce row. The wait is
+  now also recorded in the database, and after a restart Seshat picks
+  it up within a minute on the rest of its schedule, with your current
+  settings, and grabs it once (or, if MAM never lists it, on the
+  announce's VIP/Normal word, as before). Database: `pending_holds`
+  gains `kind` and `payload` columns; existing rows are unchanged.
 
 - **Grab guards: one form of torrent ID, one MAM lookup, a recorded
   refusal.** `POST /api/v1/grabs/inject` passed the torrent ID through
@@ -53,6 +152,31 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   an excluded uploader now shows as skipped (`excluded_uploader:<name>`)
   on the Announces page instead of allowed, and inject / tentative
   approve return the reason as their error.
+
+- **Cookie retry respects dry run, the snatch budget and a dead
+  cookie.** The job that re-tries grabs which failed on an expired MAM
+  cookie ran every 5 minutes regardless of dry run, retried with the
+  same dead cookie every time (one refused download per stuck grab, every
+  5 minutes, for the whole outage), and added straight to qBit past the
+  snatch budget, the queue and the qBit add stagger. Now it does nothing
+  while dry run is on; it remembers which cookie each grab failed with
+  and retries only once the cookie has changed; and it asks the snatch
+  budget first: over budget the grab is downloaded into the queue with
+  its .torrent kept, and with the queue full too it waits for the next
+  run without contacting MAM. A retried grab is added to qBit with your
+  save path and tags, and sends the "New book grabbed" notification like
+  any other grab.
+
+- **One MAM connection; the cookie goes only where it belongs.**
+  Discovery's MAM searches used their own HTTP client beside the one
+  the rest of Seshat uses; they now share it (same headers, timeouts
+  and cookie rotation), so there is one place every MAM request passes
+  through. Its POST requests now refuse a non-MAM address, as its GETs
+  already did, so the session cookie can't be sent elsewhere. And a
+  book's stored cover URL is fetched with the cookie only when it is a
+  MAM cover image (`/t/p/…`): a cover URL edited to point at any other
+  MAM page, such as a download link, is never fetched, so a scan or a
+  debug match can't download a torrent through it.
 
 - **Less traffic to MAM in three places.**
   - **A bulk MAM scan stops when the cookie stops working.** Scanning
@@ -73,15 +197,6 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
     nothing displays. A tentative torrent's cover is reused when it is
     announced again instead of being downloaded again.
 
-- **The test suite can't reach the internet.** An autouse guard refuses
-  DNS lookups and connections to anything but this machine, and
-  curl_cffi requests, for every test. A test that tries fails, naming
-  the host, even when the code under test treats the refusal as an
-  outage and carries on. Its first run caught three library-sync tests
-  whose background Goodreads author-ID backfill looked their test ISBN
-  up on goodreads.com and openlibrary.org; those tests now stub it.
-  Only loopback fakes and in-process clients remain.
-
 - **Editing a book during a bulk MAM scan no longer waits for the scan.**
   Scanning selected books, several authors, or one author's books saved
   every result in one go at the end, holding the library's write lock
@@ -91,91 +206,14 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   (as the scheduled scan already did), so a stopped or cancelled scan
   also keeps the books it got through.
 
-- **An autograb waiting for MAM's search survives a restart.** An
-  allowed IRC announce that MAM's search doesn't list yet waits up to
-  10 minutes for it (see "Autograbs wait for MAM's search" below). That
-  wait lived only in memory, so updating or restarting the container
-  mid-wait dropped the grab, leaving only its announce row. The wait is
-  now also recorded in the database, and after a restart Seshat picks
-  it up within a minute on the rest of its schedule, with your current
-  settings, and grabs it once (or, if MAM never lists it, on the
-  announce's VIP/Normal word, as before). Database: `pending_holds`
-  gains `kind` and `payload` columns; existing rows are unchanged.
-
-- **Sending books to the pipeline and approving tentatives in bulk no
-  longer time out.** Both grabbed every item inside one request; a
-  31-row bulk approve already took about two minutes, so through the
-  reverse proxy the page showed an error while the server carried on.
-  With every MAM request now paced, these batches take longer still.
-  Both now start a background job and the page checks on it until it
-  finishes, then reports the same outcome as before, as Manual Grab's
-  "Grab all" already did. A send of a single book from the sidebar
-  goes the same way and reports about a second later. Like Manual
-  Grab's, the job lives in memory: a restart loses the items it hadn't
-  reached yet; everything it did reach is an ordinary grab. API change
-  (ADR-0024): `POST /api/discovery/send-to-pipeline` and
-  `POST /api/v1/tentative/bulk/approve` now return a job (`job_id`,
-  `done`, per-row `rows`, and once done `result`, the old response);
-  poll `GET …/send-to-pipeline/{job_id}` and
-  `GET …/tentative/bulk/approve/{job_id}`. `inject-batch` is unchanged.
-
-- **Every MAM request waits its turn; one MAM scan at a time.**
-  Nothing used to bound how fast Seshat talked to MAM as a whole. A
-  discovery scan spaced its searches by the MAM rate setting but sent
-  its description lookups and cover downloads in between with no gap
-  (about 20–26 requests a minute at a 3-second setting, where 20 was
-  intended); Manual Grab's "Grab all" paced its lookups but not its
-  downloads; and a full scan could run alongside another scan,
-  doubling the rate and overwriting the scan widget. Now every request
-  Seshat sends to MAM (searches, downloads, covers, account and
-  bonus-point calls, from any feature) goes out one at a time, spaced
-  by MAM's Rate (s) in Metadata Sources (at least 1 second), with IRC
-  autograbs at the front of the queue. Scans are a little slower for
-  it. Only one MAM scan runs at a time: the full scan and the
-  single-book scan now refuse to start while another scan is running,
-  as the other scans already did, and two scans started at the same
-  moment can no longer both slip through. Debug match still runs during
-  a scan. The MAM page shows how many requests Seshat sent in the last
-  minute.
-
-- **One MAM connection; the cookie goes only where it belongs.**
-  Discovery's MAM searches used their own HTTP client beside the one
-  the rest of Seshat uses; they now share it (same headers, timeouts
-  and cookie rotation), so there is one place every MAM request passes
-  through. Its POST requests now refuse a non-MAM address, as its GETs
-  already did, so the session cookie can't be sent elsewhere. And a
-  book's stored cover URL is fetched with the cookie only when it is a
-  MAM cover image (`/t/p/…`): a cover URL edited to point at any other
-  MAM page, such as a download link, is never fetched, so a scan or a
-  debug match can't download a torrent through it.
-
-- **Autograbs wait for MAM's search before deciding.** A new torrent
-  reaches #announce about a second after MAM adds it, before MAM's
-  search API lists it, so every IRC autograb's lookup came back "not
-  found". Since 3.11.0's no-blind-wedges fix, that meant **no wedge on
-  any autograb**: the grab policy's wedges were effectively off, and
-  non-VIP grabs counted against your ratio. The same miss also blinded
-  the excluded-uploader and "already snatched on MAM" checks for
-  autograbs. Now an allowed announce MAM doesn't list yet is held: its
-  announce row is written straight away, and the grab runs in the
-  background once MAM lists the torrent (checked at 5s, 15s, 30s, 1m,
-  2m, 3m, 5m, 7m and 10m). If MAM still doesn't list it after 10
-  minutes, the announce's own VIP / Normal flag decides, so a Normal
-  torrent gets its wedge. Held grabs are kept in memory: a restart
-  during the wait drops that grab. If MAM's search can't be reached at
-  all, the grab goes ahead without waiting, as before. When the grab
-  policy would have wedged but the free status is unknown, the log now
-  says so instead of grabbing paid in silence.
-
-- **Excluded uploaders were never excluded.** MAM's search API sends
-  the uploader as `ownership`, a JSON-encoded string
-  (`"[12345,\"Name\"]"`), not a list, and not the `owner` /
-  `owner_name` fields its API page documents. Seshat only accepted a
-  list, so every uploader read as blank and the **Excluded Uploaders**
-  setting (Settings → Snatch Budget) never matched anything: announces,
-  injects and Manual Grab could all grab your own uploads, which MAM
-  counts as a re-snatch. The uploader now parses on every path, and the
-  list works as described.
+- **The test suite can't reach the internet.** An autouse guard refuses
+  DNS lookups and connections to anything but this machine, and
+  curl_cffi requests, for every test. A test that tries fails, naming
+  the host, even when the code under test treats the refusal as an
+  outage and carries on. Its first run caught three library-sync tests
+  whose background Goodreads author-ID backfill looked their test ISBN
+  up on goodreads.com and openlibrary.org; those tests now stub it.
+  Only loopback fakes and in-process clients remain.
 
 ## [3.11.0] — 2026-10-07
 
