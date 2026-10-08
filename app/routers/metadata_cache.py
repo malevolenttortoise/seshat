@@ -82,6 +82,10 @@ class QueueStatsModel(BaseModel):
     other: int  # any unknown status — defensive, should be 0 in practice
     due_now: int = 0          # pending AND next_scan_due_at <= now()
     scheduled_later: int = 0  # pending AND next_scan_due_at > now()
+    # Refresh spread (2026-10 audit wave 4, G70): authors attempted since
+    # local midnight, and the daily cap on routine refreshes.
+    refreshed_today: int = 0
+    daily_cap: int = 0
 
 
 class CacheStatsModel(BaseModel):
@@ -337,6 +341,10 @@ async def get_status(source: str) -> StatusResponse:
             (now_for_queue,),
         )
         due_now = int((await cur.fetchone())[0])
+        from app.discovery.metadata_cache_worker import refresh_cap_state
+        refreshed_today, daily_cap = await refresh_cap_state(
+            db, source, now_for_queue,
+        )
 
         # Cache state + per-source-shape detail counts.
         st_table = metadata_cache.state_table(source)
@@ -424,6 +432,8 @@ async def get_status(source: str) -> StatusResponse:
         other=other,
         due_now=due_now,
         scheduled_later=scheduled_later,
+        refreshed_today=refreshed_today,
+        daily_cap=daily_cap,
     )
 
     cache_model = CacheStatsModel(

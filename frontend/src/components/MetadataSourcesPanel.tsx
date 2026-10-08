@@ -1216,6 +1216,8 @@ type CacheQueueStats = {
   // v2.22.0 — split-pending fields for the "Queue" tile.
   due_now?: number;
   scheduled_later?: number;
+  refreshed_today?: number;
+  daily_cap?: number;
 };
 
 type CacheStats = {
@@ -1573,6 +1575,9 @@ function CacheStatusCard({ sourceKey }: { sourceKey: "amazon" | "goodreads" }) {
         <StatTile
           label="Scans today"
           value={status.worker.today_scan_count.toLocaleString()}
+          hint={status.queue.daily_cap
+            ? `${(status.queue.refreshed_today ?? 0).toLocaleString()} authors attempted since midnight; routine refreshes stop at ${status.queue.daily_cap.toLocaleString()} a day (new authors skip the cap)`
+            : undefined}
         />
         <StatTile
           label="Blocks today"

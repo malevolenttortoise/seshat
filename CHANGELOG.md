@@ -26,6 +26,17 @@ gate that paces and counts it.
   Amazon or Goodreads live. Enrichment goes ahead of scans and workers,
   and the wait no longer counts against its timeouts.
 - Kobo's per-author scan cap goes from 3 to 10 minutes.
+- **The Amazon and Goodreads cache workers no longer re-scan every author
+  in one burst each week.** Each author's next refresh lands 7 days out
+  give or take up to a day, and each worker stops routine refreshes for
+  the day once it has attempted its queue ÷ 7 × 1.25 authors since
+  midnight (127 a day for 710 authors). Authors it has never scanned
+  (new to the queue, e.g. a scan's cache miss) still go straight away.
+  The first week after updating, the 10-13/14 backlog drains over about
+  six days instead of two. The worker's "Scans today" tile shows the cap
+  on hover; `GET /api/v1/metadata-cache/{source}/status` gains
+  `queue.refreshed_today` and `queue.daily_cap`, and a capped tick's
+  outcome is `daily_cap`.
 - **Database migration**: the app database goes to `user_version` 61 (a
   new `source_counters` table). Take a backup before updating, as usual.
 

@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import random
 import time
 from dataclasses import dataclass
@@ -251,6 +252,19 @@ _COOLDOWN_MAX_SLEEP_S = 3600.0
 # recent author. ~7 days matches the plan's "normal cadence" tier.
 _NORMAL_RESCAN_CADENCE_S = 7 * 24 * 3600.0
 
+# Refresh spread (2026-10 audit wave 4, A-B / G70). Authors scanned
+# together came due together: every 7 days each worker re-swept its
+# whole queue in one burst (Amazon: 335 + 354 authors on 2026-10-06/07,
+# ending in Akamai blocks; both queues due again 10-13/14). Two parts:
+#   - each reschedule lands 7 days out ± up to a day at random, so a
+#     clump spreads a little more every cycle instead of repeating;
+#   - routine refreshes stop for the day once the queue's daily cap
+#     (rows ÷ 7 × 1.25, rounded up) have been attempted since local
+#     midnight; authors the worker has never attempted (new to the
+#     queue, e.g. a scan's cache miss) skip the cap.
+_REFRESH_SPREAD_S = 24 * 3600.0
+_DAILY_CAP_HEADROOM = 1.25
+
 # Cooldown escalation tiers (seconds). Applied when the worker
 # observes consecutive soft-blocks within a 1h window. Index 0 is
 # the first block, index 1 the second, etc. Past the last index the
@@ -313,6 +327,9 @@ class TickResult:
       - "ok_empty"         — scan succeeded but returned no books
       - "cooldown"         — skipped, cooldown engaged
       - "queue_empty"      — no work to do this tick
+      - "daily_cap"        — today's routine refreshes are used up and
+                             no never-attempted author is due (refresh
+                             spread, G70)
       - "disabled"         — operator set mode=disabled
       - "outside_schedule" — mode=scheduled but the current time is
                              outside the configured active-hours
@@ -1083,6 +1100,51 @@ def _pick_escalation_cooldown(consecutive_blocks: int) -> float:
 # ─── Queue helpers ─────────────────────────────────────────────
 
 
+def _next_refresh_due(now: float) -> float:
+    """When an author scanned now is next due: 7 days ± up to a day."""
+    return now + _NORMAL_RESCAN_CADENCE_S + random.uniform(
+        -_REFRESH_SPREAD_S, _REFRESH_SPREAD_S,
+    )
+
+
+def _local_day_start(source_name: str, now: float) -> float:
+    """Epoch seconds of the local midnight starting `now`'s day, in the
+    worker's schedule timezone (system local when unset or invalid)."""
+    tz_name = ((_source_settings(source_name).get("schedule") or {})
+               .get("timezone") or "")
+    tz = None
+    if tz_name:
+        try:
+            from zoneinfo import ZoneInfo
+            tz = ZoneInfo(tz_name)
+        except Exception:
+            tz = None
+    dt = datetime.fromtimestamp(now, tz)
+    return dt.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+
+
+async def refresh_cap_state(
+    db: aiosqlite.Connection, source_name: str, now: float,
+) -> tuple[int, int]:
+    """(authors attempted since local midnight, today's routine cap)."""
+    queue = metadata_cache.queue_table(source_name)
+    cur = await db.execute(
+        f"SELECT COUNT(*) FROM {queue} WHERE status != 'failed_permanent'"
+    )
+    total = int((await cur.fetchone())[0] or 0)
+    cap = max(1, math.ceil(total / 7 * _DAILY_CAP_HEADROOM))
+    cur = await db.execute(
+        f"SELECT COUNT(*) FROM {queue} WHERE last_attempt_at >= ?",
+        (_local_day_start(source_name, now),),
+    )
+    attempted = int((await cur.fetchone())[0] or 0)
+    return attempted, cap
+
+
+# Day each source last logged reaching its cap (one line a day).
+_cap_logged_day: dict[str, float] = {}
+
+
 async def _pop_next_queue_row(
     db: aiosqlite.Connection, source_name: str, now: float,
 ) -> Optional[dict[str, Any]]:
@@ -1090,22 +1152,50 @@ async def _pop_next_queue_row(
     `next_scan_due_at <= now` and mark it `status='in_progress'` +
     stamp `last_attempt_at`.
 
+    Once today's refresh cap is used up, only authors the worker has
+    never attempted can be popped (refresh spread, G70); returns
+    `{"capped": True}` when the cap holds back a due author and no new
+    one is waiting.
+
     Schema-v2: queue PK is `author_id` only. Worker reads per-library
     rows from the discovery DBs at scan time to partition results.
     """
     queue = metadata_cache.queue_table(source_name)
     await db.execute("BEGIN IMMEDIATE")
     try:
+        attempted, cap = await refresh_cap_state(db, source_name, now)
+        capped = attempted >= cap
         cur = await db.execute(
             f"SELECT author_id, priority, status, next_scan_due_at, "
             f"last_attempt_at, consecutive_failures, enqueued_reason "
             f"FROM {queue} "
             f"WHERE status = 'pending' AND next_scan_due_at <= ? "
-            f"ORDER BY priority DESC, next_scan_due_at ASC "
+            + ("AND last_attempt_at IS NULL " if capped else "")
+            + f"ORDER BY priority DESC, next_scan_due_at ASC "
             f"LIMIT 1",
             (now,),
         )
         row = await cur.fetchone()
+        held_back = 0
+        if row is None and capped:
+            cur = await db.execute(
+                f"SELECT COUNT(*) FROM {queue} "
+                f"WHERE status = 'pending' AND next_scan_due_at <= ?",
+                (now,),
+            )
+            held_back = int((await cur.fetchone())[0] or 0)
+        if held_back:
+            await db.execute("COMMIT")
+            day = _local_day_start(source_name, now)
+            if _cap_logged_day.get(source_name) != day:
+                _cap_logged_day[source_name] = day
+                logger.info(
+                    "metadata_cache_worker: %s reached today's refresh cap "
+                    "(%d of %d authors); %d due author(s) wait for tomorrow, "
+                    "new authors still go",
+                    source_name, attempted, cap, held_back,
+                )
+            return {"capped": True}
         if row is None:
             await db.execute("COMMIT")
             return None
@@ -1802,6 +1892,11 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
                 source_name=source_name, outcome="queue_empty",
                 queue_size=0, next_sleep_s=_IDLE_SLEEP_S,
             )
+        if queue_row.get("capped"):
+            return TickResult(
+                source_name=source_name, outcome="daily_cap",
+                next_sleep_s=_IDLE_SLEEP_S,
+            )
         queue_size = await _count_pending_queue_rows(db, source_name)
     finally:
         await db.close()
@@ -1821,7 +1916,7 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
             await _mark_queue_row_pending(
                 db, source_name,
                 author_id=author_id,
-                next_scan_due_at=now + _NORMAL_RESCAN_CADENCE_S,
+                next_scan_due_at=_next_refresh_due(now),
                 reset_failures=True,
             )
         finally:
@@ -2019,7 +2114,7 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
             new_count, became_permanent = await _mark_queue_row_failure(
                 db, source_name,
                 author_id=author_id,
-                next_scan_due_at=now + _NORMAL_RESCAN_CADENCE_S,
+                next_scan_due_at=_next_refresh_due(now),
             )
             # Record a per-library state row for each library so the
             # reader knows we tried. Cache reader keeps returning
@@ -2131,7 +2226,7 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
             await _mark_queue_row_pending(
                 db, source_name,
                 author_id=author_id,
-                next_scan_due_at=now + _NORMAL_RESCAN_CADENCE_S,
+                next_scan_due_at=_next_refresh_due(now),
                 reset_failures=True,
             )
             await _record_scan_completed(db, source_name, now)
@@ -2153,7 +2248,7 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
                 await _mark_queue_row_failure(
                     db, source_name,
                     author_id=author_id,
-                    next_scan_due_at=now + _NORMAL_RESCAN_CADENCE_S,
+                    next_scan_due_at=_next_refresh_due(now),
                 )
             finally:
                 await db.close()
@@ -2328,6 +2423,11 @@ async def tick_goodreads() -> TickResult:
                 source_name=source_name, outcome="queue_empty",
                 queue_size=0, next_sleep_s=_IDLE_SLEEP_S,
             )
+        if queue_row.get("capped"):
+            return TickResult(
+                source_name=source_name, outcome="daily_cap",
+                next_sleep_s=_IDLE_SLEEP_S,
+            )
         queue_size = await _count_pending_queue_rows(db, source_name)
     finally:
         await db.close()
@@ -2340,7 +2440,7 @@ async def tick_goodreads() -> TickResult:
             await _mark_queue_row_pending(
                 db, source_name,
                 author_id=author_id,
-                next_scan_due_at=now + _NORMAL_RESCAN_CADENCE_S,
+                next_scan_due_at=_next_refresh_due(now),
                 reset_failures=True,
             )
         finally:
@@ -2369,7 +2469,7 @@ async def tick_goodreads() -> TickResult:
             await _mark_queue_row_permanent_404(
                 db, source_name,
                 author_id=author_id,
-                next_scan_due_at=now + _NORMAL_RESCAN_CADENCE_S,
+                next_scan_due_at=_next_refresh_due(now),
             )
             for lib in libraries:
                 await _upsert_state_row(
@@ -2449,7 +2549,7 @@ async def tick_goodreads() -> TickResult:
             new_count, became_permanent = await _mark_queue_row_failure(
                 db, source_name,
                 author_id=author_id,
-                next_scan_due_at=now + _NORMAL_RESCAN_CADENCE_S,
+                next_scan_due_at=_next_refresh_due(now),
             )
             for lib in libraries:
                 await _upsert_state_row(
@@ -2517,7 +2617,7 @@ async def tick_goodreads() -> TickResult:
             await _mark_queue_row_pending(
                 db, source_name,
                 author_id=author_id,
-                next_scan_due_at=now + _NORMAL_RESCAN_CADENCE_S,
+                next_scan_due_at=_next_refresh_due(now),
                 reset_failures=True,
             )
             await _record_scan_completed(db, source_name, now)
@@ -2534,7 +2634,7 @@ async def tick_goodreads() -> TickResult:
                 await _mark_queue_row_failure(
                     db, source_name,
                     author_id=author_id,
-                    next_scan_due_at=now + _NORMAL_RESCAN_CADENCE_S,
+                    next_scan_due_at=_next_refresh_due(now),
                 )
             finally:
                 await db.close()
