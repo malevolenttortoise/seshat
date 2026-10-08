@@ -95,7 +95,7 @@ class ResolveResult:
     # "auto_complete" (T1 ISBN/ASIN) | "hardcover" | "openlibrary"
     # | "auto_complete_title" (T4) | "bibliography" (T5) | None on miss
     tier: Optional[str]
-    soft_blocked: bool = False  # True if a tier responded with a 202 / Cloudflare gate
+    soft_blocked: bool = False  # True if a tier was blocked by Goodreads' bot protection (or backing off)
 
 
 async def resolve_goodreads_id(
@@ -111,9 +111,9 @@ async def resolve_goodreads_id(
     caller that ran the resolver (a scan, enrichment, the backfill), or
     `resolver` when none did.
 
-    `client` is optional — tests inject an `httpx.AsyncClient` with a
-    `MockTransport` to drive scenarios. Production callers can pass
-    a shared client to amortize connection pooling across calls.
+    `client` is optional and serves Tier 3 (OpenLibrary) only; tests
+    inject an `httpx.AsyncClient` with a `MockTransport`. The Goodreads
+    tiers (1, 4, 5) go through the shared Goodreads session.
 
     v2.13.0: cache lookup against `app.metadata.id_cache` happens
     BEFORE any HTTP. Hits (30-day TTL) skip the network entirely.
@@ -155,7 +155,7 @@ async def _resolve_goodreads_id(
         for ident in (query.isbn, query.asin):
             if not ident:
                 continue
-            tier1 = await _tier1_auto_complete(client, ident)
+            tier1 = await _tier1_auto_complete(ident)
             if tier1 == "_soft_blocked":
                 soft_blocked = True
                 continue
@@ -225,7 +225,7 @@ async def _resolve_goodreads_id(
         # no T4 (unconstrained title matches are too risky).
         if query.title and query.author_goodreads_id:
             tier4 = await _tier4_auto_complete_title(
-                client, query.title, query.author_goodreads_id,
+                query.title, query.author_goodreads_id,
             )
             if tier4 == "_soft_blocked":
                 soft_blocked = True
@@ -272,7 +272,7 @@ async def _resolve_goodreads_id(
 
         # Full miss across all tiers — cache the negative so the next
         # scan with the same identifier doesn't re-probe Goodreads.
-        # Skip cache-write on soft-block so a transient Cloudflare gate
+        # Skip cache-write on a block so a transient bot-protection block
         # doesn't poison the cache for a day.
         if use_cache and not soft_blocked:
             id_cache.put_book_id(
@@ -289,57 +289,48 @@ async def _resolve_goodreads_id(
                 pass
 
 
-async def _autocomplete(client: httpx.AsyncClient, url: str) -> Any:
-    """One `auto_complete` request, in Goodreads' turn."""
+async def _autocomplete(url: str) -> Any:
+    """One `auto_complete` request through the shared Goodreads session:
+    TLS impersonation, Goodreads' turn in the source gate, and the
+    autocomplete backoff. Until the 2026-10 audit tiers 1 / 4 had their
+    own plain httpx client: no pacing, Python's TLS fingerprint, and the
+    block recorded only after the fact. Raises `GoodreadsBackingOff`
+    while autocomplete is backing off."""
     from app.metadata import goodreads_session  # avoid circular import at module load
 
-    async with source_gate.turn(
-        "goodreads", kind=source_gate.KIND_AUTOCOMPLETE,
-    ) as turn:
-        resp = await client.get(url)
-        if goodreads_session.is_cloudflare_soft_block(resp):
-            turn.block()
-        else:
-            turn.status(resp.status_code)
-    return resp
+    session = await goodreads_session.get_session()
+    return await session.get(url)
 
 
-async def _tier1_auto_complete(
-    client: httpx.AsyncClient, identifier: str
-) -> Optional[str]:
+async def _tier1_auto_complete(identifier: str) -> Optional[str]:
     """Hit Goodreads' undocumented auto_complete JSON endpoint.
 
-    Returns the goodreads_book_id, the string `"_soft_blocked"` if the
-    response looks like a Cloudflare 202 gate, or None on any other
-    miss/error.
+    Returns the goodreads_book_id, the string `"_soft_blocked"` if
+    Goodreads' bot protection turned it away (or autocomplete is backing
+    off), or None on any other miss/error.
 
     The endpoint is NOT in robots.txt's `*` Disallow list. Identifier-
     based (not free-text), so it doesn't conflict with the `/search`
     rule we're avoiding.
-
-    v2.13.0: still uses httpx (auto_complete is a single-shot JSON
-    probe, not the heavy HTML burst surface that needs curl_cffi
-    chrome120 impersonation). Detection + runtime-state flag write
-    routed through `app.metadata.goodreads_session` so the dispatcher
-    skip + Settings status card see the same signal whether the 202
-    came from this tier or from the heavy HTML fetchers.
     """
     from app.metadata import goodreads_session  # avoid circular import at module load
 
     try:
-        resp = await _autocomplete(client, _GOODREADS_AUTO_COMPLETE + identifier)
+        resp = await _autocomplete(_GOODREADS_AUTO_COMPLETE + identifier)
+    except goodreads_session.GoodreadsBackingOff as e:
+        _log.debug("resolver: tier1 skipped — %s", e)
+        return "_soft_blocked"
     except Exception as e:
         _log.debug("resolver: tier1 auto_complete network error: %s", e)
         return None
 
-    # Cloudflare soft-block: 202 with empty body. Surface as a distinct
-    # signal so callers can distinguish "Goodreads doesn't know this
-    # book" from "Goodreads is blocking us at the network layer."
-    if goodreads_session.is_cloudflare_soft_block(resp):
-        goodreads_session.mark_soft_blocked(last_status=resp.status_code)
+    # A block: surface it as a distinct signal so callers can tell
+    # "Goodreads doesn't know this book" from "Goodreads is blocking us".
+    # The session has already backed autocomplete off.
+    if goodreads_session.is_soft_block(resp):
         _log.info(
-            "resolver: tier1 auto_complete soft-blocked (status=%d, "
-            "empty body) — Goodreads session state flipped to soft_blocked",
+            "resolver: tier1 auto_complete blocked by AWS WAF (status=%d) "
+            "— autocomplete backing off",
             resp.status_code,
         )
         return "_soft_blocked"
@@ -367,7 +358,6 @@ async def _tier1_auto_complete(
 
 
 async def _tier4_auto_complete_title(
-    client: httpx.AsyncClient,
     title: str,
     author_goodreads_id: str,
 ) -> Optional[str]:
@@ -389,8 +379,8 @@ async def _tier4_auto_complete_title(
       - The Goodreads book ID string when at least one result has
         `author.id == author_goodreads_id`. When multiple match,
         pick the highest `ratingsCount` (most-popular edition).
-      - The string `"_soft_blocked"` if the response looks like the
-        Cloudflare 202 / empty-body interstitial.
+      - The string `"_soft_blocked"` if Goodreads' bot protection turned
+        it away or autocomplete is backing off.
       - None on any other miss / network error / parse error.
     """
     if not title or not author_goodreads_id:
@@ -400,16 +390,18 @@ async def _tier4_auto_complete_title(
 
     encoded_title = urllib.parse.quote(title.strip())
     try:
-        resp = await _autocomplete(client, _GOODREADS_AUTO_COMPLETE + encoded_title)
+        resp = await _autocomplete(_GOODREADS_AUTO_COMPLETE + encoded_title)
+    except goodreads_session.GoodreadsBackingOff as e:
+        _log.debug("resolver: tier4 skipped — %s", e)
+        return "_soft_blocked"
     except Exception as e:
         _log.debug("resolver: tier4 auto_complete network error: %s", e)
         return None
 
-    if goodreads_session.is_cloudflare_soft_block(resp):
-        goodreads_session.mark_soft_blocked(last_status=resp.status_code)
+    if goodreads_session.is_soft_block(resp):
         _log.info(
-            "resolver: tier4 auto_complete soft-blocked (status=%d, "
-            "empty body) — Goodreads session state flipped to soft_blocked",
+            "resolver: tier4 auto_complete blocked by AWS WAF (status=%d) "
+            "— autocomplete backing off",
             resp.status_code,
         )
         return "_soft_blocked"

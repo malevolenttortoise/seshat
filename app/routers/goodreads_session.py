@@ -106,6 +106,9 @@ class StateResponse(BaseModel):
     state: str
     since: Optional[float]
     last_status: Optional[int]
+    # Per request kind (book_page / list_page / autocomplete / other):
+    # {"level", "until", "last_block_at", "backing_off"} (G66).
+    backoff: dict = {}
 
 
 class MarkActiveResponse(BaseModel):
@@ -121,14 +124,19 @@ async def _probe_one(book_id: str) -> ProbeResult:
 
     Reads the session state side-effect for free (mark_active /
     mark_soft_blocked happen inside `session.get()`). We re-check
-    `is_cloudflare_soft_block()` here only to populate the per-request
+    `is_soft_block()` here only to populate the per-request
     `soft_blocked` field in the response.
     """
     session = await gr.get_session()
     started = time.monotonic()
     try:
+        # The probe exists to test whether a backoff is over, so it
+        # goes out even while book pages are backing off.
         with source_gate.caller(source_gate.CALLER_PROBE):
-            resp = await session.get(f"https://www.goodreads.com/book/show/{book_id}")
+            resp = await session.get(
+                f"https://www.goodreads.com/book/show/{book_id}",
+                ignore_backoff=True,
+            )
     except Exception as e:
         # Transport-layer failure (timeout, DNS, TLS) — still report as
         # a probe outcome so the user sees something actionable.
@@ -148,7 +156,7 @@ async def _probe_one(book_id: str) -> ProbeResult:
         status=int(getattr(resp, "status_code", 0)),
         body_size_kb=round(len(body) / 1024.0, 2),
         wall_ms=wall_ms,
-        soft_blocked=gr.is_cloudflare_soft_block(resp),
+        soft_blocked=gr.is_soft_block(resp),
     )
 
 
@@ -164,6 +172,7 @@ async def get_state():
         state=s.get("state", "unknown"),
         since=s.get("since"),
         last_status=s.get("last_status"),
+        backoff=s.get("backoff") or {},
     )
 
 
@@ -223,15 +232,10 @@ async def probe(body: ProbeRequest):
 
 @router.post("/mark-active", response_model=MarkActiveResponse)
 async def mark_active():
-    """Manually flip session state to active.
+    """End every request kind's backoff and flip the state to active.
 
-    Used after the user investigates a soft-block (refreshes IP /
-    waits for Cloudflare's bot-score to decay / pastes Phase-B
-    cookies) and wants to put Goodreads back in the dispatcher
-    rotation immediately, without waiting for the next probe.
-
-    Doesn't actually probe — only flips the flag. Caller should run
-    a probe afterwards to confirm the bypass is now working.
+    For when the user would rather not wait out a backoff. Doesn't
+    probe; run one afterwards to see whether Goodreads answers.
     """
-    gr.mark_active(last_status=None)
+    gr.clear_all()
     return MarkActiveResponse(ok=True, state_after=gr.get_session_state())

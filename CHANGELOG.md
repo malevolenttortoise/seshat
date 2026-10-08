@@ -37,6 +37,29 @@ gate that paces and counts it.
   on hover; `GET /api/v1/metadata-cache/{source}/status` gains
   `queue.refreshed_today` and `queue.daily_cap`, and a capped tick's
   outcome is `daily_cap`.
+- **A Goodreads block now pauses only that kind of request, and only for
+  a while.** Goodreads sits behind AWS WAF (not Cloudflare, as Seshat said
+  until now). A block on a book page backs book pages off for 2 minutes,
+  then 5, 10, 30 and 60 on repeated blocks, and the next success clears
+  it; list pages and autocomplete carry on. Before, one block switched
+  Goodreads off for every scan and enrichment until a later success, often
+  for days. The Goodreads card on Metadata Sources shows each kind ("backing
+  off until hh:mm"); the probe and the weekly canary always go out; "Mark
+  as active" ends every backoff. `GET /api/v1/metadata/goodreads/state`
+  gains `backoff`.
+- **A source scan stops requesting Goodreads book pages after the first
+  block**, and a new book whose page didn't load is no longer created from
+  list-page data (it used to be stored as English with no language, format
+  or translation check); it is tried again on a later scan. Known books
+  still take their list-page series and cover.
+- **The Goodreads author-ID backfill no longer runs after every Calibre and
+  Audiobookshelf sync**, only from Hygiene, and doesn't retry an author it
+  already tried until the next restart.
+- Log lines renamed: `Cloudflare soft-block on …` is now `AWS WAF
+  soft-block on …`, the resolver's `soft-blocked … session state flipped`
+  lines now say `blocked by AWS WAF … backing off`, and the canary's
+  notification text changed. Anything matching the old wording needs
+  updating.
 - **Database migration**: the app database goes to `user_version` 61 (a
   new `source_counters` table). Take a backup before updating, as usual.
 
@@ -62,6 +85,16 @@ gate that paces and counts it.
   their own unpaced client.
 - Goodreads enrichment's book page could never load within enrichment's
   15-second timeout once the Goodreads rate was above 15 seconds.
+- Goodreads list-page titles ending "(Series #N)" or "(Series Book N)"
+  (no comma) kept the suffix and lost the series, e.g. "Griffin Academy 2
+  (Knights Of War #2)". They now parse like "(Series, #N)".
+- The Goodreads ID resolver's autocomplete lookups now go through the
+  shared Goodreads session (browser TLS profile, pacing, backoff) instead
+  of a plain client.
+- A Goodreads list page refused during a backoff no longer marks the
+  ID resolver's cached walk of that author's list as complete.
+- The Kobo row's "effective rate" now reads one request per Rate seconds
+  (concurrency no longer multiplies it).
 
 ---
 

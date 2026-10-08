@@ -397,7 +397,7 @@ async def resolve_author_via_calibre_coauthor(
             )
             return None
 
-        if goodreads_session.is_cloudflare_soft_block(resp):
+        if goodreads_session.is_soft_block(resp):
             _log.info(
                 "backfill-phase2: soft-blocked fetching %s — abort.", url,
             )
@@ -451,30 +451,41 @@ async def resolve_author_via_calibre_coauthor(
         return None
 
 
+# Authors this process has already tried to resolve, per phase and
+# library (ADR-0005): an author whose books resolve to nothing is not
+# retried by the same phase until the next restart (Phase 2's Calibre
+# lookup still gets its own try). Until the 2026-10 audit every library
+# sync re-tried every unresolvable author.
+_attempted: set[tuple[str, str, int]] = set()
+
+
+def _book_pages_backing_off() -> bool:
+    return goodreads_session.is_backing_off(source_gate.KIND_BOOK_PAGE)
+
+
+def _library_key() -> str:
+    from app.discovery.database import get_active_library
+    return str(get_active_library() or "")
+
+
+def reset_attempted_for_tests() -> None:
+    _attempted.clear()
+
+
 @source_gate.as_caller(source_gate.CALLER_BACKFILL)
 async def backfill_missing_author_ids(*, limit: Optional[int] = None) -> dict:
     """Sweep every author missing `goodreads_id` whose books have at
     least one resolvable identifier, and resolve via
     `resolve_author_goodreads_id`.
 
-    Intended to run as a fire-and-forget background task after each
-    Calibre sync completes — Calibre may have just freshly mined a
-    pile of new identifiers that the previous backfill pass couldn't
-    use.
+    Runs from Hygiene (`hygiene.job_author_id_backfill`). Until the
+    2026-10 audit it also ran fire-and-forget after every Calibre and
+    Audiobookshelf sync (every two hours on one install).
 
-    Rate-limit comes for free from `goodreads_session` (5s + 0–1s
-    jitter per /book/show fetch). On a fresh install with ~200 authors
-    to backfill, expect ~17 minutes wall time. Non-blocking — caller
-    fires this via `asyncio.create_task`.
-
-    Per the Phase-A bypass dispatcher gate: if any single backfill
-    fetch returns a soft-block, the session module flips state to
-    `soft_blocked` and the next iteration's `goodreads_session.get`
-    call will... still fire (the dispatcher skip lives in the
-    enricher/source-scan path, not at the session layer). To avoid
-    pounding Cloudflare during a soft-block window, we short-circuit
-    on `is_soft_blocked()` and abort the sweep early. Picks up on
-    the next Calibre sync.
+    Each request waits Goodreads' turn at the Metadata Sources rate (the
+    source gate). Authors already tried in this process are skipped
+    (`_attempted`, ADR-0005), and the sweep stops once book pages are
+    backing off after an AWS WAF block; the next run picks up the rest.
 
     `limit` caps the number of authors processed per call (None =
     no cap). Test hook + lever for cautious rollouts.
@@ -521,6 +532,14 @@ async def backfill_missing_author_ids(*, limit: Optional[int] = None) -> dict:
             "backfill: no Phase-1 candidates (no author needs a "
             "books-table reverse-lookup) — proceeding to Phase 2"
         )
+    slug = _library_key()
+    fresh = [(a, n) for a, n in candidates if ("p1", slug, a) not in _attempted]
+    if candidates and not fresh:
+        _log.info(
+            "backfill: only previously-attempted authors remain (%d) — "
+            "skipping Phase 1 until the next restart", len(candidates),
+        )
+    candidates = fresh
     if limit is not None:
         candidates = candidates[:limit]
 
@@ -531,17 +550,18 @@ async def backfill_missing_author_ids(*, limit: Optional[int] = None) -> dict:
     )
 
     for author_id, name in candidates:
-        # Bail early if a previous iteration tripped Cloudflare.
-        if goodreads_session.is_soft_blocked():
+        # Stop once book pages are backing off after a block.
+        if _book_pages_backing_off():
             stats["skipped_soft_blocked"] = len(candidates) - stats["considered"]
             _log.info(
-                "backfill: aborting sweep — session state is "
-                "soft_blocked. %d author(s) deferred to next Calibre "
-                "sync (already resolved: %d, missed: %d).",
+                "backfill: stopping — Goodreads book pages are backing "
+                "off. %d author(s) left for the next run (already "
+                "resolved: %d, missed: %d).",
                 stats["skipped_soft_blocked"],
                 stats["resolved"], stats["missed"],
             )
             break
+        _attempted.add(("p1", slug, author_id))
         stats["considered"] += 1
         try:
             resolved = await resolve_author_goodreads_id(author_id)
@@ -572,10 +592,9 @@ async def backfill_missing_author_ids(*, limit: Optional[int] = None) -> dict:
     # query Calibre's metadata.db directly for any book they
     # contributed to that carries a `goodreads` identifier, fetch
     # /book/show, and match by normalized name.
-    if goodreads_session.is_soft_blocked():
+    if _book_pages_backing_off():
         _log.info(
-            "backfill-phase2: skipping (session state is soft_blocked "
-            "from Phase 1)"
+            "backfill-phase2: skipping (Goodreads book pages are backing off)"
         )
         return stats
 
@@ -594,7 +613,10 @@ async def backfill_missing_author_ids(*, limit: Optional[int] = None) -> dict:
     finally:
         await db.close()
 
-    phase2_candidates = [(int(r[0]), str(r[1])) for r in phase2_rows]
+    phase2_candidates = [
+        (int(r[0]), str(r[1])) for r in phase2_rows
+        if ("p2", slug, int(r[0])) not in _attempted
+    ]
     if limit is not None:
         # Honor the same limit across both phases combined (best-effort).
         remaining = max(0, limit - stats["considered"])
@@ -607,16 +629,17 @@ async def backfill_missing_author_ids(*, limit: Optional[int] = None) -> dict:
             len(phase2_candidates),
         )
         for author_id, name in phase2_candidates:
-            if goodreads_session.is_soft_blocked():
+            if _book_pages_backing_off():
                 phase2_stats["skipped_soft_blocked"] = (
                     len(phase2_candidates) - phase2_stats["considered"]
                 )
                 _log.info(
-                    "backfill-phase2: aborting — session state is "
-                    "soft_blocked. %d deferred.",
+                    "backfill-phase2: stopping — Goodreads book pages are "
+                    "backing off. %d left for the next run.",
                     phase2_stats["skipped_soft_blocked"],
                 )
                 break
+            _attempted.add(("p2", slug, author_id))
             phase2_stats["considered"] += 1
             try:
                 resolved = await resolve_author_via_calibre_coauthor(
@@ -714,10 +737,10 @@ async def resolve_author_goodreads_id(author_id: int) -> Optional[str]:
             )
             return None
 
-        if goodreads_session.is_cloudflare_soft_block(resp):
+        if goodreads_session.is_soft_block(resp):
             _log.info(
-                "backfill: soft-blocked fetching %s — abort, dispatcher "
-                "skip will gate further attempts", url,
+                "backfill: blocked by AWS WAF fetching %s — book pages "
+                "backing off", url,
             )
             return None
         status = getattr(resp, "status_code", 0)

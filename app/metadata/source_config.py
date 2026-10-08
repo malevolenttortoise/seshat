@@ -70,13 +70,12 @@ _log = logging.getLogger("seshat.metadata.source_config")
 # whole Audible+Audnexus chain.
 KNOWN_SOURCES: dict[str, dict[str, Any]] = {
     "mam":         {"display": "MyAnonamouse",  "available_for": ("ebook", "audiobook"), "default_rate": 2.0, "mam_only": True},
-    # Goodreads — v2.13.0 Stage 6: 5s ±1s jitter default (was 2.0s).
-    # Conservative phased-rollout pace lets curl_cffi Chrome120 TLS
-    # impersonation clear Cloudflare without tripping density-based
-    # 202s. Existing installs keep their saved value; only fresh
-    # installs get 5.0s. Power users can dial up to 8s+ for extra
-    # margin or down for faster scans once Phase-A UAT confirms the
-    # bypass holds.
+    # Goodreads — v2.13.0 Stage 6: 5s (+0-1s jitter) default (was
+    # 2.0s). Goodreads sits behind AWS WAF Bot Control, which scores
+    # request density; curl_cffi Chrome120 impersonation gets the TLS
+    # handshake past it, the pace does the rest (book pages are
+    # challenged far sooner than list pages). Existing installs keep
+    # their saved value; only fresh installs get 5.0s.
     "goodreads":   {"display": "Goodreads",     "available_for": ("ebook", "audiobook"), "default_rate": 5.0},
     # Amazon: 30s default rate (was 2.0 through v2.10.x). v2.11.0
     # confirmed via single-shot probe that Amazon's bot detection
@@ -169,10 +168,11 @@ _DEFAULT_NEW_INSTALL_STATE: dict[str, dict[str, Any]] = {
 # it's free and authoritative.
 #
 # v2.13.1 reshuffle — Goodreads restored to #2 (ebook) / #3 (audiobook)
-# after the v2.13.0 Stage-6 Cloudflare bypass + Phase-1/2 author-id
+# after the v2.13.0 Stage-6 TLS impersonation + Phase-1/2 author-id
 # backfill landed. The v2.11.0 demotion was based on Goodreads being
-# Cloudflare-blocked; with curl_cffi Chrome120 impersonation that
-# constraint is gone, and live UAT 2026-05-14 confirmed 0 soft-blocks
+# bot-blocked (AWS WAF; the code called it Cloudflare until 2026-10);
+# with curl_cffi Chrome120 impersonation that eased, and live UAT
+# 2026-05-14 confirmed 0 soft-blocks
 # across ~24 minutes of sustained burst traffic + 88% author
 # `goodreads_id` coverage across Mark's 740-author library.
 #

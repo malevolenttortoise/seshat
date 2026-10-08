@@ -129,10 +129,9 @@ def register_goodreads_canary(scheduler: AsyncIOScheduler) -> None:
     rotate credentials. Recovery is user-driven: see the
     GoodreadsStatusCard's "Run probe" / "Mark as active" buttons.
 
-    Cadence: weekly is the design's "we don't expect Cloudflare to
-    flip mid-week if cookies aren't part of the bypass" cadence.
-    Phase B may tighten to daily once cookies enter the mix
-    (cf_clearance typically lasts hours-to-days).
+    Cadence: weekly. The canary goes out even while book pages are
+    backing off (it exists to test whether that is over); its outcome
+    updates the book-page backoff like any other request.
     """
     async def _canary():
         from app.metadata import goodreads_session, id_cache, source_gate
@@ -142,8 +141,11 @@ def register_goodreads_canary(scheduler: AsyncIOScheduler) -> None:
         try:
             session = await goodreads_session.get_session()
             with source_gate.caller(source_gate.CALLER_PROBE):
-                resp = await session.get("https://www.goodreads.com/book/show/5907")
-            soft_blocked = goodreads_session.is_cloudflare_soft_block(resp)
+                resp = await session.get(
+                    "https://www.goodreads.com/book/show/5907",
+                    ignore_backoff=True,
+                )
+            soft_blocked = goodreads_session.is_soft_block(resp)
         except Exception:
             _log.exception("goodreads canary fetch crashed")
             return
@@ -168,10 +170,10 @@ def register_goodreads_canary(scheduler: AsyncIOScheduler) -> None:
                 events.SOURCE_GOODREADS_CANARY_FAILED,
                 title="Goodreads soft-blocked",
                 message=(
-                    "Weekly canary detected a Cloudflare soft-block. "
-                    "Open Settings > Sources > Goodreads and run a probe "
-                    "to confirm + investigate. Discovery scans will skip "
-                    "Goodreads until the session state is marked active."
+                    "Weekly canary was blocked by Goodreads' bot protection "
+                    "(AWS WAF). Book pages back off and retry by themselves; "
+                    "Settings > Sources > Goodreads shows until when, and "
+                    "its probe tests whether the block is over."
                 ),
             )
         except Exception:

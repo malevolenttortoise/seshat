@@ -1717,9 +1717,9 @@ async def _perform_goodreads_scan(
     """v3.4.0 slice 03 — Goodreads list-only scan for the cache
     worker (ADR-0018 §1).
 
-    Builds a one-shot `GoodreadsSource` (NO curl_cffi, NO warmup —
-    GR has no Akamai layer; the existing httpx-based GR session is
-    sufficient) and calls `list_page_inventory(author_id)`.
+    Builds a one-shot `GoodreadsSource` (no warmup; its requests go
+    through the shared Goodreads session) and calls
+    `list_page_inventory(author_id)`.
 
     Returns `(pages_dict, error_msg, is_soft_block, is_hard_404)`:
       - `(pages, None, False, False)` on success — pages is
@@ -1743,10 +1743,15 @@ async def _perform_goodreads_scan(
     gr_cfg = (s.get("metadata_sources") or {}).get("goodreads") or {}
     rate_limit = float(gr_cfg.get("rate_limit", 5.0))
     source = GoodreadsSource(rate_limit=rate_limit)
+    from app.metadata.goodreads_session import GoodreadsBackingOff
     try:
         pages = await source.list_page_inventory(author_id)
     except GoodreadsAuthorNotFound as exc:
         return None, str(exc), False, True
+    except GoodreadsBackingOff as exc:
+        # Refused without sending: list pages are backing off. A
+        # soft-block deferral, never a failure toward failed_permanent.
+        return None, str(exc), True, False
     except Exception as exc:
         logger.exception(
             "metadata_cache_worker: goodreads list-page scan raised "
@@ -2413,6 +2418,19 @@ async def tick_goodreads() -> TickResult:
         return TickResult(
             source_name=source_name, outcome="outside_schedule",
             next_sleep_s=sleep_s,
+        )
+
+    # List pages backing off after an AWS WAF block (G66): wait it out
+    # without popping a row. Until the 2026-10 audit the worker never
+    # checked Goodreads' block state before a request.
+    from app.metadata import goodreads_session as _gr
+    lp_until = _gr.backoff_until(source_gate.KIND_LIST_PAGE)
+    if lp_until:
+        remaining = lp_until - now
+        return TickResult(
+            source_name=source_name, outcome="cooldown",
+            cooldown_remaining_s=remaining,
+            next_sleep_s=min(remaining + 1.0, _COOLDOWN_MAX_SLEEP_S),
         )
 
     db = await metadata_cache.get_db(source_name)

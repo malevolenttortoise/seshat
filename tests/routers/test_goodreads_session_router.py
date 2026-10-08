@@ -108,15 +108,17 @@ class TestGetState:
         assert body["since"] is None
         assert body["last_status"] is None
 
-    async def test_state_reflects_mark_soft_blocked(self, isolated_settings):
+    async def test_state_reflects_a_backoff(self, isolated_settings):
         from app.metadata import goodreads_session as gr
-        gr.mark_soft_blocked(last_status=202)
+        gr._record_block("book_page", 202)
         app = _make_app()
         async with await _client(app) as c:
             resp = await c.get("/api/v1/metadata/goodreads/state")
         body = resp.json()
         assert body["state"] == "soft_blocked"
         assert body["last_status"] == 202
+        assert body["backoff"]["book_page"]["backing_off"] is True
+        assert body["backoff"]["list_page"]["backing_off"] is False
 
 
 class TestSingleProbe:
@@ -244,7 +246,8 @@ class TestMarkActive:
         self, isolated_settings,
     ):
         from app.metadata import goodreads_session as gr
-        gr.mark_soft_blocked(last_status=202)
+        gr._record_block("book_page", 202)
+        gr._record_block("autocomplete", 429)
         assert gr.is_soft_blocked()
         app = _make_app()
         async with await _client(app) as c:

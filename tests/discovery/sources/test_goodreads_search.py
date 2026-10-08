@@ -18,7 +18,7 @@ import httpx
 
 from app.discovery.sources.goodreads import (
     GoodreadsSource,
-    _is_cloudflare_soft_block,
+    _is_soft_block,
 )
 
 
@@ -77,19 +77,19 @@ class TestCloudflareSoftBlockDetection:
 
     def test_202_status_is_soft_block(self):
         resp = httpx.Response(202, content=b"")
-        assert _is_cloudflare_soft_block(resp) is True
+        assert _is_soft_block(resp) is True
 
     def test_200_with_empty_body_is_soft_block(self):
         resp = httpx.Response(200, content=b"")
-        assert _is_cloudflare_soft_block(resp) is True
+        assert _is_soft_block(resp) is True
 
     def test_200_with_real_body_is_not_soft_block(self):
         resp = httpx.Response(200, content=b"<html>real content</html>")
-        assert _is_cloudflare_soft_block(resp) is False
+        assert _is_soft_block(resp) is False
 
     def test_404_is_not_soft_block(self):
         resp = httpx.Response(404, content=b"not found")
-        assert _is_cloudflare_soft_block(resp) is False
+        assert _is_soft_block(resp) is False
 
     def test_none_response_not_soft_block(self):
-        assert _is_cloudflare_soft_block(None) is False
+        assert _is_soft_block(None) is False

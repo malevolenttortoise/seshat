@@ -1375,24 +1375,9 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
             "sync_mode": mode,
         })
 
-        # v2.13.0 — fire-and-forget Goodreads author-id backfill.
-        # Sweeps every author missing `authors.goodreads_id` whose
-        # books have at least one resolvable identifier (Calibre may
-        # have just freshly mined some). One /book/show fetch per
-        # author at the 5s+jitter rate; results cached forever to
-        # `authors.goodreads_id` so future Goodreads source-scans
-        # short-circuit. Non-blocking — sync returns immediately.
-        try:
-            import asyncio
-            from app.discovery.goodreads_author_backfill import (
-                backfill_missing_author_ids,
-            )
-            asyncio.create_task(backfill_missing_author_ids())
-        except Exception:
-            logger.exception(
-                "Calibre sync: failed to spawn Goodreads author-id "
-                "backfill task (non-fatal)"
-            )
+        # The Goodreads author-ID backfill no longer runs after every
+        # sync (2026-10 audit, wave 4 S3): it re-tried every unresolvable
+        # author each time, two-hourly on one install. Hygiene runs it.
 
         # v3.6.2 — enqueue newly-resolved Amazon + GR author IDs into
         # the metadata-cache worker queues. Pre-v3.6.2 this only ran

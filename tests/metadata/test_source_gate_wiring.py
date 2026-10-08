@@ -142,24 +142,50 @@ async def test_a_goodreads_soft_block_counts_as_blocked(clock, rates, monkeypatc
     assert (row["requests"], row["blocks"]) == (1, 1)
 
 
-async def test_the_resolvers_autocomplete_waits_goodreads_turn(clock, rates, monkeypatch):
-    """Tiers 1 / 4 had their own unpaced client."""
+class _JsonCurl:
+    """curl_cffi stand-in answering every URL with one JSON body."""
+
+    def __init__(self, payload, status=200):
+        self.payload, self.status, self.urls = payload, status, []
+
+    async def get(self, url, **_):
+        self.urls.append(url)
+        return httpx.Response(self.status, json=self.payload)
+
+
+@pytest.fixture
+def gr_session(monkeypatch):
+    """The real Goodreads session over a fake transport."""
+    from app.metadata import goodreads_session
+    from app.metadata.goodreads_session import GoodreadsSession
+
+    s = GoodreadsSession()
+    s._curl = _JsonCurl([{"bookId": 42}])
+
+    async def get_session():
+        return s
+    monkeypatch.setattr(goodreads_session, "get_session", get_session)
+    return s
+
+
+async def test_the_resolvers_autocomplete_waits_goodreads_turn(clock, rates, gr_session):
+    """Tiers 1 / 4 had their own unpaced client; now they go through the
+    shared session (impersonation, turn, backoff)."""
     from app.metadata import goodreads_id_resolver as resolver
 
-    client = _client(lambda req: httpx.Response(200, json=[{"bookId": 42}]))
     with source_gate.caller("enrichment"):
-        await resolver._tier1_auto_complete(client, "9780000000001")
-        await resolver._tier1_auto_complete(client, "9780000000002")
+        await resolver._tier1_auto_complete("9780000000001")
+        await resolver._tier1_auto_complete("9780000000002")
     assert clock.slept == [30.0]
     assert _pending("goodreads", "enrichment", "autocomplete")["ok"] == 2
+    assert all("auto_complete" in u for u in gr_session._curl.urls)
 
 
-async def test_a_resolver_run_with_no_caller_counts_as_resolver(clock, rates, monkeypatch):
+async def test_a_resolver_run_with_no_caller_counts_as_resolver(clock, rates, gr_session):
     from app.metadata import goodreads_id_resolver as resolver
 
-    client = _client(lambda req: httpx.Response(200, json=[{"bookId": 42}]))
     out = await resolver.resolve_goodreads_id(
-        resolver.ResolveQuery(isbn="9780000000001"), client=client, use_cache=False,
+        resolver.ResolveQuery(isbn="9780000000001"), use_cache=False,
     )
     assert out.goodreads_book_id == "42"
     assert _pending("goodreads", "resolver", "autocomplete")["requests"] == 1

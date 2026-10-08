@@ -43,20 +43,6 @@ def _book(book_id, title, author_name="William D. Arand", author_id=100):
     }
 
 
-@pytest.fixture(autouse=True)
-def _no_post_sync_goodreads_backfill(monkeypatch):
-    """The sync spawns the Goodreads author-ID backfill after every run;
-    under the source gate its first request goes at once, so it reached
-    for goodreads.com before these tests ended. Wave 4 S3 moves that
-    backfill to hygiene only."""
-    from app.discovery import goodreads_author_backfill
-
-    async def _none(**_):
-        return {}
-
-    monkeypatch.setattr(goodreads_author_backfill, "backfill_missing_author_ids", _none)
-
-
 @pytest.fixture
 async def discovery_db(tmp_path, monkeypatch):
     """Per-test discovery DB + pipeline DB co-located under tmp_path."""

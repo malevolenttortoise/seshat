@@ -194,7 +194,7 @@ _REGISTRY_ENTRIES: tuple[EventMeta, ...] = (
     # ── Source health ───────────────────────────────────────
     EventMeta(
         name=SOURCE_GOODREADS_CANARY_FAILED,
-        description="The weekly Goodreads canary detected a Cloudflare soft-block.",
+        description="The weekly Goodreads canary was blocked by Goodreads' bot protection (AWS WAF).",
         default_priority=4,
         default_tags=("warning",),
         suppressible_during_quiet_hours=False,

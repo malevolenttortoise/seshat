@@ -795,11 +795,12 @@ DEFAULT_SETTINGS = {
     # retired once lookup.py started reading from `metadata_sources`
     # directly via the derivation helpers in app.metadata.source_config.
     "google_books_auto_disabled_at": None,
-    # v2.13.0 — Goodreads Cloudflare soft-block state. Written by
-    # `app/metadata/goodreads_session.py` on every response. Read by
-    # the enricher dispatcher (skip Goodreads when soft_blocked) and
-    # by the Settings GoodreadsStatusCard. Protected from PATCH via
-    # `_RUNTIME_STATE_KEYS` in app/routers/settings.py.
+    # v2.13.0 — Goodreads bot-protection (AWS WAF) state. Written by
+    # `app/metadata/goodreads_session.py` on every response; the
+    # per-kind backoff (`goodreads_backoff`, 2026-10 audit G66) decides
+    # what is skipped. Read by the Settings GoodreadsStatusCard.
+    # Protected from PATCH via `_RUNTIME_STATE_KEYS` in
+    # app/routers/settings.py.
     "goodreads_session_state": "unknown",
     "goodreads_session_state_since": None,
     "goodreads_session_last_status": None,

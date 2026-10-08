@@ -442,18 +442,17 @@ class MetadataEnricher:
                         "status": "skipped_cheap_gate",
                     })
                     continue
-            # v2.13.0 Stage 6 — skip Goodreads when its session state is
-            # `soft_blocked`. Without this gate every per-book lookup
-            # pays the full request → soft-block detect → next-source
-            # roundtrip even though we already know the answer.
-            # `mark_active()` flips state back when a probe (Settings
-            # "Run probe" button or the weekly canary) returns 200.
+            # Skip Goodreads while its book pages are backing off after an
+            # AWS WAF block (G66): its record needs the book page, so the
+            # lookup could only spend autocomplete requests for nothing.
+            # The backoff ends by itself (2 → 60 min) or on a success.
             if src.name == "goodreads":
                 from app.metadata import goodreads_session
-                if goodreads_session.is_soft_blocked():
+                from app.metadata.source_gate import KIND_BOOK_PAGE
+                if goodreads_session.is_backing_off(KIND_BOOK_PAGE):
                     _log.debug(
-                        "enricher: goodreads skipped (session state = "
-                        "soft_blocked) for %r", title,
+                        "enricher: goodreads skipped (book pages backing "
+                        "off) for %r", title,
                     )
                     source_log.append({
                         "source": "goodreads",

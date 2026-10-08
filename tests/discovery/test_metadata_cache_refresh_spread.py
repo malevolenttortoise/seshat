@@ -176,3 +176,38 @@ async def test_the_status_reports_the_cap(worker_under):
     await _seed_capped_amazon_queue()
     status = await get_status("amazon")
     assert (status.queue.refreshed_today, status.queue.daily_cap) == (3, 3)
+
+
+async def test_the_goodreads_worker_waits_out_a_list_page_backoff(gr_worker_under, monkeypatch):
+    """No list-page request while list pages back off after a block (the
+    worker never checked Goodreads' block state before the 2026-10 audit)."""
+    from app.metadata import goodreads_session
+
+    await _seed_gr_queue_row(author_id="GR-1")
+    goodreads_session._record_block("list_page", 202)
+    scans: list[str] = []
+
+    async def _scan(author_id):
+        scans.append(author_id)
+        return ({1: []}, None, False, False)
+    monkeypatch.setattr(metadata_cache_worker, "_perform_goodreads_scan", _scan)
+
+    result = await metadata_cache_worker.tick_goodreads()
+    assert result.outcome == "cooldown"
+    assert 0 < result.cooldown_remaining_s <= 120
+    assert scans == []
+
+
+async def test_a_refused_list_page_is_a_deferral_not_a_failure(gr_worker_under, monkeypatch):
+    """`GoodreadsBackingOff` from the scan must not climb the failure
+    ladder toward failed_permanent."""
+    from app.discovery.sources import goodreads as gr_source
+    from app.metadata.goodreads_session import GoodreadsBackingOff
+
+    async def _refused(self, author_id, **_):
+        raise GoodreadsBackingOff("list_page", time.time() + 60)
+    monkeypatch.setattr(gr_source.GoodreadsSource, "list_page_inventory", _refused)
+
+    pages, err, soft, hard_404 = await metadata_cache_worker._perform_goodreads_scan("GR-2")
+    assert (pages, soft, hard_404) == (None, True, False)
+

@@ -374,19 +374,17 @@ class TestEnricher:
         assert b.call_count == 1
 
     async def test_goodreads_skipped_when_soft_blocked(self, monkeypatch):
-        """v2.13.0 Stage 6 — when `goodreads_session_state == "soft_blocked"`,
-        the enricher must skip the goodreads source entirely (not call
-        `search_book`). Without this gate every per-book lookup pays the
-        full request → 202 → log → next-source roundtrip even though we
-        already know Goodreads is gated.
+        """While Goodreads book pages are backing off after an AWS WAF
+        block, the enricher skips the goodreads source entirely (not
+        `search_book`): its record needs the book page.
 
-        Patches `is_soft_blocked` directly rather than writing to the
+        Patches `is_backing_off` directly rather than writing to the
         runtime-state file — keeps the test fully isolated from
         sibling tests that use fake sources named "goodreads".
         """
         from app.metadata import goodreads_session as gs
 
-        monkeypatch.setattr(gs, "is_soft_blocked", lambda: True)
+        monkeypatch.setattr(gs, "is_backing_off", lambda kind: kind == "book_page")
 
         cfg = EnrichmentConfig(enabled=True, accept_confidence=0.6)
         rec_from_fallback = MetaRecord(

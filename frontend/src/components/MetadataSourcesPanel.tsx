@@ -257,9 +257,9 @@ export function MetadataSourcesPanel() {
 
       {/* v2.13.0 migration prompt — existing users whose saved
           goodreads rate is still on the pre-v2.13.0 default (2.0s)
-          should consider bumping to the new 5.0s default for the
-          Phase-A Cloudflare bypass. One-click bump avoids forcing
-          them through the full "Reset to defaults" workflow. */}
+          should consider bumping to the new 5.0s default. One-click
+          bump avoids forcing them through the full "Reset to
+          defaults" workflow. */}
       {draft.sources.goodreads && Number(draft.sources.goodreads.rate_limit ?? 5) < 5 && (
         <div style={{
           background: t.accent + "18",
@@ -270,8 +270,9 @@ export function MetadataSourcesPanel() {
         }}>
           <span style={{ flex: 1 }}>
             <b>v2.13.0:</b> Goodreads's default rate limit is now <b>5.0s</b>{" "}
-            (was 2.0s). The slower pace lets the new Cloudflare bypass run
-            cleanly under burst load. Your current setting is{" "}
+            (was 2.0s). Goodreads' bot protection (AWS WAF) scores request
+            density, so the slower pace keeps scans from being blocked. Your
+            current setting is{" "}
             <b>{draft.sources.goodreads.rate_limit}s</b>.
           </span>
           <Btn
@@ -921,11 +922,9 @@ function AmazonExtrasRow({
 // `metadata_sources.kobo.concurrency` and flows through reload_sources
 // to the live KoboSource singleton.
 //
-// Effective request rate = ~concurrency/rate_limit. At ship-defaults
-// (4 / 3.0 = 1.33 req/s) Kobo stays below the Cloudflare-fronted
-// soft-block threshold. Raising concurrency without also raising
-// rate_limit will trigger soft-blocks — call out the multiplication
-// in the help text so power users don't shoot themselves in the foot.
+// Since the 2026-10 audit (G71/G72) every Kobo request waits Kobo's
+// turn in the source gate, so the request rate is one per Rate seconds
+// whatever the concurrency; concurrency only overlaps the parsing.
 
 function KoboExtrasRow({
   entry, onChange,
@@ -936,7 +935,7 @@ function KoboExtrasRow({
   const t = useTheme();
   const concurrency = entry.concurrency ?? 4;
   const rateLimit = entry.rate_limit ?? 3.0;
-  const effectiveRate = rateLimit > 0 ? concurrency / rateLimit : 0;
+  const effectiveRate = rateLimit > 0 ? 1 / rateLimit : 0;
   return (
     <div style={{
       display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap",
@@ -961,9 +960,9 @@ function KoboExtrasRow({
       </label>
       <span
         style={{ color: t.textDim, fontSize: 11, fontStyle: "italic" }}
-        title="Raising concurrency without raising Rate triggers Cloudflare soft-blocks."
+        title="Every Kobo request waits the Rate above since the last one, whatever the concurrency."
       >
-        Effective rate ≈ {effectiveRate.toFixed(2)} req/s ({concurrency} workers ÷ {rateLimit}s each).
+        Effective rate ≈ {effectiveRate.toFixed(2)} req/s (one request every {rateLimit}s; concurrency doesn't raise it).
       </span>
     </div>
   );
@@ -973,21 +972,39 @@ function KoboExtrasRow({
 // ─── Goodreads status + probe panel (v2.13.0 Stage 6 Phase A) ───
 //
 // Renders directly below the Goodreads row in both tabs. Provides:
-//   - Status pill: Active / Soft-blocked / Unknown
-//   - Run probe button — single GET to /book/show/237832459
+//   - Status pill: Active / Backing off / Unknown
+//   - Per request kind (book pages / list pages / autocomplete): its
+//     backoff after an AWS WAF block (2026-10 audit G66) — "backing off
+//     until hh:mm", ending by itself or on the next success
+//   - Run probe button — single GET to a book page (always goes out)
 //   - Run burst button — 10 GETs against the canonical pool
-//   - Mark as active — manual flag reset after investigation
+//   - Mark as active — end every backoff now
 //
-// Phase A: NO cookie input fields. The probe is the diagnostic for
-// "is the Chrome120 fingerprint alone enough?" — if Phase A UAT
-// shows 202s under burst, v2.13.1 adds the encrypted cookie panel
-// here.
+// No cookie fields: pasting browser cookies was rejected (ADR-0025).
+
+type GoodreadsBackoff = {
+  level: number;
+  until: number;
+  last_block_at: number | null;
+  backing_off: boolean;
+};
 
 type GoodreadsState = {
   state: "active" | "soft_blocked" | "unknown";
   since: number | null;
   last_status: number | null;
+  backoff?: Record<string, GoodreadsBackoff>;
 };
+
+const GOODREADS_KIND_LABELS: Array<[string, string]> = [
+  ["book_page", "Book pages"],
+  ["list_page", "List pages"],
+  ["autocomplete", "Autocomplete"],
+];
+
+function _clock(epochS: number): string {
+  return new Date(epochS * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+}
 
 type ProbeRequestResult = {
   goodreads_id: string;
@@ -1063,7 +1080,7 @@ function GoodreadsStatusCard() {
     state?.state === "soft_blocked" ? t.err : t.textDim;
   const pillLabel =
     state?.state === "active" ? "Active" :
-    state?.state === "soft_blocked" ? "Soft-blocked" : "Unknown";
+    state?.state === "soft_blocked" ? "Backing off" : "Unknown";
   const sinceText = state?.since
     ? new Date(state.since * 1000).toLocaleString()
     : null;
@@ -1095,6 +1112,37 @@ function GoodreadsStatusCard() {
         )}
       </div>
 
+      {/* Per request kind: each backs off on its own after a block. */}
+      {state?.backoff && (
+        <div style={{
+          display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "4px 12px",
+          background: t.bg3, border: `1px solid ${t.borderL}`,
+          borderRadius: 6, padding: "6px 10px",
+        }}>
+          {GOODREADS_KIND_LABELS.map(([kind, label]) => {
+            const b = state.backoff?.[kind];
+            const off = Boolean(b?.backing_off);
+            return (
+              <div key={kind} style={{ display: "flex", flexDirection: "column", gap: 1 }}
+                title={b?.last_block_at ? `Last blocked ${new Date(b.last_block_at * 1000).toLocaleString()}` : undefined}>
+                <span style={{
+                  color: t.textDim, fontSize: 10, fontWeight: 700,
+                  textTransform: "uppercase", letterSpacing: 0.4,
+                }}>{label}</span>
+                <span style={{ color: off ? t.err : t.ok, fontSize: 12, fontWeight: 600 }}>
+                  {off ? `Backing off until ${_clock(b!.until)}` : "OK"}
+                </span>
+                {off && (b?.level ?? 0) > 1 && (
+                  <span style={{ color: t.textDim, fontSize: 10 }}>
+                    {b!.level} blocks in a row
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {/* Action buttons */}
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         <Btn
@@ -1116,7 +1164,7 @@ function GoodreadsStatusCard() {
         )}
         {running === "burst" && (
           <span style={{ color: t.textDim, fontSize: 11, fontStyle: "italic" }}>
-            ~50s with default 5s rate-limit
+            about 10 × the Rate above
           </span>
         )}
       </div>
@@ -1171,12 +1219,12 @@ function GoodreadsStatusCard() {
 
       {/* Help text */}
       <div style={{ color: t.textDim, fontSize: 11, fontStyle: "italic", lineHeight: 1.4 }}>
-        Phase A bypass: curl_cffi Chrome120 TLS impersonation. Run probe
-        for a quick connectivity check; run burst to verify density holds
-        under realistic scan load. Soft-block during the burst means
-        Cloudflare is rejecting on request density — try raising the rate
-        limit above (8s+ is conservative) or wait a few hours for the
-        bot-score to decay, then re-test.
+        Goodreads sits behind AWS WAF bot protection, which turns away book
+        pages far sooner than list pages. After a block, that kind of request
+        backs off for 2 minutes, then 5, 10, 30 and 60 on repeated blocks,
+        and clears on the next success; the others carry on. Run probe for a
+        quick check (it goes out even while book pages back off); run burst
+        to see how density holds. Mark as active ends every backoff now.
       </div>
     </div>
   );

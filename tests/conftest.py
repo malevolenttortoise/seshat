@@ -259,6 +259,27 @@ def _no_source_gate_waits(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_leaked_goodreads_backoff():
+    """Goodreads' per-kind backoff (2026-10 audit G66) lives in the
+    suite's shared settings.json: one test's recorded block would make a
+    later test's Goodreads requests refuse themselves. Cleared around
+    every test (only written when something is there)."""
+    from app import config
+
+    def _clear():
+        s = config.load_settings()
+        if s.get("goodreads_backoff") or s.get("goodreads_session_state") == "soft_blocked":
+            s = dict(s)
+            s["goodreads_backoff"] = {}
+            s["goodreads_session_state"] = "unknown"
+            config.save_settings(s)
+
+    _clear()
+    yield
+    _clear()
+
+
+@pytest.fixture(autouse=True)
 def _no_real_mam(monkeypatch):
     """The suite never talks to the real MAM.
 

@@ -104,6 +104,34 @@ async def _queue_rows():
         await db.close()
 
 
+class TestNoGoodreadsBackfillAfterSync:
+    async def test_a_sync_no_longer_runs_the_author_id_backfill(
+        self, discovery_db, monkeypatch,
+    ):
+        """It re-tried every unresolvable author against Goodreads after
+        every sync (two-hourly on one install); Hygiene runs it now
+        (2026-10 audit wave 4 S3)."""
+        import asyncio
+        from app.discovery import calibre_sync, goodreads_author_backfill
+
+        calls: list = []
+
+        async def _record(**kw):
+            calls.append(kw)
+            return {}
+        monkeypatch.setattr(
+            goodreads_author_backfill, "backfill_missing_author_ids", _record,
+        )
+        monkeypatch.setattr(
+            calibre_sync, "_read_calibre_db",
+            lambda *a, **kw: {"books": [_book(1, "BookA", "AuthorA", author_id=100,
+                                              isbn="978-X")]},
+        )
+        await calibre_sync.sync_calibre("x", "y")
+        await asyncio.sleep(0)
+        assert calls == []
+
+
 class TestSnapshotWrite:
     """Snapshot table is populated on every Calibre sync."""
 

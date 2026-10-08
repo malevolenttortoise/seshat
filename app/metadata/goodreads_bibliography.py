@@ -12,10 +12,10 @@ Sanderson (14+ pages), James S.A. Corey (3), mid-list (1), debut
 
 Robots-clean: `/author/list/` is NOT in goodreads.com's
 `User-agent: *` Disallow list. The pages are served via AWS
-CloudFront (no Cloudflare bot-manager), so plain `httpx` works —
-but we route through `GoodreadsSession.get()` anyway for uniform
-rate-limit + jitter + soft-block detection + curl_cffi defense in
-depth.
+CloudFront behind AWS WAF, which lets list pages through far more
+readily than book pages; we route through `GoodreadsSession.get()`
+for uniform pacing, block detection, the list-page backoff and
+curl_cffi impersonation.
 
 Cache strategy (`id_cache.author_bib` scope, 7-day TTL): walk pages
 lazily and cache cumulatively. Early-stop on first title match. The
@@ -75,8 +75,8 @@ async def find_book_in_bibliography(
 
     Returns:
       - The Goodreads `book_id` on a fuzzy-match hit.
-      - The string `"_soft_blocked"` when a page fetch responded
-        with the Cloudflare 202 / empty-body interstitial.
+      - The string `"_soft_blocked"` when a page fetch was blocked by
+        Goodreads' bot protection, or list pages are backing off.
       - `None` on exhaustion (walked the whole bibliography without
         a match), missing inputs, or page-walk cap reached.
     """
@@ -142,14 +142,18 @@ async def _fetch_page(
     Returns `(entries, has_more, soft_blocked)` where:
       - `entries` is the parsed rows (empty list on parse failure).
       - `has_more` is True when a `?page=N+1` link is present.
-      - `soft_blocked` is True when the response looks like a
-        Cloudflare 202 / empty-body interstitial — caller bails the
+      - `soft_blocked` is True when Goodreads' bot protection turned the
+        page away, or list pages are backing off — caller bails the
         whole walk rather than falsely caching a partial result.
     """
     url = f"{_BASE}/author/list/{author_goodreads_id}?page={page}"
     session = await goodreads_session.get_session()
     try:
         resp = await session.get(url)
+    except goodreads_session.GoodreadsBackingOff as e:
+        # Not "no more pages": that would cache the walk as complete.
+        _log.debug("bibliography: page %d skipped — %s", page, e)
+        return [], False, True
     except Exception as e:
         _log.debug(
             "bibliography: network error fetching page %d for author_id=%s: %s",
@@ -157,7 +161,7 @@ async def _fetch_page(
         )
         return [], False, False
 
-    if goodreads_session.is_cloudflare_soft_block(resp):
+    if goodreads_session.is_soft_block(resp):
         _log.info(
             "bibliography: soft-blocked on page %d for author_id=%s "
             "(status=%s) — abandoning walk",

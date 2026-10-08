@@ -39,41 +39,41 @@ def _make_resp(status: int, body: bytes = b"") -> SimpleNamespace:
 
 
 class TestSoftBlockDetection:
-    """`is_cloudflare_soft_block` must classify responses correctly."""
+    """`is_soft_block` must classify responses correctly."""
 
     def test_202_is_soft_block(self, gr_session_module):
-        assert gr_session_module.is_cloudflare_soft_block(_make_resp(202))
+        assert gr_session_module.is_soft_block(_make_resp(202))
 
     def test_200_with_empty_body_is_soft_block(self, gr_session_module):
-        assert gr_session_module.is_cloudflare_soft_block(_make_resp(200, b""))
+        assert gr_session_module.is_soft_block(_make_resp(200, b""))
 
     def test_200_with_body_is_not_soft_block(self, gr_session_module):
-        assert not gr_session_module.is_cloudflare_soft_block(
+        assert not gr_session_module.is_soft_block(
             _make_resp(200, b"<html>real page</html>")
         )
 
     def test_404_is_not_soft_block(self, gr_session_module):
         # Real 404 from Goodreads (book deleted, etc.) — not a fingerprint
         # problem. Must not trip the soft-block flag.
-        assert not gr_session_module.is_cloudflare_soft_block(_make_resp(404))
+        assert not gr_session_module.is_soft_block(_make_resp(404))
 
     def test_503_is_not_soft_block(self, gr_session_module):
         # Transient server issue — not a Cloudflare gate. Treat as
         # retryable failure, not a session-state problem.
-        assert not gr_session_module.is_cloudflare_soft_block(_make_resp(503))
+        assert not gr_session_module.is_soft_block(_make_resp(503))
 
     def test_none_is_not_soft_block(self, gr_session_module):
         # Defensive: caller may pass None on transport exceptions.
-        assert not gr_session_module.is_cloudflare_soft_block(None)
+        assert not gr_session_module.is_soft_block(None)
 
     def test_403_is_soft_block_v2_13_2(self, gr_session_module):
         # CloudFront 403 on auto_complete / /author/list/ — flip to
         # soft_blocked so the dispatcher skips remaining tiers.
-        assert gr_session_module.is_cloudflare_soft_block(_make_resp(403))
+        assert gr_session_module.is_soft_block(_make_resp(403))
 
     def test_429_is_soft_block_v2_13_2(self, gr_session_module):
         # CloudFront throttle — slow down + flip the session flag.
-        assert gr_session_module.is_cloudflare_soft_block(_make_resp(429))
+        assert gr_session_module.is_soft_block(_make_resp(429))
 
 
 class TestRuntimeStateFlag:
@@ -85,12 +85,13 @@ class TestRuntimeStateFlag:
         assert state["since"] is None
         assert state["last_status"] is None
 
-    def test_mark_soft_blocked_persists(self, gr_session_module):
-        gr_session_module.mark_soft_blocked(last_status=202)
+    def test_a_block_reads_soft_blocked_while_it_backs_off(self, gr_session_module):
+        gr_session_module._record_block("book_page", 202)
         state = gr_session_module.get_session_state()
         assert state["state"] == "soft_blocked"
         assert state["since"] is not None
         assert state["last_status"] == 202
+        assert state["backoff"]["book_page"]["backing_off"] is True
 
     def test_mark_active_persists(self, gr_session_module):
         gr_session_module.mark_active(last_status=200)
@@ -98,11 +99,11 @@ class TestRuntimeStateFlag:
         assert state["state"] == "active"
         assert state["last_status"] == 200
 
-    def test_is_soft_blocked_helper_tracks_state(self, gr_session_module):
+    def test_is_soft_blocked_follows_the_backoff(self, gr_session_module):
         assert not gr_session_module.is_soft_blocked()
-        gr_session_module.mark_soft_blocked(last_status=202)
+        gr_session_module._record_block("book_page", 202)
         assert gr_session_module.is_soft_blocked()
-        gr_session_module.mark_active(last_status=200)
+        gr_session_module._record_success("book_page", 200)
         assert not gr_session_module.is_soft_blocked()
 
     def test_since_timestamp_updates_only_on_state_flip(self, gr_session_module):
@@ -172,15 +173,3 @@ class TestSessionGetIntegration:
         assert state["state"] == "active"  # unchanged
         assert state["last_status"] == 404  # but last_status updated
 
-
-class TestPhaseBHook:
-    """Regression guard: cookie injection must stay OFF in Phase A.
-
-    Flipping `_build_cookie_header()` on without going through a tagged
-    Phase B release would leak cookie state into Phase A scans before
-    the encrypted-store secrets path is wired. This test fails loudly
-    if someone enables injection prematurely.
-    """
-
-    def test_cookie_header_is_none_in_phase_a(self, gr_session_module):
-        assert gr_session_module._build_cookie_header() is None

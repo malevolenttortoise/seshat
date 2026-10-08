@@ -21,6 +21,16 @@ from types import SimpleNamespace
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _fresh_attempted_set():
+    """The backfill skips authors this process already tried (ADR-0005);
+    each test starts with none tried."""
+    from app.discovery import goodreads_author_backfill
+    goodreads_author_backfill.reset_attempted_for_tests()
+    yield
+    goodreads_author_backfill.reset_attempted_for_tests()
+
+
 @pytest.fixture
 async def discovery_db(tmp_path, monkeypatch):
     """Per-test discovery DB with the full schema initialized.
@@ -645,9 +655,33 @@ class TestBackfillSweep:
         # No HTTP fired.
         assert TrackingSession.calls == []
 
+    async def test_an_author_already_tried_is_not_retried(self, discovery_db, monkeypatch):
+        """ADR-0005: an unresolvable author was re-tried on every run
+        (every library sync until the 2026-10 audit); now once per process."""
+        from app.discovery.goodreads_author_backfill import (
+            backfill_missing_author_ids,
+        )
+        import app.discovery.goodreads_author_backfill as backfill_mod
+        a1 = await _insert_author("Unresolvable")
+        await _insert_book("X", a1, goodreads_id="1")
+        tried: list[int] = []
+
+        async def fake_resolve(aid):
+            tried.append(aid)
+            return None
+        monkeypatch.setattr(backfill_mod, "resolve_author_goodreads_id", fake_resolve)
+
+        async def fake_p2(aid, name):
+            return None
+        monkeypatch.setattr(backfill_mod, "resolve_author_via_calibre_coauthor", fake_p2)
+
+        await backfill_missing_author_ids()
+        await backfill_missing_author_ids()
+        assert tried == [a1]
+
     async def test_aborts_on_soft_block(self, discovery_db, monkeypatch):
-        """If the session flips to soft_blocked mid-sweep, the rest
-        of the authors are deferred to next sync."""
+        """Once book pages back off after a block mid-sweep, the rest
+        of the authors are left for the next run."""
         from app.discovery.goodreads_author_backfill import (
             backfill_missing_author_ids,
         )
@@ -664,7 +698,7 @@ class TestBackfillSweep:
 
         async def fake_resolve(aid):
             if aid == a1:
-                gs.mark_soft_blocked(last_status=202)
+                gs._record_block("book_page", 202)
                 return None
             return "should-not-be-called"
         monkeypatch.setattr(

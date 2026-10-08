@@ -13,9 +13,9 @@ Book-centric, two-pass:
        T5  /author/list/{author_id} bibliography walk   (v2.13.2)
 
   2. **Fetch `/book/show/{book_id}`** through `GoodreadsSession`
-     (curl_cffi chrome120 impersonation + 5s+jitter rate limit +
-     Cloudflare soft-block detection) and parse the HTML via
-     `_merge_detail_page()` for the rich fields.
+     (curl_cffi chrome120 impersonation, Goodreads' turn in the source
+     gate, and the book-page backoff after an AWS WAF block) and parse
+     the HTML via `_merge_detail_page()` for the rich fields.
 
 `/search` is **never** hit — robots.txt disallows it for `*`
 user-agents. We hold a higher standard than the Calibre kiwidude
@@ -67,22 +67,6 @@ _GOODREADS_BOILERPLATE = frozenset({
 })
 
 
-def _is_cloudflare_soft_block(resp) -> bool:
-    """Detect Goodreads' Cloudflare 202-with-empty-body interstitial.
-
-    The cps gate returns `HTTP 202 Accepted` with a 0-byte body when
-    it wants the client to solve a JS challenge. Browsers do; httpx
-    doesn't. Either status 202 OR a 2xx with empty body counts.
-    """
-    if resp is None:
-        return False
-    if resp.status_code == 202:
-        return True
-    if 200 <= resp.status_code < 300 and not (resp.content or b""):
-        return True
-    return False
-
-
 class GoodreadsSource(MetaSource):
     name = "goodreads"
     default_headers = _DEFAULT_HEADERS
@@ -105,10 +89,8 @@ class GoodreadsSource(MetaSource):
           - the resolver returned no goodreads_book_id (insufficient
             identifiers — no ISBN/ASIN matched T1-T3 and no author
             goodreads_id was supplied to anchor T4/T5)
-          - the resolver flagged a Cloudflare soft-block (the
-            session-state flip is already done by the resolver; the
-            enricher's dispatcher gate at the next call will skip
-            Goodreads cleanly)
+          - the resolver was blocked by Goodreads' bot protection (the
+            session has already backed that request kind off)
           - the /book/show/{id} fetch failed
         """
         if not title:
@@ -184,12 +166,12 @@ async def _fetch_and_parse_book(
         _log.debug("goodreads: /book/show fetch error for %s: %s", book_id, e)
         return None
 
-    if goodreads_session.is_cloudflare_soft_block(resp):
-        # `session.get()` already flipped the state flag; this path is
-        # an informational log only.
+    if goodreads_session.is_soft_block(resp):
+        # `session.get()` has already backed book pages off; this path
+        # is an informational log only.
         _log.info(
-            "goodreads: /book/show/%s soft-blocked — Goodreads session "
-            "state flipped to soft_blocked",
+            "goodreads: /book/show/%s blocked by AWS WAF — book pages "
+            "backing off",
             book_id,
         )
         return None

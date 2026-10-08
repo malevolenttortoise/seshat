@@ -31,18 +31,19 @@ by lookup.py) on every entry that does real work (a DETAIL fetch or a
 URL-backfill emit) but NOT on filter-noise skips, so the unified scan
 widget never flickers through "skipped foreign", etc.
 """
-import asyncio, logging, re, json
+import asyncio, logging, re, json, time
 from datetime import datetime
 from typing import Optional
 import httpx
 from bs4 import BeautifulSoup
 from app.discovery.sources.base import BaseSource, AuthorResult, BookResult, SeriesResult, Contributor
-# v2.13.0 — Goodreads HTTP plumbing centralized for Cloudflare bypass.
+# v2.13.0 — Goodreads HTTP plumbing centralized in one session.
 # `_get` override below routes every goodreads.com fetch through this
-# module so TLS impersonation + soft-block detection + runtime-state
-# flag writes happen uniformly across the metadata + discovery sources
-# + resolver + URL importer.
+# module so TLS impersonation, pacing, block detection and the per-kind
+# backoff happen uniformly across the metadata + discovery sources +
+# resolver + URL importer.
 from app.metadata import goodreads_session as _gr_session
+from app.metadata.source_gate import KIND_BOOK_PAGE as _KIND_BOOK_PAGE
 
 logger = logging.getLogger("seshat.discovery.goodreads")
 BASE = "https://www.goodreads.com"
@@ -157,19 +158,19 @@ def _parse_list_page_records(page_soup) -> list[dict]:
 
         sname = None
         sidx: Optional[float] = None
-        # Title shape "Title (Series, #N)" — same regex as
-        # `_series_from_title_paren` body but inlined to grab
-        # both halves at once.
-        series_match = re.search(r'\(([^)]+),\s*#([\d.]+)\)', full_title)
+        # Trailing "(Series, #N)", "(Series #N)" or "(Series Book N)":
+        # the series goes to the record, the title loses the suffix.
+        # Until the 2026-10 audit only the comma form parsed, so
+        # "Griffin Academy 2 (Knights Of War #2)" was stored with its
+        # suffix and no series.
+        series_match = _LIST_SERIES_SUFFIX.search(full_title)
         if series_match:
             sname = series_match.group(1).strip()
             try:
                 sidx = float(series_match.group(2))
             except (TypeError, ValueError):
                 pass
-        full_title = re.sub(
-            r'\s*\([^)]+,\s*#[\d.]+\)', '', full_title,
-        ).strip()
+            full_title = full_title[:series_match.start()].strip()
 
         title_link = row.select_one("a.bookTitle")
         book_id = None
@@ -200,6 +201,14 @@ def _parse_list_page_records(page_soup) -> list[dict]:
             "list_cover": cover, "is_audio_list": is_audio_list,
         })
     return records
+
+
+# A list page title's trailing series: "(Series, #N)", "(Series #N)",
+# "(Series Book N)", "(Series, Book N)". Not "(Book 2)" alone, and not a
+# range ("#1-6", a box set).
+_LIST_SERIES_SUFFIX = re.compile(
+    r"\s*\(([^()]+?)(?:,\s*|\s+)(?:#|[Bb]ook\s+)([\d.]+)\)\s*$"
+)
 
 
 def _extract_author_photo(soup) -> Optional[str]:
@@ -251,8 +260,8 @@ def _series_from_title_paren(title: str) -> tuple[Optional[str], Optional[float]
     When the structured seriesTitle div is missing or unparseable,
     this fallback pulls the same info straight from the title.
 
-    Accepts both `#3` and bare `3` after the comma/hash separator
-    so rare variants like "Some Series, 3" also parse. Only matches
+    Accepts `#3`, bare `3` after the comma/hash separator ("Some
+    Series, 3") and "Book 3" ("Pinwheel Book 2"). Only matches
     a trailing paren group so the "Otherlife Dreams: The Selfless
     Hero Trilogy" kind of subtitle doesn't get mis-parsed as a
     series.
@@ -262,7 +271,7 @@ def _series_from_title_paren(title: str) -> tuple[Optional[str], Optional[float]
     if not title:
         return None, None
     m = re.search(
-        r"\(([^()]+?)\s*[,#]\s*#?([\d.]+)\s*\)\s*$",
+        r"\(([^()]+?)\s*(?:[,#]\s*#?|,?\s+[Bb]ook\s+)([\d.]+)\s*\)\s*$",
         title,
     )
     if not m:
@@ -278,8 +287,8 @@ def _series_from_title_paren(title: str) -> tuple[Optional[str], Optional[float]
 # v2.13.0 — soft-block detection consolidated into
 # `app.metadata.goodreads_session`. Re-export under the original name
 # so existing tests (test_goodreads_search.py imports
-# `_is_cloudflare_soft_block` from this module) keep working.
-_is_cloudflare_soft_block = _gr_session.is_cloudflare_soft_block
+# `_is_soft_block` from this module) keep working.
+_is_soft_block = _gr_session.is_soft_block
 
 
 def _norm_title(title: str) -> str:
@@ -365,19 +374,22 @@ class GoodreadsSource(BaseSource):
 
         v2.13.0 Stage 6 Phase A: every goodreads.com fetch from the
         discovery source goes through `goodreads_session.get_session()`
-        so Cloudflare TLS-fingerprint bypass (curl_cffi chrome120) +
-        soft-block detection + runtime-state flag writes happen
-        uniformly across all callers.
+        so TLS impersonation (curl_cffi chrome120), pacing, block
+        detection and the per-kind backoff happen uniformly across all
+        callers.
 
         Differences from the base implementation:
           - Pacing lives in the source gate the session goes through
             (the Metadata Sources rate, per request, any caller).
-          - Soft-block (HTTP 202 / empty 2xx body) raises
+          - Soft-block (HTTP 202 / 403 / 429 / empty 2xx body) raises
             `httpx.HTTPStatusError` so the existing broad
             `except Exception` handlers in `_get_book_details` and
             `get_author_books` treat it as a fetch failure (skip
             this book / move on to the next source). Soft-blocks
-            are NEVER retried — the design hard-stops on 202.
+            are NEVER retried — the design hard-stops on 202 — and
+            the session backs that kind of request off.
+          - A request of a kind that is backing off raises
+            `GoodreadsBackingOff` at once, without retrying.
           - Non-2xx HTTP errors raise the same way, replacing the
             base's `resp.raise_for_status()`.
           - `retries` is honored for transport-level exceptions
@@ -416,6 +428,8 @@ class GoodreadsSource(BaseSource):
         for attempt in range(retries + 1):
             try:
                 resp = await session.get(url, **kwargs)
+            except _gr_session.GoodreadsBackingOff:
+                raise
             except Exception as e:
                 last_exc = e
                 if attempt < retries:
@@ -431,15 +445,14 @@ class GoodreadsSource(BaseSource):
             # Soft-block — hard stop, NEVER retry. Surfaced as an
             # HTTPStatusError so existing exception handlers in this
             # file catch it uniformly.
-            if _gr_session.is_cloudflare_soft_block(resp):
+            if _gr_session.is_soft_block(resp):
                 self.logger.warning(
-                    f"  {self.name}: Cloudflare soft-block on {url} "
-                    f"(status={resp.status_code}) — session state flipped "
-                    f"to soft_blocked, refresh credentials or wait for "
-                    f"the canary to clear"
+                    f"  {self.name}: AWS WAF soft-block on {url} "
+                    f"(status={resp.status_code}) — this kind of request "
+                    f"backs off and retries by itself"
                 )
                 raise httpx.HTTPStatusError(
-                    f"Cloudflare soft-block (status={resp.status_code})",
+                    f"AWS WAF soft-block (status={resp.status_code})",
                     request=httpx.Request("GET", url),
                     response=httpx.Response(resp.status_code),
                 )
@@ -464,9 +477,13 @@ class GoodreadsSource(BaseSource):
             "is_audiobook": False,
             "series_name": None, "series_index": None, "description": None,
             "page_count": None, "cover_url": None, "contributors": [],
+            # False when the page didn't load (blocked, an error, or book
+            # pages backing off): the details above are then all unknown.
+            "loaded": False,
         }
         try:
             r = await self._get(f"{BASE}/book/show/{book_id}")
+            details["loaded"] = True
             soup = BeautifulSoup(r.text, "lxml")
             page_text = soup.get_text(" ", strip=True)
 
@@ -924,16 +941,17 @@ class GoodreadsSource(BaseSource):
                         continue
                     full_title = title_el.get_text(strip=True)
 
-                    # Parse series from title
+                    # Parse series from title (same rule as the cached
+                    # path, `_parse_list_page_records`)
                     sname = sidx = None
-                    sm = re.search(r'\(([^)]+),\s*#([\d.]+)\)', full_title)
+                    sm = _LIST_SERIES_SUFFIX.search(full_title)
                     if sm:
                         sname = sm.group(1).strip()
                         try:
                             sidx = float(sm.group(2))
                         except ValueError:
                             pass
-                        full_title = re.sub(r'\s*\([^)]+,\s*#[\d.]+\)', '', full_title).strip()
+                        full_title = full_title[:sm.start()].strip()
 
                     # Get book ID
                     title_link = row.select_one("a.bookTitle")
@@ -1155,6 +1173,25 @@ class GoodreadsSource(BaseSource):
                         logger.debug(f"    SKIP-UNOWNED (library-only): '{rb['title']}'")
                         continue
 
+                # G51: once book pages are backing off (a block earlier
+                # in this scan, or from another caller), stop requesting
+                # them for the rest of the scan. Known books above still
+                # take their list-page data; a new one waits for a later
+                # scan (G82). Until the 2026-10 audit the loop kept
+                # requesting into the block, one refused page per book.
+                if _gr_session.is_backing_off(_KIND_BOOK_PAGE):
+                    if not skipped.get("unfetched"):
+                        until = _gr_session.backoff_until(_KIND_BOOK_PAGE)
+                        logger.info(
+                            "  Goodreads: book pages backing off until %s — "
+                            "not requesting the rest of this author's new "
+                            "books this scan",
+                            time.strftime("%H:%M", time.localtime(until)),
+                        )
+                    skipped.setdefault("unfetched", 0)
+                    skipped["unfetched"] += 1
+                    continue
+
                 # Log progress every 10 books
                 if (i + 1) % 10 == 0 or i == 0:
                     logger.info(f"  Goodreads: checking book {i+1}/{total}...")
@@ -1176,6 +1213,15 @@ class GoodreadsSource(BaseSource):
                     on_new_candidate()
 
                 details = await self._get_book_details(rb["book_id"], rb["title"])
+                # G82: a new book whose page didn't load isn't created from
+                # list-page data alone. That used to give it the default
+                # language "English" with no format, set or translation
+                # check; it is tried again on a later scan.
+                if not details.get("loaded"):
+                    skipped.setdefault("unloaded", 0)
+                    skipped["unloaded"] += 1
+                    logger.debug(f"    SKIP (book page didn't load): '{rb['title']}'")
+                    continue
                 logger.debug(f"    PAGE: '{rb['title']}' → lang={details.get('language')}, set={details.get('is_set')}, trans={details.get('is_translation')}, audio={details.get('is_audiobook')}, series={details.get('series_name')}, date={details.get('pub_date') or details.get('expected_date')}")
 
                 # Filter: language
@@ -1263,6 +1309,8 @@ class GoodreadsSource(BaseSource):
                 if skipped.get("set"): parts.append(f"{skipped['set']} sets")
                 if skipped.get("translation"): parts.append(f"{skipped['translation']} translations")
                 if skipped.get("unowned"): parts.append(f"{skipped['unowned']} unowned (library-only)")
+                if skipped.get("unloaded"): parts.append(f"{skipped['unloaded']} new whose page didn't load")
+                if skipped.get("unfetched"): parts.append(f"{skipped['unfetched']} new not requested (book pages backing off)")
                 logger.info(f"  Goodreads: skipped {', '.join(parts)}")
 
             # Normal completion — clear any partial state from a prior
@@ -1279,6 +1327,11 @@ class GoodreadsSource(BaseSource):
             # the caller can inspect it and optionally retry with
             # start_at=state["index"].
             raise
+        except _gr_session.GoodreadsBackingOff as e:
+            # List pages backing off after a block: nothing to scan now.
+            logger.info(f"  Goodreads: skipped author id={author_id} — {e}")
+            self._partial_state = None
+            return None
         except Exception as e:
             logger.error(f"Goodreads author error id={author_id}: {type(e).__name__}: {e}")
             # Non-cancellation failure — clear state so a later

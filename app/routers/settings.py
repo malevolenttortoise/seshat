@@ -64,14 +64,16 @@ _RUNTIME_STATE_KEYS: frozenset[str] = frozenset({
     "mam_last_validated_at",
     "last_mam_validated_at",
     "qbit_orphan_adoption_since",
-    # v2.13.0 — Goodreads Cloudflare soft-block state. Written by
+    # v2.13.0 — Goodreads bot-protection (AWS WAF) state. Written by
     # `app/metadata/goodreads_session.py` on every response. Cleared
     # to "active" manually via the Settings panel "Mark as active"
     # button (which POSTs to a dedicated endpoint, not PATCH, so the
-    # runtime-state protection here stays intact).
+    # runtime-state protection here stays intact). Since the 2026-10
+    # audit (G66) each request kind backs off on its own.
     "goodreads_session_state",
     "goodreads_session_state_since",
     "goodreads_session_last_status",
+    "goodreads_backoff",
     # v2.20.3 — Amazon Akamai soft-block cooldown state. Written by
     # `app/discovery/amazon_author_id_resolver.py:record_amazon_soft_block`
     # whenever Akamai returns 429 / 202 / thin-body / no-ProductGrid.
