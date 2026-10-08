@@ -4063,7 +4063,8 @@ async def _lookup_author_inner(author_id: int, author_name: str, full_scan: bool
     goodreads._on_new_candidate = _on_new_candidate
     # Goodreads fetches the books discovery doesn't have yet first
     # (2026-10 audit issue 12; Mark, G47).
-    goodreads._known_titles = existing_titles
+    from app.discovery.sources.goodreads import known_title_keys
+    goodreads._known_titles = known_title_keys(r["title"] for r in all_rows)
     hardcover._on_new_candidate = _on_new_candidate
     kobo._on_new_candidate = _on_new_candidate
     amazon._on_new_candidate = _on_new_candidate

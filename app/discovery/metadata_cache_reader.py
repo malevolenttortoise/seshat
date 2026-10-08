@@ -702,8 +702,14 @@ class CachedSource:
             "list-page records",
             author_id, library_slug, len(cached_raw_books),
         )
+        from app.config import load_settings
         from app.discovery.sources.goodreads import GoodreadsSource
-        source = GoodreadsSource(rate_limit=0.0)
+        from app.metadata.source_config import get_source_rate_limit
+        # The configured rate, like lookup's live Goodreads source: the
+        # first caller pins the shared session's rate for the process.
+        source = GoodreadsSource(
+            rate_limit=get_source_rate_limit(load_settings(), "goodreads"),
+        )
         # Forward the lookup.py-set per-book progress callback so the
         # scan widget keeps ticking through cache-HIT-driven detail
         # fetches.

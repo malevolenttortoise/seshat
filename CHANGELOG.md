@@ -58,6 +58,16 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   ones it already knows, so a capped scan spends its time on books that
   could be new. A check on an unfinished result never removes books
   Goodreads found on earlier scans.
+- **Goodreads always waits your configured rate** (audit issue 12, found
+  in its live check). The shared Goodreads session took the rate of
+  whichever caller reached it first after a restart: normally the
+  list-page cache worker's 5 s default, and when a source scan came
+  first, no wait at all (its cache path passed 0), which got the session
+  soft-blocked by Cloudflare within a few pages. Every Goodreads request
+  (scans, the cache worker, the author-ID backfill) now waits the rate
+  set on Metadata Sources, read before each request, so a change applies
+  without a restart. A slow rate makes a scan take longer, but a scan
+  cut off by the 5-minute cap now resumes and keeps what it finished.
 - **IBDB finds books whose byline carries a role** (audit issue 13). An
   author listed as "Name (author)" didn't match "Name", so IBDB dropped
   every book for that author.

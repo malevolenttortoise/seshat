@@ -283,9 +283,32 @@ _is_cloudflare_soft_block = _gr_session.is_cloudflare_soft_block
 
 
 def _norm_title(title: str) -> str:
-    """The title normalization `lookup_author` builds its title sets with."""
-    t = re.sub(r"[^\w\s]", "", (title or "").lower()).strip()
+    """A title for comparison: lower case, no "(...)" / "[...]" (Goodreads'
+    list page appends the series: "Contracts & Cats (Meow: Magical
+    Emporium of Wares #1)"), no punctuation, single spaces."""
+    t = re.sub(r"\([^)]*\)|\[[^\]]*\]", " ", (title or "").lower())
+    t = re.sub(r"[^\w\s]", "", t).strip()
     return re.sub(r"\s+", " ", t)
+
+
+def known_title_keys(titles) -> set[str]:
+    """Keys for the titles discovery already has, for `_known_titles`.
+
+    Each title counts both whole and up to its first colon, so a stored
+    "Harmony & Home: A Cozy Slice-of-Life Fantasy" knows Goodreads'
+    "Harmony & Home". A Goodreads title is only looked up whole, so
+    "Magic's Toll: Cursebound" stays new next to a stored "Magic's Toll:
+    Fatebound".
+    """
+    keys: set[str] = set()
+    for t in titles:
+        if not t:
+            continue
+        keys.add(_norm_title(t))
+        if ":" in t:
+            keys.add(_norm_title(t.split(":", 1)[0]))
+    keys.discard("")
+    return keys
 
 
 class GoodreadsSource(BaseSource):

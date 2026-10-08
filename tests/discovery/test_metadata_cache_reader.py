@@ -757,3 +757,33 @@ class TestGoodreadsResumeThroughTheCacheReader:
         assert seen[1][1] is not None and seen[1][1]["index"] == 1
         assert seen[0][2] == seen[1][2] == {"slow 2"}
         assert source._partial_state is None
+
+
+async def test_the_inner_goodreads_source_carries_the_configured_rate(
+    gr_reader_under, monkeypatch,
+):
+    """It used to be built with rate_limit=0.0, which pinned the shared
+    session at no delay when a scan was the first Goodreads caller."""
+    from app.discovery import database as disco_db
+    from app.discovery.sources import goodreads as gr_mod
+    from app.discovery.sources.base import AuthorResult
+
+    monkeypatch.setattr(disco_db, "_active_library_slug", "books-lib")
+    await _seed_gr_cache(
+        author_id="GR-RATE", library_slug="books-lib",
+        pages={1: [{"book_id": "r1", "title": "Rate One", "list_series": None,
+                    "list_series_idx": None, "list_cover": None, "is_audio_list": False}]},
+    )
+    seen = []
+
+    async def fake_get_author_books(self, author_id, **kwargs):
+        seen.append(self.rate_limit)
+        return AuthorResult(name=author_id)
+
+    monkeypatch.setattr(gr_mod.GoodreadsSource, "get_author_books", fake_get_author_books)
+    monkeypatch.setattr(metadata_cache_reader, "load_settings", lambda: {"rate_goodreads": 2.0}, raising=False)
+    from app import config as app_config
+    monkeypatch.setattr(app_config, "load_settings", lambda: {"rate_goodreads": 2.0})
+
+    await CachedSource(source_name=SOURCE_GOODREADS).get_author_books("GR-RATE")
+    assert seen and seen[0] > 0
