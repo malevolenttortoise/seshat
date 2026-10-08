@@ -1350,6 +1350,11 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
         books_healed = await _heal_legacy_duplicates(db, pipeline_db, slug)
         progress["books_merged_legacy_heal"] = books_healed
 
+        # ADR-0010: series re-points, contributor rewrites, new books,
+        # prunes and merges above can change a series' author mode.
+        from app.discovery.database import recompute_all_series_author_mode
+        await recompute_all_series_author_mode(db, context="Calibre sync")
+
         await db.execute("""
             UPDATE sync_log SET finished_at=?, status='complete',
             books_found=?, books_new=? WHERE id=?

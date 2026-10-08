@@ -218,12 +218,20 @@ async def apply_series_suggestion(sid: int):
         else:
             series_id = None
 
+        old_series = (await (await db.execute(
+            "SELECT series_id FROM books WHERE id = ?", (book_id,),
+        )).fetchone())["series_id"]
+
         # Update the book row. series_index is set even when None
         # (clearing it for a standalone) so the UI shows a clean state.
         await db.execute(
             "UPDATE books SET series_id = ?, series_index = ? WHERE id = ?",
             (series_id, suggested_idx, book_id),
         )
+        # ADR-0010: the book left one series and joined another.
+        if old_series != series_id:
+            from app.discovery.routers.series import _recompute_series_author
+            await _recompute_series_author(db, {old_series, series_id})
         await db.execute(
             "UPDATE book_series_suggestions SET status = 'applied', updated_at = ? WHERE id = ?",
             (time.time(), sid),

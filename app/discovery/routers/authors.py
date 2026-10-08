@@ -3028,6 +3028,10 @@ async def reset_all_source_scan_data():
         await db.execute("UPDATE authors SET last_lookup_at=NULL")
         await db.commit()
         cleaned = await cleanup_empty_series(db)
+        # ADR-0010: deleting every discovered book changes the series
+        # that also hold owned books.
+        from app.discovery.database import recompute_all_series_author_mode
+        await recompute_all_series_author_mode(db, context="Reset source scan data")
         if cleaned:
             logger.info(f"  Empty series cleanup: removed {cleaned} orphaned series")
         logger.info(f"Reset all source scan data: {affected} discovered books deleted")

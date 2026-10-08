@@ -735,6 +735,12 @@ async def update_book(bid: int, data: dict = Body(...), slug: str | None = Query
             return {"status": "no changes"}
         vals.append(bid)
         await db.execute(f"UPDATE books SET {', '.join(fields)} WHERE id=?", vals)
+        # ADR-0010: a book moving series changes both series' members.
+        new_series = await _series_id_for_book(db, bid)
+        if new_series != current_row["series_id"]:
+            await _recompute_series_author(
+                db, {current_row["series_id"], new_series},
+            )
         await db.commit()
         return {"status": "ok"}
     finally:
@@ -1291,8 +1297,11 @@ async def remove_book_contributor(
 
     A removed author left with zero books becomes an orphan and is
     hard-purged (author row + global author_links + orphaned person) by
-    the hourly hygiene `empty-cleanup` job. `removed_author_orphaned`
+    hygiene's `empty-cleanup` job the next time hygiene runs (it has no
+    schedule; Data Management runs it). `removed_author_orphaned`
     signals this so the UI can say the author will be cleaned up.
+
+    The book's series gets its ADR-0010 author mode recomputed.
     """
     db = await get_db(slug)
     try:
@@ -1354,10 +1363,15 @@ async def remove_book_contributor(
                     "(book_id, author_id, position, role) VALUES (?, ?, ?, ?)",
                     (bid, aid, pos, role),
                 )
+        # ADR-0010: the series' owner set is the intersection of its
+        # books' contributors, so a byline change can flip its mode.
+        sid = await _series_id_for_book(db, bid)
+        if sid is not None:
+            await _recompute_series_author(db, [sid])
         await db.commit()
 
         # Is the removed author now bookless in this library? (Signals
-        # the hourly hygiene orphan purge will sweep it.)
+        # hygiene's empty-cleanup job will purge it on its next run.)
         left = await (await db.execute(
             "SELECT COUNT(*) AS n FROM book_authors WHERE author_id=?",
             (author_id,),
@@ -1437,6 +1451,15 @@ async def merge_book(
             )
         except MergeError as exc:
             raise HTTPException(400, str(exc))
+
+        # ADR-0010: the merge unions contributors and drops the loser,
+        # so both books' series can change mode.
+        await _recompute_series_author(
+            discovery,
+            {row_a["series_id"], row_b["series_id"],
+             await _series_id_for_book(discovery, winner_id)},
+        )
+        await discovery.commit()
 
         return {
             "status": "ok",

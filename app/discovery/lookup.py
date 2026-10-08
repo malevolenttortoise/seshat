@@ -2128,8 +2128,16 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                     # Calibre/ABS-authoritative). Flag the series for a
                     # one-shot author_mode recompute only on a real delta.
                     if not matched_row["owned"]:
-                        if await _heal_contributors(db, matched_row["id"], bk, source_name, roster=roster, stats=roster_stats) and sid_use is not None:
-                            healed_series_ids.add(sid_use)
+                        if await _heal_contributors(db, matched_row["id"], bk, source_name, roster=roster, stats=roster_stats):
+                            # The book's own series, which `_update_existing`
+                            # doesn't always move it out of, and the source's.
+                            own = await (await db.execute(
+                                "SELECT series_id FROM books WHERE id = ?",
+                                (matched_row["id"],),
+                            )).fetchone()
+                            for s_heal in (sid_use, own["series_id"] if own else None):
+                                if s_heal is not None:
+                                    healed_series_ids.add(s_heal)
                     else:
                         # v3.3.0 (ADR-0017) — the OWNED counterpart: instead
                         # of silently overwriting library data, enqueue an
@@ -4355,6 +4363,15 @@ async def _lookup_author_inner(author_id: int, author_name: str, full_scan: bool
     # sources so it sees the full per-book picture.
     if series_collector:
         await _compute_series_suggestions(author_id, series_collector)
+
+    # ADR-0010: new books joining series, series reassignment and the
+    # title→series / orphan passes above change series membership.
+    from app.discovery.database import recompute_all_series_author_mode
+    db_mode = await get_db()
+    try:
+        await recompute_all_series_author_mode(db_mode, context="Source scan")
+    finally:
+        await db_mode.close()
 
     # Final author marker write. Retry on `database is locked` because a
     # concurrent MAM scan can hold a writer lock for longer than the

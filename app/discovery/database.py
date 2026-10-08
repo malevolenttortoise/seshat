@@ -1146,6 +1146,25 @@ async def _backfill_series_author_mode(db) -> int:
     return len(sids)
 
 
+async def recompute_all_series_author_mode(db, *, context: str) -> None:
+    """ADR-0010 catch-up for every series, after a run that may have
+    changed contributors, series membership or visibility.
+
+    Library syncs, source scans, hygiene and bulk resets/imports call it
+    at the end (2026-10 audit issue 10; Mark, G45): until then the only
+    catch-up was the startup backfill, so a mode went stale until the
+    next restart. ~0.13s on a 2,850-series library, and rows that
+    already say the right thing aren't written. Commits; never raises.
+    """
+    try:
+        await _backfill_series_author_mode(db)
+    except Exception:
+        _db_logger.exception(
+            "%s: series author-mode recompute failed (non-fatal; "
+            "the next run or restart catches up)", context,
+        )
+
+
 async def load_contributors(
     db, book_ids: Iterable[int],
 ) -> dict[int, list[dict]]:

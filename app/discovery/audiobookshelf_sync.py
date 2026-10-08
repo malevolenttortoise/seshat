@@ -551,6 +551,9 @@ async def sync_audiobookshelf(library: dict) -> dict:
         progress["books_linkage_transferred"] = books_linkage_transferred
 
         await db.commit()
+        # ADR-0010: the sync can change any series' contributors.
+        from app.discovery.database import recompute_all_series_author_mode
+        await recompute_all_series_author_mode(db, context="ABS sync")
         await db.execute(
             "UPDATE sync_log SET finished_at=?, status='complete', "
             "books_found=?, books_new=? WHERE id=?",

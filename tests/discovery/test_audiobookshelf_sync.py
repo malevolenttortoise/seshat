@@ -287,3 +287,28 @@ async def test_raises_without_base_url(discovery_db, monkeypatch):
 
     with pytest.raises(ValueError, match="abs_base_url"):
         await sync_audiobookshelf({"slug": "abs-test", "abs_library_id": "lib"})
+
+
+async def test_sync_ends_with_every_series_mode_set(discovery_db, monkeypatch):
+    """2026-10 audit issue 10: the sync recomputes series author mode
+    (ADR-0010) at the end, so a sync-made series isn't left NULL."""
+    from app.discovery.audiobookshelf_sync import sync_audiobookshelf
+    from app.discovery.database import get_db
+
+    await _patch_abs_pipeline(monkeypatch, [
+        _fake_item("abs-1", "Saga One", "Jane Doe", series="Jane Saga"),
+        _fake_item("abs-2", "Saga Two", "Jane Doe", series="Jane Saga"),
+    ])
+    await sync_audiobookshelf({
+        "slug": "abs-test",
+        "abs_base_url": "http://abs:13378",
+        "abs_library_id": "lib-xxx",
+    })
+
+    db = await get_db()
+    try:
+        row = await (await db.execute(
+            "SELECT author_mode FROM series WHERE name = 'Jane Saga'")).fetchone()
+    finally:
+        await db.close()
+    assert row["author_mode"] == "per_author"

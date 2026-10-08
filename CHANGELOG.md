@@ -20,6 +20,18 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   until qBit answers. A torrent qBit hasn't listed yet (seconds after it
   was added) also keeps its slot for up to `qbit_missing_grab_grace_hours`
   instead of being freed on the next tick.
+- **A series' author mode now follows every change to its books**
+  (audit issue 10). Per-author / multi-author / shared (ADR-0010) was
+  recomputed only by the series and hide/delete routes, so removing a
+  contributor, merging two books, moving a book between series, applying
+  a series suggestion, pulling a series from Calibre/ABS, a library sync,
+  a source scan, hygiene, a source-data reset or an import could leave it
+  stale until the next restart (sync-made series read "per-author" until
+  then). The single-book actions now recompute the series they touch, and
+  syncs, scans, hygiene, resets and imports finish by recomputing every
+  series (a fraction of a second; unchanged rows aren't rewritten). A
+  series whose owner can't be set because a same-named series already
+  has it now logs that once, not at every startup.
 
 ### Changed
 
