@@ -47,6 +47,17 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   httpx logs every request URL, which put the Google Books API key in
   the log. Its request lines stay, with the values of `key`, `token`,
   `api_key`, `apikey`, `passkey` and `mam_id` shown as `***`.
+- **Goodreads source scans land their books again** (audit issue 12).
+  Since the Goodreads list-page cache arrived (~May), a scan that hit the
+  300 s per-source cap lost its whole Goodreads result: the resume point
+  stayed on a throwaway copy of the source, so the retry never ran, and
+  nothing finished before the cap was merged. The retry now resumes where
+  the cap cut in, and when it gives up (time budget, retry limit, no
+  progress) the books it did finish are merged instead of dropped.
+  Goodreads also fetches the books discovery doesn't have yet before the
+  ones it already knows, so a capped scan spends its time on books that
+  could be new. A check on an unfinished result never removes books
+  Goodreads found on earlier scans.
 - **IBDB finds books whose byline carries a role** (audit issue 13). An
   author listed as "Name (author)" didn't match "Name", so IBDB dropped
   every book for that author.
