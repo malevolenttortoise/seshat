@@ -50,6 +50,17 @@ async def discovery_db(tmp_path, monkeypatch):
 
     monkeypatch.setattr(app_config, "DATA_DIR", tmp_path)
     monkeypatch.setattr(disco_db, "DATA_DIR", tmp_path)
+    # The sync's fire-and-forget Goodreads author-ID backfill resolves
+    # seeded ISBNs against goodreads.com and openlibrary.org; the suite's
+    # no-network guard (tests/_network_guard.py) caught it.
+    from app.discovery import goodreads_author_backfill
+
+    async def _no_backfill(**_kw):
+        return {}
+
+    monkeypatch.setattr(
+        goodreads_author_backfill, "backfill_missing_author_ids", _no_backfill,
+    )
     disco_db.set_active_library("test")
     await disco_db.init_db("test")
     yield tmp_path

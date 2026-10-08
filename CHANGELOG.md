@@ -73,6 +73,15 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
     nothing displays. A tentative torrent's cover is reused when it is
     announced again instead of being downloaded again.
 
+- **The test suite can't reach the internet.** An autouse guard refuses
+  DNS lookups and connections to anything but this machine, and
+  curl_cffi requests, for every test. A test that tries fails, naming
+  the host, even when the code under test treats the refusal as an
+  outage and carries on. Its first run caught three library-sync tests
+  whose background Goodreads author-ID backfill looked their test ISBN
+  up on goodreads.com and openlibrary.org; those tests now stub it.
+  Only loopback fakes and in-process clients remain.
+
 - **Autograbs wait for MAM's search before deciding.** A new torrent
   reaches #announce about a second after MAM adds it, before MAM's
   search API lists it, so every IRC autograb's lookup came back "not

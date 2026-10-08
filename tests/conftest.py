@@ -168,6 +168,35 @@ def _undo_module_reloads():
                 current[key] = value
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _no_real_network():
+    """No test reaches a real host: DNS, TCP connects and curl_cffi are
+    refused for anything but loopback (see `tests/_network_guard.py`)."""
+    from tests import _network_guard
+
+    mp = pytest.MonkeyPatch()
+    _network_guard.install(mp)
+    yield
+    mp.undo()
+
+
+@pytest.fixture(autouse=True)
+def _fail_on_real_network_attempt():
+    """Fail the test that tried, naming the host, even when the code
+    under test swallowed the refusal and failed open."""
+    from tests import _network_guard
+
+    _network_guard.attempts.clear()
+    yield
+    tried = list(_network_guard.attempts)
+    _network_guard.attempts.clear()
+    if tried:
+        pytest.fail(
+            "test tried to reach the real network: " + "; ".join(tried),
+            pytrace=False,
+        )
+
+
 @pytest.fixture(autouse=True)
 def _no_leaked_dispatcher():
     """Every test starts and ends with no published dispatcher.
