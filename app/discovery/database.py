@@ -692,6 +692,10 @@ MIGRATIONS = [
     # stateless and the next hygiene run silently re-hides the book the
     # operator just said they wanted.
     "ALTER TABLE books ADD COLUMN language_swept_at REAL",
+    # ── 2026-10 audit, issue 18 (L4-01): Calibre sync looks every Calibre
+    # book up by `calibre_id` inside its loop; unindexed, 3,696 lookups
+    # took 4.07s on a real library (0.014s with the index).
+    "CREATE INDEX IF NOT EXISTS idx_books_calibre_id ON books(calibre_id)",
 ]
 
 

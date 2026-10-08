@@ -127,9 +127,11 @@ async def link_new_book(
     """Try to link a freshly-inserted book to a recent unlinked grab.
 
     Returns True if a link was made (and `library_db` was updated to
-    set mam_url/mam_status='found'/mam_torrent_id). The caller owns
-    `library_db`'s commit lifecycle — we execute UPDATE statements
-    but don't commit. Cross-DB write to the global app DB is
+    set mam_url/mam_status='found'/mam_torrent_id). After a link, this
+    commits `library_db` (the caller's pending writes with it) before
+    the quality extraction, which can make a MAM search: an open
+    transaction would hold the library DB's write lock across that
+    call (2026-10 audit L4-02). Cross-DB write to the global app DB is
     committed inside this function (separate connection).
 
     No-ops on:
@@ -237,13 +239,16 @@ async def link_new_book(
             )
             return False
 
-        # Now update the books row in the per-library DB. Caller
-        # commits.
+        # Now update the books row in the per-library DB, and commit
+        # before the quality extraction below: it can make a MAM search
+        # (15s timeout), and SQLite would hold this DB's write lock for
+        # the whole call (CLAUDE.md: commit before any async pause).
         await library_db.execute(
             "UPDATE books SET mam_url=?, mam_status='found', "
             "mam_torrent_id=? WHERE id=?",
             (mam_url, best_torrent_id, book_id),
         )
+        await library_db.commit()
         logger.info(
             "acquisition link-back: linked book_id=%d (%r) to grab_id=%d "
             "(mam_torrent_id=%s, score=%.2f)",

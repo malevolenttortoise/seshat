@@ -77,9 +77,19 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `vip`, `free`, `wedge`, `normal`), so a grab's economics can be read
   back later.
 
-**Database migration** (`user_version` 60): `grabs` gains `policy_tier`,
-and grabs stuck in `processing` behind rejected reviews are settled.
-Take a backup before updating, as usual.
+### Performance
+
+- **Calibre sync no longer scans the whole books table for every book**
+  (audit issue 18): `books.calibre_id` is indexed (about 4 s → 0.01 s for
+  3,700 books on a real library).
+- A book linked to the grab it came from during a library sync no longer
+  holds the library database's write lock while its quality details are
+  fetched from MAM (audit issue 18).
+
+**Database migrations**: the app database goes to `user_version` 60
+(`grabs` gains `policy_tier`, and grabs stuck in `processing` behind
+rejected reviews are settled); each library database goes to 89 (the
+`calibre_id` index). Take a backup before updating, as usual.
 
 ## [3.12.0] — 2026-10-08
 
