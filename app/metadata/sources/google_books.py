@@ -1,10 +1,11 @@
 """
 Google Books metadata source — public REST API.
 
-Free, no API key needed for basic use (~1000 req/day). Clean JSON
-responses with volumeInfo containing title, authors, publisher,
-publishedDate, description, ISBN identifiers, pageCount, categories,
-language, and image links.
+Clean JSON responses with volumeInfo containing title, authors,
+publisher, publishedDate, description, ISBN identifiers, pageCount,
+categories, language, and image links. Without an API key the call bills
+to Google's shared anonymous project, which is out of quota (429s); the
+enricher passes the stored key (2026-10 audit).
 
 Known limitation: match quality is poor for niche/indie titles, and
 there's no native series/series_index field. We parse series from the
@@ -16,10 +17,15 @@ parameter in the URL for the best available version.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import random
 import re
 from typing import Optional
 
+import httpx
+
+from app.metadata import source_gate
 from app.metadata.record import MetaRecord
 from app.metadata.sources.base import MetaSource
 from app.metadata.text_clean import description_to_plain_text
@@ -27,6 +33,13 @@ from app.metadata.text_clean import description_to_plain_text
 _log = logging.getLogger("seshat.metadata.google_books")
 
 _API = "https://www.googleapis.com/books/v1/volumes"
+
+
+def retry_delay(attempt: int) -> float:
+    """3s, then 6s, plus up to a second of jitter, before retrying a 5xx
+    (Google's `backendFailed` 503s are transient and usually clear on the
+    first retry). Shared with the discovery source."""
+    return 3 * (2 ** attempt) + random.uniform(0.0, 1.0)
 
 
 class GoogleBooksSource(MetaSource):
@@ -37,16 +50,38 @@ class GoogleBooksSource(MetaSource):
         super().__init__(rate_limit=rate_limit)
         self._api_key = api_key
 
+    async def _get(self, url: str, *, retries: int = 2, **kwargs):
+        """Retry a 5xx or a network error 3s / 6s (+ jitter); a 429 (the
+        quota) fails at once instead of burning ~9s per grab."""
+        for attempt in range(retries + 1):
+            try:
+                async with source_gate.turn(self.name) as turn:
+                    resp = await self.client.get(url, **kwargs)
+                    turn.status(resp.status_code)
+                resp.raise_for_status()
+                return resp
+            except httpx.HTTPStatusError as e:
+                status = e.response.status_code if e.response is not None else 0
+                if status >= 500 and attempt < retries:
+                    await asyncio.sleep(retry_delay(attempt))
+                    continue
+                raise
+            except Exception:
+                if attempt < retries:
+                    await asyncio.sleep(retry_delay(attempt))
+                    continue
+                raise
+
     async def search_book(
         self, title: str, author: str, **_,
     ) -> Optional[MetaRecord]:
         if not title:
             return None
 
-        # Google Books query syntax: intitle: and inauthor: qualifiers.
-        q = f"intitle:{title}"
-        if author:
-            q += f"+inauthor:{author}"
+        # Free text, not `intitle:` / `inauthor:`: since about 2026-09-26
+        # Google answers a query made only of field operators with no
+        # results (2026-10 audit, G55). The candidates are scored below.
+        q = f"{title} {author}".strip()
 
         params = {"q": q, "maxResults": "5", "printType": "books"}
         if self._api_key:

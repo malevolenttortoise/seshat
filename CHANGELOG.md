@@ -95,6 +95,15 @@ gate that paces and counts it.
   ID resolver's cached walk of that author's list as complete.
 - The Kobo row's "effective rate" now reads one request per Rate seconds
   (concurrency no longer multiplies it).
+- **Google Books queries** (audit G55): since about 2026-09-26 Google
+  answers a query made only of field operators (`inauthor:…`) with no
+  results. Author scans now search the quoted name as free text, keep the
+  volumes whose authors match, and make one search per author (the extra
+  lookup before it is gone), paging by the items actually returned (up to
+  5 pages). Enrichment searches "title author" as free text with the API
+  key. A 503 is retried 3s then 6s plus jitter; a 429 (the quota) isn't
+  retried in enrichment either. The `GIVING UP … after 1 attempts`
+  warning no longer appears before a retry that succeeds.
 
 ---
 

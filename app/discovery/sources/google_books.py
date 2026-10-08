@@ -1,9 +1,19 @@
 """
 Google Books metadata source — public REST API.
 
-Free, no API key needed for basic use (~1000 req/day). Clean JSON
-responses with title, authors, publisher, date, description, ISBN,
-pageCount, categories, language, and image links.
+Clean JSON responses with title, authors, publisher, date, description,
+ISBN, pageCount, categories, language, and image links. Without an API
+key the call bills to Google's shared anonymous project, which is out of
+quota (429s); the stored key is sent on every request.
+
+**Queries (2026-10 audit, G55).** Since about 2026-09-26 Google answers a
+query made only of field operators (`inauthor:X`, `intitle:X`) with 200
+and no results. An author scan now searches the quoted name as free text
+(`"Travis Dean"`) and keeps the volumes whose authors match, in one
+search per author: `search_author` does it and returns the books inline.
+Pages hold at most 20 items whatever `maxResults` says, so paging
+advances by the items actually returned, and stops at the end of the
+results, at a page with no matching volume, or after `_MAX_PAGES`.
 
 Positioned as a supplementary source for ISBN, publisher, and
 description backfill. Match quality is poor for niche/indie titles
@@ -19,7 +29,9 @@ from typing import Optional
 import httpx
 
 from app.discovery.sources.base import BaseSource, AuthorResult, SeriesResult, BookResult, Contributor, _redact_sensitive
+from app.metadata import source_gate
 from app.metadata.scoring import author_overlap
+from app.metadata.sources.google_books import retry_delay
 
 logger = logging.getLogger("seshat.discovery.google_books")
 
@@ -35,6 +47,9 @@ _API = "https://www.googleapis.com/books/v1/volumes"
 # Reset to 0 on any successful response — so a day-later scan after
 # the quota resets naturally clears the counter on its first hit.
 _CIRCUIT_BREAKER_THRESHOLD = 5
+
+# Pages of results one author scan reads at most (≤ 20 volumes each).
+_MAX_PAGES = 5
 
 
 class GoogleBooksSource(BaseSource):
@@ -80,20 +95,22 @@ class GoogleBooksSource(BaseSource):
         self.api_key = (key or "").strip()
 
     async def _get(self, url: str, retries: int = 0, **kwargs):
-        """Override base _get with split retry behavior for Google Books.
+        """GET with Google Books' retry rules, each attempt in its turn.
 
         - **429 (quota exhausted)**: fail fast, don't retry. Retrying on
           429 just burns the quota faster — better to surface the failure
           immediately and let the enricher fall through to the next source.
           Counts toward the circuit breaker.
-        - **5xx (transient server error)**: retry up to 2 times with
-          exponential backoff (3s, 6s). Validation runs caught real
-          transients getting through as terminal failures because the
-          previous "retries=0 for everything" policy didn't distinguish
-          server-side hiccups from quota exhaustion.
-        - **Other / network errors**: same retry-on-503 path; httpx
-          surfaces connect errors as exceptions without an HTTP code,
-          which generally indicates a transient issue worth retrying.
+        - **5xx (transient server error)**: retry up to 2 times, 3s then
+          6s plus jitter (`retry_delay`). Google's `backendFailed` 503s
+          usually clear on the first retry.
+        - **Other / network errors**: same retry path; httpx surfaces
+          connect errors as exceptions without an HTTP code, which
+          generally indicates a transient issue worth retrying.
+
+        One warning when the request finally fails. Until the 2026-10
+        audit every 503 also logged the base class's "GIVING UP … after
+        1 attempts" before the retry that usually succeeded.
 
         Also implements the auto-disable circuit breaker: tracks
         consecutive 429 responses and flips `google_books_enabled` to
@@ -105,7 +122,10 @@ class GoogleBooksSource(BaseSource):
         max_attempts = 3
         for attempt in range(max_attempts):
             try:
-                resp = await super()._get(url, retries=0, **kwargs)
+                async with source_gate.turn(self.name) as turn:
+                    resp = await self.client.get(url, **kwargs)
+                    turn.status(resp.status_code)
+                resp.raise_for_status()
             except httpx.HTTPStatusError as e:
                 status = e.response.status_code if e.response is not None else 0
                 if status == 429:
@@ -113,31 +133,74 @@ class GoogleBooksSource(BaseSource):
                     self._consecutive_429s += 1
                     if self._consecutive_429s >= _CIRCUIT_BREAKER_THRESHOLD:
                         self._trip_circuit_breaker()
+                    logger.warning(f"  google_books: HTTP 429 (quota) — {_redact_sensitive(e)}")
                     raise
                 if status >= 500 and attempt < max_attempts - 1:
-                    backoff = 3 * (2 ** attempt)  # 3s, 6s
+                    backoff = retry_delay(attempt)
                     logger.debug(
                         f"  google_books: {status} on attempt {attempt+1}/{max_attempts} "
-                        f"for {url} — retrying in {backoff}s ({_redact_sensitive(e)})"
+                        f"— retrying in {backoff:.1f}s ({_redact_sensitive(e)})"
                     )
                     await asyncio.sleep(backoff)
                     continue
+                logger.warning(
+                    f"  google_books: GIVING UP after {attempt+1} attempt(s): "
+                    f"{_redact_sensitive(e)}"
+                )
                 raise
             except Exception as e:
                 # Network / timeout / other transient — retry the same as 5xx
                 if attempt < max_attempts - 1:
-                    backoff = 3 * (2 ** attempt)
+                    backoff = retry_delay(attempt)
                     logger.debug(
                         f"  google_books: network error on attempt "
-                        f"{attempt+1}/{max_attempts} for {url} — retrying in "
-                        f"{backoff}s ({_redact_sensitive(e)})"
+                        f"{attempt+1}/{max_attempts} — retrying in "
+                        f"{backoff:.1f}s ({_redact_sensitive(e)})"
                     )
                     await asyncio.sleep(backoff)
                     continue
+                logger.warning(
+                    f"  google_books: GIVING UP after {attempt+1} attempt(s): "
+                    f"{_redact_sensitive(e)}"
+                )
                 raise
             # Success path: any 2xx clears the 429 counter
             self._consecutive_429s = 0
             return resp
+
+    async def _search_pages(self, author_name: str) -> list[dict]:
+        """Every volume the free-text search returns for the quoted name,
+        up to `_MAX_PAGES` pages. A failed first page returns nothing; a
+        failed later page keeps what came before."""
+        phrase = '"' + author_name.replace('"', " ").strip() + '"'
+        items_all: list[dict] = []
+        start = 0
+        for page in range(_MAX_PAGES):
+            try:
+                resp = await self._get(
+                    _API,
+                    params=self._request_params({
+                        "q": phrase,
+                        "maxResults": "40",
+                        "printType": "books",
+                        "startIndex": str(start),
+                    }),
+                )
+                data = resp.json()
+            except Exception:
+                break
+            items = data.get("items") or []
+            if not items:
+                break
+            items_all.extend(items)
+            start += len(items)
+            matching = sum(
+                1 for it in items
+                if author_overlap((it.get("volumeInfo") or {}).get("authors", []), author_name) >= 0.5
+            )
+            if matching == 0 or start >= int(data.get("totalItems") or 0):
+                break
+        return items_all
 
     def _trip_circuit_breaker(self) -> None:
         """Auto-disable Google Books in settings after repeated 429s.
@@ -174,24 +237,12 @@ class GoogleBooksSource(BaseSource):
         )
 
     async def search_author(self, author_name: str) -> Optional[AuthorResult]:
-        """Search Google Books for an author."""
-        try:
-            resp = await self._get(
-                _API,
-                params=self._request_params({
-                    "q": f"inauthor:{author_name}",
-                    "maxResults": "5",
-                    "printType": "books",
-                }),
-            )
-            data = resp.json()
-        except Exception:
-            return None
-
-        if not data.get("items"):
-            return None
-
-        return AuthorResult(name=author_name, external_id=author_name)
+        """Search Google Books for an author's books: the one search per
+        author, returned inline (lookup merges them without asking
+        `get_author_books`). None when nothing by them came back. Until the
+        2026-10 audit this made its own 5-result query and then
+        `get_author_books` searched again."""
+        return await self.get_author_books(author_name)
 
     async def get_author_books(
         self, author_id: str,
@@ -199,32 +250,13 @@ class GoogleBooksSource(BaseSource):
         owned_titles: list = None,
         owned_only: bool = False,
     ) -> Optional[AuthorResult]:
-        """Fetch books by author from Google Books API.
-
-        Makes two queries: one by author name, one by author + owned titles
-        for better coverage of their catalog.
-        """
+        """Fetch an author's books: the quoted name as free text, paged by
+        the items actually returned (G55). `author_id` is the name."""
         author_name = author_id
         existing_titles = existing_titles or set()
         owned_titles = owned_titles or []
 
-        all_items = []
-
-        # Query 1: by author name
-        try:
-            resp = await self._get(
-                _API,
-                params=self._request_params({
-                    "q": f"inauthor:{author_name}",
-                    "maxResults": "40",
-                    "printType": "books",
-                }),
-            )
-            data = resp.json()
-            all_items.extend(data.get("items", []))
-        except Exception:
-            pass
-
+        all_items = await self._search_pages(author_name)
         if not all_items:
             return None
 
