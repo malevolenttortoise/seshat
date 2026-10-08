@@ -7,7 +7,34 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
-## [Unreleased]
+## [3.13.0] — 2026-10-08
+
+Phase 2 of the 2026-10 roadmap, the **codebase audit**, wave 3: the
+snatch budget, series author mode, grab records, Goodreads scans and a
+batch of small fixes, built, then checked on the live container. The
+budget stops losing torrents and now counts what MAM counts, a rejected
+review ends its grab, and Goodreads source scans land their books again
+for the first time since about May.
+
+**Behaviour changes to know about:**
+
+- The snatch budget counts the larger of Seshat's number and MAM's own
+  unsatisfied count, against the lower of your cap and MAM's limit (read
+  from MAM about once an hour). It can report more torrents in use than
+  before, and so hold grabs back sooner.
+- A qBit read that fails leaves the budget and the queue alone until
+  qBit answers, instead of freeing every slot.
+- Every Goodreads request waits the rate set on Metadata Sources. A slow
+  rate makes a source scan take longer; a scan cut off by the 5-minute
+  cap now resumes and keeps what it finished.
+- A grab whose books were all rejected at review ends as `rejected`, a
+  new grab state. Anything reading grab states through the API should
+  expect it.
+- `GET /api/v1/grabs/budget` gains `mam_unsat`, `mam_limit`,
+  `mam_not_seeding` and `mam_fetched_at`, and `budget_used` /
+  `budget_cap` now report the values the budget enforces.
+- **Database migrations**: the app database goes to `user_version` 60,
+  each library database to 89. Take a backup before updating, as usual.
 
 ### Fixed
 
@@ -63,7 +90,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   whichever caller reached it first after a restart: normally the
   list-page cache worker's 5 s default, and when a source scan came
   first, no wait at all (its cache path passed 0), which got the session
-  soft-blocked by Cloudflare within a few pages. Every Goodreads request
+  soft-blocked by Goodreads' bot protection within a few pages. Every Goodreads request
   (scans, the cache worker, the author-ID backfill) now waits the rate
   set on Metadata Sources, read before each request, so a change applies
   without a restart. A slow rate makes a scan take longer, but a scan
