@@ -2965,6 +2965,9 @@ async def _start_authors_mam_scan(
                                 bid,
                             ),
                         )
+                        # Commit per book, before the next book's paced MAM
+                        # searches (audit L4-05; see books.py's bulk scan).
+                        await db2.commit()
                         state._mam_scan_progress["scanned"] = (
                             state._mam_scan_progress.get("scanned", 0) + 1
                         )

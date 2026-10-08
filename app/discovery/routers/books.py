@@ -1182,6 +1182,11 @@ async def _start_books_mam_scan(
                     time.time(),
                     bid,
                 ))
+                # Commit per book: the next book's MAM searches wait their
+                # turn in the pacer, and an open write transaction across
+                # that wait blocks every other write to this library
+                # (audit L4-05; CLAUDE.md "commit before any async pause").
+                await bdb.commit()
                 state._mam_scan_progress["scanned"] += 1
                 st = check["status"]
                 if st in ("found", "possible", "not_found"):

@@ -82,6 +82,15 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   up on goodreads.com and openlibrary.org; those tests now stub it.
   Only loopback fakes and in-process clients remain.
 
+- **Editing a book during a bulk MAM scan no longer waits for the scan.**
+  Scanning selected books, several authors, or one author's books saved
+  every result in one go at the end, holding the library's write lock
+  through every MAM search in between. A Hide, Approve or edit on the same
+  library meanwhile waited, and failed after 30 seconds with "database
+  is locked". These scans now save each book as soon as it's checked
+  (as the scheduled scan already did), so a stopped or cancelled scan
+  also keeps the books it got through.
+
 - **An autograb waiting for MAM's search survives a restart.** An
   allowed IRC announce that MAM's search doesn't list yet waits up to
   10 minutes for it (see "Autograbs wait for MAM's search" below). That

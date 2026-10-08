@@ -988,6 +988,9 @@ async def _start_author_scan(
                     1 if check.get("mam_is_bundle") else 0,
                     bid,
                 ))
+                # Commit per book, before the next book's paced MAM searches
+                # (audit L4-05; see books.py's bulk scan).
+                await bdb.commit()
                 state._mam_scan_progress["scanned"] += 1
                 if check["status"] == "found":
                     state._mam_scan_progress["found"] += 1
