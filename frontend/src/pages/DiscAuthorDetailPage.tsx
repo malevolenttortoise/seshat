@@ -6,7 +6,7 @@
 // primary fetch and `?include_cross_library=1` asks the backend for
 // same-normalized-name matches in every other library. The UI then renders
 // tabs (Combined / Ebook / Audiobook) that show each library's copy.
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useTheme } from "../theme";
 import type { Theme } from "../theme";
 import { api, slugQuery } from "../api";
@@ -29,7 +29,8 @@ import { SourceBreakdownPanel } from "../components/SourceBreakdownPanel";
 import { AuthorCacheStatusBadge } from "../components/AuthorCacheStatusBadge";
 import { GoodreadsAuthorCacheStatusBadge } from "../components/GoodreadsAuthorCacheStatusBadge";
 import { useViewport } from "../hooks/useViewport";
-import { useScanPolling } from "../hooks/useScanPolling";
+import { useAuthorScans } from "../hooks/useAuthorScans";
+import { useAuthorBulkActions } from "../hooks/useAuthorBulkActions";
 import { useAuthorDetail } from "../hooks/useAuthorDetail";
 import { useBulkSelection } from "../hooks/useBulkSelection";
 import { usePenNames } from "../hooks/usePenNames";
@@ -477,8 +478,6 @@ function DesktopAuthorDetailPage({
 }: AuthorDetailPageProps) {
   const t = useTheme();
   const { a, ld, loadErr, loadA, authorIdNum, authorSlug } = useAuthorDetail(authorId);
-  const [ref, setRef] = useState(false);
-  const [mamRef, setMamRef] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [vm, setVm] = usePersist<ViewMode>("adp_vm", "grid");
   const [rk, setRk] = useState(0);
@@ -495,12 +494,9 @@ function DesktopAuthorDetailPage({
   const {
     selMode, setSelMode, sel, toggle: toggleSel, selectMany, deselectMany, clear: clearSel,
   } = useBulkSelection();
-  const [busy, setBusy] = useState(false);
-  const [seriesBooks, setSeriesBooks] = useState<Record<string, Book[]>>({});
-
-  const onBooksLoaded = useCallback((key: string, books: Book[]) => {
-    setSeriesBooks((p) => ({ ...p, [key]: books }));
-  }, []);
+  const { busy, onBooksLoaded, allVisibleIds, act: bulkAct } = useAuthorBulkActions({
+    a, sel, clearSel, setSelMode, loadA, onDone: () => setRk((k) => k + 1),
+  });
 
   // Prev/next within the list the user came from. Keyed on the RAW
   // `authorId` because that's the nav-arg form the list snapshotted.
@@ -539,51 +535,10 @@ function DesktopAuthorDetailPage({
   };
 
 
-  // Author scans run as background tasks on the server. The flow:
-  //   1. Dispatch `seshat:scan-started` so the Dashboard widget
-  //      shows it immediately.
-  //   2. Fire the POST without awaiting completion (the server
-  //      returns `{status: "started"}`).
-  //   3. Listen for `seshat:scan-completed` from App's unified
-  //      poller and refresh the page data when it fires.
-  const scanQs = authorSlug ? `?slug=${encodeURIComponent(authorSlug)}` : "";
-
-  const refresh = async (full: boolean = false) => {
-    if (ref) return;
-    setRef(true);
-    try {
-      const r = await api.post<ScanStartedResponse>(
-        `/discovery/authors/${authorIdNum}/${full ? "full-rescan" : "lookup"}${scanQs}`,
-      );
-      toast.info(
-        `${full ? "Full re-scan" : "Source scan"} started for ${r.author || "author"}`,
-      );
-      window.dispatchEvent(new CustomEvent("seshat:scan-started"));
-    } catch (e) {
-      toast.error((e as Error).message || "Scan failed to start");
-      setRef(false);
-    }
-  };
-
-  const scanMam = async () => {
-    if (mamRef) return;
-    setMamRef(true);
-    try {
-      const r = await api.post<ScanStartedResponse>(
-        `/discovery/mam/scan-author/${authorIdNum}${scanQs}`,
-      );
-      if (r.status === "complete") {
-        toast.info(r.message || "No un-scanned books for this author");
-        setMamRef(false);
-      } else {
-        toast.info(`MAM scan started — ${r.total || 0} books`);
-        window.dispatchEvent(new CustomEvent("seshat:scan-started"));
-      }
-    } catch (e) {
-      toast.error((e as Error).message || "MAM scan failed to start");
-      setMamRef(false);
-    }
-  };
+  // Source + MAM scan buttons, busy until the scan finishes (G160).
+  const {
+    sourceBusy: ref, setSourceBusy: setRef, mamBusy: mamRef, scanSources, fullRescan, scanMam,
+  } = useAuthorScans({ authorIdNum, authorSlug, loadA, onFinished: () => setRk((k) => k + 1) });
 
   const clearData = async (
     type: "source" | "mam" | "both",
@@ -671,30 +626,6 @@ function DesktopAuthorDetailPage({
   const scanEbookSources = () => _crossLibraryAuthorScan("ebook");
   const scanAudiobookSources = () => _crossLibraryAuthorScan("audiobook");
 
-  // v2.14.0 — page-local scan-completion poll. UAT 2026-05-14 surfaced
-  // that after triggering an audiobook scan, this page didn't refresh
-  // when the scan finished: spinners stayed up and newly-merged books
-  // didn't appear until manual reload. Root cause: the prior
-  // implementation listened for `seshat:scan-completed`, but that
-  // event is never dispatched anywhere in the frontend — the
-  // app-wide unified poller it referenced only runs while the user
-  // is on the Dashboard.
-  //
-  // Fix: poll `/discovery/scan-status` directly while on this page
-  // (useScanPolling, shared with the mobile twin). On a running→idle
-  // transition for `lookup` or `mam`, clear the corresponding local
-  // spinner state, call `loadA()` to refresh the author + book data,
-  // and bump `rk` so child series components re-mount with fresh keys.
-  useScanPolling({
-    kinds: ["lookup", "mam"],
-    restartKey: loadA,
-    onComplete: (finished) => {
-      if (finished.includes("lookup")) setRef(false);
-      if (finished.includes("mam")) setMamRef(false);
-      loadA();
-      setRk((k) => k + 1);
-    },
-  });
 
   const onAction = async (act: BookAction, id: number, slug?: string) => {
     const scrollY = window.scrollY;
@@ -705,198 +636,6 @@ function DesktopAuthorDetailPage({
     setTimeout(() => window.scrollTo(0, scrollY), 100);
   };
 
-  // Page-wide selectable IDs = standalone books on every visible
-  // library block + every series whose IS section has loaded its
-  // books. Series that haven't been mounted yet (e.g. a tab the user
-  // hasn't switched to) won't appear; that's intentional — we only
-  // select what's on screen.
-  const allVisibleIds = (): number[] => {
-    const ids = new Set<number>();
-    if (a) {
-      (a.standalone_books || []).forEach((b) => ids.add(b.id));
-      Object.values(a.cross_library || {}).forEach((c) => {
-        (c.author.standalone_books || []).forEach((b) => ids.add(b.id));
-      });
-    }
-    Object.values(seriesBooks).forEach((arr) =>
-      arr.forEach((b) => ids.add(b.id)),
-    );
-    return [...ids];
-  };
-
-  // v2.12.1 #1 — per-library partition for cross-library bulk
-  // operations. Pre-v2.12.1 the bulk-{op} request sent ALL selected
-  // book_ids to a single endpoint with `slug=a.active_library_slug`.
-  // When the user selected books from a cross-library tab in the
-  // Combined view, their IDs were scoped to a different library, and
-  // the request hit the wrong DB — finding arbitrary unrelated books
-  // by id collision (UAT 2026-05-14: "The Far Reaches" id=288 in
-  // ABS lib collided with "God Hammer" id=288 in Calibre lib; the
-  // delete request skipped "God Hammer" as Calibre-synced while
-  // "The Far Reaches" was never touched).
-  //
-  // Build a bookId → libSlug map from the data we have on hand, then
-  // partition `sel` by slug and fire one bulk-{op} request per
-  // library. Aggregates responses into a single user-facing toast.
-  // Works for all four bulk endpoints (delete / hide / dismiss /
-  // skip-mam) — they share the same {slug, book_ids} contract.
-  const buildBookSlugMap = (): Map<number, string> => {
-    const out = new Map<number, string>();
-    const activeSlug = a?.active_library_slug || "active";
-    // Active library: standalone books on the AuthorDetail root.
-    (a?.standalone_books || []).forEach((b) => out.set(b.id, activeSlug));
-    // Cross-library entries: each carries its own slug as the map key.
-    Object.entries(a?.cross_library || {}).forEach(([slug, entry]) => {
-      (entry.author.standalone_books || []).forEach((b) => out.set(b.id, slug));
-    });
-    // Lazy-loaded series books: `seriesBooks` keys are
-    // "{librarySlug || 'active'}:{series.id}" so we can recover the
-    // owning slug from the key. Books not yet covered above (e.g.
-    // series in a cross-lib tab the user hasn't expanded? — defensive)
-    // get the prefix's slug.
-    Object.entries(seriesBooks).forEach(([key, books]) => {
-      const prefix = key.split(":", 1)[0];
-      const slug = prefix === "active" ? activeSlug : prefix;
-      books.forEach((b) => {
-        if (!out.has(b.id)) out.set(b.id, slug);
-      });
-    });
-    return out;
-  };
-
-  // Map slug → human-readable upstream-app label for the "skipped N
-  // X-synced" toast. Calibre + Audiobookshelf is the full known set
-  // today; revisit when a third app type lands.
-  const slugToSyncedLabel = (slug: string): string => {
-    if (slug === a?.active_library_slug) {
-      return a?.active_content_type === "audiobook"
-        ? "Audiobookshelf-synced"
-        : "Calibre-synced";
-    }
-    const entry = a?.cross_library?.[slug];
-    if (entry?.content_type === "audiobook") return "Audiobookshelf-synced";
-    return "Calibre-synced";
-  };
-
-  const bulkAct = async (kind: "hide" | "dismiss" | "delete" | "skip-mam") => {
-    const ids = [...sel];
-    if (ids.length === 0) return;
-    const labels = {
-      hide: "Hide", dismiss: "Dismiss", delete: "Delete",
-      "skip-mam": "Skip MAM",
-    } as const;
-    // Past-tense forms for the success toast — pre-v2.3.4.3 used
-    // `${labels[kind]}d` which produced "Hided" / "Dismissd"
-    // (grammatically wrong on both). Skip MAM uses a different
-    // form ("Marked Not Applicable") since it doesn't tense well.
-    const pastLabels = {
-      hide: "Hidden", dismiss: "Dismissed", delete: "Deleted",
-      "skip-mam": "Marked N/A",
-    } as const;
-
-    // v2.12.1 #1 — partition selection by library slug. For delete,
-    // the confirmation copy needs to list all upstream-app labels
-    // that COULD be skipped (so the user knows the protection
-    // semantics even on cross-library deletes). Build the per-slug
-    // book lists up front so the confirmation message + the bulk
-    // dispatch both consume the same partition.
-    const slugMap = buildBookSlugMap();
-    const partition = new Map<string, number[]>();
-    for (const id of ids) {
-      const slug = slugMap.get(id) || a?.active_library_slug || "active";
-      const arr = partition.get(slug) || [];
-      arr.push(id);
-      partition.set(slug, arr);
-    }
-    const slugs = [...partition.keys()];
-    const syncedLabelsInvolved = [
-      ...new Set(slugs.map(slugToSyncedLabel)),
-    ];
-    const syncedLabelText = syncedLabelsInvolved.length === 1
-      ? syncedLabelsInvolved[0]
-      : syncedLabelsInvolved.join(" / ");
-
-    const msg =
-      kind === "delete"
-        ? `Delete ${ids.length} book(s)? ${syncedLabelText} books will be skipped.`
-        : kind === "skip-mam"
-        ? `Mark ${ids.length} book(s) as Not Applicable for MAM scanning?`
-        : `${labels[kind]} ${ids.length} book(s)?`;
-    if (!confirm(msg)) return;
-    setBusy(true);
-    try {
-      // Fire one bulk-{kind} request per library slug; gather results
-      // into per-slug map so the aggregate toast can label the skip
-      // count with the right upstream-app name (Calibre / ABS).
-      // Type the response uniformly so the `.catch` branch carries
-      // the same shape as the success branch (all fields optional);
-      // otherwise TS narrows the union and the aggregate step can't
-      // access r.deleted / r.skipped without disjoint discrimination.
-      type BulkResp = {
-        status?: string;
-        count?: number;
-        deleted?: number;
-        skipped?: number;
-        error?: string;
-      };
-      const results = await Promise.all(
-        slugs.map((slug): Promise<{ slug: string; r: BulkResp }> => {
-          const slugIds = partition.get(slug)!;
-          return api.post<BulkResp>(
-            `/discovery/books/bulk-${kind}${slugQuery(slug)}`,
-            { book_ids: slugIds },
-          ).then((r) => ({ slug, r }))
-            .catch((e): { slug: string; r: BulkResp } => ({
-              slug, r: { error: (e as Error).message || "failed" },
-            }));
-        }),
-      );
-
-      // Aggregate. First surface any errors; otherwise build a
-      // success toast with per-slug skip breakdown.
-      const errors = results.filter((x) => x.r.error);
-      if (errors.length > 0 && errors.length === results.length) {
-        toast.error(errors[0].r.error || "Bulk action failed");
-      } else {
-        if (errors.length > 0) {
-          toast.warn(
-            `Partial failure: ${errors.length} of ${results.length} ${
-              errors.length === 1 ? "library" : "libraries"
-            } errored. ${errors[0].r.error || ""}`,
-          );
-        }
-        if (kind === "delete") {
-          const totalDeleted = results.reduce(
-            (acc, x) => acc + (x.r.deleted || 0), 0,
-          );
-          // Per-slug skip breakdown, labeled by upstream app type.
-          const skipParts = results
-            .filter((x) => (x.r.skipped || 0) > 0)
-            .map((x) => `${x.r.skipped} ${slugToSyncedLabel(x.slug)}`);
-          const skipMsg = skipParts.length > 0
-            ? `, skipped ${skipParts.join(", ")}`
-            : "";
-          toast.success(`Deleted ${totalDeleted} book(s)${skipMsg}`);
-        } else {
-          const totalCount = results.reduce(
-            (acc, x) => acc + (x.r.count ?? 0), 0,
-          );
-          toast.success(`${pastLabels[kind]} ${totalCount || ids.length} book(s)`);
-        }
-      }
-      clearSel();
-      setSelMode(false);
-      // Invalidate the lazy series cache so series sections re-fetch
-      // (deleted books should disappear; hidden/dismissed books stay
-      // in the list but with their flags cleared by the refresh).
-      setSeriesBooks({});
-      await loadA();
-      setRk((k) => k + 1);
-    } catch (e) {
-      toast.error((e as Error).message || `${labels[kind]} failed`);
-    }
-    setBusy(false);
-  };
 
   if (ld) return <Load />;
   if (!a && loadErr) {
@@ -1230,7 +969,7 @@ function DesktopAuthorDetailPage({
             </Btn>
             <Btn
               size="sm"
-              onClick={() => refresh(false)}
+              onClick={scanSources}
               disabled={ref}
               style={{ height: 38 }}
             >
@@ -1244,7 +983,7 @@ function DesktopAuthorDetailPage({
                     "Full Re-Scan visits every book page to refresh metadata. This may take a few minutes. Continue?",
                   )
                 )
-                  refresh(true);
+                  fullRescan();
               }}
               disabled={ref}
               style={{

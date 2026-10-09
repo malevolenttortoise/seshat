@@ -258,7 +258,11 @@ frontend test suite.
   both Settings pages share one hook for the settings draft, its save and
   the credential list (`useSettingsDraft`), and six of the desktop page's
   self-contained sections moved to their own files with the field
-  components they use (2,189 → 1,032 lines).
+  components they use (2,189 → 1,032 lines); both author pages share one
+  hook for their bulk actions (the per-library split, the confirm and the
+  toasts: `useAuthorBulkActions`) and one for their source / MAM scan
+  buttons (`useAuthorScans`) (desktop 2,046 → 1,785 lines, phone
+  1,179 → 974).
 - **The metadata-cache status is fetched once for every place that shows
   it** (wave 5b, audit L4-03): the navbar cloud icon, the Dashboard's
   Amazon / Goodreads cache rails and the Settings cache cards each polled

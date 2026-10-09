@@ -16,7 +16,8 @@ import { SourceBreakdownPanel } from "../components/SourceBreakdownPanel";
 import { useAuthorWalk } from "../hooks/useAuthorWalk";
 import { AuthorCacheStatusBadge } from "../components/AuthorCacheStatusBadge";
 import { GoodreadsAuthorCacheStatusBadge } from "../components/GoodreadsAuthorCacheStatusBadge";
-import { useScanPolling } from "../hooks/useScanPolling";
+import { useAuthorScans } from "../hooks/useAuthorScans";
+import { useAuthorBulkActions } from "../hooks/useAuthorBulkActions";
 import { useAuthorDetail } from "../hooks/useAuthorDetail";
 import { useBulkSelection } from "../hooks/useBulkSelection";
 import { usePenNames } from "../hooks/usePenNames";
@@ -37,14 +38,6 @@ import type {
   NavFn,
   Series,
 } from "../types";
-
-interface ScanStartedResponse {
-  status?: string;
-  author?: string;
-  total?: number;
-  message?: string;
-  error?: string;
-}
 
 interface MobileAuthorDetailPageProps {
   authorId: number | string;
@@ -239,8 +232,6 @@ export default function MobileAuthorDetailPage({
 }: MobileAuthorDetailPageProps) {
   const t = useTheme();
   const { a, ld, loadErr, loadA, authorIdNum, authorSlug } = useAuthorDetail(authorId);
-  const [ref, setRef] = useState(false);
-  const [mamRef, setMamRef] = useState(false);
   const { sb, setSb, sbClosing, closeSb } = useBookSidebar();
   const mamOn = useMamEnabled();
   const [fmtTab, setFmtTab] = useState<string>("combined");
@@ -252,12 +243,9 @@ export default function MobileAuthorDetailPage({
   const {
     selMode, setSelMode, sel, toggle: toggleSel, selectMany, deselectMany, clear: clearSel,
   } = useBulkSelection();
-  const [busy, setBusy] = useState(false);
-  const [seriesBooks, setSeriesBooks] = useState<Record<string, Book[]>>({});
-
-  const onBooksLoaded = useCallback((key: string, books: Book[]) => {
-    setSeriesBooks((p) => ({ ...p, [key]: books }));
-  }, []);
+  const { busy, onBooksLoaded, allVisibleIds, act: bulkAct } = useAuthorBulkActions({
+    a, sel, clearSel, setSelMode, loadA,
+  });
 
   // pen-name management (usePenNames, after loadA below)
 
@@ -265,20 +253,10 @@ export default function MobileAuthorDetailPage({
   // `authorId` because that's the nav-arg form the list snapshotted.
   const walk = useAuthorWalk(authorId);
 
-  // v2.14.0 — page-local scan-completion poll (useScanPolling, shared
-  // with the desktop DiscAuthorDetailPage): on a running→idle transition
-  // for `lookup` or `mam`, clear the corresponding local spinner state
-  // and call `loadA()` so the user sees the new state without a manual
-  // reload. See the desktop poll for full context.
-  useScanPolling({
-    kinds: ["lookup", "mam"],
-    restartKey: loadA,
-    onComplete: (finished) => {
-      if (finished.includes("lookup")) setRef(false);
-      if (finished.includes("mam")) setMamRef(false);
-      loadA();
-    },
-  });
+  // Source + MAM scan buttons, busy until the scan finishes (G160).
+  const {
+    sourceBusy: ref, mamBusy: mamRef, scanSources: triggerSync, scanMam: triggerMam,
+  } = useAuthorScans({ authorIdNum, authorSlug, loadA });
 
   // v2.20.0 Phase 4 — the search returns person hits.
   const {
@@ -293,192 +271,7 @@ export default function MobileAuthorDetailPage({
     await loadA();
   };
 
-  // Page-wide selectable IDs — see the desktop sibling for the
-  // matching helper. Mobile sections default to closed, so this is
-  // skewed toward "standalone is always available; series only
-  // counts after the user has expanded that section at least once
-  // and IS fetched its books."
-  const allVisibleIds = (): number[] => {
-    const ids = new Set<number>();
-    if (a) {
-      (a.standalone_books || []).forEach((b) => ids.add(b.id));
-      Object.values(a.cross_library || {}).forEach((c) => {
-        (c.author.standalone_books || []).forEach((b) => ids.add(b.id));
-      });
-    }
-    Object.values(seriesBooks).forEach((arr) =>
-      arr.forEach((b) => ids.add(b.id)),
-    );
-    return [...ids];
-  };
 
-  // v2.12.1 #1 — per-library partition for cross-library bulk
-  // operations. See DiscAuthorDetailPage.tsx for the full rationale
-  // (cross-library id-collision can delete unrelated books on the
-  // wrong library when the user selects from Combined tab).
-  // Mirrors the desktop refactor.
-  const buildBookSlugMap = (): Map<number, string> => {
-    const out = new Map<number, string>();
-    const activeSlug = a?.active_library_slug || "active";
-    (a?.standalone_books || []).forEach((b) => out.set(b.id, activeSlug));
-    Object.entries(a?.cross_library || {}).forEach(([slug, entry]) => {
-      (entry.author.standalone_books || []).forEach((b) => out.set(b.id, slug));
-    });
-    Object.entries(seriesBooks).forEach(([key, books]) => {
-      const prefix = key.split(":", 1)[0];
-      const slug = prefix === "active" ? activeSlug : prefix;
-      books.forEach((b) => {
-        if (!out.has(b.id)) out.set(b.id, slug);
-      });
-    });
-    return out;
-  };
-  const slugToSyncedLabel = (slug: string): string => {
-    if (slug === a?.active_library_slug) {
-      return a?.active_content_type === "audiobook"
-        ? "Audiobookshelf-synced"
-        : "Calibre-synced";
-    }
-    const entry = a?.cross_library?.[slug];
-    if (entry?.content_type === "audiobook") return "Audiobookshelf-synced";
-    return "Calibre-synced";
-  };
-
-  const bulkAct = async (kind: "hide" | "dismiss" | "delete" | "skip-mam") => {
-    const ids = [...sel];
-    if (ids.length === 0) return;
-    const labels = {
-      hide: "Hide", dismiss: "Dismiss", delete: "Delete",
-      "skip-mam": "Skip MAM",
-    } as const;
-    const pastLabels = {
-      hide: "Hidden", dismiss: "Dismissed", delete: "Deleted",
-      "skip-mam": "Marked N/A",
-    } as const;
-
-    const slugMap = buildBookSlugMap();
-    const partition = new Map<string, number[]>();
-    for (const id of ids) {
-      const slug = slugMap.get(id) || a?.active_library_slug || "active";
-      const arr = partition.get(slug) || [];
-      arr.push(id);
-      partition.set(slug, arr);
-    }
-    const slugs = [...partition.keys()];
-    const syncedLabelsInvolved = [
-      ...new Set(slugs.map(slugToSyncedLabel)),
-    ];
-    const syncedLabelText = syncedLabelsInvolved.length === 1
-      ? syncedLabelsInvolved[0]
-      : syncedLabelsInvolved.join(" / ");
-
-    const msg =
-      kind === "delete"
-        ? `Delete ${ids.length} book(s)? ${syncedLabelText} books will be skipped.`
-        : kind === "skip-mam"
-        ? `Mark ${ids.length} book(s) as Not Applicable for MAM scanning?`
-        : `${labels[kind]} ${ids.length} book(s)?`;
-    if (!confirm(msg)) return;
-    setBusy(true);
-    try {
-      // Uniform response type so the `.catch` branch shares the
-      // success-branch shape; otherwise TS union narrowing breaks
-      // the aggregate step's r.deleted / r.skipped / r.count access.
-      type BulkResp = {
-        status?: string;
-        count?: number;
-        deleted?: number;
-        skipped?: number;
-        error?: string;
-      };
-      const results = await Promise.all(
-        slugs.map((slug): Promise<{ slug: string; r: BulkResp }> => {
-          const slugIds = partition.get(slug)!;
-          return api.post<BulkResp>(
-            `/discovery/books/bulk-${kind}${slugQuery(slug)}`,
-            { book_ids: slugIds },
-          ).then((r) => ({ slug, r }))
-            .catch((e): { slug: string; r: BulkResp } => ({
-              slug, r: { error: (e as Error).message || "failed" },
-            }));
-        }),
-      );
-      const errors = results.filter((x) => x.r.error);
-      if (errors.length > 0 && errors.length === results.length) {
-        toast.error(errors[0].r.error || "Bulk action failed");
-      } else {
-        if (errors.length > 0) {
-          toast.warn(
-            `Partial failure: ${errors.length} of ${results.length} ${
-              errors.length === 1 ? "library" : "libraries"
-            } errored. ${errors[0].r.error || ""}`,
-          );
-        }
-        if (kind === "delete") {
-          const totalDeleted = results.reduce(
-            (acc, x) => acc + (x.r.deleted || 0), 0,
-          );
-          const skipParts = results
-            .filter((x) => (x.r.skipped || 0) > 0)
-            .map((x) => `${x.r.skipped} ${slugToSyncedLabel(x.slug)}`);
-          const skipMsg = skipParts.length > 0
-            ? `, skipped ${skipParts.join(", ")}`
-            : "";
-          toast.success(`Deleted ${totalDeleted} book(s)${skipMsg}`);
-        } else {
-          const totalCount = results.reduce(
-            (acc, x) => acc + (x.r.count ?? 0), 0,
-          );
-          toast.success(`${pastLabels[kind]} ${totalCount || ids.length} book(s)`);
-        }
-      }
-      clearSel();
-      setSelMode(false);
-      setSeriesBooks({});
-      await loadA();
-    } catch (e) {
-      toast.error((e as Error).message || `${labels[kind]} failed`);
-    }
-    setBusy(false);
-  };
-
-  const scanQs = authorSlug ? `?slug=${encodeURIComponent(authorSlug)}` : "";
-
-  const triggerSync = async () => {
-    if (ref) return;
-    setRef(true);
-    try {
-      const r = await api.post<ScanStartedResponse>(
-        `/discovery/authors/${authorIdNum}/lookup${scanQs}`,
-      );
-      toast.info(`Source scan started for ${r.author || "author"}`);
-      window.dispatchEvent(new CustomEvent("seshat:scan-started"));
-      // Busy until the scan-finished poll clears it, as on desktop.
-    } catch (e) {
-      toast.error((e as Error).message || "Scan failed to start");
-      setRef(false);
-    }
-  };
-
-  const triggerMam = async () => {
-    if (mamRef) return;
-    setMamRef(true);
-    try {
-      const r = await api.post<ScanStartedResponse>(
-        `/discovery/mam/scan-author/${authorIdNum}${scanQs}`,
-      );
-      if (r.status === "complete") {
-        toast.info(r.message || "No un-scanned books for this author");
-        setMamRef(false);
-      } else {
-        toast.info(`MAM scan started — ${r.total || 0} books`);
-        window.dispatchEvent(new CustomEvent("seshat:scan-started"));
-      }
-    } catch (e) {
-      toast.error((e as Error).message || "MAM scan failed to start");
-      setMamRef(false);
-    }
-  };
 
   const linkPen = async (aliasPersonId: number, linkType = "pen_name") => {
     if (!a?.person_id) {
