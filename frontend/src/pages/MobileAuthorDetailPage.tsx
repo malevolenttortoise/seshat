@@ -243,6 +243,8 @@ export default function MobileAuthorDetailPage({
   const t = useTheme();
   const [a, setA] = useState<AuthorDetail | null>(null);
   const [ld, setLd] = useState(true);
+  // Why the author couldn't be loaded (null while it loads or loaded).
+  const [loadErr, setLoadErr] = useState<string | null>(null);
   const [ref, setRef] = useState(false);
   const [mamRef, setMamRef] = useState(false);
   const [sb, setSb] = useState<Book | null>(null);
@@ -319,15 +321,27 @@ export default function MobileAuthorDetailPage({
       return loadAuthorDetailViaPerson(authorIdNum, authorSlug, signal)
         .then((d) => {
           setA(d);
+          setLoadErr(null);
           setLd(false);
         })
-        .catch(() => setLd(false));
+        .catch((e) => {
+          if (api.isAbort(e)) return;
+          // A failed load used to leave a blank page.
+          console.error(e);
+          setLoadErr((e as Error).message || String(e));
+          setLd(false);
+        });
     },
     [authorIdNum, authorSlug],
   );
 
   useEffect(() => {
-    if (!authorIdNum) return;
+    // An id that doesn't parse (0) has nothing to load.
+    if (!authorIdNum) {
+      setLoadErr("no author id");
+      setLd(false);
+      return;
+    }
     const c = new AbortController();
     loadA(c.signal);
     return () => c.abort();
@@ -632,7 +646,13 @@ export default function MobileAuthorDetailPage({
       </div>
     );
   }
-  if (!a) return null;
+  if (!a) {
+    return (
+      <div style={{ padding: 32, textAlign: "center", color: t.err }}>
+        Couldn't load this author{loadErr ? `: ${loadErr}` : ""}
+      </div>
+    );
+  }
 
   // Build the list of library blocks for cross-library tabs.
   const blocks: { slug: string; label: string; content_type: string; data: AuthorDetail }[] = [

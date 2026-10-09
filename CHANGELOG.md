@@ -255,6 +255,9 @@ frontend test suite.
 
 ### Fixed
 
+- **The author page says when an author can't be loaded** (wave 5b): on
+  desktop a failed load left the spinner up for good, on the phone it left
+  a blank page. Both now show "Couldn't load this author: <reason>".
 - Reingest from disk now honours the ebook format priority (Settings →
   Format Priorities) when a torrent holds several formats (wave 5a): it
   read a settings key nothing writes, so it never had one.

@@ -1,5 +1,6 @@
 // Author detail fixtures: Ada Quill, linked to a person, with an
 // ebook block (Calibre) and an audiobook block (Audiobookshelf).
+import { reply } from "../render";
 import {
   AUDIO_SLUG,
   EBOOK_SLUG,
@@ -117,4 +118,11 @@ export const authorDetailScanningRoutes = {
     ],
   },
   "GET /discovery/scan-status": runningScans,
+};
+
+// The author request fails (wave 5b S2a: the page says so instead of a
+// spinner that never stops / a blank page).
+export const authorDetailFailedRoutes = {
+  ...authorDetailRoutes,
+  "GET /discovery/authors/11": reply(500, { detail: "database is locked" }),
 };

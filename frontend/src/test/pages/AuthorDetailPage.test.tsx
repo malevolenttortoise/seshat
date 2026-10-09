@@ -1,7 +1,7 @@
 import { afterEach, describe, it, vi } from "vitest";
 import AuthorDetailPage from "../../pages/DiscAuthorDetailPage";
 import { expectRendered, renderPage, resetPageEnv, type Viewport } from "../render";
-import { authorDetailRoutes, authorDetailScanningRoutes } from "../fixtures/authorDetail";
+import { authorDetailFailedRoutes, authorDetailRoutes, authorDetailScanningRoutes } from "../fixtures/authorDetail";
 
 afterEach(resetPageEnv);
 
@@ -20,5 +20,13 @@ describe.each<Viewport>(["desktop", "phone"])("Author detail (%s)", (viewport) =
       routes: authorDetailScanningRoutes,
     });
     expectRendered(r, "Ada Quill", viewport === "desktop" ? "A. Q. Thorne" : "Pen names");
+  });
+
+  it("when the author fails to load", async () => {
+    const r = await renderPage(<AuthorDetailPage authorId="calibre-library:11" onNav={vi.fn()} />, {
+      viewport,
+      routes: authorDetailFailedRoutes,
+    });
+    expectRendered(r, "Couldn't load this author: database is locked");
   });
 });

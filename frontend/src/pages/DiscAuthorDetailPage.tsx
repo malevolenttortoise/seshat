@@ -481,6 +481,8 @@ function DesktopAuthorDetailPage({
   const t = useTheme();
   const [a, setA] = useState<AuthorDetail | null>(null);
   const [ld, setLd] = useState(true);
+  // Why the author couldn't be loaded (null while it loads or loaded).
+  const [loadErr, setLoadErr] = useState<string | null>(null);
   const [ref, setRef] = useState(false);
   const [mamRef, setMamRef] = useState(false);
   const [clearing, setClearing] = useState(false);
@@ -662,20 +664,31 @@ function DesktopAuthorDetailPage({
       return loadAuthorDetailViaPerson(authorIdNum, authorSlug, signal)
         .then((d) => {
           setA(d);
+          setLoadErr(null);
           setLd(false);
         })
         .catch((e) => {
-          if (!api.isAbort(e)) console.error(e);
+          if (api.isAbort(e)) return;
+          // A failed load used to leave the spinner up for good.
+          console.error(e);
+          setLoadErr((e as Error).message || String(e));
+          setLd(false);
         });
     },
     [authorIdNum, authorSlug],
   );
 
   useEffect(() => {
+    // An id that doesn't parse (0) has nothing to load.
+    if (!authorIdNum) {
+      setLoadErr("no author id");
+      setLd(false);
+      return;
+    }
     const c = new AbortController();
     loadA(c.signal);
     return () => c.abort();
-  }, [loadA]);
+  }, [loadA, authorIdNum]);
 
   // Author scans run as background tasks on the server. The flow:
   //   1. Dispatch `seshat:scan-started` so the Dashboard widget
@@ -1037,6 +1050,9 @@ function DesktopAuthorDetailPage({
   };
 
   if (ld) return <Load />;
+  if (!a && loadErr) {
+    return <div style={{ color: t.err }}>Couldn't load this author: {loadErr}</div>;
+  }
   if (!a) return <div style={{ color: t.tf }}>Not found</div>;
 
   // v2.17.0 Bug B — when the backend ran the cross_library fan-out

@@ -1070,6 +1070,25 @@ exports[`Author detail (desktop) > an author with series, standalones and a seco
 ]
 `;
 
+exports[`Author detail (desktop) > when the author fails to load > markup 1`] = `
+<DocumentFragment>
+  <div
+    style="color: rgb(224, 96, 96);"
+  >
+    Couldn't load this author: database is locked
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Author detail (desktop) > when the author fails to load > requests 1`] = `
+[
+  "GET /discovery/authors/11/pen-names",
+  "GET /discovery/authors/11?include_cross_library=1&slug=calibre-library",
+  "GET /discovery/mam/status",
+  "GET /discovery/scan-status",
+]
+`;
+
 exports[`Author detail (desktop) > with pen-name links while a source scan runs > markup 1`] = `
 <DocumentFragment>
   <div
@@ -2837,6 +2856,25 @@ exports[`Author detail (phone) > an author with series, standalones and a second
   "GET /discovery/persons/5",
   "GET /discovery/scan-status",
   "GET /discovery/series/7?slug=calibre-library",
+]
+`;
+
+exports[`Author detail (phone) > when the author fails to load > markup 1`] = `
+<DocumentFragment>
+  <div
+    style="padding: 32px; text-align: center; color: rgb(224, 96, 96);"
+  >
+    Couldn't load this author: database is locked
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Author detail (phone) > when the author fails to load > requests 1`] = `
+[
+  "GET /discovery/authors/11/pen-names",
+  "GET /discovery/authors/11?include_cross_library=1&slug=calibre-library",
+  "GET /discovery/mam/status",
+  "GET /discovery/scan-status",
 ]
 `;
 
