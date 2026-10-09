@@ -93,17 +93,19 @@ class IbdbSource(MetaSource):
 
 
 def _extract_authors(item: dict) -> list[str]:
-    """Extract author names from various IBDB response shapes."""
+    """Extract author names from various IBDB response shapes, given name
+    first ("Dean, Travis" → "Travis Dean", 2026-10 audit G65)."""
+    from app.metadata.author_names import flip_surname_first
     authors = item.get("authors") or item.get("author") or []
     if isinstance(authors, str):
-        return [authors]
+        return [flip_surname_first(authors)]
     if isinstance(authors, list):
         out = []
         for a in authors:
             if isinstance(a, str):
-                out.append(a)
+                out.append(flip_surname_first(a))
             elif isinstance(a, dict):
-                out.append(a.get("name", str(a)))
+                out.append(flip_surname_first(a.get("name", str(a))))
         return out
     return []
 

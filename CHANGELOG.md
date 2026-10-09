@@ -104,6 +104,12 @@ gate that paces and counts it.
   ID resolver's cached walk of that author's list as complete.
 - The Kobo row's "effective rate" now reads one request per Rate seconds
   (concurrency no longer multiplies it).
+- IBDB bylines given surname first ("Dean, Travis") now match the author
+  ("Travis Dean"); before, every such book was dropped.
+- OpenLibrary no longer falls back to its top search result when no
+  author's name matches: "Travis Dean" had resolved to "Dean Travis
+  Clarke", another person, kept out only by title validation. No name
+  match now means no OpenLibrary books for that author.
 - **Google Books queries** (audit G55): since about 2026-09-26 Google
   answers a query made only of field operators (`inauthor:…`) with no
   results. Author scans now search the quoted name as free text, keep the

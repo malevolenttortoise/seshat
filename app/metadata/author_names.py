@@ -109,6 +109,30 @@ def authors_match(a: str, b: str) -> bool:
     return SequenceMatcher(None, na, nb).ratio() >= _FUZZY_THRESHOLD
 
 
+# Name suffixes that can follow a comma without the name being
+# "Surname, Given": "Smith, Jr." is not "Jr. Smith".
+_NAME_SUFFIXES = frozenset({
+    "jr", "sr", "ii", "iii", "iv", "v", "phd", "md", "esq",
+})
+
+
+def flip_surname_first(name: str) -> str:
+    """"Dean, Travis" → "Travis Dean"; anything else unchanged.
+
+    Some catalogues (IBDB) give bylines surname first, which never
+    matched an author stored given-name first (2026-10 audit, G65).
+    Only one comma, a non-empty given part, and not a suffix ("Smith,
+    Jr.") count."""
+    if not name or name.count(",") != 1:
+        return name
+    surname, given = (p.strip() for p in name.split(","))
+    if not surname or not given:
+        return name
+    if given.lower().strip(".") in _NAME_SUFFIXES:
+        return name
+    return f"{given} {surname}"
+
+
 def _parse_name_tokens(name: str) -> list[tuple[str, bool]]:
     """Split `name` into `(content, is_initial_group)` pairs.
 

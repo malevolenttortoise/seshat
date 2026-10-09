@@ -371,10 +371,11 @@ class OpenLibrarySource(BaseSource):
            Work-count dominance is the signal that this is the same
            prolific author, not an unrelated entry.
 
-        4. **Top-hit fallback** — if no record passes either gate,
-           return OL's #1-ranked result wrapped in a single-element
-           list. Preserves the v2.10.6 behavior for the long tail of
-           noisy / partial matches.
+        No record passes either name gate → no key, so no OpenLibrary
+        books for that author (2026-10 audit, G65). Until then OL's
+        #1-ranked result was used anyway: "Travis Dean" became "Dean
+        Travis Clarke", a different person that only lookup's title
+        validation kept out.
         """
         docs = await self._search_authors(author_name)
 
@@ -415,16 +416,12 @@ class OpenLibrarySource(BaseSource):
                 others.append((work_count, name, key))
 
         if not strict and not substring:
-            # No name-match at all — trust OL's ranker (single top hit).
-            top = docs[0]
-            top_key = top.get("key")
-            if top_key:
-                logger.info(
-                    "  OpenLibrary: no strict name match for '%s', "
-                    "falling back to top hit '%s' (key=%s)",
-                    author_name, top.get("name"), top_key,
-                )
-                return [top_key]
+            # No name-match at all: not this author (G65).
+            logger.info(
+                "  OpenLibrary: no name match for '%s' among %d result(s) "
+                "(top: '%s') — no OpenLibrary books for this author",
+                author_name, len(docs), docs[0].get("name"),
+            )
             return []
 
         # Strict-name aggregation: include every record that strictly
