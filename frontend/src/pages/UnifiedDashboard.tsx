@@ -7,6 +7,7 @@
 // on narrow viewports.
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
+import { toast } from "../lib/toast";
 import { useTheme } from "../theme";
 import type { Theme } from "../theme";
 import { Spin } from "../components/Spin";
@@ -34,6 +35,9 @@ interface Props {
 }
 
 const POLL = 30;
+
+// A failed command's reason, for its toast (G148 wording).
+const why = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 // ─── API response shapes ─────────────────────────────────────
 // GET /discovery/stats — same projection the DiscDashboard page consumes.
@@ -292,8 +296,8 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
     try {
       const qs = slug ? `?slug=${encodeURIComponent(slug)}` : "";
       await api.post(`/discovery/sync/library${qs}`);
-    } catch {
-      /* ignore — poll loop will surface errors */
+    } catch (e) {
+      toast.error(`Couldn't start the library sync: ${why(e)}`);
     }
     setSyncingSlug(null);
     refresh();
@@ -308,8 +312,8 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
     setScanning(true);
     try {
       await api.post("/discovery/lookup?content_type=ebook");
-    } catch {
-      /* ignore */
+    } catch (e) {
+      toast.error(`Couldn't start the ebook source scan: ${why(e)}`);
     }
     setScanning(false);
     refresh();
@@ -318,8 +322,8 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
     setScanning(true);
     try {
       await api.post("/discovery/lookup?content_type=audiobook");
-    } catch {
-      /* ignore */
+    } catch (e) {
+      toast.error(`Couldn't start the audiobook source scan: ${why(e)}`);
     }
     setScanning(false);
     refresh();
@@ -328,8 +332,8 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
     setMamScanning(true);
     try {
       await api.post("/discovery/mam/scan");
-    } catch {
-      /* ignore */
+    } catch (e) {
+      toast.error(`Couldn't start the MAM scan: ${why(e)}`);
     }
     setMamScanning(false);
     refresh();
@@ -337,16 +341,16 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
   const cancelSources = async () => {
     try {
       await api.post("/discovery/lookup/cancel");
-    } catch {
-      /* ignore */
+    } catch (e) {
+      toast.error(`Couldn't cancel the source scan: ${why(e)}`);
     }
     refresh();
   };
   const cancelMam = async () => {
     try {
       await api.post("/discovery/mam/scan/cancel");
-    } catch {
-      /* ignore */
+    } catch (e) {
+      toast.error(`Couldn't cancel the MAM scan: ${why(e)}`);
     }
     refresh();
   };
@@ -364,8 +368,8 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
     setHygieneStarting(true);
     try {
       await api.post("/discovery/hygiene/run");
-    } catch {
-      /* ignore — banner will surface errors */
+    } catch (e) {
+      toast.error(`Couldn't start Data Hygiene: ${why(e)}`);
     }
     setHygieneStarting(false);
     setShowHygieneConfirm(false);
@@ -374,8 +378,8 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
   const cancelHygiene = async () => {
     try {
       await api.post("/discovery/hygiene/cancel");
-    } catch {
-      /* ignore */
+    } catch (e) {
+      toast.error(`Couldn't cancel Data Hygiene: ${why(e)}`);
     }
     refresh();
   };

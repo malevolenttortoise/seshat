@@ -291,6 +291,11 @@ frontend test suite.
   as imported each set their message and then refreshed the list, which
   cleared it at once (the phone didn't show bulk failures at all). The
   message now shows until the next refresh, like other errors there.
+- **A Dashboard command that fails says so** (wave 5b): Sync, Scan Ebooks,
+  Scan Audiobooks, MAM Scan, Data Hygiene and the Stop buttons ignored a
+  failed request on both the desktop and phone Dashboard (the button just
+  stopped spinning). Each now shows an error toast with the reason, e.g.
+  "Couldn't start the MAM scan: …", "Couldn't cancel Data Hygiene: …".
 - Reingest from disk now honours the ebook format priority (Settings →
   Format Priorities) when a torrent holds several formats (wave 5a): it
   read a settings key nothing writes, so it never had one.

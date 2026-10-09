@@ -9,6 +9,7 @@
 // code untouched while we iterate on mobile UX.
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
+import { toast } from "../lib/toast";
 import { useTheme } from "../theme";
 import { fmtNum } from "../lib/format";
 import { useVisibleInterval } from "../hooks/useVisibleInterval";
@@ -34,6 +35,9 @@ interface Props {
 }
 
 const POLL = 30;
+
+// A failed command's reason, for its toast (G148 wording).
+const why = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 interface DashboardStats {
   owned_books?: number;
@@ -215,35 +219,35 @@ export default function MobileUnifiedDashboard({ onNav }: Props) {
     try {
       const qs = slug ? `?slug=${encodeURIComponent(slug)}` : "";
       await api.post(`/discovery/sync/library${qs}`);
-    } catch { /* ignore */ }
+    } catch (e) { toast.error(`Couldn't start the library sync: ${why(e)}`); }
     setSyncingSlug(null);
     refresh();
   };
   // v2.12.0 — paired ebook/audiobook triggers, each cross-library.
   const triggerEbookSources = async () => {
     setScanning(true);
-    try { await api.post("/discovery/lookup?content_type=ebook"); } catch { /* ignore */ }
+    try { await api.post("/discovery/lookup?content_type=ebook"); } catch (e) { toast.error(`Couldn't start the ebook source scan: ${why(e)}`); }
     setScanning(false);
     refresh();
   };
   const triggerAudiobookSources = async () => {
     setScanning(true);
-    try { await api.post("/discovery/lookup?content_type=audiobook"); } catch { /* ignore */ }
+    try { await api.post("/discovery/lookup?content_type=audiobook"); } catch (e) { toast.error(`Couldn't start the audiobook source scan: ${why(e)}`); }
     setScanning(false);
     refresh();
   };
   const triggerMam = async () => {
     setMamScanning(true);
-    try { await api.post("/discovery/mam/scan"); } catch { /* ignore */ }
+    try { await api.post("/discovery/mam/scan"); } catch (e) { toast.error(`Couldn't start the MAM scan: ${why(e)}`); }
     setMamScanning(false);
     refresh();
   };
   const cancelSources = async () => {
-    try { await api.post("/discovery/lookup/cancel"); } catch { /* ignore */ }
+    try { await api.post("/discovery/lookup/cancel"); } catch (e) { toast.error(`Couldn't cancel the source scan: ${why(e)}`); }
     refresh();
   };
   const cancelMam = async () => {
-    try { await api.post("/discovery/mam/scan/cancel"); } catch { /* ignore */ }
+    try { await api.post("/discovery/mam/scan/cancel"); } catch (e) { toast.error(`Couldn't cancel the MAM scan: ${why(e)}`); }
     refresh();
   };
 
@@ -254,13 +258,13 @@ export default function MobileUnifiedDashboard({ onNav }: Props) {
   const [hygieneStarting, setHygieneStarting] = useState(false);
   const triggerHygiene = async () => {
     setHygieneStarting(true);
-    try { await api.post("/discovery/hygiene/run"); } catch { /* ignore */ }
+    try { await api.post("/discovery/hygiene/run"); } catch (e) { toast.error(`Couldn't start Data Hygiene: ${why(e)}`); }
     setHygieneStarting(false);
     setShowHygieneConfirm(false);
     refresh();
   };
   const cancelHygiene = async () => {
-    try { await api.post("/discovery/hygiene/cancel"); } catch { /* ignore */ }
+    try { await api.post("/discovery/hygiene/cancel"); } catch (e) { toast.error(`Couldn't cancel Data Hygiene: ${why(e)}`); }
     refresh();
   };
 
