@@ -314,6 +314,8 @@ frontend test suite.
   "Re-scan sources" and "Scan MAM" turned back on as soon as the start
   request returned, so a second tap started another scan. They now show
   "Syncing…" / "MAM scanning…" until the scan finishes, as on desktop.
+- The author page's bulk actions say "Partial failure: 1 of 2 libraries
+  errored" when one library's request fails (it read "1 of 2 library").
 - Reingest from disk now honours the ebook format priority (Settings →
   Format Priorities) when a torrent holds several formats (wave 5a): it
   read a settings key nothing writes, so it never had one.

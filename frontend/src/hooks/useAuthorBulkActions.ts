@@ -146,9 +146,7 @@ export function useAuthorBulkActions({
       } else {
         if (errors.length > 0) {
           toast.warn(
-            `Partial failure: ${errors.length} of ${results.length} ${
-              errors.length === 1 ? "library" : "libraries"
-            } errored. ${errors[0].r.error || ""}`,
+            `Partial failure: ${errors.length} of ${results.length} libraries errored. ${errors[0].r.error || ""}`,
           );
         }
         if (kind === "delete") {

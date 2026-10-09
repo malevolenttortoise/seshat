@@ -79,9 +79,8 @@ describe.each<Viewport>(["desktop", "phone"])("Author bulk actions (%s)", (viewp
     expect(confirm).toHaveBeenCalledWith(
       `Delete ${picked} book(s)? Calibre-synced / Audiobookshelf-synced books will be skipped.`,
     );
-    // (Today's wording: "library" follows the failure count.)
     expect(toasts).toEqual([
-      "warn: Partial failure: 1 of 2 library errored. database is locked",
+      "warn: Partial failure: 1 of 2 libraries errored. database is locked",
       "success: Deleted 1 book(s), skipped 1 Calibre-synced",
     ]);
   });
