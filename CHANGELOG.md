@@ -227,8 +227,9 @@ frontend test suite.
 
 - **Frontend build toolchain** (wave 5b): Vite 6 → 8 (its bundler is now
   Rolldown, its minifier oxc), `@vitejs/plugin-react` 4 → 6,
-  `vite-plugin-pwa` 1 → 2; the images build the frontend on Node 26
-  (was 22). Same chunks as before (plus a 0.6 KB Rolldown runtime), the
+  `vite-plugin-pwa` 1 → 2, TypeScript 5.9 → 7 (the native compiler; the
+  typecheck only, it emits nothing); the images build the frontend on
+  Node 26 (was 22). Same chunks as before (plus a 0.6 KB Rolldown runtime), the
   same service-worker caching rules, and every page renders as it did
   (the render snapshots above were taken on Vite 6 and pass unchanged).
 
