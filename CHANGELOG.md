@@ -249,7 +249,9 @@ frontend test suite.
   leaving with its own state; they look and act as before (render
   snapshots unchanged). So far: Manual Grab's wedge toggle (desktop and
   phone) and the book sidebar's "Use wedge" tick are one `WedgeToggle`
-  component.
+  component; the book sidebar's series suggestion, reingest from disk,
+  send to pipeline and contributors each moved to their own file
+  (`components/bookSidebar/`), the sidebar 2,691 → 1,984 lines.
 - **The metadata-cache status is fetched once for every place that shows
   it** (wave 5b, audit L4-03): the navbar cloud icon, the Dashboard's
   Amazon / Goodreads cache rails and the Settings cache cards each polled

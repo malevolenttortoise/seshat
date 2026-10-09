@@ -15,7 +15,6 @@ import { useViewport } from "../hooks/useViewport";
 import { useMamEnabled } from "../hooks/useMamEnabled";
 import { useMobileCodepath } from "./mobile";
 import { api } from "../api";
-import { runBatchJob } from "../lib/batchJob";
 import { Ic } from "../icons";
 import { fmtDate } from "../lib/format";
 import { openCoverLightbox } from "../lib/lightbox";
@@ -23,20 +22,18 @@ import { toast } from "../lib/toast";
 import { Btn } from "./Btn";
 import { Spin } from "./Spin";
 import { SBRow } from "./SBRow";
-import { BufferInsufficientBanner } from "./BufferInsufficientBanner";
-import { WedgeToggle } from "./WedgeToggle";
 import { CompareModal } from "./CompareModal";
 import { MergeBookModal } from "./MergeBookModal";
-import { ReplaceAuthorModal } from "./ReplaceAuthorModal";
-import { economyApi, type PreflightResponse } from "../lib/economyApi";
+import { ContributorsRow, ReplaceSoleAuthor, useContributors } from "./bookSidebar/Contributors";
+import { ReingestButton, ReingestOutcome, useReingest } from "./bookSidebar/Reingest";
+import { SendBufferGate, SendButton, SendWedgeRow, useSendToPipeline } from "./bookSidebar/SendToPipeline";
+import { SeriesSuggestionCard, useSeriesSuggestion } from "./bookSidebar/SeriesSuggestion";
 import type {
   Book,
   BookAction,
   BookActionHandler,
-  Contributor,
   WorkSibling,
 } from "../types";
-import { EVT } from "../types";
 
 interface BookSidebarProps {
   book: Book;
@@ -60,20 +57,6 @@ interface EditFields {
   is_unreleased: boolean;
   mam_url: string;
 }
-
-// Inline series-suggestion card shape — returned by
-// /discovery/series-suggestions/by-book/{id} as `{suggestion: ... | null}`.
-interface SeriesSuggestion {
-  id: number;
-  status: string;
-  current_series_name: string | null;
-  current_series_index: number | null;
-  suggested_series_name: string | null;
-  suggested_series_index: number | null;
-  sources_agreeing: string[];
-}
-
-type SuggestionAction = "apply" | "ignore" | "delete";
 
 interface SettingsResponse {
   calibre_web_url?: string;
@@ -100,38 +83,6 @@ interface MamScanResponse {
   // Legacy synchronous-result fields, retained for back-compat with
   // any older code path that still returns them.
   results?: MamScanResult[];
-}
-
-interface SendToPipelineResponse {
-  sent: number;
-  message?: string;
-}
-
-// v2.8.0 reingest types — mirror the FastAPI ProbeResponse /
-// StartResponse shapes in app/discovery/routers/reingest.py.
-interface ReingestCandidate {
-  source: "qbit" | "fs";
-  display_path: string;
-  save_path: string;
-  book_files: string[];
-  qbit_hash: string | null;
-  mtime: number;
-  total_size: number;
-}
-
-interface ReingestProbeResponse {
-  found: boolean;
-  candidates: ReingestCandidate[];
-  auto_started: boolean;
-  grab_id: number | null;
-  pipeline_run_id: number | null;
-  // v2.8.1: when auto-start fired but the pipeline failed
-  // mid-flight (qBit reported a file that wasn't on disk, sink
-  // unreachable, etc.) the server returns auto_started=false +
-  // error set. The UI shows the error instead of a success toast.
-  error?: string | null;
-  searched: string[];
-  mam_torrent_name: string | null;
 }
 
 // Per-source badge palette for the "Metadata" row. `manual` is the
@@ -178,65 +129,7 @@ export function BookSidebar({
   const [editing, setEditing] = useState(false);
   const [compareOpen, setCompareOpen] = useState(false);
   const [mergeOpen, setMergeOpen] = useState(false);
-  // Contributor editing — a local copy of the byline so removals reflect
-  // instantly without waiting on the parent list refresh. `removingId`
-  // drives the per-chip spinner; `replaceTarget` opens the
-  // last-author replacement modal.
-  const [contribs, setContribs] = useState<Contributor[]>(
-    book.contributors ?? [],
-  );
-  const [removingId, setRemovingId] = useState<number | null>(null);
-  const [replaceTarget, setReplaceTarget] = useState<Contributor | null>(null);
-  // Re-seed when a different book is selected into the same sidebar
-  // instance (the parent reuses one BookSidebar and swaps `book`).
-  useEffect(() => {
-    setContribs(book.contributors ?? []);
-    setReplaceTarget(null);
-    setRemovingId(null);
-  }, [book.id, book.library_slug, book.contributors]);
-
-  // DELETE one contributor. With >1 author it removes immediately; with
-  // exactly 1 it opens the replacement modal (the backend refuses to
-  // leave a book authorless). `replacementId` is supplied only from the
-  // modal path.
-  const removeContributor = async (c: Contributor, replacementId?: number) => {
-    if (contribs.length <= 1 && replacementId === undefined) {
-      setReplaceTarget(c);
-      return;
-    }
-    setRemovingId(c.author_id);
-    try {
-      const repQs =
-        replacementId !== undefined
-          ? `${slugQs ? "&" : "?"}replacement_author_id=${replacementId}`
-          : "";
-      const res = await api.del<{
-        contributors: Contributor[];
-        removed_author_orphaned: boolean;
-      }>(`/discovery/books/${book.id}/contributors/${c.author_id}${slugQs}${repQs}`);
-      setContribs(res.contributors);
-      setReplaceTarget(null);
-      toast.success(
-        res.removed_author_orphaned
-          ? `Removed ${c.name} — now-empty author will be cleaned up automatically`
-          : `Removed ${c.name} from this book`,
-      );
-      // Refresh the parent list/counts (byline, author totals) in the
-      // background — the local `contribs` already updated the sidebar.
-      if (onEdit) {
-        Promise.resolve(onEdit()).catch(() => {
-          /* background refresh — surfaces on parent list */
-        });
-      }
-    } catch (e) {
-      toast.error(
-        `Remove failed: ${e instanceof Error ? e.message : String(e)}`,
-      );
-      throw e; // let the modal surface it too
-    } finally {
-      setRemovingId(null);
-    }
-  };
+  const contributors = useContributors(book, onEdit);
   const [ef, setEf] = useState<EditFields>({
     title: "",
     description: "",
@@ -255,29 +148,9 @@ export function BookSidebar({
   const [mamScanning, setMamScanning] = useState(false);
   const [mamDeciding, setMamDeciding] = useState(false);
   const mamOn = useMamEnabled();
-  const [suggestion, setSuggestion] = useState<SeriesSuggestion | null>(null);
-  const [sugBusy, setSugBusy] = useState<SuggestionAction | null>(null);
-  const [sending, setSending] = useState(false);
-
-  // Economy offers — the "use wedge" checkbox only renders when the
-  // user has opted into it via MamPage. (The "buy personal FL" tick was
-  // dropped 2026-10-07: MAM refuses spendtype=personalFL via the API,
-  // "Not allowed via API".) `preflight` caches the result of the most
-  // recent buffer gate check for this book so the
-  // BufferInsufficientBanner has something to render.
-  const [offerWedge, setOfferWedge] = useState(false);
-  const [bufferGateOn, setBufferGateOn] = useState(false);
-  const [useWedgeChecked, setUseWedgeChecked] = useState(false);
-  const [preflight, setPreflight] = useState<PreflightResponse | null>(null);
-  // v2.8.0 reingest state. `reingestBusy` mirrors `sending` for the
-  // parallel button; `reingestCandidates` holds the picker payload
-  // when probe returned >1 result; `reingestError` shows the
-  // not-found / failure toast inline near the button.
-  const [reingestBusy, setReingestBusy] = useState(false);
-  const [reingestCandidates, setReingestCandidates] = useState<
-    ReingestCandidate[] | null
-  >(null);
-  const [reingestError, setReingestError] = useState<string | null>(null);
+  const suggestion = useSeriesSuggestion(book?.id, onEdit);
+  const send = useSendToPipeline(book);
+  const reingest = useReingest(book, onEdit);
 
   useEffect(() => {
     requestAnimationFrame(() => setMounted(true));
@@ -296,66 +169,7 @@ export function BookSidebar({
       .get<PipelineStatusResponse>("/discovery/pipeline/status")
       .then((r) => setPipelineReady(!!r.configured && !!r.reachable))
       .catch(() => {});
-
-    // Economy offers config — cheap one-shot fetch. Failures are
-    // non-blocking (the checkboxes just stay hidden, matching the
-    // pre-commit-7 UX).
-    economyApi
-      .getConfig()
-      .then((cfg) => {
-        setOfferWedge(!!cfg.mam_economy_manual_wedge_offer_enabled);
-        setBufferGateOn(!!cfg.mam_economy_buffer_gate_enabled);
-      })
-      .catch(() => {});
   }, []);
-
-  // Fetch the active series-suggestion (if any) for this book when the
-  // sidebar opens. The endpoint returns `{suggestion: null}` rather than
-  // 404 when nothing exists, so we always reach a deterministic terminal
-  // state without branching on HTTP status.
-  useEffect(() => {
-    if (!book?.id) {
-      setSuggestion(null);
-      return;
-    }
-    let cancelled = false;
-    api
-      .get<{ suggestion: SeriesSuggestion | null }>(
-        `/discovery/series-suggestions/by-book/${book.id}`,
-      )
-      .then((r) => {
-        if (!cancelled) setSuggestion(r.suggestion || null);
-      })
-      .catch(() => {
-        if (!cancelled) setSuggestion(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [book?.id]);
-
-  const sugAction = async (action: SuggestionAction) => {
-    if (!suggestion || sugBusy) return;
-    setSugBusy(action);
-    try {
-      if (action === "apply")
-        await api.post(`/discovery/series-suggestions/${suggestion.id}/apply`);
-      else if (action === "ignore")
-        await api.post(`/discovery/series-suggestions/${suggestion.id}/ignore`);
-      else if (action === "delete")
-        await api.del(`/discovery/series-suggestions/${suggestion.id}`);
-      try {
-        window.dispatchEvent(new CustomEvent(EVT.SuggestionsChanged));
-      } catch {
-        /* ignore */
-      }
-      setSuggestion(null);
-      if (action === "apply" && onEdit) await onEdit();
-    } catch (e) {
-      alert(`${action} failed: ${(e as Error).message || e}`);
-    }
-    setSugBusy(null);
-  };
 
   // Approve a "possible" match as Found, Remove the MAM link
   // entirely (clears URL → status flips to "not_found"), or Skip
@@ -426,144 +240,6 @@ export function BookSidebar({
       toast.error(`MAM scan failed: ${(e as Error).message || e}`);
     }
     setMamScanning(false);
-  };
-
-  const sendToPipeline = async () => {
-    if (sending) return;
-    setSending(true);
-    setPreflight(null);
-
-    // Buffer-gate preflight: only when the gate is enabled AND the
-    // book has a MAM torrent ID we can probe. A failed preflight
-    // (no torrent ID, MAM offline, etc.) falls through to the
-    // normal grab — the server-side gate is authoritative.
-    if (bufferGateOn && book.mam_torrent_id) {
-      try {
-        const match = /(\d+)/.exec(String(book.mam_torrent_id));
-        if (match) {
-          const pf = await economyApi.preflight(match[1]);
-          if (!pf.sufficient) {
-            setPreflight(pf);
-            setSending(false);
-            return;
-          }
-        }
-      } catch {
-        /* preflight is best-effort — let the server decide */
-      }
-    }
-
-    try {
-      const r = await runBatchJob<SendToPipelineResponse>(
-        "/discovery/send-to-pipeline",
-        {
-          book_ids: [book.id],
-          use_wedge_override: useWedgeChecked,
-        },
-      );
-      if (r.sent > 0) {
-        alert("Sent to pipeline for download!");
-        setUseWedgeChecked(false);
-      } else {
-        alert(r.message || "Failed to send");
-      }
-    } catch (e) {
-      alert(`Send failed: ${(e as Error).message || e}`);
-    }
-    setSending(false);
-  };
-
-  // ── Reingest from disk (v2.8.0) ────────────────────────────
-  // For books MAM reports as already-snatched: probe qBit + the
-  // configured download folder for the existing files and either
-  // auto-start the pipeline (one candidate) or prompt the user to
-  // pick among multiple matches.
-  const probeReingest = async () => {
-    if (reingestBusy) return;
-    setReingestBusy(true);
-    setReingestCandidates(null);
-    setReingestError(null);
-    try {
-      const slug = book.library_slug
-        ? `?slug=${encodeURIComponent(book.library_slug)}`
-        : "";
-      const r = await api.post<ReingestProbeResponse>(
-        `/discovery/books/${book.id}/reingest/probe${slug}`,
-      );
-      if (!r.found) {
-        // Per the v2.8.0 design (option a): hard-fail with a clear
-        // message when the file isn't on disk anywhere. NO automatic
-        // fallback to re-snatch — the snatch-safety rule forbids it.
-        setReingestError(
-          `Could not find this snatch anywhere we looked: ${(r.searched || []).join(", ") || "no sources searched"}.`,
-        );
-        return;
-      }
-      // v2.8.1: auto-start that ran but failed mid-pipeline returns
-      // auto_started=false + error set. Surface that instead of a
-      // misleading success toast.
-      if (r.error) {
-        setReingestError(r.error);
-        return;
-      }
-      if (r.auto_started) {
-        toast.success(
-          `Reingest started: grab #${r.grab_id}, run #${r.pipeline_run_id}. Check the Review queue.`,
-        );
-        onEdit?.();
-        return;
-      }
-      // Multi-candidate → show picker.
-      setReingestCandidates(r.candidates || []);
-    } catch (e) {
-      setReingestError(
-        `Reingest probe failed: ${(e as Error).message || e}`,
-      );
-    } finally {
-      setReingestBusy(false);
-    }
-  };
-
-  const startReingestWithCandidate = async (
-    candidate: ReingestCandidate,
-  ) => {
-    if (reingestBusy) return;
-    setReingestBusy(true);
-    setReingestError(null);
-    try {
-      const slug = book.library_slug
-        ? `?slug=${encodeURIComponent(book.library_slug)}`
-        : "";
-      const r = await api.post<{
-        ok: boolean;
-        grab_id: number;
-        pipeline_run_id: number;
-        error?: string | null;
-      }>(
-        `/discovery/books/${book.id}/reingest/start${slug}`,
-        { candidate },
-      );
-      // v2.8.1: surface mid-pipeline failures (qBit file moved,
-      // sink unreachable, etc.) instead of a misleading success
-      // toast. The grab/run rows still exist as audit trail.
-      if (!r.ok) {
-        setReingestError(
-          r.error || `Reingest pipeline_run #${r.pipeline_run_id} failed.`,
-        );
-        return;
-      }
-      toast.success(
-        `Reingest started: grab #${r.grab_id}, run #${r.pipeline_run_id}. Check the Review queue.`,
-      );
-      setReingestCandidates(null);
-      onEdit?.();
-    } catch (e) {
-      setReingestError(
-        `Reingest start failed: ${(e as Error).message || e}`,
-      );
-    } finally {
-      setReingestBusy(false);
-    }
   };
 
   if (!book) return null;
@@ -806,11 +482,6 @@ export function BookSidebar({
       : "Owned"
     : "Unowned";
 
-  const fmtSuggestion = (
-    name: string | null,
-    idx: number | null,
-  ) => (name ? (idx != null ? `${name} #${idx}` : name) : "standalone");
-
   return (
     <div
       style={{
@@ -1032,84 +703,10 @@ export function BookSidebar({
       ) : null}
 
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        {/* v3.0.0: show the full contributor set (position order), not
-            just the primary. Falls back to author_name on stale payloads
-            with no contributors[]. */}
-        {/* v3.x — contributors are individually removable. Each is a
-            chip with an × ; with >1 author the removal is immediate
-            (after a confirm), with exactly 1 it opens the replacement
-            modal since a book can't be left authorless. */}
-        <SBRow
-          label={contribs.length > 1 ? "Authors" : "Author"}
-          value={
-            contribs.length ? (
-              <span
-                style={{
-                  display: "inline-flex",
-                  flexWrap: "wrap",
-                  gap: 6,
-                  justifyContent: "flex-end",
-                }}
-              >
-                {contribs.map((c) => (
-                  <span
-                    key={`${c.author_id}-${c.position}`}
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: 4,
-                      padding: "1px 4px 1px 8px",
-                      background: t.bg4,
-                      border: `1px solid ${t.border}`,
-                      borderRadius: 11,
-                      fontSize: 12,
-                      lineHeight: 1.5,
-                    }}
-                  >
-                    {c.name}
-                    {c.role ? <span style={{ color: t.td }}>({c.role})</span> : null}
-                    <button
-                      title={`Remove ${c.name} from this book`}
-                      aria-label={`Remove ${c.name}`}
-                      disabled={removingId !== null}
-                      onClick={() => {
-                        if (
-                          contribs.length > 1 &&
-                          !window.confirm(
-                            `Remove ${c.name} from "${book.title}"?`,
-                          )
-                        )
-                          return;
-                        removeContributor(c).catch(() => {
-                          /* toast already surfaced in handler */
-                        });
-                      }}
-                      style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        width: 15,
-                        height: 15,
-                        padding: 0,
-                        borderRadius: "50%",
-                        border: "none",
-                        background: "none",
-                        color: t.red,
-                        cursor: removingId !== null ? "default" : "pointer",
-                        fontSize: 14,
-                        opacity: removingId === c.author_id ? 0.4 : 0.8,
-                      }}
-                    >
-                      ×
-                    </button>
-                  </span>
-                ))}
-              </span>
-            ) : (
-              book.author_name
-            )
-          }
-        />
+        {/* v3.0.0: the full contributor set (position order), each
+            removable. Falls back to author_name on stale payloads with
+            no contributors[]. */}
+        <ContributorsRow c={contributors} book={book} />
 
         {book.series_name ? (
           <div
@@ -1520,137 +1117,8 @@ export function BookSidebar({
               </div>
             ) : null}
 
-            {/* Inline series-suggestion card. Only renders when an
-                active (pending or ignored) suggestion exists for this
-                book. Apply/Ignore/Delete hit the same endpoints
-                SuggestionsPage uses and dispatch the same
-                EVT.SuggestionsChanged event so the navbar badge count
-                stays in sync. */}
-            {suggestion
-              ? (() => {
-                  const isPending = suggestion.status === "pending";
-                  const sources = Array.isArray(suggestion.sources_agreeing)
-                    ? suggestion.sources_agreeing
-                    : [];
-                  return (
-                    <div
-                      style={{
-                        background: t.accent + "12",
-                        border: `1px solid ${t.accent}44`,
-                        borderRadius: 10,
-                        padding: "12px 14px",
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: 8,
-                      }}
-                    >
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 6,
-                        }}
-                      >
-                        <span style={{ fontSize: 14 }}>💡</span>
-                        <span
-                          style={{
-                            fontSize: 12,
-                            fontWeight: 700,
-                            color: t.accent,
-                            textTransform: "uppercase",
-                            letterSpacing: "0.06em",
-                          }}
-                        >
-                          Series Suggestion
-                        </span>
-                        {!isPending ? (
-                          <span
-                            style={{
-                              fontSize: 10,
-                              fontWeight: 600,
-                              color: t.tg,
-                              textTransform: "uppercase",
-                              padding: "1px 6px",
-                              borderRadius: 4,
-                              background: t.bg4,
-                              border: `1px solid ${t.borderL}`,
-                            }}
-                          >
-                            {suggestion.status}
-                          </span>
-                        ) : null}
-                      </div>
-                      <div
-                        style={{
-                          fontSize: 12,
-                          color: t.text2,
-                          lineHeight: 1.5,
-                        }}
-                      >
-                        <span style={{ color: t.tg }}>Currently:</span>{" "}
-                        <span style={{ color: t.text2 }}>
-                          {fmtSuggestion(
-                            suggestion.current_series_name,
-                            suggestion.current_series_index,
-                          )}
-                        </span>
-                        <br />
-                        <span style={{ color: t.tg }}>Suggested:</span>{" "}
-                        <span
-                          style={{ color: t.accent, fontWeight: 600 }}
-                        >
-                          {fmtSuggestion(
-                            suggestion.suggested_series_name,
-                            suggestion.suggested_series_index,
-                          )}
-                        </span>
-                      </div>
-                      <div style={{ fontSize: 11, color: t.tg }}>
-                        Agreed by: {sources.join(", ") || "—"}
-                      </div>
-                      <div
-                        style={{ display: "flex", gap: 6, flexWrap: "wrap" }}
-                      >
-                        {isPending ? (
-                          <>
-                            <Btn
-                              size="sm"
-                              variant="accent"
-                              onClick={() => sugAction("apply")}
-                              disabled={!!sugBusy}
-                            >
-                              {sugBusy === "apply" ? (
-                                <Spin />
-                              ) : (
-                                <>
-                                  {Ic.check} Apply
-                                </>
-                              )}
-                            </Btn>
-                            <Btn
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => sugAction("ignore")}
-                              disabled={!!sugBusy}
-                            >
-                              {sugBusy === "ignore" ? <Spin /> : "Ignore"}
-                            </Btn>
-                          </>
-                        ) : null}
-                        <Btn
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => sugAction("delete")}
-                          disabled={!!sugBusy}
-                          style={{ color: t.redt }}
-                        >
-                          {sugBusy === "delete" ? <Spin /> : Ic.trash}
-                        </Btn>
-                      </div>
-                    </div>
-                  );
-                })()
-              : null}
+            {/* Inline series-suggestion card, when one is active. */}
+            <SeriesSuggestionCard s={suggestion} />
 
             {mamOn || book.mam_status ? (
               <div>
@@ -1775,18 +1243,7 @@ export function BookSidebar({
                     {pipelineReady &&
                     book.mam_status === "found" &&
                     !book.mam_my_snatched ? (
-                      <Btn
-                        size="sm"
-                        onClick={sendToPipeline}
-                        disabled={sending}
-                        style={{
-                          background: t.accent + "22",
-                          color: t.accent,
-                          border: `1px solid ${t.accent}44`,
-                        }}
-                      >
-                        {sending ? <Spin /> : "⬇"} Send to pipeline
-                      </Btn>
+                      <SendButton s={send} />
                     ) : null}
                     {/* v2.8.0 reingest: same MAM-found + not-owned
                         case as Send to pipeline, but specifically
@@ -1798,151 +1255,20 @@ export function BookSidebar({
                     book.mam_status === "found" &&
                     book.mam_my_snatched &&
                     !book.owned ? (
-                      <Btn
-                        size="sm"
-                        onClick={probeReingest}
-                        disabled={reingestBusy}
-                        title="Already on disk from a prior snatch — find the files and run them through enrichment + review without re-downloading from MAM."
-                        style={{
-                          background: t.ok + "22",
-                          color: t.ok,
-                          border: `1px solid ${t.ok}44`,
-                        }}
-                      >
-                        {reingestBusy ? <Spin /> : "♻"} Reingest from disk
-                      </Btn>
+                      <ReingestButton r={reingest} />
                     ) : null}
                   </div>
                 </div>
-                {/* Reingest error banner — shown inline below the
-                    button row when probe/start fails. Includes the
-                    list of sources searched so the user can debug
-                    a missing drive or wrong download_path setting. */}
-                {reingestError ? (
-                  <div
-                    style={{
-                      marginTop: 6,
-                      padding: "6px 10px",
-                      borderRadius: 6,
-                      background: t.err + "15",
-                      border: `1px solid ${t.err}55`,
-                      color: t.err,
-                      fontSize: 12,
-                    }}
-                  >
-                    {reingestError}
-                  </div>
-                ) : null}
-                {/* Reingest candidate picker — appears when probe
-                    returned multiple matches. Shows up to 5 with
-                    path + file count + size; user clicks one and
-                    we POST /reingest/start with the chosen entry. */}
-                {reingestCandidates && reingestCandidates.length > 0 ? (
-                  <div
-                    style={{
-                      marginTop: 8,
-                      padding: 10,
-                      borderRadius: 8,
-                      background: t.bg3,
-                      border: `1px solid ${t.borderL}`,
-                    }}
-                  >
-                    <div
-                      style={{
-                        fontSize: 12,
-                        fontWeight: 700,
-                        color: t.text2,
-                        marginBottom: 8,
-                      }}
-                    >
-                      Multiple matches found — pick one:
-                    </div>
-                    <div
-                      style={{
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: 6,
-                      }}
-                    >
-                      {reingestCandidates.map((c, i) => (
-                        <button
-                          key={`${c.source}:${c.save_path}:${i}`}
-                          disabled={reingestBusy}
-                          onClick={() => startReingestWithCandidate(c)}
-                          style={{
-                            textAlign: "left",
-                            padding: "6px 10px",
-                            borderRadius: 6,
-                            background: t.bg2,
-                            border: `1px solid ${t.borderL}`,
-                            color: t.text,
-                            cursor: reingestBusy ? "wait" : "pointer",
-                            fontSize: 12,
-                          }}
-                        >
-                          <div style={{ fontWeight: 600 }}>
-                            [{c.source}] {c.display_path}
-                          </div>
-                          <div style={{ color: t.textDim, fontSize: 11 }}>
-                            {c.book_files.length} file
-                            {c.book_files.length === 1 ? "" : "s"}
-                            {c.total_size > 0
-                              ? ` · ${(c.total_size / 1024 / 1024).toFixed(1)} MB`
-                              : ""}
-                          </div>
-                        </button>
-                      ))}
-                      <button
-                        disabled={reingestBusy}
-                        onClick={() => setReingestCandidates(null)}
-                        style={{
-                          marginTop: 4,
-                          padding: "4px 10px",
-                          borderRadius: 6,
-                          background: "transparent",
-                          border: "none",
-                          color: t.textDim,
-                          cursor: "pointer",
-                          fontSize: 11,
-                          textAlign: "left",
-                        }}
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
-                ) : null}
+                {/* Reingest error / candidate picker, under the button row. */}
+                <ReingestOutcome r={reingest} />
 
-                {/* Per-grab offer checkboxes (commit 7). On their
-                    own row so narrow sidebar widths don't wrap the
-                    Found/Re-scan/Send buttons around them. Only
-                    renders when the user has enabled one of the
-                    offer under MamPage → Wedges on manual grabs
-                    AND the send-to-pipeline button would actually
-                    show up on the row above. */}
+                {/* The per-book wedge tick: where Send to pipeline
+                    shows and MamPage → Wedges on manual grabs is on. */}
                 {pipelineReady &&
                 book.mam_status === "found" &&
                 !book.mam_my_snatched &&
-                offerWedge ? (
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "flex-end",
-                      gap: 14,
-                      marginTop: 4,
-                      fontSize: 11,
-                      color: t.tg,
-                      flexWrap: "wrap",
-                    }}
-                  >
-                    {offerWedge && (
-                      <WedgeToggle
-                        form="plain"
-                        checked={useWedgeChecked}
-                        onChange={setUseWedgeChecked}
-                      />
-                    )}
-                  </div>
+                send.offerWedge ? (
+                  <SendWedgeRow s={send} />
                 ) : null}
 
                 {book.mam_url &&
@@ -2368,18 +1694,7 @@ export function BookSidebar({
         </div>
       ) : null}
 
-      {preflight && (
-        <div style={{ margin: "12px 14px 0" }}>
-          <BufferInsufficientBanner
-            preflight={preflight}
-            onBufferReady={() => {
-              setPreflight(null);
-              sendToPipeline();
-            }}
-            onCancel={() => setPreflight(null)}
-          />
-        </div>
-      )}
+      <SendBufferGate s={send} />
 
       {compareOpen ? (
         <CompareModal
@@ -2420,18 +1735,7 @@ export function BookSidebar({
         />
       ) : null}
 
-      {replaceTarget ? (
-        <ReplaceAuthorModal
-          bookTitle={book.title}
-          slug={book.library_slug}
-          removingName={replaceTarget.name}
-          removingAuthorId={replaceTarget.author_id}
-          onCancel={() => setReplaceTarget(null)}
-          onConfirm={(replacementId) =>
-            removeContributor(replaceTarget, replacementId)
-          }
-        />
-      ) : null}
+      <ReplaceSoleAuthor c={contributors} book={book} />
     </div>
   );
 }
