@@ -55,6 +55,9 @@ class ReviewItem(BaseModel):
     bundle_index: int = 0
     bundle_total: int = 1
     bundle_parent_grab_id: Optional[int] = None
+    # The grab's MAM content tags (wave 5a, G125); None when only one
+    # category is known.
+    categories: Optional[list[str]] = None
 
 
 class ReviewListResponse(BaseModel):
@@ -95,7 +98,26 @@ class BulkResponse(BaseModel):
     errors: list[str] = []
 
 
-def _to_item(row: review_storage.ReviewRow) -> ReviewItem:
+async def _grab_categories(db, grab_ids: list[int]) -> dict[int, list[str]]:
+    """Each grab's content tags, by grab id (grabs without any left out)."""
+    if not grab_ids:
+        return {}
+    marks = ",".join("?" * len(grab_ids))
+    rows = await (await db.execute(
+        f"SELECT id, categories_json FROM grabs WHERE id IN ({marks})",  # nosec B608
+        grab_ids,
+    )).fetchall()
+    out: dict[int, list[str]] = {}
+    for r in rows:
+        tags = grabs_storage.parse_categories(r["categories_json"])
+        if tags:
+            out[int(r["id"])] = tags
+    return out
+
+
+def _to_item(
+    row: review_storage.ReviewRow, categories: Optional[list[str]] = None,
+) -> ReviewItem:
     return ReviewItem(
         id=row.id,
         grab_id=row.grab_id,
@@ -112,6 +134,7 @@ def _to_item(row: review_storage.ReviewRow) -> ReviewItem:
         bundle_index=row.bundle_index,
         bundle_total=row.bundle_total,
         bundle_parent_grab_id=row.bundle_parent_grab_id,
+        categories=categories,
     )
 
 
@@ -126,8 +149,10 @@ async def list_pending() -> ReviewListResponse:
         count = await review_storage.count_by_status(
             db, review_storage.STATUS_PENDING
         )
+        tags = await _grab_categories(db, sorted({r.grab_id for r in rows}))
         return ReviewListResponse(
-            items=[_to_item(r) for r in rows], pending_count=count
+            items=[_to_item(r, tags.get(r.grab_id)) for r in rows],
+            pending_count=count,
         )
     finally:
         await db.close()
@@ -140,7 +165,8 @@ async def get_one(review_id: int) -> ReviewItem:
         row = await review_storage.get_entry(db, review_id)
         if row is None:
             raise HTTPException(status_code=404, detail="review not found")
-        return _to_item(row)
+        tags = await _grab_categories(db, [row.grab_id])
+        return _to_item(row, tags.get(row.grab_id))
     finally:
         await db.close()
 
@@ -383,7 +409,7 @@ async def save_edits(review_id: int, body: SaveRequest) -> ReviewItem:
             "review edit saved: review_id=%d grab_id=%d (title=%r)",
             review_id, row.grab_id, merged.get("title"),
         )
-        return _to_item(refreshed)
+        return _to_item(refreshed, (await _grab_categories(db, [refreshed.grab_id])).get(refreshed.grab_id))
     finally:
         await db.close()
 
@@ -570,7 +596,7 @@ async def re_enrich(review_id: int, body: SaveRequest) -> ReviewItem:
             review_id, row.grab_id, result.title or title,
             getattr(result, "confidence", 0.0),
         )
-        return _to_item(refreshed)
+        return _to_item(refreshed, (await _grab_categories(db, [refreshed.grab_id])).get(refreshed.grab_id))
     finally:
         await db.close()
 

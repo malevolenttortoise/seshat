@@ -26,6 +26,7 @@ import { useMobileCodepath } from "../components/mobile";
 import MobileReviewPage from "./MobileReviewPage";
 import { storedCoverUrl } from "../lib/covers";
 import { ImportFailedCard } from "../components/review/ImportFailedCard";
+import { CategoryChips } from "../components/CategoryChips";
 
 interface ReviewItem {
   id: number;
@@ -90,6 +91,8 @@ interface ReviewItem {
   created_at: string;
   // Why the CWA import failed, for status "import_failed" (wave 5a).
   decision_note?: string | null;
+  // The grab's MAM content tags (wave 5a); null when only one is known.
+  categories?: string[] | null;
 }
 
 interface ReviewListResponse {
@@ -682,6 +685,9 @@ function ReviewCard({
           <EditInput value={editAuthors} onChange={setEditAuthors} placeholder="Author(s)" style={{ fontSize: 14 }} />
         ) : (
           <div style={{ fontSize: 14, color: theme.text2, marginTop: 2 }}>{authors}</div>
+        )}
+        {item.categories && item.categories.length > 0 && (
+          <div style={{ marginTop: 4 }}><CategoryChips categories={item.categories} /></div>
         )}
         {editing ? (
           <div style={{ display: "flex", gap: 8, marginTop: 4 }}>

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { useTheme } from "../theme";
+import { CategoryChips } from "../components/CategoryChips";
 import { useVisibleInterval } from "../hooks/useVisibleInterval";
 import { Ic } from "../icons";
 import {
@@ -36,6 +37,9 @@ interface AnnounceRow {
   decision: string;
   decision_reason: string;
   matched_author: string;
+  // Every MAM content tag the announce carried (wave 5a); null when
+  // only `category` is known.
+  categories?: string[] | null;
 }
 
 interface AnnouncesResponse {
@@ -333,6 +337,7 @@ export default function MobileLogsPage() {
                       {row.torrent_name || "(no name)"}
                     </span>
                   </div>
+                  <CategoryChips categories={row.categories} />
                   <div
                     style={{
                       display: "flex",

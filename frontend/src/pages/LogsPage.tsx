@@ -8,6 +8,7 @@
 // when the user scrolls up (reading older entries) to avoid jumping.
 import { useEffect, useRef, useState } from "react";
 import { Btn } from "../components/Btn";
+import { CategoryChips } from "../components/CategoryChips";
 import { Spin } from "../components/Spin";
 import { api } from "../api";
 import { useTheme } from "../theme";
@@ -43,6 +44,9 @@ interface AnnounceRow {
   decision: string;
   decision_reason: string;
   matched_author: string;
+  // Every MAM content tag the announce carried (wave 5a); null when
+  // only `category` is known.
+  categories?: string[] | null;
 }
 
 interface AnnouncesResponse {
@@ -472,6 +476,9 @@ function AnnouncesTable({ rows }: { rows: AnnounceRow[] }) {
             </span>
             <span style={{ color: theme.text2, fontWeight: 500 }}>
               {row.torrent_name || "(no name)"}
+              {row.categories && row.categories.length > 0 && (
+                <div style={{ marginTop: 3 }}><CategoryChips categories={row.categories} /></div>
+              )}
             </span>
             <span style={{ color: theme.textDim }}>
               {row.author_blob || "—"}

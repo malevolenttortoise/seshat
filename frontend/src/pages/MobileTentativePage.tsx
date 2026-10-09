@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import { runBatchJob } from "../lib/batchJob";
 import { useTheme } from "../theme";
+import { CategoryChips } from "../components/CategoryChips";
 import { useVisibleInterval } from "../hooks/useVisibleInterval";
 import {
   MobileBtn,
@@ -25,6 +26,9 @@ interface TentativeItem {
   vip: boolean;
   cover_path: string | null;
   status: string;
+  // Every MAM content tag the announce carried (wave 5a); null when
+  // only `category` is known.
+  categories?: string[] | null;
 }
 
 export default function MobileTentativePage() {
@@ -301,6 +305,7 @@ export default function MobileTentativePage() {
                   <MobileBadge tone="info">{item.language}</MobileBadge>
                 )}
                 {item.vip && <MobileBadge tone="accent">VIP</MobileBadge>}
+                <CategoryChips categories={item.categories} />
                 <a
                   href={`https://www.myanonamouse.net/t/${item.mam_torrent_id}`}
                   target="_blank"

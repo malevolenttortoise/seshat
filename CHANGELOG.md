@@ -37,8 +37,11 @@ themselves.
   kept until the import is confirmed (so a Re-drop has something to send).
   From 2026-09-29 to 10-09 CWA deleted every patched ebook unimported while
   Seshat said delivered; this is what would have caught it.
-- **Database migration**: the app database goes to `user_version` 63 (a new
-  `import_checks` table).
+- **Database migration**: the app database goes to `user_version` 66 (a new
+  `import_checks` table; a `categories_json` column on announces,
+  tentative torrents and grabs). At first start the MAM content tags of
+  announces since 2026-10-08 (when the IRC line started being stored) are
+  read back from their IRC lines.
 - **Drop mode keeps a grab's .torrent when qBit can't be reached** (wave
   5a): a qBit login or network failure now saves the bytes and queues the
   grab in both full-budget modes, as queue mode already did. Before, drop
@@ -155,6 +158,15 @@ themselves.
 
 ### Added
 
+- **Every MAM content tag is kept** (wave 5a): an announce carries several
+  ("Crime, Mystery, Thriller/Suspense"), the filter already read them all,
+  but announces, tentative torrents and grabs kept only the first (in
+  `category`, "Ebooks - Crime", which stays as it is for every reader).
+  They now also store the list, and the Tentative page, the Announces log
+  and the Review page show it as chips (desktop + mobile).
+  `GET /api/v1/announces`, `GET /api/v1/tentative` and `GET /api/v1/review`
+  rows gain `categories` (a list, or null when only one category is
+  known: grabs from Manual Grab or discovery, rows from before).
 - `POST /api/v1/review/{id}/redrop` and `POST /api/v1/review/{id}/mark-imported`
   for reviews whose CWA import failed; `GET /api/v1/review` lists those
   (status `import_failed`, the reason in `decision_note`) ahead of the

@@ -17,6 +17,7 @@ import {
   MobileBackButton,
 } from "../components/mobile";
 import { ImportFailedCard } from "../components/review/ImportFailedCard";
+import { CategoryChips } from "../components/CategoryChips";
 
 interface ReviewItem {
   id: number;
@@ -62,6 +63,8 @@ interface ReviewItem {
   created_at: string;
   // Why the CWA import failed, for status "import_failed" (wave 5a).
   decision_note?: string | null;
+  // The grab's MAM content tags (wave 5a); null when only one is known.
+  categories?: string[] | null;
 }
 
 interface ReviewListResponse {
@@ -470,6 +473,9 @@ function ReviewCard({
           <div style={{ fontSize: 13, color: t.td, marginTop: 2 }}>
             {metaString(item, "author") || "(unknown author)"}
           </div>
+          {item.categories && item.categories.length > 0 && (
+            <div style={{ marginTop: 4 }}><CategoryChips categories={item.categories} /></div>
+          )}
           {metaString(item, "series") && (
             <div style={{ fontSize: 12, color: t.purt, marginTop: 2 }}>
               {metaString(item, "series")}

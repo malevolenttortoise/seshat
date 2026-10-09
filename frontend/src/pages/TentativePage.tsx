@@ -13,6 +13,7 @@
 // tentative approvals, not for the initial capture. Phase 6b work.
 import { useEffect, useState } from "react";
 import { Btn } from "../components/Btn";
+import { CategoryChips } from "../components/CategoryChips";
 import { useVisibleInterval } from "../hooks/useVisibleInterval";
 import { Section } from "../components/Section";
 import { Spin } from "../components/Spin";
@@ -37,6 +38,9 @@ interface TentativeItem {
   cover_path: string | null;
   status: string;
   created_at: string;
+  // Every MAM content tag the announce carried (wave 5a); null when
+  // only `category` is known.
+  categories?: string[] | null;
 }
 
 interface TentativeListResponse {
@@ -442,6 +446,9 @@ function TentativeCard({
           }}
         >
           {item.category && <Field label="Category">{item.category}</Field>}
+          {item.categories && item.categories.length > 0 && (
+            <Field label="Tags"><CategoryChips categories={item.categories} /></Field>
+          )}
           {item.language && <Field label="Language">{item.language}</Field>}
           {item.format && <Field label="Format">{item.format}</Field>}
           <Field label="MAM ID">

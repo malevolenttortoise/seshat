@@ -20,9 +20,10 @@ the torrent moves through the rest of the pipeline.
 """
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Sequence
 
 import aiosqlite
 
@@ -93,6 +94,7 @@ async def record_announce(
     author_blob: str,
     decision: Decision,
     filetype: str = "",
+    categories: Sequence[str] = (),
 ) -> int:
     """Insert one row in the `announces` table.
 
@@ -106,13 +108,18 @@ async def record_announce(
     format-dedup decisions can be reviewed retroactively. Pre-v2.9.0
     callers that didn't pass it land an empty string, which the
     schema accepts via the column's NULL-able definition.
+
+    `categories` is every MAM content tag the announce carried (IRC
+    announces since MAM's 2026-08-11 format), stored as a JSON list
+    beside the single `category` string (wave 5a, G124).
     """
     cursor = await db.execute(
         """
         INSERT INTO announces
             (raw, torrent_id, torrent_name, category, author_blob,
-             decision, decision_reason, matched_author, filetype)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             decision, decision_reason, matched_author, filetype,
+             categories_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             raw,
@@ -124,10 +131,41 @@ async def record_announce(
             decision.reason,
             decision.matched_author,
             (filetype or "").lower() or None,
+            categories_json(categories),
         ),
     )
     await db.commit()
     return cursor.lastrowid or 0
+
+
+def categories_json(categories: Sequence[str]) -> Optional[str]:
+    """MAM content tags as stored (`categories_json`): a JSON list, or
+    NULL when there's none to keep (one category is already `category`)."""
+    tags = [str(c).strip() for c in categories or () if str(c).strip()]
+    return json.dumps(tags, ensure_ascii=False) if tags else None
+
+
+def parse_categories(raw: Optional[str]) -> Optional[list[str]]:
+    """`categories_json` back to a list; None when absent or unreadable."""
+    if not raw:
+        return None
+    try:
+        tags = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    return [str(t) for t in tags] if isinstance(tags, list) else None
+
+
+async def announce_categories(
+    db: aiosqlite.Connection, announce_id: Optional[int],
+) -> list[str]:
+    """The content tags recorded on an announce row (empty if none)."""
+    if not announce_id:
+        return []
+    row = await (await db.execute(
+        "SELECT categories_json FROM announces WHERE id = ?", (announce_id,),
+    )).fetchone()
+    return parse_categories(row["categories_json"] if row else None) or []
 
 
 async def update_announce_decision(
@@ -170,6 +208,7 @@ async def create_grab(
     book_format: str = "",
     dedup_key: str = "",
     policy_tier: str = "",
+    categories: Sequence[str] = (),
 ) -> int:
     """Insert a new row in the `grabs` table.
 
@@ -197,14 +236,16 @@ async def create_grab(
     `free`, `normal`, ...; `policy/engine.py`), so a grab's economics can
     be read back later (2026-10 audit issue 11). Empty → NULL: grabs that
     never went through the policy (adoptions, reingests, older rows).
+
+    `categories`: the announce's MAM content tags (wave 5a, G124).
     """
     cursor = await db.execute(
         """
         INSERT INTO grabs
             (announce_id, mam_torrent_id, torrent_name, category,
              author_blob, state, qbit_hash, is_reingest,
-             book_format, dedup_key, policy_tier)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             book_format, dedup_key, policy_tier, categories_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             announce_id,
@@ -218,6 +259,7 @@ async def create_grab(
             (book_format or "").lower() or None,
             dedup_key or None,
             policy_tier or None,
+            categories_json(categories),
         ),
     )
     await db.commit()

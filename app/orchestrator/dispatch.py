@@ -44,7 +44,7 @@ import time
 import weakref
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Awaitable, Callable, Optional, Protocol
+from typing import Awaitable, Callable, Optional, Protocol, Sequence
 
 import aiosqlite
 
@@ -601,6 +601,7 @@ async def _hold_for_index(
             author_blob=announce.author_blob,
             decision=decision,
             filetype=(announce.filetype or "").lower().strip(),
+            categories=announce.categories,
         )
         hold_id = await holds_storage.create_index_wait(
             db,
@@ -869,6 +870,7 @@ async def inject_grab(
     apply_format_dedup: bool = True,
     override_mam_snatched: bool = False,
     apply_claim_for_owned: bool = True,
+    categories: Sequence[str] = (),
 ) -> DispatchResult:
     """Manually queue a grab by torrent ID.
 
@@ -932,6 +934,9 @@ async def inject_grab(
         series_name=series_name,
         book_title=book_title,
         filetype=(filetype or "").lower(),
+        # The IRC announce's content tags, when a tentative approve or a
+        # hold release has them (wave 5a, G124).
+        categories=tuple(categories),
     )
     if live["dry_run"] and not deps.dry_run:
         _log.info(
@@ -1032,6 +1037,7 @@ async def _dispatch_with_decision(
                 author_blob=announce.author_blob,
                 decision=filter_decision,
                 filetype=book_format,
+                categories=announce.categories,
             )
             _emit(deps, "announce_recorded", {"announce_id": announce_id})
 
@@ -1069,6 +1075,7 @@ async def _dispatch_with_decision(
                         vip=announce.vip,
                         scraped_metadata=None,
                         cover_path=cover_path,
+                        categories=announce.categories,
                     )
                     _emit(deps, "tentative_captured",
                           {"torrent_id": announce.torrent_id})
@@ -1519,6 +1526,10 @@ async def _dispatch_with_decision(
                 book_format=book_format,
                 dedup_key=dedup_key,
                 policy_tier=policy_decision.tier,
+                categories=(
+                    announce.categories
+                    or await grabs_storage.announce_categories(db, announce_id)
+                ),
             )
 
         # A wedge comes from the policy or from `force_fl_wedge` (a user

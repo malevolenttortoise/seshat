@@ -29,6 +29,7 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
 from app.database import get_db
+from app.storage.grabs import parse_categories
 
 router = APIRouter(prefix="/api/v1/announces", tags=["announces"])
 
@@ -44,6 +45,9 @@ class AnnounceRow(BaseModel):
     decision: str
     decision_reason: str
     matched_author: str
+    # Every MAM content tag the announce carried (wave 5a, G124): explains
+    # a `category_not_allowed` skip. None when only `category` is known.
+    categories: Optional[list[str]] = None
 
 
 class AnnouncesResponse(BaseModel):
@@ -134,7 +138,7 @@ async def list_announces(
 
         rows_cur = await db.execute(
             "SELECT id, seen_at, torrent_name, author_blob, category, "
-            "filetype, decision, decision_reason, matched_author "
+            "filetype, decision, decision_reason, matched_author, categories_json "
             "FROM announces"
             + rows_sql_where
             + " ORDER BY id DESC LIMIT ?",
@@ -151,6 +155,7 @@ async def list_announces(
                 decision=str(r["decision"] or ""),
                 decision_reason=str(r["decision_reason"] or ""),
                 matched_author=str(r["matched_author"] or ""),
+                categories=parse_categories(r["categories_json"]),
             )
             for r in await rows_cur.fetchall()
         ]

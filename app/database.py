@@ -69,7 +69,12 @@ CREATE TABLE IF NOT EXISTS announces (
     -- v2.9.0 format-priority dedup: persist the IRC announce's
     -- `Filetype: ( xxx )` field so we can audit dedup decisions
     -- after the fact. Pre-v2.9.0 announces have this NULL.
-    filetype          TEXT
+    filetype          TEXT,
+    -- 2026-10 audit wave 5a (G124): every MAM content tag the announce
+    -- carried, as a JSON list (`category` keeps the first, synthesized
+    -- "Ebooks - Fantasy" form every reader parses). NULL when only one
+    -- category was known (search-API paths, rows before the change).
+    categories_json   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS grabs (
@@ -106,7 +111,9 @@ CREATE TABLE IF NOT EXISTS grabs (
     -- The grab policy's tier when the grab went through (`vip`, `free`,
     -- `normal`, ...). NULL for grabs that never met the policy and for
     -- rows from before the 2026-10 audit (issue 11).
-    policy_tier       TEXT
+    policy_tier       TEXT,
+    -- MAM content tags, JSON list (wave 5a, G124; see announces).
+    categories_json   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS snatch_ledger (
@@ -208,7 +215,9 @@ CREATE TABLE IF NOT EXISTS tentative_torrents (
     cover_path          TEXT,
     status              TEXT NOT NULL DEFAULT 'pending',
     created_at          TEXT NOT NULL DEFAULT (datetime('now')),
-    decided_at          TEXT
+    decided_at          TEXT,
+    -- MAM content tags, JSON list (wave 5a, G124; see announces).
+    categories_json     TEXT
 );
 
 -- Tier 2: 3-tier author taxonomy. When a tentative torrent is
@@ -1159,6 +1168,10 @@ MIGRATIONS: list[str] = [
         checked_at      TEXT
     )""",
     "CREATE INDEX IF NOT EXISTS idx_import_checks_state ON import_checks(state)",
+    # ── 2026-10 audit wave 5a, G124: every MAM content tag ──
+    "ALTER TABLE announces ADD COLUMN categories_json TEXT",
+    "ALTER TABLE tentative_torrents ADD COLUMN categories_json TEXT",
+    "ALTER TABLE grabs ADD COLUMN categories_json TEXT",
 ]
 
 
@@ -1170,6 +1183,48 @@ async def get_db() -> aiosqlite.Connection:
     await db.execute("PRAGMA foreign_keys=ON")
     await db.execute("PRAGMA busy_timeout=30000")
     return db
+
+
+async def _backfill_content_tags(db) -> int:
+    """Fill `categories_json` from the stored IRC line (2026-10 audit wave
+    5a, G124), then copy it to the tentative and grab rows of the same
+    torrent that have none.
+
+    `announces.raw` holds the IRC line only since the 2026-10-08 update
+    (G9), so older rows stay NULL. Only IRC lines are parsed (an
+    `… By: …` line with a `/t/<id>` link; the other `raw` tags are
+    `discovery:…`, `tentative_approve:…` and the like); a line that parses
+    to no tags gets `[]` so it isn't parsed again. A no-op once done.
+    """
+    import json as _json
+
+    from app.mam.announce import parse_announce
+
+    rows = await (await db.execute(
+        "SELECT id, torrent_id, raw FROM announces "
+        "WHERE categories_json IS NULL AND raw LIKE '% By:%' AND raw LIKE '%/t/%'"
+    )).fetchall()
+    if not rows:
+        return 0
+    by_torrent: dict[str, str] = {}
+    for row_id, torrent_id, raw in rows:
+        parsed = parse_announce(raw)
+        tags = [c for c in (parsed.categories if parsed else ()) if c]
+        stored = _json.dumps(tags, ensure_ascii=False)
+        await db.execute(
+            "UPDATE announces SET categories_json = ? WHERE id = ?", (stored, row_id),
+        )
+        if tags and torrent_id:
+            by_torrent[str(torrent_id)] = stored
+    for torrent_id, stored in by_torrent.items():
+        for table in ("tentative_torrents", "grabs"):
+            await db.execute(
+                f"UPDATE {table} SET categories_json = ? "  # nosec B608 — fixed names
+                f"WHERE mam_torrent_id = ? AND categories_json IS NULL",
+                (stored, torrent_id),
+            )
+    await db.commit()
+    return len(rows)
 
 
 async def _backfill_numeric_grab_categories(db) -> int:
@@ -1259,6 +1314,12 @@ async def init_db():
         if fixed:
             _log.info(
                 f"Backfilled numeric category IDs on {fixed} grab row(s)"
+            )
+        tagged = await _backfill_content_tags(db)
+        if tagged:
+            _log.info(
+                f"Backfilled MAM content tags on {tagged} announce row(s) "
+                f"from their IRC lines"
             )
     finally:
         await db.close()
