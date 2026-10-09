@@ -38,6 +38,18 @@ background worker instead of during scans.
   "Include non-fiction from Goodreads" to allow it.
 - **Goodreads enrichment reads a stored book page** (under 90 days old)
   instead of fetching it, and stores the pages it fetches.
+- **A grab's Amazon enrichment sends at most two live requests** (wave 4b,
+  G92), all over curl_cffi's Chrome profile on a fresh session per book,
+  checking Amazon's cooldown first and recording the blocks it sees (a
+  captcha or "automated access" page, HTTP 202 / 429, a thin product page)
+  so the cache worker backs off too. A cache hit costs one product page;
+  a miss for an author whose Amazon ID is known costs their store page
+  plus one product page (no search); without the ID, one search plus one
+  product page for the best result. Before, a miss could cost up to five
+  requests (about eight minutes at a 100s rate), the search and product
+  pages went out over plain Python HTTP with no block check, and an
+  audiobook or pre-order at the top of the search fell through to the next
+  result; it now ends there.
 - **Database migration**: the Goodreads cache database
   (`metadata_cache_goodreads.db`) gains four tables (the detail store and
   the candidate worker's progress).
@@ -127,6 +139,10 @@ background worker instead of during scans.
 - ADR-0025: source access stays within tiers 0–1 (no challenge solving,
   no borrowed browser cookies, no proxies or grey API routes), enforced
   through one gate per source.
+
+### Removed
+
+- The `requests` dependency (Amazon enrichment was its last user).
 
 ### Fixed
 

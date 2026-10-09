@@ -9,9 +9,10 @@ Two-pass flow:
   2. Detail: amazon.com/dp/{ASIN} for rich metadata
 
 Based on analysis of CWA's proven Amazon scraper, this implementation:
-  - Uses plain requests.Session for search / product pages (wave 4b moves
-    them to curl_cffi)
-  - Includes Accept-Encoding header (critical for bot detection)
+  - Goes live only through curl_cffi's Chrome 120 profile, on a fresh
+    session per book, checking the shared Amazon cooldown before each
+    request and recording the blocks it sees (2026-10 audit wave 4b,
+    A-C); at most two live requests per book (G92)
   - Uses explicit search params (unfiltered, sort, search-alias)
   - Extracts high-res covers from script JSON, not img elements
   - Filters pre-order pages
@@ -23,17 +24,16 @@ CAPTCHAs or 503s consistently, this source degrades gracefully
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 from datetime import datetime
 from typing import Optional
 
-import requests
-
 from app.metadata import source_gate
 from app.metadata.record import MetaRecord
-from app.metadata.sources.base import MetaSource
+from app.metadata.sources.base import (
+    MetaSource, current_enrichment_scope, enrichment_scope,
+)
 from app.metadata.text_clean import description_to_plain_text
 
 _log = logging.getLogger("seshat.metadata.amazon")
@@ -41,17 +41,37 @@ _log = logging.getLogger("seshat.metadata.amazon")
 _SEARCH_URL = "https://www.amazon.com/s"
 _PRODUCT_URL = "https://www.amazon.com/dp"
 
-_UA = (
-    "Mozilla/5.0 (X11; Linux x86_64; rv:143.0) "
-    "Gecko/20100101 Firefox/143.0"
-)
+# curl_cffi's Chrome 120 profile sends Chrome's own header set; only the
+# language is added. (Until the 2026-10 audit the search and product pages
+# went out over plain `requests`, Python's TLS fingerprint, with a Firefox
+# User-Agent.)
+_LIVE_HEADERS = {"Accept-Language": "en-US,en;q=0.9"}
 
-_HEADERS = {
-    "User-Agent": _UA,
-    "Accept": "*/*",
-    "Accept-Encoding": "gzip, deflate, br, zstd",
-    "Accept-Language": "en-US,en;q=0.9",
-}
+# G92: one enrichment spends at most this many live Amazon requests: a
+# cache hit's product page, or a miss's author store (or search) plus one
+# product page. A cache-miss live search waited ~100s per request on grab
+# 4665 (the Amazon rate) and still scored 0.77.
+_LIVE_REQUESTS_PER_BOOK = 2
+
+# Markers of Amazon's bot pages: the captcha form and the "automated
+# access" notice on its 503 page.
+_BLOCK_MARKERS = ("validateCaptcha", "api-services-support@amazon.com")
+
+
+def _block_reason(url: str, status: Optional[int], body: str) -> Optional[str]:
+    """Why a live response is a block (Akamai / Amazon's bot pages), or
+    None."""
+    if status in (202, 429):
+        return f"HTTP {status}"
+    if body and any(m in body for m in _BLOCK_MARKERS):
+        return f"bot page (HTTP {status})"
+    if status == 200 and "/dp/" in url:
+        from app.discovery.amazon_author_id_resolver import (
+            _AMAZON_SOFT_BLOCK_THIN_BODY_BYTES,
+        )
+        if len(body) < _AMAZON_SOFT_BLOCK_THIN_BODY_BYTES:
+            return f"thin {len(body)}-byte product page"
+    return None
 
 # High-res cover extraction from script JSON blocks.
 _HIRES_RE = re.compile(r'"hiRes"\s*:\s*"([^"]+)"')
@@ -85,41 +105,103 @@ class AmazonSource(MetaSource):
 
     def __init__(self, *, rate_limit: float = 1.5):
         super().__init__(rate_limit=rate_limit)
-        self._session: Optional[requests.Session] = None
-        # v2.31.0 Tier 3 — lazy curl_cffi AsyncSession for the Author
-        # Store fetch path. Kept separate from the requests.Session
-        # because amazon.com/stores/author/* is Akamai-protected and
-        # only the Chrome 120 impersonation handshake gets through.
-        self._cffi_session = None
 
-    def _get_session(self) -> requests.Session:
-        if self._session is None:
-            self._session = requests.Session()
-            self._session.headers.update(_HEADERS)
-        return self._session
+    # ── Live requests: a fresh curl_cffi session and a budget per book ──
 
-    def _fetch_sync(
-        self, url: str, params: dict = None,
-    ) -> tuple[Optional[int], Optional[str]]:
-        """(status, body on a 200); (None, None) on a transport error."""
-        session = self._get_session()
-        try:
-            r = session.get(url, params=params, timeout=self.default_timeout)
-            if r.status_code == 200:
-                return r.status_code, r.text
-            _log.info("amazon: HTTP %d for %s", r.status_code, url)
-            return r.status_code, None
-        except Exception as e:
-            _log.debug("amazon fetch error: %s", e)
-            return None, None
+    @staticmethod
+    def _scope() -> dict:
+        scope = current_enrichment_scope()
+        # `search_book` opens one when called outside the enricher.
+        return scope if scope is not None else {}
+
+    def _live_left(self) -> int:
+        return int(self._scope().setdefault("amazon_live_left", _LIVE_REQUESTS_PER_BOOK))
+
+    def _spend_live_request(self) -> bool:
+        scope = self._scope()
+        left = int(scope.setdefault("amazon_live_left", _LIVE_REQUESTS_PER_BOOK))
+        if left <= 0:
+            if not scope.get("amazon_budget_logged"):
+                scope["amazon_budget_logged"] = True
+                _log.info(
+                    "amazon: this book's %d live requests are spent — no more "
+                    "(G92)", _LIVE_REQUESTS_PER_BOOK,
+                )
+            return False
+        scope["amazon_live_left"] = left - 1
+        return True
+
+    def _live_session(self):
+        """This book's curl_cffi session (Chrome 120), made on first use and
+        closed when the book's enrichment ends."""
+        scope = self._scope()
+        session = scope.get("amazon_session")
+        if session is None:
+            from app.discovery.sources.amazon import _create_impersonating_session
+            session = _create_impersonating_session()
+            if session is not None:
+                scope["amazon_session"] = session
+        return session
+
+    @staticmethod
+    def _blocked_now() -> bool:
+        from app.discovery.amazon_author_id_resolver import is_amazon_blocked
+        if is_amazon_blocked():
+            _log.info("amazon: skipped — soft-block cooldown active")
+            return True
+        return False
 
     async def _fetch(self, url: str, params: dict = None) -> Optional[str]:
-        # In Amazon's turn (the source gate's Metadata Sources rate, any
-        # caller); the thread runs only the request.
+        """One live GET in Amazon's turn (the source gate): the shared
+        cooldown checked first, the book's budget spent, the book's
+        curl_cffi session used, a block recorded. The body on a 200, else
+        None."""
+        if current_enrichment_scope() is None:
+            async with enrichment_scope():          # its session closes after
+                return await self._fetch(url, params)
+        from app.discovery.amazon_author_id_resolver import (
+            parse_retry_after, record_amazon_soft_block,
+        )
+        if self._blocked_now() or not self._spend_live_request():
+            return None
+        session = self._live_session()
+        if session is None:
+            return None
+        reason: Optional[str] = None
+        retry_after = None
         async with source_gate.turn(self.name) as turn:
-            status, text = await asyncio.to_thread(self._fetch_sync, url, params)
+            try:
+                resp = await session.get(
+                    url, params=params, headers=_LIVE_HEADERS,
+                    timeout=self.default_timeout,
+                )
+            except Exception as e:
+                _log.debug("amazon fetch error for %s: %s", url, e)
+                turn.error()
+                return None
+            status = getattr(resp, "status_code", None)
+            body = getattr(resp, "text", None) or ""
+            # A block found in the body moves this count to "blocked"
+            # (`record_amazon_soft_block` → `mark_last_blocked`).
             turn.status(status)
-        return text
+            reason = _block_reason(url, status, body)
+            if reason:
+                headers = getattr(resp, "headers", None) or {}
+                try:
+                    retry_after = parse_retry_after(
+                        headers.get("Retry-After") or headers.get("retry-after")
+                    )
+                except Exception:
+                    retry_after = None
+        if reason:
+            record_amazon_soft_block(
+                f"enrichment GET {url}: {reason}", retry_after_s=retry_after,
+            )
+            return None
+        if status != 200 or not body:
+            _log.info("amazon: HTTP %s for %s", status, url)
+            return None
+        return body
 
     def is_cheap_for(
         self,
@@ -156,14 +238,33 @@ class AmazonSource(MetaSource):
     ) -> Optional[MetaRecord]:
         if not title:
             return None
+        if current_enrichment_scope() is None:
+            # Outside the enricher (a direct call): a scope of its own, so
+            # the budget and the session are this call's.
+            async with enrichment_scope():
+                return await self._search(
+                    title, author, author_amazon_id=author_amazon_id,
+                    library_slug=library_slug,
+                )
+        return await self._search(
+            title, author, author_amazon_id=author_amazon_id,
+            library_slug=library_slug,
+        )
 
-        # v2.29.0 — cache-first phase. When the upstream pipeline
-        # resolved an Amazon Author Store ID (10-char ASIN shape), we
-        # can score the title against cached widget rows for that
-        # author instead of hitting amazon.com/s. On hit, one
-        # detail-page fetch suffices. On miss, enqueue a high-priority
-        # worker rescan for the author and fall through to the live
-        # /s search (with the F2 audiobook-retry loop intact).
+    async def _search(
+        self, title: str, author: str, *, author_amazon_id: str,
+        library_slug: str,
+    ) -> Optional[MetaRecord]:
+        """Cache first; then at most two live requests (G92).
+
+        With the author's Amazon Author Store ID: the local cache scores
+        the title against the author's cached books — a hit costs one
+        product page. A miss (no cached row scores, or the cache has none
+        for the author, which also queues the author for the worker) goes
+        to the author's store page plus one product page, the store URL
+        guaranteeing the author. Without the ID: one search plus one
+        product page for the best result.
+        """
         if _is_amazon_author_id_shape(author_amazon_id):
             cached = await self._cache_first_search(
                 title=title, author=author,
@@ -172,28 +273,15 @@ class AmazonSource(MetaSource):
             )
             if cached is not None:
                 return cached
-
-        live_hit = await self._live_search(title=title, author=author)
-        if live_hit is not None:
-            return live_hit
-
-        # v2.31.0 — Tier 3 Author Store fallback. Both the cache phase
-        # (Tier 1) and the live /s search (Tier 2) failed to surface a
-        # usable record. When `author_amazon_id` is a verified Author
-        # Store ID we can hit the storefront directly: the URL is keyed
-        # on the verified author, so any title-scored hit is
-        # author-identity-guaranteed by construction. Single SSR fetch
-        # via curl_cffi Chrome 120 + parse the embedded widget JSON
-        # (~85 candidate products) + one detail fetch for the best
-        # binding-match. No /juvec — the F1 enqueue-on-miss above
-        # already arranged a worker rescan for full coverage.
-        if _is_amazon_author_id_shape(author_amazon_id):
+            if self._live_left() < 2:
+                # The cache's product page was spent and didn't parse;
+                # the store needs two more.
+                return None
             return await self._author_store_search(
                 title=title, author=author,
                 author_amazon_id=author_amazon_id,
             )
-
-        return None
+        return await self._live_search(title=title, author=author)
 
     async def _live_search(
         self, *, title: str, author: str,
@@ -292,13 +380,12 @@ class AmazonSource(MetaSource):
 
         scored.sort(key=lambda x: x[2], reverse=True)
 
-        # Walk the ranked list, fetching each detail page until one
-        # parses to a usable record. `_parse_detail_page` returns None
-        # for audiobook + pre-order pages — those don't count toward
-        # the "match" and we move to the next candidate. Worst case is
-        # 3 detail fetches × rate_limit (~1.5s each) = 4.5s, well under
-        # the per-source 15s timeout.
-        for asin, _link, score in scored:
+        # One product page, for the best-scoring result (G92: the search
+        # and one product page are the book's two live requests). Until
+        # the 2026-10 audit the loop walked down to the third result when
+        # `_parse_detail_page` rejected an audiobook or a pre-order; at the
+        # Amazon rate each extra page cost ~100s.
+        for asin, _link, score in scored[:1]:
             if score < 0.2:
                 break
             detail_html = await self._fetch(f"{_PRODUCT_URL}/{asin}")
@@ -643,22 +730,23 @@ class AmazonSource(MetaSource):
         Returns ``None`` on:
           - curl_cffi missing (degrade gracefully)
           - Amazon soft-block cooldown active (penalty box)
-          - transport error / non-200 response
+          - the book's live-request budget spent (G92)
+          - transport error / non-200 response / a bot page
 
         202 (Akamai sensor challenge) and 429 (rate limit) record an
         IP-level soft-block via the shared discovery-side penalty box
         so subsequent author-store calls + worker scans short-circuit.
         """
+        if current_enrichment_scope() is None:
+            async with enrichment_scope():
+                return await self._fetch_author_store_html(author_id)
         try:
             from app.discovery.amazon_author_id_resolver import (
                 is_amazon_blocked,
                 parse_retry_after,
                 record_amazon_soft_block,
             )
-            from app.discovery.sources.amazon import (
-                _ALLBOOKS_URL_TEMPLATE,
-                _create_impersonating_session,
-            )
+            from app.discovery.sources.amazon import _ALLBOOKS_URL_TEMPLATE
         except Exception as e:
             _log.debug(
                 "amazon author-store: discovery helpers unavailable: %s", e,
@@ -670,20 +758,19 @@ class AmazonSource(MetaSource):
                 "amazon author-store: skipped — soft-block cooldown active",
             )
             return None
-
-        session = self._cffi_session
+        if not self._spend_live_request():
+            return None
+        session = self._live_session()
         if session is None:
-            session = _create_impersonating_session()
-            if session is None:
-                # curl_cffi missing — log once at debug; the discovery
-                # source already logged the install warning at startup.
-                return None
-            self._cffi_session = session
+            # curl_cffi missing — the discovery source already logged the
+            # install warning at startup.
+            return None
 
         url = _ALLBOOKS_URL_TEMPLATE.format(author_id=author_id)
         try:
             resp = await source_gate.request(
-                "amazon", lambda: session.get(url, timeout=30.0),
+                "amazon",
+                lambda: session.get(url, headers=_LIVE_HEADERS, timeout=30.0),
             )
         except Exception as e:
             _log.debug("amazon author-store fetch error: %s", e)
@@ -691,6 +778,11 @@ class AmazonSource(MetaSource):
 
         status = getattr(resp, "status_code", None)
         body = getattr(resp, "text", None) or ""
+        if status == 200 and any(m in body for m in _BLOCK_MARKERS):
+            record_amazon_soft_block(
+                f"enricher author-store GET {url} returned a bot page",
+            )
+            return None
         if status in (429, 202):
             headers = getattr(resp, "headers", None)
             raw_ra = None
@@ -718,17 +810,7 @@ class AmazonSource(MetaSource):
         return body
 
     async def close(self) -> None:
-        self._session = None
-        if self._cffi_session is not None:
-            try:
-                close_method = getattr(self._cffi_session, "close", None)
-                if close_method is not None:
-                    result = close_method()
-                    if hasattr(result, "__await__"):
-                        await result
-            except Exception:
-                pass
-            self._cffi_session = None
+        # Live sessions belong to a book's enrichment scope, closed with it.
         await super().close()
 
 

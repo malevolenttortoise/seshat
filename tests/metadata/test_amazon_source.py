@@ -98,15 +98,12 @@ def source(monkeypatch):
 
 
 class TestF2AudiobookRetry:
-    async def test_top_audiobook_falls_through_to_kindle_at_rank_2(
-        self, source,
-    ):
+    async def test_only_the_best_result_gets_a_product_page(self, source):
+        """G92 (2026-10 audit wave 4b): the search and one product page
+        are the book's two live requests. An audiobook at rank 1 no longer
+        falls through to the Kindle edition at rank 2 (that cost ~100s per
+        page at the Amazon rate)."""
         src, fetches, responses = source
-        # The audiobook listing has the cleanest title match ("The
-        # Tale" verbatim) so it outranks the Kindle hit on score —
-        # exactly the Master Alvin scenario from the F2 plan. Without
-        # F2's retry, the audiobook detail fetch returns None at
-        # `_parse_detail_page` and the whole call would return None.
         responses["SEARCH"] = _search_html(
             ("B000AUDIO0", "The Tale"),
             ("B000KINDLE", "The Tale: A Novel"),
@@ -118,20 +115,12 @@ class TestF2AudiobookRetry:
         responses[
             "https://www.amazon.com/dp/B000KINDLE"
         ] = _kindle_detail_html("B000KINDLE", title="The Tale: A Novel")
-        responses[
-            "https://www.amazon.com/dp/B000OTHER0"
-        ] = _kindle_detail_html("B000OTHER0", title="Another Book")
 
         result = await src.search_book("The Tale", "Author Name")
 
-        assert result is not None
-        assert result.external_id == "B000KINDLE"
-        # Two detail fetches: audiobook rejected, kindle accepted. The
-        # rank-3 candidate must NOT have been fetched.
+        assert result is None
         detail_fetches = [u for u in fetches if "/dp/" in u]
-        assert "https://www.amazon.com/dp/B000AUDIO0" in detail_fetches
-        assert "https://www.amazon.com/dp/B000KINDLE" in detail_fetches
-        assert "https://www.amazon.com/dp/B000OTHER0" not in detail_fetches
+        assert detail_fetches == ["https://www.amazon.com/dp/B000AUDIO0"]
 
     async def test_all_three_audiobooks_returns_none(self, source):
         src, fetches, responses = source
@@ -148,9 +137,8 @@ class TestF2AudiobookRetry:
         result = await src.search_book("Series", "Author")
 
         assert result is None
-        # Cap at 3 detail fetches — no infinite loop, no extra requests.
         detail_fetches = [u for u in fetches if "/dp/" in u]
-        assert len(detail_fetches) == 3
+        assert len(detail_fetches) == 1
 
     async def test_preorder_falls_through_to_shipping(self, source):
         src, fetches, responses = source
@@ -205,8 +193,9 @@ class TestF2AudiobookRetry:
 class TestF1CacheFirst:
     """When ``author_amazon_id`` is known and the cache holds rows for
     that author, the search short-circuits to a cache scoring pass
-    plus a single detail fetch. On miss, the worker queue is bumped
-    and the live ``/s`` flow runs."""
+    plus a single detail fetch. On a miss the author's store page plus
+    one product page (G92, 2026-10 audit wave 4b); the worker queue is
+    bumped when the cache has nothing for the author. Never ``/s``."""
 
     async def test_cache_hit_uses_cache_then_one_detail_fetch(
         self, source, monkeypatch,
@@ -267,11 +256,12 @@ class TestF1CacheFirst:
         # /s never queried.
         assert "SEARCH" not in fetches
 
-    async def test_cache_miss_enqueues_and_falls_back_to_live(
+    async def test_cache_miss_enqueues_and_goes_to_the_author_store(
         self, source, monkeypatch,
     ):
         src, fetches, responses = source
         enqueued: list[dict] = []
+        store_calls: list[str] = []
 
         async def fake_read(**_):
             return []  # no cached rows
@@ -280,6 +270,10 @@ class TestF1CacheFirst:
             enqueued.append(kw)
             return True
 
+        async def fake_store(author_id):
+            store_calls.append(author_id)
+            return None
+
         from app.discovery import metadata_cache_reader
         monkeypatch.setattr(
             metadata_cache_reader, "read_books_by_author", fake_read,
@@ -287,13 +281,8 @@ class TestF1CacheFirst:
         monkeypatch.setattr(
             metadata_cache_reader, "ensure_enqueued", fake_enqueue,
         )
-        # Live fallback: a clean Kindle hit.
-        responses["SEARCH"] = _search_html(
-            ("B00LIVEK01", "The Tale: A Novel"),
-        )
-        responses[
-            "https://www.amazon.com/dp/B00LIVEK01"
-        ] = _kindle_detail_html("B00LIVEK01", title="The Tale: A Novel")
+        monkeypatch.setattr(src, "_fetch_author_store_html", fake_store)
+        responses["SEARCH"] = _search_html(("B00LIVEK01", "The Tale"))
 
         result = await src.search_book(
             "The Tale", "Author",
@@ -301,10 +290,9 @@ class TestF1CacheFirst:
             library_slug="calibre-library",
         )
 
-        assert result is not None
-        assert result.external_id == "B00LIVEK01"
-        assert getattr(result, "_from_cache", False) is False
-        # Enqueue fired with the right shape.
+        assert result is None
+        assert store_calls == ["B0C0AUTHOR"]
+        assert "SEARCH" not in fetches          # G92: no /s with an author ID
         assert len(enqueued) == 1
         assert enqueued[0]["author_id"] == "B0C0AUTHOR"
         assert enqueued[0]["priority"] == 1000.0
@@ -482,13 +470,14 @@ class TestF1CacheFirst:
         assert result is not None
         assert result.external_id == "B0BOOK0003"
 
-    async def test_cache_hit_low_score_falls_back_to_live(
+    async def test_cache_hit_low_score_goes_to_the_author_store(
         self, source, monkeypatch,
     ):
-        """Cached rows that don't score above 0.5 against the query
-        should fall through to the live ``/s`` flow rather than picking
-        an obviously wrong book."""
+        """Cached rows that don't score against the query send the book to
+        the author's store page (G92), not ``/s`` — and don't enqueue (the
+        cache has rows for the author)."""
         src, fetches, responses = source
+        store_calls: list[str] = []
 
         async def fake_read(**_):
             return [
@@ -504,9 +493,11 @@ class TestF1CacheFirst:
             ]
 
         async def fake_enqueue(**kw):
-            # Score-too-low is NOT a cache miss — the cache HAS rows,
-            # they're just irrelevant. Don't enqueue.
             raise AssertionError("enqueue must NOT fire on low-score hit")
+
+        async def fake_store(author_id):
+            store_calls.append(author_id)
+            return None
 
         from app.discovery import metadata_cache_reader
         monkeypatch.setattr(
@@ -515,22 +506,17 @@ class TestF1CacheFirst:
         monkeypatch.setattr(
             metadata_cache_reader, "ensure_enqueued", fake_enqueue,
         )
-        responses["SEARCH"] = _search_html(
-            ("B00LIVELO0", "The Tale"),
-        )
-        responses[
-            "https://www.amazon.com/dp/B00LIVELO0"
-        ] = _kindle_detail_html("B00LIVELO0", title="The Tale")
+        monkeypatch.setattr(src, "_fetch_author_store_html", fake_store)
+        responses["SEARCH"] = _search_html(("B00LIVELO0", "The Tale"))
 
         result = await src.search_book(
             "The Tale", "Author",
             author_amazon_id="B0C0AUTHOR",
             library_slug="calibre-library",
         )
-        assert result is not None
-        assert result.external_id == "B00LIVELO0"
-        # Live /s fired (low-score cache hit fell through).
-        assert "SEARCH" in fetches
+        assert result is None
+        assert store_calls == ["B0C0AUTHOR"]
+        assert "SEARCH" not in fetches
 
 
 # ─── F4 — Author Store fallback (Tier 3) ────────────────────
@@ -590,13 +576,13 @@ class TestF4AuthorStoreFallback:
     title hits are author-identity-guaranteed (treated as
     `_from_cache=True` for merge-gate bypass)."""
 
-    async def test_tier3_fires_when_cache_and_search_both_miss(
+    async def test_tier3_fires_on_a_cache_miss(
         self, source, monkeypatch,
     ):
         src, fetches, responses = source
 
         async def fake_read(**_):
-            return []  # cache miss — Tier 1 returns None, /s runs
+            return []  # cache miss — the store page next, never /s (G92)
 
         async def fake_enqueue(**_):
             return True  # F1 enqueue-on-miss fires; doesn't matter here
@@ -664,6 +650,7 @@ class TestF4AuthorStoreFallback:
         assert result.series == "Tale Series"
         # Author populated from the search author (same reason as F1).
         assert result.authors == ["Author"]
+        assert "SEARCH" not in fetches
 
     async def test_tier3_skipped_when_author_id_not_asin_shape(
         self, source, monkeypatch,

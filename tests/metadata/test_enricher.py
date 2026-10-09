@@ -801,3 +801,49 @@ class TestF3CheapSourceGate:
 
         assert seen.get("author_amazon_id") == "B0CMJC56GQ"
         assert seen.get("library_slug") == "calibre-library"
+
+
+class _ScopeSpy(MetaSource):
+    """Records the per-book scope each call sees (2026-10 audit wave 4b,
+    S5): Amazon keeps its live budget and session there."""
+    name = "scope_spy"
+
+    def __init__(self):
+        super().__init__(rate_limit=0)
+        self.scopes: list = []
+
+    async def search_book(self, title, author, **_):
+        from app.metadata.sources.base import current_enrichment_scope
+        scope = current_enrichment_scope()
+        self.scopes.append(scope)
+        if scope is not None:
+            scope.setdefault("calls", 0)
+            scope["calls"] += 1
+        return None
+
+
+class TestEnrichmentScope:
+    async def test_one_scope_per_book_shared_by_the_title_retry(self):
+        spy = _ScopeSpy()
+        enricher = MetadataEnricher(EnrichmentConfig(enabled=True), sources=[spy])
+        await enricher.enrich(title="Monster's Mercy: Book 2", author="A")
+        # Raw title, then the cleaned variant: one book, one scope.
+        assert len(spy.scopes) == 2
+        assert spy.scopes[0] is not None and spy.scopes[0] is spy.scopes[1]
+        assert spy.scopes[0]["calls"] == 2
+        await enricher.enrich(title="Another", author="A")
+        assert spy.scopes[2] is not spy.scopes[0]     # a new book, a new scope
+
+    async def test_scope_values_are_closed_when_the_book_is_done(self):
+        from app.metadata.sources.base import enrichment_scope
+
+        class Closable:
+            closed = False
+
+            async def close(self):
+                self.closed = True
+
+        c = Closable()
+        async with enrichment_scope() as scope:
+            scope["session"] = c
+        assert c.closed

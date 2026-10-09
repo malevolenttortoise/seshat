@@ -38,6 +38,47 @@ from app.metadata import source_gate
 from app.metadata.record import MetaRecord
 
 
+# ─── Per-book scope (2026-10 audit wave 4b, S5) ───────────────────
+#
+# The enricher opens one per book (`enrichment_scope()`); a source keeps
+# per-book state in it across the enricher's calls for that book, the
+# title-variant retry included: Amazon's live-request budget (G92) and its
+# fresh session. Values with a `close()` / `aclose()` are closed when the
+# book is done.
+
+import contextlib as _contextlib
+import contextvars as _contextvars
+
+_ENRICHMENT_SCOPE: "_contextvars.ContextVar[Optional[dict]]" = _contextvars.ContextVar(
+    "enrichment_scope", default=None,
+)
+
+
+@_contextlib.asynccontextmanager
+async def enrichment_scope():
+    scope: dict = {}
+    token = _ENRICHMENT_SCOPE.set(scope)
+    try:
+        yield scope
+    finally:
+        _ENRICHMENT_SCOPE.reset(token)
+        for value in scope.values():
+            close = getattr(value, "aclose", None) or getattr(value, "close", None)
+            if close is None:
+                continue
+            try:
+                result = close()
+                if hasattr(result, "__await__"):
+                    await result
+            except Exception:
+                pass
+
+
+def current_enrichment_scope() -> Optional[dict]:
+    """The book's scope, or None outside an enrichment."""
+    return _ENRICHMENT_SCOPE.get()
+
+
 class MetaSource:
     """Base class for Seshat metadata source plugins."""
 

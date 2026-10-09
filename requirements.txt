@@ -47,11 +47,6 @@ ImageHash==4.3.2
 beautifulsoup4==4.12.3
 lxml==6.1.0
 
-# Plain HTTP for Amazon enrichment's search / product tiers (wave 4b moves
-# them to curl_cffi). Used to arrive with cloudscraper, which the 2026-10
-# audit removed: it solves Cloudflare's JavaScript challenges (ADR-0025).
-requests==2.34.2
-
 # v2.11.0 — TLS-fingerprint impersonation for sources fronted by
 # Akamai Bot Manager (Amazon), AWS WAF (Goodreads) and Cloudflare (Kobo). curl_cffi drives libcurl-impersonate
 # which exactly replicates Chrome's JA3 fingerprint at the protocol

@@ -39,7 +39,7 @@ from typing import Optional
 from app.metadata import source_gate
 from app.metadata.record import MetaRecord
 from app.metadata.scoring import score_match
-from app.metadata.sources.base import MetaSource
+from app.metadata.sources.base import MetaSource, enrichment_scope
 from app.metadata.sources.goodreads import GoodreadsSource
 from app.metadata.sources.amazon import AmazonSource
 from app.metadata.sources.audible import AudibleSource
@@ -324,16 +324,19 @@ class MetadataEnricher:
         # source's turn (up to its Metadata Sources rate: 30s for
         # Goodreads, 100s for Amazon on one install) doesn't count against
         # the per-book budget or a source's timeout.
+        # One scope per book: Amazon keeps its live-request budget and its
+        # fresh session there across the title-variant retry (G92).
         with source_gate.caller(source_gate.CALLER_ENRICHMENT), \
                 source_gate.measure_turn_waits() as turn_waits:
-            return await self._enrich(
-                title=title, author=author, isbn=isbn, asin=asin,
-                mam_torrent_id=mam_torrent_id, mam_token=mam_token,
-                audiobook=audiobook, skip_mam=skip_mam,
-                author_goodreads_id=author_goodreads_id,
-                author_amazon_id=author_amazon_id,
-                library_slug=library_slug, turn_waits=turn_waits,
-            )
+            async with enrichment_scope():
+                return await self._enrich(
+                    title=title, author=author, isbn=isbn, asin=asin,
+                    mam_torrent_id=mam_torrent_id, mam_token=mam_token,
+                    audiobook=audiobook, skip_mam=skip_mam,
+                    author_goodreads_id=author_goodreads_id,
+                    author_amazon_id=author_amazon_id,
+                    library_slug=library_slug, turn_waits=turn_waits,
+                )
 
     async def _enrich(
         self, *, title: str, author: str, isbn: str, asin: str,
