@@ -18,11 +18,12 @@
 // Everything is buffered client-side until the user clicks Save —
 // PUT /v1/metadata-sources replaces the whole state atomically and
 // rebuilds the dispatcher so changes apply live without a restart.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Btn } from "./Btn";
 import { Spin } from "./Spin";
 import { api } from "../api";
 import { useTheme } from "../theme";
+import { useMetadataCacheStatus } from "../hooks/useMetadataCacheStatus";
 
 interface SourceEntry {
   rate_limit: number;
@@ -1439,7 +1440,6 @@ function _formatCooldown(s: number): string {
 // tile + no cooldown UI (no IP-level penalty box, ADR-0018 §1).
 function CacheStatusCard({ sourceKey }: { sourceKey: "amazon" | "goodreads" }) {
   const t = useTheme();
-  const [status, setStatus] = useState<CacheStatusResponse | null>(null);
   const [busy, setBusy] = useState<null | "mode" | "schedule" | "reset" | "phase2">(null);
   const [err, setErr] = useState<string>("");
   // Local-edit buffer for the active-hours field — committed via the
@@ -1453,43 +1453,27 @@ function CacheStatusCard({ sourceKey }: { sourceKey: "amazon" | "goodreads" }) {
 
   const isGr = sourceKey === "goodreads";
   const sourceLabel = isGr ? "Goodreads" : "Amazon";
-  const statusUrl = `/v1/metadata-cache/${sourceKey}/status`;
   const settingsUrl = `/v1/metadata-cache/${sourceKey}/settings`;
   const resetCooldownUrl = `/v1/metadata-cache/${sourceKey}/reset-cooldown`;
 
-  // Poll every 30s while mounted. Heartbeat-staleness checks rely on
-  // a recent reading; faster polling burns CPU for no real-world
-  // benefit (worker iterations are ≥30s by design).
-  useEffect(() => {
-    let cancelled = false;
-    let timer: ReturnType<typeof setInterval> | null = null;
-    const fetchStatus = async () => {
-      try {
-        const r = await api.get<CacheStatusResponse>(statusUrl);
-        if (cancelled) return;
-        setStatus(r);
-        // Seed the local edit buffer on first load — and on every
-        // subsequent poll where the user hasn't started editing
-        // (dirty flag stays false until they touch an input). This
-        // way a remote change (e.g. via PATCH from another tab)
-        // surfaces in the inputs.
-        setPendingHours((prev) =>
-          scheduleDirty ? prev : r.schedule.active_hours,
-        );
-        setPendingTz((prev) => (scheduleDirty ? prev : r.schedule.timezone));
-      } catch (e) {
-        if (!cancelled && !api.isAbort(e)) {
-          setErr(e instanceof Error ? e.message : "Status fetch failed");
-        }
-      }
-    };
-    fetchStatus();
-    timer = setInterval(fetchStatus, 30_000);
-    return () => {
-      cancelled = true;
-      if (timer) clearInterval(timer);
-    };
-  }, [scheduleDirty, statusUrl]);
+  // Poll every 30s while mounted, through the shared poller (the navbar
+  // icon and the Dashboard rail read the same requests). Heartbeat-
+  // staleness checks rely on a recent reading; faster polling burns CPU
+  // for no real-world benefit (worker iterations are ≥30s by design).
+  const scheduleDirtyRef = useRef(scheduleDirty);
+  scheduleDirtyRef.current = scheduleDirty;
+  const { status, setStatus, refresh } = useMetadataCacheStatus<CacheStatusResponse>(sourceKey, {
+    paceMs: 30_000,
+    // Seed the local edit buffer on the first status — and on every
+    // later one while the user hasn't started editing (dirty stays false
+    // until they touch an input). This way a remote change (e.g. via
+    // PATCH from another tab) surfaces in the inputs.
+    onData: (r) => {
+      setPendingHours((prev) => (scheduleDirtyRef.current ? prev : r.schedule.active_hours));
+      setPendingTz((prev) => (scheduleDirtyRef.current ? prev : r.schedule.timezone));
+    },
+    onError: (message) => setErr(message),
+  });
 
   async function setMode(nextMode: CacheMode) {
     if (status === null || nextMode === status.mode) return;
@@ -1530,6 +1514,8 @@ function CacheStatusCard({ sourceKey }: { sourceKey: "amazon" | "goodreads" }) {
       );
       setStatus({ ...status, schedule: r.schedule });
       setScheduleDirty(false);
+      // Re-read it so the inputs show the schedule as the server stored it.
+      void refresh();
     } catch (e) {
       // Backend returns 400 with detail on invalid spec — surface it.
       setErr(e instanceof Error ? e.message : "Save failed");
@@ -1564,8 +1550,7 @@ function CacheStatusCard({ sourceKey }: { sourceKey: "amazon" | "goodreads" }) {
     try {
       await api.post<ResetCooldownResponse>(resetCooldownUrl);
       // Force-refresh status so the cooldown banner clears.
-      const r = await api.get<CacheStatusResponse>(statusUrl);
-      setStatus(r);
+      await refresh();
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Reset failed");
     } finally {

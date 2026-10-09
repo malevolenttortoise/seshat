@@ -21,6 +21,7 @@ import {
   type MamBudgetFields,
 } from "../lib/format";
 import { useVisibleInterval } from "../hooks/useVisibleInterval";
+import { useMetadataCacheStatus } from "../hooks/useMetadataCacheStatus";
 import { useVisibleEventSource } from "../hooks/useVisibleEventSource";
 import { useSseEvents } from "../providers/SseEventsProvider";
 import { useViewport } from "../hooks/useViewport";
@@ -1713,28 +1714,9 @@ function AmazonCacheRail({
   onNavSettings: () => void;
 }) {
   const t = useTheme();
-  const [status, setStatus] = useState<AmazonCacheStatus | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    let statusTimer: ReturnType<typeof setInterval> | null = null;
-    const fetchStatus = async () => {
-      try {
-        const r = await api.get<AmazonCacheStatus>(
-          "/v1/metadata-cache/amazon/status",
-        );
-        if (!cancelled) setStatus(r);
-      } catch {
-        /* silent — auth, network, legacy image */
-      }
-    };
-    fetchStatus();
-    statusTimer = setInterval(fetchStatus, STATUS_POLL_MS);
-    return () => {
-      cancelled = true;
-      if (statusTimer) clearInterval(statusTimer);
-    };
-  }, []);
+  // Shared poller (one request per tick with the navbar icon and the
+  // Settings card); errors stay silent here — auth, network, legacy image.
+  const { status } = useMetadataCacheStatus<AmazonCacheStatus>("amazon", { paceMs: STATUS_POLL_MS });
 
   // Cached authors fraction: author-level (DISTINCT author_id),
   // not per-library state rows. A 2-library setup with 645 unique
@@ -1866,28 +1848,8 @@ function GoodreadsCacheRail({
   onNavSettings: () => void;
 }) {
   const t = useTheme();
-  const [status, setStatus] = useState<GoodreadsCacheStatus | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    let timer: ReturnType<typeof setInterval> | null = null;
-    const fetchStatus = async () => {
-      try {
-        const r = await api.get<GoodreadsCacheStatus>(
-          "/v1/metadata-cache/goodreads/status",
-        );
-        if (!cancelled) setStatus(r);
-      } catch {
-        /* silent — auth, network, legacy image */
-      }
-    };
-    fetchStatus();
-    timer = setInterval(fetchStatus, STATUS_POLL_MS);
-    return () => {
-      cancelled = true;
-      if (timer) clearInterval(timer);
-    };
-  }, []);
+  // Shared poller, as the Amazon rail; errors stay silent here.
+  const { status } = useMetadataCacheStatus<GoodreadsCacheStatus>("goodreads", { paceMs: STATUS_POLL_MS });
 
   const cachedTotal = (
     status?.cache.unique_total_authors ?? status?.cache.state_rows ?? 0

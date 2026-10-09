@@ -239,6 +239,15 @@ frontend test suite.
   scan-finished poll (`useScanPolling`) and its author load
   (`useAuthorDetail`) and pen names (`usePenNames`); the multi-select of
   the author and Tentative pages (`useBulkSelection`).
+- **The metadata-cache status is fetched once for every place that shows
+  it** (wave 5b, audit L4-03): the navbar cloud icon, the Dashboard's
+  Amazon / Goodreads cache rails and the Settings cache cards each polled
+  `/api/v1/metadata-cache/{amazon,goodreads}/status` on their own, so with
+  the Dashboard open each was fetched twice a minute, in background tabs
+  too. Now one request per source per tick serves them all (every 60s;
+  every 30s while a Settings cache card is open), nothing is fetched while
+  the tab is hidden, and coming back to it fetches at once. What they show
+  is unchanged.
 
 ### Removed
 

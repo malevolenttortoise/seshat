@@ -14,15 +14,15 @@
 // Hover tooltip surfaces brief per-source stats. Click navigates to
 // the Settings page where the full cache status cards live.
 //
-// Polls /api/v1/metadata-cache/{amazon,goodreads}/status in parallel
-// every 60s. Silently no-ops on individual fetch errors so a transient
-// blip (network hiccup, auth redirect, 404 on a legacy install)
-// doesn't crash the navbar — the icon falls back to whichever
-// source's status is still available.
+// Reads /api/v1/metadata-cache/{amazon,goodreads}/status through the
+// shared poller (useMetadataCacheStatus, every 60s from here; one request
+// per tick however many places show it). Silently no-ops on fetch errors
+// so a transient blip (network hiccup, auth redirect, 404 on a legacy
+// install) doesn't crash the navbar — the icon keeps whichever source's
+// last status it has.
 
-import { useEffect, useState } from "react";
-import { api } from "../api";
 import { useTheme } from "../theme";
+import { useMetadataCacheStatus } from "../hooks/useMetadataCacheStatus";
 
 type CacheMode = "continuous" | "scheduled" | "disabled";
 
@@ -143,44 +143,11 @@ export function GlobalMetadataCacheStatusIcon({
   onClick: () => void;
 }) {
   const t = useTheme();
-  const [states, setStates] = useState<SourceState>({
-    amazon: null, goodreads: null,
-  });
-
-  useEffect(() => {
-    let cancelled = false;
-    let timer: ReturnType<typeof setInterval> | null = null;
-    const fetchOne = async (key: SourceKey): Promise<[SourceKey, WorkerStatus | null]> => {
-      try {
-        const r = await api.get<WorkerStatus>(
-          `/v1/metadata-cache/${key}/status`,
-        );
-        return [key, r];
-      } catch {
-        // 404 on a legacy install / 401 on signed-out / network. Leave
-        // the prior cached value in place; the next poll will retry.
-        return [key, null];
-      }
-    };
-    const fetchAll = async () => {
-      const results = await Promise.all([fetchOne("amazon"), fetchOne("goodreads")]);
-      if (cancelled) return;
-      setStates(prev => {
-        const next = { ...prev };
-        for (const [key, status] of results) {
-          if (status !== null) next[key] = status;
-          else if (prev[key] === null) next[key] = null;
-        }
-        return next;
-      });
-    };
-    fetchAll();
-    timer = setInterval(fetchAll, POLL_INTERVAL_MS);
-    return () => {
-      cancelled = true;
-      if (timer) clearInterval(timer);
-    };
-  }, []);
+  // A failed fetch leaves each source's last status in place (null until
+  // the first one lands); the next poll retries.
+  const amazon = useMetadataCacheStatus<WorkerStatus>("amazon", { paceMs: POLL_INTERVAL_MS });
+  const goodreads = useMetadataCacheStatus<WorkerStatus>("goodreads", { paceMs: POLL_INTERVAL_MS });
+  const states: SourceState = { amazon: amazon.status, goodreads: goodreads.status };
 
   // Pre-load state: gray dot, "loading…" tooltip. Renders something
   // immediately so the navbar layout doesn't shift when polls resolve.
