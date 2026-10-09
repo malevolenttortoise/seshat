@@ -6,10 +6,9 @@
 // The desktop page surfaces a richer multi-source cover picker and
 // per-source confidence chips; mobile keeps it focused on what the
 // user actually does daily — verify and approve.
-import { useEffect, useState } from "react";
-import { api } from "../api";
+import { useState } from "react";
 import { useTheme } from "../theme";
-import { useVisibleInterval } from "../hooks/useVisibleInterval";
+import { useReviewQueue } from "../hooks/useReviewQueue";
 import {
   MobileBtn,
   MobileChip,
@@ -67,11 +66,6 @@ interface ReviewItem {
   categories?: string[] | null;
 }
 
-interface ReviewListResponse {
-  items: ReviewItem[];
-  pending_count: number;
-}
-
 function metaString(item: ReviewItem, key: string): string {
   const v = item.metadata[key];
   return typeof v === "string" ? v : v == null ? "" : String(v);
@@ -79,135 +73,25 @@ function metaString(item: ReviewItem, key: string): string {
 
 export default function MobileReviewPage() {
   const t = useTheme();
-  const [items, setItems] = useState<ReviewItem[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busyId, setBusyId] = useState<number | null>(null);
-  const [bulkBusy, setBulkBusy] = useState(false);
-
-  const refresh = async () => {
-    try {
-      const r = await api.get<ReviewListResponse>("/v1/review");
-      setItems(r.items);
-      setError(null);
-    } catch (e) {
-      setError(String(e));
-    }
-  };
-
-  useEffect(() => { refresh(); }, []);
-  useVisibleInterval(refresh, 30_000);
-
-  const approve = async (
-    id: number,
-    metadata?: Record<string, unknown>,
-  ) => {
-    setBusyId(id);
-    try {
-      await api.post(`/v1/review/${id}/approve`, {
-        metadata: metadata || null,
-      });
-      await refresh();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusyId(null);
-    }
-  };
+  const {
+    items, error, busyId, bulkBusy, failed, pending,
+    approve, saveEdits, reEnrich, reject: rejectReview, claimForOwned: claim, redrop, markImported, bulk,
+  } = useReviewQueue<ReviewItem>();
 
   const reject = async (id: number) => {
     if (!confirm("Reject this book? Staging dir will be deleted.")) return;
-    setBusyId(id);
-    try {
-      await api.post(`/v1/review/${id}/reject`, { note: "rejected via UI" });
-      await refresh();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusyId(null);
-    }
+    await rejectReview(id);
   };
 
   const claimForOwned = async (
     id: number, library_slug: string, book_id: number,
   ) => {
     if (!confirm("Pin this MAM URL to the existing owned book and reject this duplicate import?")) return;
-    setBusyId(id);
-    try {
-      await api.post(`/v1/review/${id}/claim-for-owned`, {
-        library_slug, book_id, note: "claimed for owned via mobile UI",
-      });
-      await refresh();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusyId(null);
-    }
+    await claim(id, library_slug, book_id, "claimed for owned via mobile UI");
   };
 
-  const saveEdits = async (id: number, metadata: Record<string, unknown>) => {
-    setBusyId(id);
-    try {
-      await api.post(`/v1/review/${id}/save`, { metadata });
-      await refresh();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusyId(null);
-    }
-  };
-
-  const reEnrich = async (
-    id: number,
-    metadata: Record<string, unknown>,
-  ): Promise<boolean> => {
-    setBusyId(id);
-    setError(null);
-    try {
-      await api.post(`/v1/review/${id}/re-enrich`, { metadata });
-      await refresh();
-      return true;
-    } catch (e) {
-      setError(String(e));
-      return false;
-    } finally {
-      setBusyId(null);
-    }
-  };
-
-  const redrop = async (id: number) => {
-    setBusyId(id);
-    setError(null);
-    try {
-      const r = await api.post<{ ok: boolean; error?: string | null }>(`/v1/review/${id}/redrop`);
-      // Refresh first: a successful refresh clears `error`.
-      await refresh();
-      if (!r.ok) setError(`Re-drop failed: ${r.error ?? "unknown error"}`);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusyId(null);
-    }
-  };
-
-  const markImported = async (id: number) => {
-    setBusyId(id);
-    setError(null);
-    try {
-      const r = await api.post<{ ok: boolean; error?: string | null }>(`/v1/review/${id}/mark-imported`);
-      await refresh();
-      if (!r.ok) setError(`Couldn't mark as imported: ${r.error ?? "unknown error"}`);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusyId(null);
-    }
-  };
-
-  // Import failures (wave 5a) come first with their own actions; the bulk
-  // chips only ever touch pending reviews.
-  const failed = (items ?? []).filter((i) => i.status === "import_failed");
-  const pending = (items ?? []).filter((i) => i.status !== "import_failed");
-
+  // Import failures come first with their own actions; the bulk chips
+  // only ever touch pending reviews (the hook splits them).
   const bulkAction = async (action: "approve" | "reject") => {
     if (pending.length === 0) return;
     if (
@@ -216,24 +100,7 @@ export default function MobileReviewPage() {
       )
     )
       return;
-    setBulkBusy(true);
-    setError(null);
-    try {
-      const r = await api.post<{ processed: number; failed: number; errors: string[] }>(
-        `/v1/review/bulk/${action}`,
-      );
-      // Refresh first: a successful refresh clears `error`.
-      await refresh();
-      if (r.failed > 0) {
-        setError(
-          `${action === "approve" ? "Approved" : "Rejected"} ${r.processed}, ${r.failed} failed. First errors: ${r.errors.slice(0, 3).join("; ")}`,
-        );
-      }
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBulkBusy(false);
-    }
+    await bulk(action);
   };
 
   return (
