@@ -2,7 +2,6 @@
 // drag-and-drop on phones, so uploads go through the file picker.
 import { useState } from "react";
 import { useTheme } from "../theme";
-import { useNavigation } from "../providers/NavigationProvider";
 import { MobileBackButton, MobileBtn } from "../components/mobile";
 import { GrabPreviewRow } from "../components/manualGrab/GrabPreviewRow";
 import { useManualGrabBatch } from "../components/manualGrab/useManualGrabBatch";
@@ -10,11 +9,11 @@ import { SNATCH_LAG_HINT, grabLabel, linesOf } from "../components/manualGrab/te
 import { TorrentDropZone } from "../components/manualGrab/TorrentDropZone";
 import { MAX_BATCH, wedgeEligible } from "../components/manualGrab/types";
 import { useCarriedLinks } from "../components/manualGrab/useCarriedLinks";
+import { BatchWedgeToggle } from "../components/manualGrab/BatchWedgeToggle";
 
 export default function MobileGrabFromMamPage({ initial }: { initial?: string | number | null }) {
   const t = useTheme();
   const batch = useManualGrabBatch();
-  const { nav } = useNavigation();
   const [text, setText] = useState("");
   useCarriedLinks(batch, initial);
 
@@ -89,43 +88,7 @@ export default function MobileGrabFromMamPage({ initial }: { initial?: string | 
             />
           ))}
 
-          {batch.offerWedges && (batch.useWedges || batch.eligibleForWedges > 0) && (
-            <label style={{ fontSize: 14, color: t.text2, display: "flex", alignItems: "center", gap: 10, padding: "10px 0" }}>
-              <input
-                type="checkbox"
-                checked={batch.useWedges}
-                disabled={batch.grabbing}
-                onChange={(e) => void batch.setUseWedges(e.target.checked)}
-                style={{ width: 20, height: 20, accentColor: t.accent }}
-              />
-              <span>
-                Use wedges on rows that aren't free
-                {batch.useWedges && batch.wedges && (
-                  <span style={{ color: t.td }}> ({batch.wedges.spendable} spendable)</span>
-                )}
-              </span>
-            </label>
-          )}
-          {batch.wedgesSwitchedOff && batch.eligibleForWedges > 0 && (
-            <div style={{ fontSize: 12, color: t.td, paddingBottom: 8 }}>
-              Wedges are off for manual grabs. Turn them on in{" "}
-              <a
-                href="#"
-                onClick={(e) => { e.preventDefault(); nav("pipe-mam"); }}
-                style={{ color: t.accent }}
-              >
-                MAM Status › Wedges on manual grabs
-              </a>
-              .
-            </div>
-          )}
-          {batch.wedgeError && <div style={{ fontSize: 12, color: t.err }}>{batch.wedgeError}</div>}
-          {batch.wedgeShort && batch.wedges && (
-            <div style={{ fontSize: 12, color: t.err, paddingBottom: 8 }}>
-              Needs {batch.wedgeCount} wedges, {batch.wedges.spendable} spendable
-              ({batch.wedges.wedges} − {batch.wedges.reserved} reserved). Untick rows or turn wedges off.
-            </div>
-          )}
+          <BatchWedgeToggle batch={batch} compact />
           {batch.willQueue > 0 && (
             <div style={{ fontSize: 12, color: t.td, paddingBottom: 8 }}>
               {batch.willQueue} will queue: your snatch budget is full

@@ -245,6 +245,11 @@ frontend test suite.
   the Discovery → MAM page's sections, list and scan (`useMamSection`); the
   Logs page's feed (`useLogFeed`); the Import page's preview and add
   (`useImportPreview`); the Books pages' list and filters (`useBooksList`).
+- **The largest components are split up** (wave 5b, issue 23), each piece
+  leaving with its own state; they look and act as before (render
+  snapshots unchanged). So far: Manual Grab's wedge toggle (desktop and
+  phone) and the book sidebar's "Use wedge" tick are one `WedgeToggle`
+  component.
 - **The metadata-cache status is fetched once for every place that shows
   it** (wave 5b, audit L4-03): the navbar cloud icon, the Dashboard's
   Amazon / Goodreads cache rails and the Settings cache cards each polled

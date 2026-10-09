@@ -24,6 +24,7 @@ import { Btn } from "./Btn";
 import { Spin } from "./Spin";
 import { SBRow } from "./SBRow";
 import { BufferInsufficientBanner } from "./BufferInsufficientBanner";
+import { WedgeToggle } from "./WedgeToggle";
 import { CompareModal } from "./CompareModal";
 import { MergeBookModal } from "./MergeBookModal";
 import { ReplaceAuthorModal } from "./ReplaceAuthorModal";
@@ -1935,23 +1936,11 @@ export function BookSidebar({
                     }}
                   >
                     {offerWedge && (
-                      <label
-                        style={{
-                          display: "flex",
-                          gap: 4,
-                          alignItems: "center",
-                          cursor: "pointer",
-                        }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={useWedgeChecked}
-                          onChange={(e) =>
-                            setUseWedgeChecked(e.target.checked)
-                          }
-                        />
-                        Use wedge
-                      </label>
+                      <WedgeToggle
+                        form="plain"
+                        checked={useWedgeChecked}
+                        onChange={setUseWedgeChecked}
+                      />
                     )}
                   </div>
                 ) : null}
