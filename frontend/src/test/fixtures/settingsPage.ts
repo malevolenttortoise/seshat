@@ -1,7 +1,8 @@
-// Settings page fixtures. `settings.json` = the backend's DEFAULT_SETTINGS
+// Settings page fixtures. `settingsBlob.json` = the backend's DEFAULT_SETTINGS
 // as GET /v1/settings returns it (secrets → `<key>_configured`), plus a
-// few URLs so the page renders a configured install.
-import settings from "./settings.json";
+// few URLs so the page renders a configured install. (Not named
+// `settings.json`: .gitignore drops every file of that name.)
+import settings from "./settingsBlob.json";
 import { cacheStatusCooldownRoutes, cacheStatusRoutes } from "./cacheStatus";
 
 export const settingsRoutes: Record<string, unknown> = {

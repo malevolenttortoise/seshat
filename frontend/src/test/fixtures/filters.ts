@@ -1,6 +1,6 @@
 // Filters page fixtures: a few MAM categories in two main groups, the
 // settings blob with some allow / exclude lists set.
-import settings from "./settings.json";
+import settings from "./settingsBlob.json";
 
 const cat = (id: string, name: string, main_id: string, main_name: string) => ({
   id, name, main_id, main_name, normalized: `${main_name.replace("-", "")} ${name}`.toLowerCase(),
