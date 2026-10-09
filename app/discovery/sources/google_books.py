@@ -242,7 +242,13 @@ class GoogleBooksSource(BaseSource):
         `get_author_books`). None when nothing by them came back. Until the
         2026-10 audit this made its own 5-result query and then
         `get_author_books` searched again."""
-        return await self.get_author_books(author_name)
+        found = await self.get_author_books(author_name)
+        if found is None or not (found.books or found.series):
+            # Results, but none by this author: no author. An empty result
+            # would send lookup to `get_author_books` for the same search
+            # again (seen live, 2026-10-09).
+            return None
+        return found
 
     async def get_author_books(
         self, author_id: str,

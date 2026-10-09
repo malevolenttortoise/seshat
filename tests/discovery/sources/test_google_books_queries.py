@@ -75,6 +75,14 @@ async def test_paging_is_capped():
     assert len(reqs) == gb._MAX_PAGES
 
 
+async def test_results_by_someone_else_are_no_author():
+    """Volumes came back but none by this author: one search, and no
+    author (lookup would otherwise search again through get_author_books)."""
+    src, reqs = _source({0: [_vol(1, author="Dean Travis Clarke")]}, total=1)
+    assert await src.search_author("Travis Dean") is None
+    assert len(reqs) == 1
+
+
 async def test_no_results_is_no_author():
     src, reqs = _source({}, total=0)
     assert await src.search_author("Nobody Here") is None

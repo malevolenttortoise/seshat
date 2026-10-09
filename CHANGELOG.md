@@ -118,7 +118,9 @@ gate that paces and counts it.
   5 pages). Enrichment searches "title author" as free text with the API
   key. A 503 is retried 3s then 6s plus jitter; a 429 (the quota) isn't
   retried in enrichment either. The `GIVING UP … after 1 attempts`
-  warning no longer appears before a retry that succeeds.
+  warning no longer appears before a retry that succeeds. A search that
+  returns volumes but none by the author counts as no author (it used to
+  run the same search twice).
 
 ---
 
