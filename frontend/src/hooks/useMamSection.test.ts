@@ -29,6 +29,8 @@ function routes(url: string): unknown {
 }
 
 const booksCalls = () => mockGet.mock.calls.map(([u]) => String(u)).filter((u) => u.startsWith("/discovery/mam/books?"));
+// (No Array.prototype.at: the app's lib is ES2020.)
+const lastBooksCall = () => booksCalls()[booksCalls().length - 1];
 
 describe("useMamSection", () => {
   beforeEach(() => {
@@ -56,10 +58,10 @@ describe("useMamSection", () => {
     const { result } = renderHook(() => useMamSection());
     await waitFor(() => expect(result.current.ld).toBe(false));
     act(() => result.current.setLibSlug("audiobookshelf"));
-    await waitFor(() => expect(booksCalls().at(-1)).toContain("&slug=audiobookshelf"));
+    await waitFor(() => expect(lastBooksCall()).toContain("&slug=audiobookshelf"));
     act(() => { result.current.setQ("orchard"); result.current.setSort("author"); });
     act(() => result.current.switchTab("download"));
-    await waitFor(() => expect(booksCalls().at(-1)).toBe(
+    await waitFor(() => expect(lastBooksCall()).toBe(
       "/discovery/mam/books?section=download&search=&sort=title&page=1&per_page=50&slug=audiobookshelf"));
   });
 
