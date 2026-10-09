@@ -183,6 +183,13 @@ themselves.
 
 ### Fixed
 
+- New authors from a Calibre or Audiobookshelf sync are linked to their
+  cross-library person right away (wave 5a). Since v2.20.0 the link was
+  attempted before the sync had saved the author, failed quietly, and the
+  author (plus the stub copy made in the other content type's library,
+  which was never linked at all) stayed out of the person graph until the
+  next restart: mirrored IDs and the weekly author-ID job's copy step
+  skipped them. A link that still fails is now logged as a warning.
 - Ebooks delivered to Calibre-Web-Automated never reached the library
   when Seshat had patched their metadata. The patched epub was written
   root-only (mode 0600); CWA v4.0.8+ ingests as a non-root user, couldn't

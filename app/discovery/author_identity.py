@@ -504,6 +504,36 @@ async def get_or_create_person(
         await db.close()
 
 
+async def link_new_authors(
+    library_slug: Optional[str],
+    authors: list[tuple[int, str]],
+    *,
+    context: str,
+) -> int:
+    """Link freshly inserted (author_id, name) rows into the person graph.
+
+    Call it after the insert is committed: `get_or_create_person` reads the
+    row on its own connection, so an uncommitted insert is invisible and
+    the link fails ("not found … cannot link"). Both library syncs did
+    that from v2.20.0 until wave 5a, leaving every new author unlinked
+    until a restart. A failure is logged at WARNING and the rest carry on.
+    Returns how many were linked.
+    """
+    if not library_slug or not authors:
+        return 0
+    linked = 0
+    for author_id, name in authors:
+        try:
+            await get_or_create_person(library_slug, author_id, name=name)
+            linked += 1
+        except Exception as e:
+            _log.warning(
+                "%s: couldn't link %r (%s/%d) to a person: %s: %s",
+                context, name, library_slug, author_id, type(e).__name__, e,
+            )
+    return linked
+
+
 # ─── Mirror source-ID across linked rows ───────────────────────
 
 

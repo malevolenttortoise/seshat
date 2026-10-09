@@ -253,6 +253,9 @@ async def sync_audiobookshelf(library: dict) -> dict:
         # as one author because ABS joins with " & " in that case.
         from app.metadata.author_names import normalize_author_name
         author_id_map: dict[str, int] = {}
+        # New author rows, linked into the person graph once this sync
+        # commits (`author_identity` reads them on another connection).
+        new_authors: list[tuple[int, str]] = []
         for book in books_all:
             for author_name in book["authors"]:
                 if author_name in author_id_map:
@@ -298,23 +301,10 @@ async def sync_audiobookshelf(library: dict) -> dict:
                         (author_name, sort_name, abs_library_id, norm),
                     )
                     author_id_map[author_name] = cur.lastrowid
-                    # v2.20.0 — link the new ABS-sourced author into the
-                    # cross-library identity graph. Best-effort.
-                    try:
-                        from app.discovery import author_identity
-                        from app.discovery.database import get_active_library
-                        active_slug = get_active_library()
-                        if active_slug:
-                            await author_identity.get_or_create_person(
-                                active_slug, author_id_map[author_name],
-                                name=author_name,
-                            )
-                    except Exception:
-                        logger.debug(
-                            "audiobookshelf_sync: identity-link failed "
-                            "for '%s' (non-fatal)",
-                            author_name, exc_info=True,
-                        )
+                    # v2.20.0 — the new author joins the cross-library
+                    # identity graph after this sync commits (see
+                    # `link_new_authors`).
+                    new_authors.append((cur.lastrowid, author_name))
                     # v2.12.1 #2 — dual author-row pattern. Stub this
                     # author into every ebook library so the
                     # cross-library Scan Ebooks button can always run
@@ -551,6 +541,9 @@ async def sync_audiobookshelf(library: dict) -> dict:
         progress["books_linkage_transferred"] = books_linkage_transferred
 
         await db.commit()
+        from app.discovery.author_identity import link_new_authors
+        from app.discovery.database import get_active_library
+        await link_new_authors(get_active_library(), new_authors, context="ABS sync")
         # ADR-0010: the sync can change any series' contributors.
         from app.discovery.database import recompute_all_series_author_mode
         await recompute_all_series_author_mode(db, context="ABS sync")

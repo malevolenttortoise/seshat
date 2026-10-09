@@ -94,13 +94,15 @@ async def mirror_new_author_to_other_type_libs(
             )).fetchone()
             if existing:
                 continue
-            await db.execute(
+            cur = await db.execute(
                 "INSERT INTO authors (name, sort_name, normalized_name) "
                 "VALUES (?, ?, ?)",
                 (name, sort_name or name, normalized_name),
             )
             await db.commit()
             inserted += 1
+            from app.discovery.author_identity import link_new_authors
+            await link_new_authors(slug, [(cur.lastrowid, name)], context="author mirror")
             logger.debug(
                 "author_mirror: stubbed '%s' into %s (source_type=%s)",
                 name, slug, source_content_type,

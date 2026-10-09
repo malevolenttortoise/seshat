@@ -775,6 +775,9 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
         # with any newly-upserted authors. Full mode keeps the empty
         # start so existing re-canonicalization behavior is preserved.
         author_map = {}  # calibre_author_id -> our_id
+        # New author rows, linked into the person graph once this sync
+        # commits (`author_identity` reads them on another connection).
+        new_authors: list[tuple[int, str]] = []
         if mode == "incremental":
             existing = await (await db.execute(
                 "SELECT id, calibre_id FROM authors WHERE calibre_id IS NOT NULL"
@@ -832,27 +835,11 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
                             "calibre_sync: stub-mirror failed for '%s' "
                             "(non-fatal)", incoming_name, exc_info=True,
                         )
-                    # v2.20.0 — link the new author into the cross-library
-                    # identity graph so subsequent source-ID writes (and
-                    # the unified author detail page) see them. The
-                    # `mirror_new_author_to_other_type_libs` call above
-                    # may have inserted matching stub rows in other
-                    # libraries; those stubs get their own
-                    # get_or_create_person() at INSERT time below.
-                    try:
-                        from app.discovery import author_identity
-                        from app.discovery.database import get_active_library
-                        active_slug = get_active_library()
-                        if active_slug:
-                            await author_identity.get_or_create_person(
-                                active_slug, author_map[cal_id],
-                                name=incoming_name,
-                            )
-                    except Exception:
-                        logger.debug(
-                            "calibre_sync: identity-link failed for '%s' "
-                            "(non-fatal)", incoming_name, exc_info=True,
-                        )
+                    # v2.20.0 — the new author joins the cross-library
+                    # identity graph after this sync commits (see
+                    # `link_new_authors`); the stub mirror above links
+                    # its own stubs.
+                    new_authors.append((author_map[cal_id], incoming_name))
 
         # Pass 2: upsert series
         #
@@ -1338,6 +1325,9 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
         progress["books_linkage_transferred"] = books_linkage_transferred
 
         await db.commit()
+        from app.discovery.author_identity import link_new_authors
+        from app.discovery.database import get_active_library
+        await link_new_authors(get_active_library(), new_authors, context="Calibre sync")
 
         # v2.10.1 end-of-sync legacy-duplicate heal pass. The per-UPDATE
         # sweep added in v2.10.0 only fires for books Calibre touched
