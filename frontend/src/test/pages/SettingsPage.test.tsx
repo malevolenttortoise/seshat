@@ -52,6 +52,17 @@ describe("Settings search (desktop)", () => {
     await r.settle();
     expectRendered(r, "Searching across all sections");
   });
+
+  it("a search only a section keyword matches", async () => {
+    // "transmission" is in no field's text, only in Download Client's
+    // keywords: that whole section shows.
+    const r = await renderPage(<SettingsPage />, { viewport: "desktop", routes: settingsSectionRoutes });
+    act(() => {
+      fireEvent.change(r.getByPlaceholderText("Search fields…"), { target: { value: "transmission" } });
+    });
+    await r.settle();
+    expectRendered(r, "Download Client");
+  });
 });
 
 describe("Settings sections (phone)", () => {
