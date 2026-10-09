@@ -231,6 +231,8 @@ def test_secret_keys_mirror_the_secret_store():
 def settings_file(tmp_path, monkeypatch):
     path = tmp_path / "settings.json"
     monkeypatch.setattr(config, "SETTINGS_PATH", path)
+    monkeypatch.setattr(config, "_logging_ready", True)
+    monkeypatch.setattr(config, "_pending_info", [])
     monkeypatch.setattr(config, "_settings_cache", {"mtime": object(), "data": None})
     monkeypatch.setattr(config, "_build_label", lambda: "abc1234")
     return path
@@ -267,6 +269,24 @@ def test_unknown_keys_are_dropped_logged_and_backed_up_once(settings_file, caplo
     _write(settings_file, {**on_disk, "another_dead_key": 1})
     config.load_settings()
     assert json.loads(backup.read_text()) == saved
+
+
+def test_drops_before_logging_is_configured_are_logged_once_it_is(
+    settings_file, monkeypatch, caplog,
+):
+    """The first load at startup can run before `apply_logging`; its drops
+    used to vanish from the log (live check, 2026-10-09)."""
+    monkeypatch.setattr(config, "_logging_ready", False)
+    _write(settings_file, {"metadata_sources": {}, "weekly_audit_day": 6})
+
+    with caplog.at_level(logging.INFO, logger="seshat.config"):
+        config.load_settings()
+        assert not any("weekly_audit_day" in r.getMessage() for r in caplog.records)
+        config.apply_logging(False)
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert "settings sweep: dropped 'weekly_audit_day' (no code reads it)" in messages
+    assert config._pending_info == []
 
 
 def test_runtime_and_secret_keys_survive(settings_file):

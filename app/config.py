@@ -934,6 +934,10 @@ def apply_logging(verbose: bool = False):
     logging.getLogger("seshat").info(
         f"Logging set to {'VERBOSE (DEBUG)' if verbose else 'NORMAL (INFO)'}"
     )
+    global _logging_ready
+    _logging_ready = True
+    while _pending_info:
+        _log.info(_pending_info.pop(0))
 
 
 # ─── Settings keys the code knows (2026-10 audit issue 25) ───
@@ -1013,6 +1017,20 @@ def _sweep_unknown_keys(saved: dict, merged: dict) -> list[str]:
     return dropped
 
 
+# The first `load_settings()` can run before `apply_logging` has set
+# levels (an import-time read), when INFO lines are dropped: the sweep's
+# lines wait here and `apply_logging` writes them (G13: every drop logged).
+_logging_ready = False
+_pending_info: list[str] = []
+
+
+def _info_once_logging_is_up(message: str) -> None:
+    if _logging_ready:
+        _log.info(message)
+    else:
+        _pending_info.append(message)
+
+
 def _backup_before_sweep() -> None:
     """Copy settings.json aside once per build before a sweep rewrites it
     (G13): `settings.json.pre-sweep-<build>`."""
@@ -1021,7 +1039,7 @@ def _backup_before_sweep() -> None:
         return
     try:
         _shutil.copy2(SETTINGS_PATH, backup)
-        _log.info("settings sweep: backed up settings.json to %s", backup.name)
+        _info_once_logging_is_up(f"settings sweep: backed up settings.json to {backup.name}")
     except OSError as e:
         _log.warning("settings sweep: couldn't back up settings.json: %s", e)
 
@@ -1134,7 +1152,7 @@ def load_settings() -> dict:
             if dropped:
                 _backup_before_sweep()
                 for key in dropped:
-                    _log.info("settings sweep: dropped %r (no code reads it)", key)
+                    _info_once_logging_is_up(f"settings sweep: dropped {key!r} (no code reads it)")
             if migrated or dropped:
                 try:
                     save_settings(merged)
