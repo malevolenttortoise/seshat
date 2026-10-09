@@ -3816,6 +3816,101 @@ async def _merge_unfinished_source(
     return n
 
 
+@source_gate.as_caller(source_gate.CALLER_WORKER)
+async def merge_goodreads_book(
+    author_id: int, slug: str, goodreads_author_id: str, book: BookResult,
+) -> tuple[int, int]:
+    """Merge one book the Goodreads candidate worker accepted into `slug`
+    (2026-10 audit wave 4b, G87 / G102): the scan's merge path
+    (`_merge_result`: dedup, roster gate, language rule, contributors) and
+    its post-passes, for a single Goodreads book. Returns (created,
+    updated).
+
+    The Goodreads author is the one whose list page the book came from,
+    resolved from the author's own books, so there is no catalogue to
+    validate (a scan's cache hit skips that check for the same reason). A
+    blacklisted Goodreads author record and the library-only setting stop
+    it, as they stop a scan. Switches the process-wide active library for
+    the merge, as scans and Hygiene do; the worker calls this only when no
+    scan, sync or Hygiene is running.
+    """
+    from app.discovery.database import (
+        get_active_library, set_active_library, recompute_all_series_author_mode,
+    )
+    settings = load_settings()
+    if settings.get("author_scan_owned_only"):
+        return 0, 0
+    try:
+        from app.discovery import source_blacklist
+        if await source_blacklist.is_blacklisted("goodreads", goodreads_author_id):
+            logger.info(
+                "  [goodreads] author record %s is BLACKLISTED — not creating %r",
+                goodreads_author_id, book.title,
+            )
+            return 0, 0
+    except Exception:
+        logger.exception("  [goodreads] blacklist check failed — continuing")
+
+    previous = get_active_library()
+    if slug != previous:
+        set_active_library(slug)
+    state._source_scan_refs += 1
+    try:
+        db = await get_db()
+        try:
+            row = await (await db.execute(
+                "SELECT name FROM authors WHERE id = ?", (author_id,),
+            )).fetchone()
+            if row is None:
+                return 0, 0
+            author_name = row["name"]
+            linked, link_type_by_id = [], {}
+            for pr in await (await db.execute(
+                "SELECT canonical_author_id, alias_author_id, link_type "
+                "FROM pen_name_links "
+                "WHERE canonical_author_id = ? OR alias_author_id = ?",
+                (author_id, author_id),
+            )).fetchall():
+                for col in ("canonical_author_id", "alias_author_id"):
+                    if pr[col] != author_id and pr[col] not in linked:
+                        linked.append(pr[col])
+                        link_type_by_id[pr[col]] = pr["link_type"]
+        finally:
+            await db.close()
+
+        result = AuthorResult(name=author_name, external_id=str(goodreads_author_id))
+        if book.series_name:
+            result.series = [SeriesResult(name=book.series_name, books=[book])]
+        else:
+            result.books = [book]
+        n, u = await _merge_result(
+            author_id, result, "goodreads", settings.get("languages", ["English"]),
+            full_scan=False, owned_only=False,
+            exclude_audiobooks=bool(settings.get("exclude_audiobooks", True)),
+            linked_author_ids=linked, link_type_by_id=link_type_by_id,
+        )
+        source_gate.count_merged("goodreads", created=n, updated=u)
+        if n:
+            await _title_to_series_pass(author_id)
+            db_mode = await get_db()
+            try:
+                await recompute_all_series_author_mode(
+                    db_mode, context="Goodreads candidate",
+                )
+            finally:
+                await db_mode.close()
+        logger.info(
+            "  [goodreads] candidate %r for %s: %s",
+            book.title, author_name,
+            "created" if n else ("merged into an existing book" if u else "no change"),
+        )
+        return n, u
+    finally:
+        state._source_scan_refs = max(0, state._source_scan_refs - 1)
+        if slug != previous:
+            set_active_library(previous)
+
+
 def _log_source_timeout_summary(timeouts: dict[str, list[str]]) -> None:
     """Emit a single warning per source that hit its wall-clock cap during
     a bulk scan. Each line names the source, count, and author list so the
@@ -4472,6 +4567,13 @@ async def _lookup_author_inner(author_id: int, author_name: str, full_scan: bool
             await asyncio.sleep(2 ** attempt)
         finally:
             await db2.close()
+
+    # The Goodreads candidate worker checks this author's Goodreads-only
+    # books next (2026-10 audit wave 4b, G86): the books the other sources
+    # just created drop out of its list, the rest go to the front.
+    from app.discovery import goodreads_candidates
+    from app.discovery.database import get_active_library
+    await goodreads_candidates.note_author_scanned(author_id, get_active_library() or "")
 
     logger.info(f"{'Full re-scan' if full_scan else 'Lookup'} complete for '{author_name}': {total} new books found across all sources")
     return total

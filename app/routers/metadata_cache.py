@@ -149,6 +149,10 @@ class StatusResponse(BaseModel):
     worker: WorkerStatusModel
     queue: QueueStatsModel
     cache: CacheStatsModel
+    # Goodreads only (2026-10 audit wave 4b, S4): the candidate worker's
+    # progress — first fill, weekly new IDs, created / rejected, the next
+    # book-page slot, phase 2. None for Amazon.
+    candidates: Optional[dict] = None
 
 
 class SettingsPatchRequest(BaseModel):
@@ -162,6 +166,8 @@ class SettingsPatchRequest(BaseModel):
     enabled: Optional[bool] = Field(default=None)
     mode: Optional[str] = Field(default=None)  # continuous|scheduled|disabled
     schedule: Optional[ScheduleModel] = Field(default=None)
+    # Goodreads only (G88): phase 2 of the candidate worker on / off.
+    phase2_enabled: Optional[bool] = Field(default=None)
 
 
 class SettingsPatchResponse(BaseModel):
@@ -170,6 +176,7 @@ class SettingsPatchResponse(BaseModel):
     enabled: bool
     mode: str
     schedule: ScheduleModel
+    phase2_enabled: Optional[bool] = None
 
 
 class ResetCooldownResponse(BaseModel):
@@ -460,6 +467,14 @@ async def get_status(source: str) -> StatusResponse:
     inside = metadata_cache_worker.is_inside_schedule_window(source)
     wait_s = metadata_cache_worker.seconds_until_window_open(source)
 
+    candidates = None
+    if is_gr:
+        try:
+            from app.discovery import goodreads_candidates
+            candidates = await goodreads_candidates.status()
+        except Exception:
+            _log.exception("metadata_cache status: candidate progress failed")
+
     return StatusResponse(
         source=source,
         enabled=enabled,
@@ -471,6 +486,7 @@ async def get_status(source: str) -> StatusResponse:
         worker=worker_model,
         queue=queue_model,
         cache=cache_model,
+        candidates=candidates,
     )
 
 
@@ -550,6 +566,15 @@ async def patch_settings(
             source, body.schedule.active_hours, body.schedule.timezone,
         )
 
+    if body.phase2_enabled is not None:
+        if source != metadata_cache.SOURCE_GOODREADS:
+            raise HTTPException(400, "phase2_enabled applies to goodreads only")
+        _cache_settings_set(source, key="phase2_enabled", value=bool(body.phase2_enabled))
+        _log.info(
+            "metadata_cache settings: goodreads phase 2 → %s",
+            "on" if body.phase2_enabled else "off",
+        )
+
     from app.discovery import metadata_cache_worker
     new_enabled = bool(_cache_settings_get(source).get("enabled", False))
     new_mode = metadata_cache_worker.get_worker_mode(source)
@@ -579,6 +604,10 @@ async def patch_settings(
         schedule=ScheduleModel(
             active_hours=str(sched_now.get("active_hours") or "10:00-22:00"),
             timezone=str(sched_now.get("timezone") or ""),
+        ),
+        phase2_enabled=(
+            bool(_cache_settings_get(source).get("phase2_enabled", False))
+            if source == metadata_cache.SOURCE_GOODREADS else None
         ),
     )
 

@@ -40,6 +40,13 @@ each source 15s and each book 60s; a Goodreads turn can be 30s away and an
 Amazon one 100s. `wait_for_excluding_turns()` is `asyncio.wait_for` with
 the time spent waiting for turns added back, and `measure_turn_waits()`
 does the same for a longer budget.
+
+**A kind can have a gap of its own (G89).** Goodreads book pages wait
+`metadata_sources.goodreads.book_page_gap` (default 2 min) between
+starts, on top of the 30s source gap, in a queue of their own: AWS WAF
+blocks a cluster of book pages from one IP while list pages and
+autocomplete pass. `kind_wait_seconds()` says how long a page would wait
+now, so the Goodreads worker can do other work meanwhile.
 """
 from __future__ import annotations
 
@@ -267,6 +274,36 @@ def gap_seconds(source: str) -> float:
     return max(0.0, rate)
 
 
+# Kinds with a minimum gap of their own on top of the source's (G89):
+# Goodreads book pages. AWS WAF blocks a cluster of book pages from one IP
+# while list pages and autocomplete pass, so pages wait in a queue of their
+# own; a page sleeping out its gap holds up no other kind.
+def kind_gap_seconds(source: str, kind: str) -> float:
+    """The extra gap between two requests of `kind` to `source`, read now
+    (0 = none)."""
+    if source != "goodreads" or kind != KIND_BOOK_PAGE:
+        return 0.0
+    from app.metadata.source_config import get_goodreads_book_page_gap
+    try:
+        return get_goodreads_book_page_gap(load_settings())
+    except Exception:
+        return 0.0
+
+
+def _kind_key(source: str, kind: str) -> str:
+    return f"{source}:{kind}"
+
+
+def kind_wait_seconds(source: str, kind: str) -> float:
+    """How long a request of `kind` would wait for its kind's gap if it
+    asked now (not counting the source's own gap or queue)."""
+    gap = kind_gap_seconds(source, kind)
+    last = _last_start.get(_kind_key(source, kind))
+    if gap <= 0 or last is None:
+        return 0.0
+    return max(0.0, last + gap - _clock())
+
+
 async def _take_turn(q: _Queue, level: int) -> None:
     if not q.busy and not q.waiters:
         q.busy = True
@@ -292,31 +329,56 @@ def _pass_turn(q: _Queue) -> None:
     q.busy = False
 
 
-async def _wait_turn(source: str, level: int) -> None:
+async def _wait_turn(source: str, level: int, kind: str = "") -> None:
     sinks = _sinks.get()
     now = _clock()
     for s in sinks:
         s._start(now)
     try:
-        q = _queue(source)
-        await _take_turn(q, level)
+        # A kind with its own gap (G89) waits in its own queue first, and
+        # keeps that turn until the source's turn is taken, so the kind's
+        # gap runs between the real starts of two requests.
+        kgap = kind_gap_seconds(source, kind) if kind else 0.0
+        kkey = _kind_key(source, kind)
+        kq = _queue(kkey) if kgap > 0 else None
+        if kq is not None:
+            await _take_turn(kq, level)
         try:
-            last = _last_start.get(source)
-            if last is not None:
-                gap = gap_seconds(source)
-                lo, hi = _JITTER_S.get(source, (0.0, 0.0))
-                if gap > 0 and hi > 0:
-                    gap += _jitter(lo, hi)
-                wait = last + gap - _clock()
-                if wait > 0:
-                    _log.debug(
-                        "source gate: %s waits %.1fs (%s)",
-                        source, wait, current_caller(),
-                    )
-                    await _sleep(wait)
-            _last_start[source] = _clock()
+            if kq is not None:
+                klast = _last_start.get(kkey)
+                if klast is not None:
+                    kwait = klast + kgap - _clock()
+                    if kwait > 0:
+                        _log.debug(
+                            "source gate: %s %s waits %.1fs (%s)",
+                            source, kind, kwait, current_caller(),
+                        )
+                        await _sleep(kwait)
+            q = _queue(source)
+            await _take_turn(q, level)
+            try:
+                last = _last_start.get(source)
+                if last is not None:
+                    gap = gap_seconds(source)
+                    lo, hi = _JITTER_S.get(source, (0.0, 0.0))
+                    if gap > 0 and hi > 0:
+                        gap += _jitter(lo, hi)
+                    wait = last + gap - _clock()
+                    if wait > 0:
+                        _log.debug(
+                            "source gate: %s waits %.1fs (%s)",
+                            source, wait, current_caller(),
+                        )
+                        await _sleep(wait)
+                started = _clock()
+                _last_start[source] = started
+                if kq is not None:
+                    _last_start[kkey] = started
+            finally:
+                _pass_turn(q)
         finally:
-            _pass_turn(q)
+            if kq is not None:
+                _pass_turn(kq)
     finally:
         now = _clock()
         for s in sinks:
@@ -392,7 +454,7 @@ async def turn(source: str, *, kind: str = "") -> AsyncIterator[Turn]:
     it. `kind` splits Goodreads' counts (`goodreads_kind`)."""
     who = current_caller()
     level = _PRIORITY_FIRST if who in _FIRST_IN_LINE else _PRIORITY_NORMAL
-    await _wait_turn(source, level)
+    await _wait_turn(source, level, kind)
     t = Turn(source, who, kind)
     _last_turn.set(t)
     _bump(source, who, kind, "requests")

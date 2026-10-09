@@ -158,6 +158,15 @@ async def _fetch_and_parse_book(
 
     record = MetaRecord(title=title, authors=[author] if author else [])
 
+    # A page the detail store holds serves enrichment when it's under 90
+    # days old and the book wasn't unreleased (2026-10 audit wave 4b, G93):
+    # one book page less, the kind AWS WAF blocks.
+    stored = await _stored_record(book_id)
+    if stored is not None:
+        _fill_record(record, stored)
+        _log.info("goodreads: /book/show/%s served from the detail store", book_id)
+        return record
+
     url = f"{_BASE}/book/show/{book_id}"
     session = await goodreads_session.get_session()
     try:
@@ -193,7 +202,37 @@ async def _fetch_and_parse_book(
         _log.exception("goodreads: failed to parse /book/show/%s", book_id)
         return None
 
+    # Every page enrichment loads goes into the detail store (G93).
+    try:
+        from app.discovery import goodreads_store
+        await goodreads_store.save_page(str(book_id), body)
+    except Exception:
+        _log.debug("goodreads: storing /book/show/%s failed", book_id, exc_info=True)
+
     return record
+
+
+async def _stored_record(book_id: str) -> Optional[MetaRecord]:
+    try:
+        from app.discovery import goodreads_store
+        return await goodreads_store.stored_record(str(book_id))
+    except Exception:
+        _log.debug("goodreads: detail store read failed for %s", book_id, exc_info=True)
+        return None
+
+
+def _fill_record(record: MetaRecord, stored: MetaRecord) -> None:
+    """What a page parse would add to `record`, from a stored page: the
+    caller's title stays, the page's authors replace a lone search author,
+    empty fields fill, the longer description wins."""
+    if stored.authors and len(record.authors) <= 1:
+        record.authors = list(stored.authors)
+    for f in ("series", "series_index", "isbn", "publisher", "pub_date",
+              "page_count", "language", "cover_url"):
+        if getattr(record, f) in (None, "", []) and getattr(stored, f) not in (None, "", []):
+            setattr(record, f, getattr(stored, f))
+    if len(stored.description or "") > len(record.description or ""):
+        record.description = stored.description
 
 
 # ─── HTML parser for /book/show/{id} (robots-permitted) ────────

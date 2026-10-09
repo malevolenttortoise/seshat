@@ -842,3 +842,34 @@ class TestGetGoodreadsAuthorCacheState:
             assert row["list_pages"] is not None
             assert len(row["list_pages"]) == 1
             assert row["list_pages"][0]["book_count"] == 2
+
+
+class TestGoodreadsCandidateStatus:
+    """2026-10 audit wave 4b, S4: the Goodreads status carries the
+    candidate worker's progress; Amazon's doesn't. Phase 2 is switched
+    through the settings PATCH (Goodreads only)."""
+
+    async def test_goodreads_status_has_candidates(self, gr_cache_router_client):
+        r = await gr_cache_router_client.get("/api/v1/metadata-cache/goodreads/status")
+        assert r.status_code == 200, r.text
+        c = r.json()["candidates"]
+        assert c["first_fill"] == {"candidates": 0, "decided": 0, "authors": 0, "authors_left": 0}
+        assert c["phase2"]["enabled"] is False
+
+    async def test_phase2_switches_on_and_off(self, gr_cache_router_client):
+        r = await gr_cache_router_client.patch(
+            "/api/v1/metadata-cache/goodreads/settings", json={"phase2_enabled": True},
+        )
+        assert r.status_code == 200 and r.json()["phase2_enabled"] is True
+        s = await gr_cache_router_client.get("/api/v1/metadata-cache/goodreads/status")
+        assert s.json()["candidates"]["phase2"]["enabled"] is True
+        r = await gr_cache_router_client.patch(
+            "/api/v1/metadata-cache/goodreads/settings", json={"phase2_enabled": False},
+        )
+        assert r.json()["phase2_enabled"] is False
+
+    async def test_phase2_is_goodreads_only(self, gr_cache_router_client):
+        r = await gr_cache_router_client.patch(
+            "/api/v1/metadata-cache/amazon/settings", json={"phase2_enabled": True},
+        )
+        assert r.status_code == 400

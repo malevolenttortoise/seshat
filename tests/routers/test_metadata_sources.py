@@ -361,3 +361,43 @@ class TestKoboConcurrency:
             assert put.status_code == 200, put.text
 
         assert lookup_module.kobo.concurrency == 6
+
+
+class TestGoodreadsExtras:
+    """2026-10 audit wave 4b — Goodreads' book-page gap (G89) and the
+    non-fiction option (G96 / G98) round-trip GET/PUT; the GET shows the
+    defaults the backend uses (120s, off)."""
+
+    async def test_get_shows_the_defaults(self, isolated_settings):
+        async with await _client(_make_app()) as ac:
+            resp = await ac.get("/api/v1/metadata-sources")
+        gr = resp.json()["state"]["sources"]["goodreads"]
+        assert gr["book_page_gap"] == 120.0
+        assert gr["include_nonfiction"] is False
+        for name, entry in resp.json()["state"]["sources"].items():
+            if name != "goodreads":
+                assert entry.get("book_page_gap") is None
+                assert entry.get("include_nonfiction") is None
+
+    async def test_put_persists_both(self, isolated_settings):
+        from app.metadata.source_config import (
+            get_goodreads_book_page_gap, goodreads_includes_nonfiction,
+        )
+        async with await _client(_make_app()) as ac:
+            state = (await ac.get("/api/v1/metadata-sources")).json()["state"]
+            state["sources"]["goodreads"]["book_page_gap"] = 300
+            state["sources"]["goodreads"]["include_nonfiction"] = True
+            put = await ac.put("/api/v1/metadata-sources", json=state)
+            assert put.status_code == 200, put.text
+            gr = (await ac.get("/api/v1/metadata-sources")).json()["state"]["sources"]["goodreads"]
+        assert gr["book_page_gap"] == 300.0 and gr["include_nonfiction"] is True
+        s = config.load_settings()
+        assert get_goodreads_book_page_gap(s) == 300.0
+        assert goodreads_includes_nonfiction(s) is True
+
+    async def test_a_gap_over_an_hour_is_refused(self, isolated_settings):
+        async with await _client(_make_app()) as ac:
+            state = (await ac.get("/api/v1/metadata-sources")).json()["state"]
+            state["sources"]["goodreads"]["book_page_gap"] = 7200
+            put = await ac.put("/api/v1/metadata-sources", json=state)
+        assert put.status_code == 422

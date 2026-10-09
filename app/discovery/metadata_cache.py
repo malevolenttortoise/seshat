@@ -111,6 +111,13 @@ _TABLE_NAMES: dict[str, dict[str, str]] = {
         "list_pages": "metadata_cache_goodreads_list_pages",
         "queue": "metadata_cache_goodreads_queue",
         "worker_state": "metadata_cache_goodreads_worker_state",
+        # 2026-10 audit wave 4b (S4, ADR-0026): the detail store (one row
+        # per Goodreads book: its autocomplete hit and its page) and the
+        # candidate worker's durable progress.
+        "books": "metadata_cache_goodreads_books",
+        "candidates": "metadata_cache_goodreads_candidates",
+        "candidate_authors": "metadata_cache_goodreads_candidate_authors",
+        "phase2": "metadata_cache_goodreads_phase2",
     },
 }
 
@@ -136,9 +143,28 @@ def state_table(source: str = SOURCE_AMAZON) -> str:
 
 
 def books_table(source: str = SOURCE_AMAZON) -> str:
-    """Amazon-only — Goodreads caches list pages, not per-book detail.
-    Calling for `goodreads` raises (see ADR-0018)."""
+    """Amazon's per-book cache rows, or (since ADR-0026) Goodreads' detail
+    store: one row per Goodreads book with its autocomplete hit and its
+    page. The two shapes differ."""
     return _table_name(source, "books")
+
+
+def candidates_table(source: str = SOURCE_GOODREADS) -> str:
+    """Goodreads-only (ADR-0026): every list entry of a tracked author,
+    with its state in the candidate worker."""
+    return _table_name(source, "candidates")
+
+
+def candidate_authors_table(source: str = SOURCE_GOODREADS) -> str:
+    """Goodreads-only (ADR-0026): per (author, library) progress of the
+    candidate worker."""
+    return _table_name(source, "candidate_authors")
+
+
+def phase2_table(source: str = SOURCE_GOODREADS) -> str:
+    """Goodreads-only (ADR-0026): list entries phase 2 fetches the page
+    of, while switched on."""
+    return _table_name(source, "phase2")
 
 
 def list_pages_table(source: str = SOURCE_GOODREADS) -> str:
@@ -377,6 +403,10 @@ def _build_goodreads_migrations() -> list[str]:
     list_pages = list_pages_table(SOURCE_GOODREADS)
     queue = queue_table(SOURCE_GOODREADS)
     worker = worker_state_table(SOURCE_GOODREADS)
+    books = books_table(SOURCE_GOODREADS)
+    candidates = candidates_table(SOURCE_GOODREADS)
+    candidate_authors = candidate_authors_table(SOURCE_GOODREADS)
+    phase2 = phase2_table(SOURCE_GOODREADS)
     return [
         # v1 — core tables.
         f"""
@@ -442,6 +472,77 @@ def _build_goodreads_migrations() -> list[str]:
         # the `duplicate column` swallowed error in `_apply_migrations`.
         f"ALTER TABLE {worker} "
         f"ADD COLUMN today_budget_exhaust_count INTEGER NOT NULL DEFAULT 0",
+        # 2026-10 audit wave 4b (S4, ADR-0026) — the detail store and the
+        # candidate worker's durable progress (G73). `books`: one row per
+        # Goodreads book ID, the autocomplete part (`ac_*`, the hit's
+        # fields) and the page part (`page_json` = the discovery parse,
+        # `record_json` = enrichment's record), each with its fetch time.
+        f"""
+        CREATE TABLE IF NOT EXISTS {books} (
+            book_id          TEXT PRIMARY KEY,
+            work_id          TEXT,
+            author_gr_id     TEXT,
+            author_name      TEXT,
+            ac_title         TEXT,
+            ac_num_pages     INTEGER,
+            ratings_count    INTEGER,
+            avg_rating       REAL,
+            snippet          TEXT,
+            asin             TEXT,
+            ac_fetched_at    REAL,
+            page_fetched_at  REAL,
+            page_json        TEXT,
+            record_json      TEXT
+        )
+        """,
+        # Every list entry of an author the worker tracks, with its state:
+        # known / skipped / baseline / pending / awaiting_page / accepted /
+        # rejected / created. `reason` says why it was skipped or rejected.
+        f"""
+        CREATE TABLE IF NOT EXISTS {candidates} (
+            author_id     TEXT NOT NULL,
+            library_slug  TEXT NOT NULL,
+            book_id       TEXT NOT NULL,
+            title         TEXT,
+            position      INTEGER NOT NULL DEFAULT 0,
+            list_json     TEXT,
+            state         TEXT NOT NULL,
+            reason        TEXT,
+            origin        TEXT,
+            attempts      INTEGER NOT NULL DEFAULT 0,
+            first_seen_at REAL NOT NULL,
+            updated_at    REAL NOT NULL,
+            PRIMARY KEY (author_id, library_slug, book_id)
+        )
+        """,
+        f"CREATE INDEX IF NOT EXISTS idx_{candidates}_state "
+        f"ON {candidates} (state)",
+        f"""
+        CREATE TABLE IF NOT EXISTS {candidate_authors} (
+            author_id        TEXT NOT NULL,
+            library_slug     TEXT NOT NULL,
+            seshat_author_id INTEGER,
+            listed           INTEGER NOT NULL DEFAULT 0,
+            first_fill       INTEGER NOT NULL DEFAULT 0,
+            seeded_at        REAL NOT NULL,
+            scan_bumped_at   REAL,
+            last_worked_at   REAL,
+            PRIMARY KEY (author_id, library_slug)
+        )
+        """,
+        f"""
+        CREATE TABLE IF NOT EXISTS {phase2} (
+            book_id     TEXT PRIMARY KEY,
+            author_id   TEXT NOT NULL,
+            title       TEXT,
+            listed      INTEGER NOT NULL DEFAULT 0,
+            state       TEXT NOT NULL DEFAULT 'pending',
+            attempts    INTEGER NOT NULL DEFAULT 0,
+            updated_at  REAL NOT NULL
+        )
+        """,
+        f"CREATE INDEX IF NOT EXISTS idx_{phase2}_state "
+        f"ON {phase2} (state, listed)",
     ]
 
 

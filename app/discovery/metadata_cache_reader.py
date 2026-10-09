@@ -669,12 +669,12 @@ class CachedSource:
     ) -> Optional[AuthorResult]:
         """v3.4.0 slice 04 — GR cache-HIT path.
 
-        Reads cached list-page raw_books → hands them to a live
+        Reads cached list-page raw_books → hands them to
         `GoodreadsSource.get_author_books` via the `cached_raw_books`
-        kwarg, which short-circuits the list-page HTTP fetch and
-        runs the detail loop directly. Detail loop honors the
-        existing_titles short-circuit so a re-scan of a mostly-
-        owned author returns nearly instantly.
+        kwarg, which skips the list-page fetch, in cache-only mode
+        (2026-10 audit wave 4b, G-C): books discovery has take the list
+        page's data and a stored page's, books it doesn't are left to the
+        Goodreads candidate worker. No Goodreads request at scan time.
 
         Cache MISS → enqueue + return None.
         """
@@ -728,6 +728,11 @@ class CachedSource:
                 owned_only=owned_only,
                 start_at=start_at,
                 cached_raw_books=cached_raw_books,
+                # Scans read only the Goodreads caches while the worker is
+                # on (2026-10 audit wave 4b, G-C / G103): known books take
+                # the list page's data (and a stored page's), new ones are
+                # the candidate worker's.
+                cache_only=True,
             )
         finally:
             # None after a clean run or an error; the resume point when

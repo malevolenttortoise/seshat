@@ -48,6 +48,12 @@ interface SourceEntry {
   // Effective request rate is ~concurrency/rate_limit. Null for
   // every other source.
   concurrency?: number | null;
+  // 2026-10 audit wave 4b — Goodreads-specific. `book_page_gap`: seconds
+  // between two book-page requests on top of the Rate (G89);
+  // `include_nonfiction`: let non-fiction into discovery (G96 / G98).
+  // Null for every other source.
+  book_page_gap?: number | null;
+  include_nonfiction?: boolean | null;
 }
 
 // Amazon Author-Store format options (matches FILTER_TO_BINDING in
@@ -782,6 +788,10 @@ function SourceDetailPane({
       )}
       {sourceName === "goodreads" && (
         <>
+          <GoodreadsExtrasRow
+            entry={entry}
+            onChange={(key, value) => setToggle(key, value)}
+          />
           <GoodreadsStatusCard />
           {/* v3.4.0 slice 06 — list-page cache worker card; mirrors
               the Amazon Phase-I layout via the same parameterized
@@ -964,6 +974,68 @@ function KoboExtrasRow({
       >
         Effective rate ≈ {effectiveRate.toFixed(2)} req/s (one request every {rateLimit}s; concurrency doesn't raise it).
       </span>
+    </div>
+  );
+}
+
+
+// ─── Goodreads-specific sub-row (2026-10 audit wave 4b) ──────────
+//
+// The book-page gap (G89): AWS WAF blocks a cluster of Goodreads book
+// pages from one IP, so pages wait their own gap on top of the Rate,
+// whoever asks (the candidate worker, enrichment, a live scan). And the
+// non-fiction option (G96 / G98), off by default.
+
+function GoodreadsExtrasRow({
+  entry, onChange,
+}: {
+  entry: SourceEntry;
+  onChange: (key: keyof SourceEntry, value: number | boolean) => void;
+}) {
+  const t = useTheme();
+  const gap = entry.book_page_gap ?? 120;
+  return (
+    <div style={{
+      display: "flex", flexDirection: "column", gap: 6,
+      padding: "2px 0", fontSize: 12,
+    }}>
+      <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ color: t.textDim, fontWeight: 600 }}>Book-page gap</span>
+          <input
+            type="number"
+            min={0}
+            max={3600}
+            step={10}
+            value={gap}
+            onChange={e => onChange("book_page_gap", Math.max(0, parseFloat(e.target.value) || 0))}
+            style={{
+              width: 70, padding: "4px 8px", textAlign: "center",
+              borderRadius: 6,
+              border: `1px solid ${t.border}`, background: t.inp,
+              color: t.text2, fontSize: 12, outline: "none",
+            }}
+          />
+          <span style={{ color: t.textDim }}>s</span>
+        </label>
+        <span style={{ color: t.textDim, fontSize: 11, fontStyle: "italic" }}>
+          Book pages wait this long after the last one, on top of the Rate: Goodreads blocks a run of book pages from one address.
+        </span>
+      </div>
+      <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer" }}>
+        <input
+          type="checkbox"
+          checked={!!entry.include_nonfiction}
+          onChange={e => onChange("include_nonfiction", e.target.checked)}
+          style={{ marginTop: 2 }}
+        />
+        <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          <span style={{ color: t.text2, fontWeight: 600 }}>Include non-fiction from Goodreads</span>
+          <span style={{ color: t.textDim, fontSize: 11 }}>
+            Off: books Goodreads files under Nonfiction, Self Help, Sports, Puzzles, Cookbooks, Reference or Picture Books aren't added to discovery. Turn on if you collect non-fiction.
+          </span>
+        </span>
+      </label>
     </div>
   );
 }
@@ -1296,6 +1368,22 @@ type CacheSchedule = {
 
 type CacheMode = "continuous" | "scheduled" | "disabled";
 
+// Goodreads candidate worker progress (2026-10 audit wave 4b, S4).
+type GoodreadsCandidates = {
+  first_fill: { candidates: number; decided: number; authors: number; authors_left: number };
+  weekly: { candidates: number; decided: number };
+  pending: number;
+  awaiting_page: number;
+  accepted_waiting_merge: number;
+  created: number;
+  rejected: number;
+  rejected_by_reason: Record<string, number>;
+  tracked_authors: number;
+  last: { title: string; state: string; author_id: string } | null;
+  book_page_next_at: number | null;
+  phase2: { enabled: boolean; fetched: number; left: number; gone: number; failed: number };
+};
+
 type CacheStatusResponse = {
   source: string;
   enabled: boolean;
@@ -1307,6 +1395,7 @@ type CacheStatusResponse = {
   worker: CacheWorkerStatus;
   queue: CacheQueueStats;
   cache: CacheStats;
+  candidates?: GoodreadsCandidates | null;
 };
 
 type CacheSettingsResponse = {
@@ -1315,6 +1404,7 @@ type CacheSettingsResponse = {
   enabled: boolean;
   mode: CacheMode;
   schedule: CacheSchedule;
+  phase2_enabled?: boolean | null;
 };
 
 type ResetCooldownResponse = {
@@ -1350,7 +1440,7 @@ function _formatCooldown(s: number): string {
 function CacheStatusCard({ sourceKey }: { sourceKey: "amazon" | "goodreads" }) {
   const t = useTheme();
   const [status, setStatus] = useState<CacheStatusResponse | null>(null);
-  const [busy, setBusy] = useState<null | "mode" | "schedule" | "reset">(null);
+  const [busy, setBusy] = useState<null | "mode" | "schedule" | "reset" | "phase2">(null);
   const [err, setErr] = useState<string>("");
   // Local-edit buffer for the active-hours field — committed via the
   // Save button rather than every keystroke so we don't ping the
@@ -1443,6 +1533,26 @@ function CacheStatusCard({ sourceKey }: { sourceKey: "amazon" | "goodreads" }) {
     } catch (e) {
       // Backend returns 400 with detail on invalid spec — surface it.
       setErr(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function setPhase2(on: boolean) {
+    if (status === null || !status.candidates) return;
+    setBusy("phase2");
+    setErr("");
+    try {
+      const r = await api.patch<CacheSettingsResponse>(settingsUrl, { phase2_enabled: on });
+      setStatus({
+        ...status,
+        candidates: {
+          ...status.candidates,
+          phase2: { ...status.candidates.phase2, enabled: !!r.phase2_enabled },
+        },
+      });
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Phase 2 update failed");
     } finally {
       setBusy(null);
     }
@@ -1713,6 +1823,15 @@ function CacheStatusCard({ sourceKey }: { sourceKey: "amazon" | "goodreads" }) {
         </div>
       )}
 
+      {isGr && status.candidates && (
+        <GoodreadsCandidatesBlock
+          c={status.candidates}
+          busy={busy === "phase2"}
+          disabled={busy !== null}
+          onPhase2={setPhase2}
+        />
+      )}
+
       {/* Cooldown banner + reset button — Amazon only. GR has no
           IP-level penalty box (no Akamai layer; soft-blocks defer
           per-queue-row via the lighter 300s cooldown — ADR-0018 §1).
@@ -1743,6 +1862,105 @@ function CacheStatusCard({ sourceKey }: { sourceKey: "amazon" | "goodreads" }) {
           {err}
         </div>
       )}
+    </div>
+  );
+}
+
+
+// ─── Goodreads candidate worker (2026-10 audit wave 4b, S4) ──────
+//
+// Books Goodreads lists that discovery doesn't have, for authors a scan
+// has covered: each gets an autocomplete check and its book page before
+// it's created. The first fill covers authors listing up to 100 books;
+// later list refreshes add any author's new books. Phase 2 (off unless
+// switched on) fetches every cached list entry's page.
+
+const CANDIDATE_STATE_LABELS: Record<string, string> = {
+  pending: "waiting for a check", awaiting_page: "waiting for its page",
+  accepted: "accepted", created: "created", rejected: "rejected",
+};
+
+function GoodreadsCandidatesBlock({
+  c, busy, disabled, onPhase2,
+}: {
+  c: GoodreadsCandidates;
+  busy: boolean;
+  disabled: boolean;
+  onPhase2: (on: boolean) => void;
+}) {
+  const t = useTheme();
+  const reasons = Object.entries(c.rejected_by_reason)
+    .slice(0, 6).map(([r, n]) => `${r} ${n}`).join(", ");
+  const nextPage = c.book_page_next_at
+    ? new Date(c.book_page_next_at * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : "now";
+  return (
+    <div style={{
+      display: "flex", flexDirection: "column", gap: 6,
+      background: t.bg3, border: `1px solid ${t.borderL}`,
+      borderRadius: 6, padding: "6px 10px",
+    }}>
+      <span style={{
+        fontSize: 11, color: t.textDim, fontWeight: 700,
+        textTransform: "uppercase", letterSpacing: 0.5,
+      }}>Candidate worker</span>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "4px 12px" }}>
+        <StatTile
+          label="First fill"
+          value={`${c.first_fill.decided.toLocaleString()} / ${c.first_fill.candidates.toLocaleString()}`}
+          hint={`${c.first_fill.authors_left.toLocaleString()} of ${c.first_fill.authors.toLocaleString()} authors left (authors listing up to 100 books)`}
+        />
+        <StatTile
+          label="New on lists"
+          value={`${c.weekly.decided.toLocaleString()} / ${c.weekly.candidates.toLocaleString()}`}
+          hint="books added to an author's Goodreads list since it was first checked"
+        />
+        <StatTile
+          label="Waiting"
+          value={`${c.pending.toLocaleString()} · ${c.awaiting_page.toLocaleString()}`}
+          hint={`${c.pending} waiting for an autocomplete check, ${c.awaiting_page} for their book page${c.accepted_waiting_merge ? `, ${c.accepted_waiting_merge} accepted and waiting for a scan to finish` : ""}`}
+        />
+        <StatTile
+          label="Next book page"
+          value={nextPage}
+          hint="book pages wait the book-page gap after the last one"
+        />
+        <StatTile
+          label="Created"
+          value={c.created.toLocaleString()}
+        />
+        <StatTile
+          label="Rejected"
+          value={c.rejected.toLocaleString()}
+          hint={reasons || undefined}
+        />
+        <StatTile
+          label="Last checked"
+          value={c.last ? (c.last.title || "—") : "—"}
+          hint={c.last ? CANDIDATE_STATE_LABELS[c.last.state] ?? c.last.state : undefined}
+        />
+        <StatTile
+          label="Authors"
+          value={c.tracked_authors.toLocaleString()}
+          hint="authors a scan has covered, with a cached Goodreads list"
+        />
+      </div>
+      <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, cursor: disabled ? "default" : "pointer" }}>
+        <input
+          type="checkbox"
+          checked={c.phase2.enabled}
+          disabled={disabled}
+          onChange={e => onPhase2(e.target.checked)}
+        />
+        <span style={{ color: t.text2, fontWeight: 600 }}>Phase 2: fetch every listed book's page</span>
+        {busy && <Spin />}
+        <span style={{ color: t.textDim, fontSize: 11 }}>
+          {c.phase2.fetched.toLocaleString()} fetched, {c.phase2.left.toLocaleString()} left
+          {c.phase2.gone ? `, ${c.phase2.gone.toLocaleString()} gone` : ""}
+          {c.phase2.failed ? `, ${c.phase2.failed.toLocaleString()} failed` : ""}
+          {" "}— runs only when no candidate is waiting
+        </span>
+      </label>
     </div>
   );
 }

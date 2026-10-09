@@ -71,6 +71,12 @@ class SourceEntry(BaseModel):
     # for the asyncio.Semaphore in `app/discovery/sources/kobo.py`.
     # None for non-Kobo sources.
     concurrency: int | None = None
+    # 2026-10 audit wave 4b — Goodreads-specific. `book_page_gap`: seconds
+    # between two book-page requests, on top of `rate_limit` (G89);
+    # `include_nonfiction`: let non-fiction through the candidate worker
+    # and a live scan's page filter (G96 / G98). None for other sources.
+    book_page_gap: float | None = Field(default=None, ge=0.0, le=3600.0)
+    include_nonfiction: bool | None = None
 
 
 class PriorityLists(BaseModel):
@@ -130,7 +136,10 @@ def _state_from_settings(settings: dict) -> MetadataSourcesState:
         if not isinstance(entry, dict):
             continue
         try:
-            from app.metadata.source_config import is_source_mandatory
+            from app.metadata.source_config import (
+                get_goodreads_book_page_gap, goodreads_includes_nonfiction,
+                is_source_mandatory,
+            )
             sources[name] = SourceEntry(
                 rate_limit=float(entry.get("rate_limit", 1.0)),
                 ebook_enrich=bool(entry.get("ebook_enrich", False)),
@@ -156,6 +165,16 @@ def _state_from_settings(settings: dict) -> MetadataSourcesState:
                     int(entry["concurrency"])
                     if name == "kobo" and entry.get("concurrency") is not None
                     else None
+                ),
+                # Goodreads-specific (wave 4b): the values the backend uses,
+                # defaults included.
+                book_page_gap=(
+                    get_goodreads_book_page_gap(settings)
+                    if name == "goodreads" else None
+                ),
+                include_nonfiction=(
+                    goodreads_includes_nonfiction(settings)
+                    if name == "goodreads" else None
                 ),
             )
         except Exception:

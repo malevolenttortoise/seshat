@@ -137,6 +137,112 @@ async def test_concurrent_requests_go_one_gap_apart(clock, rates):
     assert starts == [1000.0, 1003.0, 1006.0, 1009.0]
 
 
+# ─── A kind's own gap: Goodreads book pages (G89) ───────────
+
+
+@pytest.fixture
+def page_gap(monkeypatch, rates):
+    """Settings with a Goodreads book-page gap; edit `["gap"]` mid-test."""
+    g = {"gap": 120.0}
+
+    def _settings():
+        ms = {k: {"rate_limit": v} for k, v in rates.items()}
+        ms["goodreads"]["book_page_gap"] = g["gap"]
+        return {"metadata_sources": ms}
+
+    monkeypatch.setattr(source_gate, "load_settings", _settings)
+    return g
+
+
+async def test_book_pages_wait_their_own_gap(clock, page_gap):
+    await _one("goodreads", "worker", kind="book_page")
+    await _one("goodreads", "worker", kind="book_page")
+    assert clock.now - 1000.0 == pytest.approx(120.0)
+
+
+async def test_the_page_gap_runs_between_real_starts(clock, page_gap):
+    """A page that also waited the 30s source gap behind another kind
+    still starts 120s after the previous page's real start."""
+    starts: list[float] = []
+
+    async def page():
+        async def send():
+            starts.append(clock.now)
+            return httpx.Response(200)
+        with source_gate.caller("worker"):
+            await source_gate.request("goodreads", send, kind="book_page")
+
+    await page()                                     # t=1000
+    await _one("goodreads", "worker", kind="autocomplete")   # t=1030
+    await page()
+    assert starts[1] - starts[0] == pytest.approx(120.0)
+
+
+async def test_other_kinds_dont_wait_for_the_page_gap(clock, page_gap):
+    await _one("goodreads", "worker", kind="book_page")
+    await _one("goodreads", "worker", kind="autocomplete")
+    await _one("goodreads", "worker", kind="list_page")
+    assert clock.slept == [30.0, 30.0]
+
+
+async def test_a_waiting_page_doesnt_hold_up_other_kinds(clock, page_gap, monkeypatch):
+    """While a page sleeps out its 2 min, autocomplete keeps its 30s
+    turns: the page waits in a queue of its own."""
+    order: list[str] = []
+    page_gap_over = asyncio.Event()
+
+    async def sleep(seconds):
+        if seconds > 60:                       # the page's kind gap: held
+            await asyncio.wait_for(page_gap_over.wait(), 5)
+        clock.now += seconds
+
+    monkeypatch.setattr(source_gate, "_sleep", sleep)
+
+    async def req(label, kind):
+        async def send():
+            order.append(label)
+            return httpx.Response(200)
+        with source_gate.caller("worker"):
+            await source_gate.request("goodreads", send, kind=kind)
+
+    await req("page-1", "book_page")
+    page2 = asyncio.create_task(req("page-2", "book_page"))
+    for _ in range(5):
+        await asyncio.sleep(0)                 # page-2 asleep on its 2 min
+    await asyncio.wait_for(req("ac", "autocomplete"), 5)
+    assert order == ["page-1", "ac"]           # went while page-2 waited
+    page_gap_over.set()
+    await asyncio.wait_for(page2, 5)
+    assert order == ["page-1", "ac", "page-2"]
+
+
+async def test_the_page_gap_is_read_before_every_page(clock, page_gap):
+    await _one("goodreads", "worker", kind="book_page")
+    page_gap["gap"] = 300.0
+    await _one("goodreads", "worker", kind="book_page")
+    assert clock.now - 1000.0 == pytest.approx(300.0)
+
+
+async def test_enrichment_pages_wait_the_page_gap_too(clock, page_gap):
+    await _one("goodreads", "worker", kind="book_page")
+    await _one("goodreads", "enrichment", kind="book_page")
+    assert clock.now - 1000.0 == pytest.approx(120.0)
+
+
+async def test_kind_wait_seconds_says_how_long_a_page_would_wait(clock, page_gap):
+    assert source_gate.kind_wait_seconds("goodreads", "book_page") == 0.0
+    await _one("goodreads", "worker", kind="book_page")
+    clock.now += 45.0
+    assert source_gate.kind_wait_seconds("goodreads", "book_page") == pytest.approx(75.0)
+    assert source_gate.kind_wait_seconds("goodreads", "autocomplete") == 0.0
+
+
+async def test_only_goodreads_book_pages_have_a_kind_gap(clock, page_gap):
+    assert source_gate.kind_gap_seconds("goodreads", "book_page") == 120.0
+    assert source_gate.kind_gap_seconds("goodreads", "list_page") == 0.0
+    assert source_gate.kind_gap_seconds("amazon", "book_page") == 0.0
+
+
 async def test_enrichment_goes_ahead_of_waiting_scans_and_workers(clock, rates, monkeypatch):
     """G78: a grab's enrichment waits behind at most the request in its
     gap, never behind a queue of scan or worker requests."""

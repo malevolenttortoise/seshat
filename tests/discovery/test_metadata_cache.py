@@ -102,7 +102,7 @@ class TestSchemaInit:
         assert path.exists()
         assert path.name == "metadata_cache_amazon.db"
 
-    async def test_init_creates_all_four_tables(self, cache_under):
+    async def test_init_creates_every_table(self, cache_under):
         await metadata_cache.init_db(metadata_cache.SOURCE_AMAZON)
         db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
         try:
@@ -344,7 +344,7 @@ class TestGoodreadsSchemaInit:
         assert path.exists()
         assert path.name == "metadata_cache_goodreads.db"
 
-    async def test_init_creates_all_four_tables(self, cache_under):
+    async def test_init_creates_every_table(self, cache_under):
         await metadata_cache.init_db(metadata_cache.SOURCE_GOODREADS)
         db = await metadata_cache.get_db(metadata_cache.SOURCE_GOODREADS)
         try:
@@ -357,30 +357,37 @@ class TestGoodreadsSchemaInit:
         finally:
             await db.close()
         names = [r[0] for r in rows]
-        # Path B: list_pages replaces Amazon's books table.
+        # Path B's list pages (ADR-0018) plus ADR-0026's detail store and
+        # candidate worker tables.
         assert names == [
+            "metadata_cache_goodreads_books",
+            "metadata_cache_goodreads_candidate_authors",
+            "metadata_cache_goodreads_candidates",
             "metadata_cache_goodreads_list_pages",
+            "metadata_cache_goodreads_phase2",
             "metadata_cache_goodreads_queue",
             "metadata_cache_goodreads_state",
             "metadata_cache_goodreads_worker_state",
         ]
 
-    async def test_init_does_not_create_amazon_shaped_books_table(
+    async def test_goodreads_books_table_has_the_detail_store_shape(
         self, cache_under,
     ):
-        """GR is list-page-only — Amazon's `books` per-book detail
-        table must NOT exist in the GR DB (see ADR-0018 §1)."""
+        """ADR-0026: Goodreads' `books` is keyed by Goodreads book ID
+        alone (a book's detail doesn't vary by author or library), not
+        Amazon's per-(author, library, ASIN) cache rows."""
         await metadata_cache.init_db(metadata_cache.SOURCE_GOODREADS)
         db = await metadata_cache.get_db(metadata_cache.SOURCE_GOODREADS)
         try:
             cur = await db.execute(
-                "SELECT name FROM sqlite_master "
-                "WHERE type='table' AND name = 'metadata_cache_goodreads_books'"
+                "PRAGMA table_info(metadata_cache_goodreads_books)"
             )
-            row = await cur.fetchone()
+            cols = {r[1]: r[5] for r in await cur.fetchall()}  # name → pk
         finally:
             await db.close()
-        assert row is None
+        assert cols["book_id"] == 1
+        assert "library_slug" not in cols
+        assert {"page_json", "record_json", "ac_fetched_at"} <= set(cols)
 
     async def test_init_seeds_worker_state_singleton(self, cache_under):
         await metadata_cache.init_db(metadata_cache.SOURCE_GOODREADS)
@@ -490,7 +497,7 @@ class TestGoodreadsDbSummary:
         self, cache_under,
     ):
         """`db_summary` enumerates per-source tables — GR has
-        list_pages, NOT books (ADR-0018 §2)."""
+        list_pages (ADR-0018 §2) and ADR-0026's tables."""
         await metadata_cache.init_db(metadata_cache.SOURCE_GOODREADS)
         summary = await metadata_cache.db_summary(
             metadata_cache.SOURCE_GOODREADS,
@@ -501,9 +508,8 @@ class TestGoodreadsDbSummary:
         assert "metadata_cache_goodreads_list_pages" in rc
         assert "metadata_cache_goodreads_queue" in rc
         assert "metadata_cache_goodreads_worker_state" in rc
-        # `books` is the Amazon-shape detail table — must not appear
-        # in the GR summary.
-        assert "metadata_cache_goodreads_books" not in rc
+        for t in ("books", "candidates", "candidate_authors", "phase2"):
+            assert rc[f"metadata_cache_goodreads_{t}"] == 0
         # Empty cache: state/list_pages/queue 0, worker_state seeded.
         assert rc["metadata_cache_goodreads_state"] == 0
         assert rc["metadata_cache_goodreads_list_pages"] == 0
@@ -668,9 +674,11 @@ class TestSourceShape:
         assert metadata_cache.SOURCE_GOODREADS in metadata_cache.SUPPORTED_SOURCES
 
     def test_per_source_table_suffixes_diverge(self):
-        """Amazon has `books`, Goodreads has `list_pages`. Other
-        suffixes match. Callers like `db_summary` use this helper
-        instead of a hardcoded tuple so the divergence is honored."""
+        """Goodreads has `list_pages` and the candidate worker's tables
+        (ADR-0026); Amazon has none of them. Both have a `books` table, in
+        different shapes (Amazon's cache rows, Goodreads' detail store).
+        Callers like `db_summary` use this helper instead of a hardcoded
+        tuple so the divergence is honored."""
         amz = metadata_cache.per_source_table_suffixes(
             metadata_cache.SOURCE_AMAZON,
         )
@@ -678,20 +686,26 @@ class TestSourceShape:
             metadata_cache.SOURCE_GOODREADS,
         )
         assert "books" in amz
-        assert "books" not in gr
-        assert "list_pages" in gr
-        assert "list_pages" not in amz
+        assert "books" in gr
+        for suffix in ("list_pages", "candidates", "candidate_authors", "phase2"):
+            assert suffix in gr
+            assert suffix not in amz
         # Source-agnostic tables are shared by both.
         for suffix in ("state", "queue", "worker_state"):
             assert suffix in amz
             assert suffix in gr
 
-    def test_books_table_raises_for_goodreads(self):
-        """Amazon-only helper. Calling for GR must raise so callers
-        get a clean signal rather than silently building a SQL
-        statement against a non-existent table."""
+    def test_goodreads_books_table_is_the_detail_store(self):
+        """ADR-0026: Goodreads' `books` table is its detail store."""
+        assert metadata_cache.books_table(
+            metadata_cache.SOURCE_GOODREADS,
+        ) == "metadata_cache_goodreads_books"
+
+    def test_candidate_tables_raise_for_amazon(self):
         with pytest.raises(ValueError):
-            metadata_cache.books_table(metadata_cache.SOURCE_GOODREADS)
+            metadata_cache.candidates_table(metadata_cache.SOURCE_AMAZON)
+        with pytest.raises(ValueError):
+            metadata_cache.phase2_table(metadata_cache.SOURCE_AMAZON)
 
     def test_list_pages_table_raises_for_amazon(self):
         with pytest.raises(ValueError):

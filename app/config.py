@@ -647,6 +647,10 @@ DEFAULT_SETTINGS = {
                 "active_hours": "10:00-22:00",
                 "timezone": "",
             },
+            # Phase 2 of the candidate worker (2026-10 audit wave 4b, G88):
+            # fetch the page of every cached list entry. Off until the
+            # operator switches it on.
+            "phase2_enabled": False,
         },
     },
     "notify_daily_accepted": True,

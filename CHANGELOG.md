@@ -9,11 +9,38 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
-Phase 2 of the 2026-10 roadmap, the codebase audit, wave 4a: the
+Phase 2 of the 2026-10 roadmap, the codebase audit, waves 4a and 4b: the
 **metadata sources**. Every request to a source now goes through one
-gate that paces and counts it.
+gate that paces and counts it, and Goodreads-only books are found by a
+background worker instead of during scans.
 
 **Behaviour changes to know about:**
+
+- **While the Goodreads cache worker is on, a source scan no longer sends
+  Goodreads anything** (wave 4b, ADR-0026). Books discovery already has
+  still take Goodreads' list-page data (and its stored page, if one was
+  fetched); books only Goodreads lists are found by the new **Goodreads
+  candidate worker** in the background, minutes to days after the
+  author's scan, and only for authors a source scan has covered. Each
+  candidate needs an autocomplete match under the same Goodreads author
+  and its book page (English, not an audiobook, set or translation)
+  before it's created. With the worker off, scans fetch Goodreads live as
+  before.
+- **Goodreads book pages wait at least 2 minutes after the previous one**,
+  whoever asks (the candidate worker, a grab's enrichment, a live scan,
+  the probe), on top of the Goodreads rate. Goodreads blocks a run of book
+  pages from one address. "Book-page gap" on Metadata Sources › Goodreads
+  sets it.
+- **Goodreads non-fiction isn't added to discovery by default**: a book
+  Goodreads files under Nonfiction, Self Help, Sports, Puzzles, Cookbooks,
+  Reference or Picture Books, or whose title names a crossword, puzzle,
+  colouring book, journal, notebook, planner, workbook or log book. Tick
+  "Include non-fiction from Goodreads" to allow it.
+- **Goodreads enrichment reads a stored book page** (under 90 days old)
+  instead of fetching it, and stores the pages it fetches.
+- **Database migration**: the Goodreads cache database
+  (`metadata_cache_goodreads.db`) gains four tables (the detail store and
+  the candidate worker's progress).
 
 - **A source's Rate on Metadata Sources is now the minimum gap between
   any two requests to that source, from anything in Seshat** (scans, the
@@ -74,6 +101,22 @@ gate that paces and counts it.
 
 ### Added
 
+- **Goodreads candidate worker + detail store** (wave 4b, ADR-0026): the
+  Goodreads cache worker checks, between list-page refreshes, the books
+  Goodreads lists that discovery doesn't have, for authors a scan has
+  covered (first fill: authors listing up to 100 books; then any author's
+  newly listed books), one request at a time, and creates the ones that
+  pass. Its progress survives restarts and blocks; a scan puts its author
+  first. The Goodreads cache card shows it (first fill, newly listed,
+  waiting, created, rejected and why, the next book-page slot);
+  `GET /api/v1/metadata-cache/goodreads/status` gains `candidates`.
+  **Phase 2** (fetch the page of every cached list entry) is built and off:
+  a switch on the same card (`PATCH …/goodreads/settings`
+  `{"phase2_enabled": true}`).
+- Metadata Sources › Goodreads: **Book-page gap** and **Include
+  non-fiction from Goodreads** (`metadata_sources.goodreads.book_page_gap`,
+  `.include_nonfiction`).
+- ADR-0026 (supersedes ADR-0018 §6).
 - **Per-source traffic counts** (audit issue 15): every request to a
   metadata source is counted per day, source and caller: requests, OK,
   blocked, errors, timeouts; scans add the books they created and updated

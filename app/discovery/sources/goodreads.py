@@ -44,6 +44,7 @@ from app.discovery.sources.base import BaseSource, AuthorResult, BookResult, Ser
 # resolver + URL importer.
 from app.metadata import goodreads_session as _gr_session
 from app.metadata.source_gate import KIND_BOOK_PAGE as _KIND_BOOK_PAGE
+from app.discovery import goodreads_filters as _goodreads_filters
 
 logger = logging.getLogger("seshat.discovery.goodreads")
 BASE = "https://www.goodreads.com"
@@ -291,6 +292,23 @@ def _series_from_title_paren(title: str) -> tuple[Optional[str], Optional[float]
 _is_soft_block = _gr_session.is_soft_block
 
 
+_SET_TITLE_WORDS = (
+    "box set", "boxed set", "boxset", "book set", "collection set",
+    "books collection", "hardcover collection", "paperback collection",
+    "complete series", "series set", "roleplaying game",
+)
+_SET_TITLE_RX = re.compile(
+    r"series\s+#?\d+\s*[-–]\s*#?\d+|#\d+\s*[-–]\s*\d+|books?\s+\d+\s*[-–]\s*\d+"
+)
+
+
+def is_set_title(title: str) -> bool:
+    """A list-page title that names a box set or collection ("Box Set",
+    "Books 1-3", "#1-6"): skipped without visiting its page."""
+    t = (title or "").lower()
+    return any(kw in t for kw in _SET_TITLE_WORDS) or bool(_SET_TITLE_RX.search(t))
+
+
 def _norm_title(title: str) -> str:
     """A title for comparison: lower case, no "(...)" / "[...]" (Goodreads'
     list page appends the series: "Contracts & Cats (Meow: Magical
@@ -318,6 +336,286 @@ def known_title_keys(titles) -> set[str]:
             keys.add(_norm_title(t.split(":", 1)[0]))
     keys.discard("")
     return keys
+
+
+async def _fill_from_stored_page(br: BookResult) -> None:
+    """Fill a known book's list-page result from its stored page, if the
+    detail store has one (2026-10 audit wave 4b): series, dates,
+    description, page count, language, contributors."""
+    try:
+        from app.discovery import goodreads_store
+        details = goodreads_store.page_details_from_row(
+            await goodreads_store.get_book(br.external_id or ""),
+        )
+    except Exception:
+        logger.debug("  Goodreads: stored page read failed", exc_info=True)
+        return
+    if not details:
+        return
+    br.series_name = details.get("series_name") or br.series_name
+    br.series_index = details.get("series_index") or br.series_index
+    br.cover_url = details.get("cover_url") or br.cover_url
+    if details.get("is_unreleased"):
+        br.is_unreleased = True
+        br.expected_date = details.get("expected_date")
+    else:
+        br.pub_date = details.get("pub_date")
+    br.description = details.get("description")
+    br.page_count = details.get("page_count")
+    br.language = details.get("language") or br.language
+    br.contributors = list(details.get("contributors") or [])
+
+
+def _empty_book_details() -> dict:
+    return {
+        "language": None, "pub_date": None, "expected_date": None,
+        "is_unreleased": False, "is_set": False, "is_translation": False,
+        "is_audiobook": False,
+        "series_name": None, "series_index": None, "description": None,
+        "page_count": None, "cover_url": None, "contributors": [],
+        # Read from the page's `__NEXT_DATA__` (2026-10 audit wave 4b):
+        # Goodreads' genres (readers' shelves; none for a book few people
+        # shelved), format, ISBN-13 and ASIN.
+        "genres": [], "book_format": None, "isbn13": None, "asin": None,
+        # False when the page didn't load (blocked, an error, or book
+        # pages backing off): the details above are then all unknown.
+        "loaded": False,
+    }
+
+
+_NEXT_DATA_RX = re.compile(
+    r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', re.S,
+)
+
+
+def _next_data_book(text: str, book_id: Optional[str] = None) -> Optional[dict]:
+    """The book's entry in the page's `__NEXT_DATA__` Apollo state: the
+    `Book:` record carrying `details` + `bookGenres`, the one whose
+    `legacyId` is `book_id` when several are present."""
+    m = _NEXT_DATA_RX.search(text or "")
+    if not m:
+        return None
+    try:
+        apollo = json.loads(m.group(1))["props"]["pageProps"]["apolloState"]
+    except (ValueError, KeyError, TypeError):
+        return None
+    books = [
+        v for k, v in apollo.items()
+        if k.startswith("Book:") and isinstance(v, dict) and "details" in v
+    ]
+    if book_id is not None:
+        for b in books:
+            if str(b.get("legacyId")) == str(book_id):
+                return b
+    return books[0] if books else None
+
+
+def parse_book_page(text: str, *, book_id: Optional[str] = None) -> dict:
+    """The details a `/book/show/{id}` page gives, as a dict (pure: no
+    request). `loaded` is True: the page came back."""
+    details = _empty_book_details()
+    details["loaded"] = True
+    soup = BeautifulSoup(text or "", "lxml")
+    page_text = soup.get_text(" ", strip=True)
+
+    # --- Language ---
+    # Defer to JSON-LD `inLanguage` (authoritative, parsed in
+    # the JSON-LD block below) and fall back to a strict
+    # text-regex scan only if JSON-LD didn't yield a language.
+    # The regex IS allowlisted to specific language names —
+    # a loose `Language\s+(\w+)` once matched "and" out of body
+    # text containing the phrase "language and", which silently
+    # marked Leviathan Wakes as foreign and left an unrelated
+    # anthology as the only Corey result.
+
+    # --- Translator detection ---
+    if "(translator)" in page_text.lower() or "translator" in page_text.lower()[:2000]:
+        details["is_translation"] = True
+
+    # --- Publication date ---
+    # Try data-testid publicationInfo
+    pub_el = soup.find("p", {"data-testid": "publicationInfo"})
+    if pub_el:
+        pt = pub_el.get_text(strip=True)
+        # "First published January 1, 2020"
+        dm = re.search(r'(?:published|Published)\s+(.+?)$', pt)
+        if dm:
+            details["pub_date"] = _parse_date(dm.group(1))
+        # "Expected publication April 4, 2026"
+        em = re.search(r'[Ee]xpected\s+(?:publication\s+)?(.+?)$', pt)
+        if em:
+            details["expected_date"] = _parse_date(em.group(1))
+            details["is_unreleased"] = True
+
+    # Try JSON-LD structured data
+    for script in soup.select("script[type='application/ld+json']"):
+        try:
+            data = json.loads(script.string)
+            if not details["pub_date"] and data.get("datePublished"):
+                d = data["datePublished"]
+                details["pub_date"] = d[:10] if len(d) >= 10 else _parse_date(d)
+            if data.get("numberOfPages"):
+                try:
+                    details["page_count"] = int(data["numberOfPages"])
+                except (ValueError, TypeError):
+                    pass
+            if data.get("inLanguage") and not details["language"]:
+                # Goodreads sometimes encodes language as a code
+                # ("en", "en-US") and sometimes as a full name
+                # ("English"). lookup.py's _lang_ok() handles both.
+                details["language"] = data["inLanguage"]
+            if data.get("image"):
+                details["cover_url"] = data["image"]
+            # bookFormat: "Audiobook", "EBook", "Paperback", etc.
+            if data.get("bookFormat") and not details["book_format"]:
+                details["book_format"] = data["bookFormat"]
+            bf = (data.get("bookFormat") or "").lower()
+            if bf in ("audiobook", "audio", "audio cd", "audible audio"):
+                details["is_audiobook"] = True
+        except (ValueError, TypeError, AttributeError):
+            pass
+
+    # Allowlisted text-regex fallback for language. Only runs if
+    # JSON-LD didn't supply one. Restricted to a known set of
+    # language names to prevent false positives like the previous
+    # `Language\s+(\w+)` matching "and" out of body text.
+    if not details["language"]:
+        lang_m = re.search(
+            r'Language\s+(English|Spanish|French|German|Italian|Portuguese|Dutch|'
+            r'Russian|Chinese|Japanese|Korean|Polish|Czech|Swedish|Norwegian|'
+            r'Danish|Finnish|Greek|Turkish|Arabic|Hebrew|Hindi|Thai|Vietnamese|'
+            r'Indonesian|Croatian|Serbian|Romanian|Hungarian|Bulgarian|Ukrainian|'
+            r'Catalan|Latin|Esperanto|Welsh|Irish|Gaelic|Slovak|Slovenian|'
+            r'Estonian|Latvian|Lithuanian|Icelandic|Albanian|Macedonian|Bosnian|'
+            r'Persian|Farsi|Urdu|Bengali|Tamil|Malay|Filipino|Tagalog|Swahili|'
+            r'Afrikaans)\b',
+            page_text,
+        )
+        if lang_m:
+            details["language"] = lang_m.group(1)
+
+    # Fallback: check for "not yet published" text
+    if "not yet published" in page_text.lower():
+        details["is_unreleased"] = True
+
+    # If pub_date is in the future, it's unreleased
+    if details["pub_date"] and _is_future(details["pub_date"]):
+        details["is_unreleased"] = True
+        if not details["expected_date"]:
+            details["expected_date"] = details["pub_date"]
+        details["pub_date"] = None
+
+    # --- Series info from book page ---
+    series_section = soup.find("div", {"data-testid": "seriesTitle"})
+    series_text = ""
+    if series_section:
+        # Get only the text from series links, not page navigation
+        series_links = series_section.find_all("a")
+        if series_links:
+            parts = []
+            for sl in series_links:
+                parts.append(sl.get_text(strip=True))
+            series_text = ", ".join(parts)
+        else:
+            series_text = series_section.get_text(strip=True)
+            # Truncate at any obvious page-chrome boundary
+            for boundary in ["|", "Goodreads", "Home", "My Books", "Browse"]:
+                idx = series_text.find(boundary)
+                if idx > 0:
+                    series_text = series_text[:idx].strip()
+                    break
+
+    # Title-pattern fallback: Goodreads increasingly ships book
+    # titles with the series appended in parens — e.g.
+    # "Right of Retribution 3 (Right of Retribution #3)". When
+    # the seriesTitle div is missing or unparseable, extract
+    # name + index from the title's trailing "(<series> #<n>)"
+    # pattern. Runs BEFORE the series_text branch so the
+    # primary (structured) path still overrides when available.
+    if not series_text:
+        tsrs = soup.find("h1", {"data-testid": "bookTitle"})
+        title_text = (
+            tsrs.get_text(strip=True) if tsrs
+            else (soup.title.get_text(strip=True) if soup.title else "")
+        )
+        fallback_name, fallback_idx = _series_from_title_paren(title_text)
+        if fallback_name:
+            details["series_name"] = fallback_name
+            if fallback_idx is not None:
+                details["series_index"] = fallback_idx
+
+    if series_text:
+        # Check for set indicators: multiple series entries or range like #1-6
+        if _is_set_from_series(series_text):
+            details["is_set"] = True
+
+        # Count distinct series entries (sets are often in 2+ series)
+        series_entries = [s.strip() for s in series_text.split(",") if s.strip()]
+        real_series = [s for s in series_entries if not re.search(r'chronological|reading order|timeline', s, re.I)]
+        if len(real_series) >= 2:
+            # In multiple real series = likely a set/omnibus
+            details["is_set"] = True
+
+        # Extract primary series name and index (first non-chronological entry)
+        for entry in series_entries:
+            if re.search(r'chronological|reading order|timeline', entry, re.I):
+                continue
+            sm = re.match(r'(.+?)\s*(?:\(|#)([\d.]+)\)?', entry)
+            if sm and not _is_set_from_series(entry):
+                details["series_name"] = sm.group(1).strip()
+                try:
+                    details["series_index"] = float(sm.group(2))
+                except ValueError:
+                    pass
+                break
+            elif not _is_set_from_series(entry):
+                # Series without index
+                sn = re.sub(r'\s*\(.*\)', '', entry).strip()
+                if sn:
+                    details["series_name"] = sn
+                break
+
+    # --- Description ---
+    desc_el = soup.find("div", {"data-testid": "description"})
+    if desc_el:
+        # Get text from the expanded version if available
+        spans = desc_el.find_all("span", class_=re.compile("Formatted"))
+        if spans:
+            details["description"] = spans[-1].get_text(strip=True)[:500]
+        else:
+            details["description"] = desc_el.get_text(strip=True)[:500]
+
+    # --- Contributors (v3.0.0 Phase 3.2) ---
+    # Scoped a.ContributorLink parse → ordered author list +
+    # per-contributor role + Goodreads author id. Drives
+    # book_authors via lookup's role-filter; the captured ids
+    # pre-wire the v3.x author-ID enrichment arc.
+    details["contributors"] = _parse_book_contributors(soup)
+
+
+    # `__NEXT_DATA__`: genres, format, ISBN-13, ASIN; language and page
+    # count when JSON-LD had none.
+    nd = _next_data_book(text, book_id)
+    if nd:
+        genres = []
+        for g in nd.get("bookGenres") or []:
+            name = ((g or {}).get("genre") or {}).get("name")
+            if name:
+                genres.append(str(name))
+        details["genres"] = genres
+        d = nd.get("details") or {}
+        details["book_format"] = details["book_format"] or d.get("format") or None
+        details["isbn13"] = d.get("isbn13") or None
+        details["asin"] = d.get("asin") or None
+        lang = (d.get("language") or {}).get("name")
+        if lang and not details["language"]:
+            details["language"] = lang
+        if d.get("numPages") and not details["page_count"]:
+            try:
+                details["page_count"] = int(d["numPages"])
+            except (TypeError, ValueError):
+                pass
+    return details
 
 
 class GoodreadsSource(BaseSource):
@@ -471,198 +769,18 @@ class GoodreadsSource(BaseSource):
 
     async def _get_book_details(self, book_id: str, title: str) -> dict:
         """Visit individual book page to get full details."""
-        details = {
-            "language": None, "pub_date": None, "expected_date": None,
-            "is_unreleased": False, "is_set": False, "is_translation": False,
-            "is_audiobook": False,
-            "series_name": None, "series_index": None, "description": None,
-            "page_count": None, "cover_url": None, "contributors": [],
-            # False when the page didn't load (blocked, an error, or book
-            # pages backing off): the details above are then all unknown.
-            "loaded": False,
-        }
         try:
             r = await self._get(f"{BASE}/book/show/{book_id}")
-            details["loaded"] = True
-            soup = BeautifulSoup(r.text, "lxml")
-            page_text = soup.get_text(" ", strip=True)
-
-            # --- Language ---
-            # Defer to JSON-LD `inLanguage` (authoritative, parsed in
-            # the JSON-LD block below) and fall back to a strict
-            # text-regex scan only if JSON-LD didn't yield a language.
-            # The regex IS allowlisted to specific language names —
-            # a loose `Language\s+(\w+)` once matched "and" out of body
-            # text containing the phrase "language and", which silently
-            # marked Leviathan Wakes as foreign and left an unrelated
-            # anthology as the only Corey result.
-
-            # --- Translator detection ---
-            if "(translator)" in page_text.lower() or "translator" in page_text.lower()[:2000]:
-                details["is_translation"] = True
-
-            # --- Publication date ---
-            # Try data-testid publicationInfo
-            pub_el = soup.find("p", {"data-testid": "publicationInfo"})
-            if pub_el:
-                pt = pub_el.get_text(strip=True)
-                # "First published January 1, 2020"
-                dm = re.search(r'(?:published|Published)\s+(.+?)$', pt)
-                if dm:
-                    details["pub_date"] = _parse_date(dm.group(1))
-                # "Expected publication April 4, 2026"
-                em = re.search(r'[Ee]xpected\s+(?:publication\s+)?(.+?)$', pt)
-                if em:
-                    details["expected_date"] = _parse_date(em.group(1))
-                    details["is_unreleased"] = True
-
-            # Try JSON-LD structured data
-            for script in soup.select("script[type='application/ld+json']"):
-                try:
-                    data = json.loads(script.string)
-                    if not details["pub_date"] and data.get("datePublished"):
-                        d = data["datePublished"]
-                        details["pub_date"] = d[:10] if len(d) >= 10 else _parse_date(d)
-                    if data.get("numberOfPages"):
-                        try:
-                            details["page_count"] = int(data["numberOfPages"])
-                        except (ValueError, TypeError):
-                            pass
-                    if data.get("inLanguage") and not details["language"]:
-                        # Goodreads sometimes encodes language as a code
-                        # ("en", "en-US") and sometimes as a full name
-                        # ("English"). lookup.py's _lang_ok() handles both.
-                        details["language"] = data["inLanguage"]
-                    if data.get("image"):
-                        details["cover_url"] = data["image"]
-                    # bookFormat: "Audiobook", "EBook", "Paperback", etc.
-                    bf = (data.get("bookFormat") or "").lower()
-                    if bf in ("audiobook", "audio", "audio cd", "audible audio"):
-                        details["is_audiobook"] = True
-                except (ValueError, TypeError, AttributeError):
-                    pass
-
-            # Allowlisted text-regex fallback for language. Only runs if
-            # JSON-LD didn't supply one. Restricted to a known set of
-            # language names to prevent false positives like the previous
-            # `Language\s+(\w+)` matching "and" out of body text.
-            if not details["language"]:
-                lang_m = re.search(
-                    r'Language\s+(English|Spanish|French|German|Italian|Portuguese|Dutch|'
-                    r'Russian|Chinese|Japanese|Korean|Polish|Czech|Swedish|Norwegian|'
-                    r'Danish|Finnish|Greek|Turkish|Arabic|Hebrew|Hindi|Thai|Vietnamese|'
-                    r'Indonesian|Croatian|Serbian|Romanian|Hungarian|Bulgarian|Ukrainian|'
-                    r'Catalan|Latin|Esperanto|Welsh|Irish|Gaelic|Slovak|Slovenian|'
-                    r'Estonian|Latvian|Lithuanian|Icelandic|Albanian|Macedonian|Bosnian|'
-                    r'Persian|Farsi|Urdu|Bengali|Tamil|Malay|Filipino|Tagalog|Swahili|'
-                    r'Afrikaans)\b',
-                    page_text,
-                )
-                if lang_m:
-                    details["language"] = lang_m.group(1)
-
-            # Fallback: check for "not yet published" text
-            if "not yet published" in page_text.lower():
-                details["is_unreleased"] = True
-
-            # If pub_date is in the future, it's unreleased
-            if details["pub_date"] and _is_future(details["pub_date"]):
-                details["is_unreleased"] = True
-                if not details["expected_date"]:
-                    details["expected_date"] = details["pub_date"]
-                details["pub_date"] = None
-
-            # --- Series info from book page ---
-            series_section = soup.find("div", {"data-testid": "seriesTitle"})
-            series_text = ""
-            if series_section:
-                # Get only the text from series links, not page navigation
-                series_links = series_section.find_all("a")
-                if series_links:
-                    parts = []
-                    for sl in series_links:
-                        parts.append(sl.get_text(strip=True))
-                    series_text = ", ".join(parts)
-                else:
-                    series_text = series_section.get_text(strip=True)
-                    # Truncate at any obvious page-chrome boundary
-                    for boundary in ["|", "Goodreads", "Home", "My Books", "Browse"]:
-                        idx = series_text.find(boundary)
-                        if idx > 0:
-                            series_text = series_text[:idx].strip()
-                            break
-
-            # Title-pattern fallback: Goodreads increasingly ships book
-            # titles with the series appended in parens — e.g.
-            # "Right of Retribution 3 (Right of Retribution #3)". When
-            # the seriesTitle div is missing or unparseable, extract
-            # name + index from the title's trailing "(<series> #<n>)"
-            # pattern. Runs BEFORE the series_text branch so the
-            # primary (structured) path still overrides when available.
-            if not series_text:
-                tsrs = soup.find("h1", {"data-testid": "bookTitle"})
-                title_text = (
-                    tsrs.get_text(strip=True) if tsrs
-                    else (soup.title.get_text(strip=True) if soup.title else "")
-                )
-                fallback_name, fallback_idx = _series_from_title_paren(title_text)
-                if fallback_name:
-                    details["series_name"] = fallback_name
-                    if fallback_idx is not None:
-                        details["series_index"] = fallback_idx
-
-            if series_text:
-                # Check for set indicators: multiple series entries or range like #1-6
-                if _is_set_from_series(series_text):
-                    details["is_set"] = True
-
-                # Count distinct series entries (sets are often in 2+ series)
-                series_entries = [s.strip() for s in series_text.split(",") if s.strip()]
-                real_series = [s for s in series_entries if not re.search(r'chronological|reading order|timeline', s, re.I)]
-                if len(real_series) >= 2:
-                    # In multiple real series = likely a set/omnibus
-                    details["is_set"] = True
-
-                # Extract primary series name and index (first non-chronological entry)
-                for entry in series_entries:
-                    if re.search(r'chronological|reading order|timeline', entry, re.I):
-                        continue
-                    sm = re.match(r'(.+?)\s*(?:\(|#)([\d.]+)\)?', entry)
-                    if sm and not _is_set_from_series(entry):
-                        details["series_name"] = sm.group(1).strip()
-                        try:
-                            details["series_index"] = float(sm.group(2))
-                        except ValueError:
-                            pass
-                        break
-                    elif not _is_set_from_series(entry):
-                        # Series without index
-                        sn = re.sub(r'\s*\(.*\)', '', entry).strip()
-                        if sn:
-                            details["series_name"] = sn
-                        break
-
-            # --- Description ---
-            desc_el = soup.find("div", {"data-testid": "description"})
-            if desc_el:
-                # Get text from the expanded version if available
-                spans = desc_el.find_all("span", class_=re.compile("Formatted"))
-                if spans:
-                    details["description"] = spans[-1].get_text(strip=True)[:500]
-                else:
-                    details["description"] = desc_el.get_text(strip=True)[:500]
-
-            # --- Contributors (v3.0.0 Phase 3.2) ---
-            # Scoped a.ContributorLink parse → ordered author list +
-            # per-contributor role + Goodreads author id. Drives
-            # book_authors via lookup's role-filter; the captured ids
-            # pre-wire the v3.x author-ID enrichment arc.
-            details["contributors"] = _parse_book_contributors(soup)
-
         except Exception as e:
             logger.debug(f"  Goodreads: error getting details for book {book_id} '{title}': {e}")
-
-        return details
+            return _empty_book_details()
+        try:
+            return parse_book_page(r.text, book_id=book_id)
+        except Exception as e:
+            logger.debug(f"  Goodreads: error parsing details for book {book_id} '{title}': {e}")
+            details = _empty_book_details()
+            details["loaded"] = True
+            return details
 
     async def search_author(self, author_name: str) -> Optional[AuthorResult]:
         """Find an author's Goodreads ID — DISABLED in v2.10.4.
@@ -794,7 +912,7 @@ class GoodreadsSource(BaseSource):
             pages[page_num] = records
         return pages
 
-    async def get_author_books(self, author_id: str, existing_titles: set = None, owned_titles: list = None, owned_only: bool = False, start_at: int = 0, cached_raw_books: Optional[list[dict]] = None) -> Optional[AuthorResult]:
+    async def get_author_books(self, author_id: str, existing_titles: set = None, owned_titles: list = None, owned_only: bool = False, start_at: int = 0, cached_raw_books: Optional[list[dict]] = None, cache_only: bool = False) -> Optional[AuthorResult]:
         """Scrape an author's full book list and visit per-book detail pages.
 
         Validates author identity from list-page titles BEFORE running
@@ -1065,6 +1183,9 @@ class GoodreadsSource(BaseSource):
             # otherwise start fresh. See start_at docstring above.
             books = resume_books if resume_books is not None else []
             series_map = resume_series_map if resume_series_map is not None else {}
+            from app.config import load_settings as _load_settings
+            from app.metadata.source_config import goodreads_includes_nonfiction
+            include_nonfiction = goodreads_includes_nonfiction(_load_settings())
             skipped = {"foreign": 0, "set": 0, "translation": 0}
 
             for i, rb in enumerate(raw_books):
@@ -1085,23 +1206,22 @@ class GoodreadsSource(BaseSource):
                     continue
 
                 # Quick skip: title looks like a set/collection (no page visit needed)
-                title_lower = rb["title"].lower()
-                if any(kw in title_lower for kw in [
-                    "box set", "boxed set", "boxset", "book set", "collection set",
-                    "books collection", "hardcover collection", "paperback collection",
-                    "complete series", "series set", "roleplaying game",
-                ]) or re.search(r'series\s+#?\d+\s*[-–]\s*#?\d+', title_lower) or \
-                   re.search(r'#\d+\s*[-–]\s*\d+', title_lower) or \
-                   re.search(r'books?\s+\d+\s*[-–]\s*\d+', title_lower):
+                if is_set_title(rb["title"]):
                     skipped["set"] += 1
                     logger.debug(f"    SKIP (set/collection title): '{rb['title']}'")
                     continue
 
                 # Skip books already in DB (avoid unnecessary page visits)
                 # But still emit a minimal result so the merge can backfill the URL
-                if existing_titles:
+                if existing_titles or cache_only:
                     norm_title = re.sub(r'[^\w\s]', '', rb["title"].lower()).strip()
                     norm_title = re.sub(r'\s+', ' ', norm_title)
+                    # A cache-only scan (the candidate worker is on) also
+                    # backfills books other sources have: it can't fetch
+                    # their pages to check (2026-10 audit wave 4b, G-C).
+                    known = norm_title in existing_titles or (
+                        cache_only and _norm_title(rb["title"]) in (self._known_titles or set())
+                    )
                     # EXACT normalized match only — previously this used
                     # substring containment on either side, which caused
                     # "Monster's Mercy" (book #1) to be classified as
@@ -1115,7 +1235,7 @@ class GoodreadsSource(BaseSource):
                     # still handles Calibre↔Goodreads spelling variance;
                     # this fast-path only exists to skip detail fetches
                     # for books we're certain are duplicates.
-                    if norm_title in existing_titles:
+                    if known:
                         skipped.setdefault("known", 0)
                         skipped["known"] += 1
                         logger.debug(f"    SKIP (known, URL backfill): '{rb['title']}' → book/{rb['book_id']}")
@@ -1144,6 +1264,11 @@ class GoodreadsSource(BaseSource):
                             source="goodreads",
                             source_url=f"https://www.goodreads.com/book/show/{rb['book_id']}",
                         )
+                        if cache_only:
+                            # A page the candidate worker, phase 2 or a grab
+                            # stored adds what the list page lacks.
+                            await _fill_from_stored_page(br)
+                            sname = br.series_name
                         if sname:
                             if sname not in series_map:
                                 series_map[sname] = SeriesResult(name=sname, books=[])
@@ -1151,6 +1276,14 @@ class GoodreadsSource(BaseSource):
                         else:
                             books.append(br)
                         continue
+
+                # A cache-only scan leaves a book no source has to the
+                # Goodreads candidate worker, which checks it with an
+                # autocomplete and its page before creating it (G-C, G95).
+                if cache_only:
+                    skipped.setdefault("worker", 0)
+                    skipped["worker"] += 1
+                    continue
 
                 # owned_only optimization: skip detail fetches for
                 # books that won't survive the merge layer in
@@ -1250,6 +1383,18 @@ class GoodreadsSource(BaseSource):
                     logger.debug(f"    SKIP (audiobook format): '{rb['title']}'")
                     continue
 
+                # Filter: non-fiction, unless allowed (G96 / G101 / G103):
+                # a non-fiction genre, or a title naming a non-book product.
+                if not include_nonfiction:
+                    nf = _goodreads_filters.nonfiction_genre(details.get("genres") or [])
+                    if nf or _goodreads_filters.title_skip_reason(
+                        rb["title"], include_nonfiction=False,
+                    ) == "non_book_title":
+                        skipped.setdefault("nonfiction", 0)
+                        skipped["nonfiction"] += 1
+                        logger.debug(f"    SKIP (non-fiction {nf or 'title'}): '{rb['title']}'")
+                        continue
+
                 # Build the BookResult
                 sname = details.get("series_name") or rb["list_series"]
                 sidx = details.get("series_index") or rb["list_series_idx"]
@@ -1311,6 +1456,8 @@ class GoodreadsSource(BaseSource):
                 if skipped.get("unowned"): parts.append(f"{skipped['unowned']} unowned (library-only)")
                 if skipped.get("unloaded"): parts.append(f"{skipped['unloaded']} new whose page didn't load")
                 if skipped.get("unfetched"): parts.append(f"{skipped['unfetched']} new not requested (book pages backing off)")
+                if skipped.get("nonfiction"): parts.append(f"{skipped['nonfiction']} non-fiction")
+                if skipped.get("worker"): parts.append(f"{skipped['worker']} new left to the candidate worker")
                 logger.info(f"  Goodreads: skipped {', '.join(parts)}")
 
             # Normal completion — clear any partial state from a prior

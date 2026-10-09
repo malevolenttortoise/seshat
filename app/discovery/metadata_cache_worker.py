@@ -2364,6 +2364,47 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
 # intentionally from Amazon's 600s/1800s/3600s tier).
 _GR_SOFT_BLOCK_COOLDOWN_S = 300.0
 
+# Seed authors with Goodreads candidates at most this often (S4).
+_GR_CANDIDATE_SEED_EVERY_S = 300.0
+_gr_candidates_seeded_at = 0.0
+
+
+async def _seed_goodreads_candidates(now: float) -> None:
+    global _gr_candidates_seeded_at
+    if now - _gr_candidates_seeded_at < _GR_CANDIDATE_SEED_EVERY_S:
+        return
+    _gr_candidates_seeded_at = now
+    try:
+        from app.discovery import goodreads_candidates
+        await goodreads_candidates.seed_new_authors(now=now)
+    except Exception:
+        logger.exception(
+            "metadata_cache_worker[goodreads]: candidate seeding failed (non-fatal)"
+        )
+
+
+async def _goodreads_candidate_tick(idle: "TickResult") -> "TickResult":
+    """One step of the Goodreads candidate worker (2026-10 audit wave 4b,
+    S4, ADR-0026) when no list page is due. `idle` is what the tick
+    returns when there's no candidate work either."""
+    from app.discovery import goodreads_candidates
+    res = await goodreads_candidates.step()
+    if res.outcome == "idle":
+        if res.retry_in_s > 0:
+            # Candidate work waits for the book-page gap or a backoff.
+            idle.next_sleep_s = min(idle.next_sleep_s, max(1.0, res.retry_in_s))
+        return idle
+    if res.detail:
+        _scan_logger(metadata_cache.SOURCE_GOODREADS).info(
+            "[candidate] %s", _format_fields(step=res.outcome, detail=res.detail),
+        )
+    return TickResult(
+        source_name=metadata_cache.SOURCE_GOODREADS,
+        outcome=f"candidate_{res.outcome}",
+        # The source gate paces the requests; a block waits its backoff.
+        next_sleep_s=max(1.0, res.retry_in_s) if res.retry_in_s > 0 else 1.0,
+    )
+
 
 @source_gate.as_caller(source_gate.CALLER_WORKER)
 async def tick_goodreads() -> TickResult:
@@ -2420,35 +2461,45 @@ async def tick_goodreads() -> TickResult:
             next_sleep_s=sleep_s,
         )
 
+    # Authors a scan has covered get their Goodreads candidates (2026-10
+    # audit wave 4b, S4); a few at a time, at most every few minutes.
+    await _seed_goodreads_candidates(now)
+
     # List pages backing off after an AWS WAF block (G66): wait it out
     # without popping a row. Until the 2026-10 audit the worker never
-    # checked Goodreads' block state before a request.
+    # checked Goodreads' block state before a request. The candidate work
+    # below carries on (other request kinds).
     from app.metadata import goodreads_session as _gr
     lp_until = _gr.backoff_until(source_gate.KIND_LIST_PAGE)
     if lp_until:
         remaining = lp_until - now
-        return TickResult(
+        return await _goodreads_candidate_tick(TickResult(
             source_name=source_name, outcome="cooldown",
             cooldown_remaining_s=remaining,
             next_sleep_s=min(remaining + 1.0, _COOLDOWN_MAX_SLEEP_S),
-        )
+        ))
 
     db = await metadata_cache.get_db(source_name)
     try:
         queue_row = await _pop_next_queue_row(db, source_name, now)
         if queue_row is None:
-            return TickResult(
+            idle = TickResult(
                 source_name=source_name, outcome="queue_empty",
                 queue_size=0, next_sleep_s=_IDLE_SLEEP_S,
             )
-        if queue_row.get("capped"):
-            return TickResult(
+        elif queue_row.get("capped"):
+            idle = TickResult(
                 source_name=source_name, outcome="daily_cap",
                 next_sleep_s=_IDLE_SLEEP_S,
             )
-        queue_size = await _count_pending_queue_rows(db, source_name)
+        else:
+            idle = None
+            queue_size = await _count_pending_queue_rows(db, source_name)
     finally:
         await db.close()
+    if idle is not None:
+        # No list page due: the candidate worker's turn (S4).
+        return await _goodreads_candidate_tick(idle)
 
     author_id = queue_row["author_id"]
     libraries = await _libraries_for_author(author_id, source_name)
@@ -2689,6 +2740,18 @@ async def tick_goodreads() -> TickResult:
             next_sleep_s=random.uniform(_JITTER_MIN_S, _JITTER_MAX_S),
             elapsed_ms=elapsed_ms,
         )
+
+    # New entries on a refreshed list become candidates (weekly new IDs,
+    # G94); an author seen for the first time is seeded (S4).
+    for lib in libraries:
+        try:
+            from app.discovery import goodreads_candidates
+            await goodreads_candidates.refresh_author(author_id, lib["slug"], now=now)
+        except Exception:
+            logger.exception(
+                "metadata_cache_worker[goodreads]: candidate refresh for %s "
+                "in %s failed (non-fatal)", author_id, lib["slug"],
+            )
 
     elapsed_ms = (time.time() - started_at) * 1000.0
     outcome = "ok" if book_count_total else "ok_empty"
