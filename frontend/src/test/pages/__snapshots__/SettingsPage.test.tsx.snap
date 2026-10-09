@@ -682,6 +682,1442 @@ exports[`Settings (phone) > a configured install > requests 1`] = `
 ]
 `;
 
+exports[`Settings search (desktop) > a search across sections > markup 1`] = `
+<DocumentFragment>
+  <div
+    style="display: flex; gap: 0px; min-height: calc(100vh - 100px);"
+  >
+    <div
+      style="width: 220px; flex-shrink: 0; background: rgb(34, 36, 56); border-right: 1px solid rgb(58, 60, 86); border-radius: 12px 0 0 12px; padding: 16px 0px; position: sticky; top: 60px; align-self: flex-start;"
+    >
+      <div>
+        <div
+          style="font-size: 11px; font-weight: 700; color: rgb(150, 148, 172); text-transform: uppercase; letter-spacing: 0.06em; padding: 14px 20px 6px;"
+        >
+          Pipeline
+        </div>
+        <div
+          style="padding: 9px 20px; font-size: 14px; cursor: pointer; color: rgb(228, 184, 104); background: rgba(222, 176, 96, 0.16); border-left: 3px solid rgb(228, 184, 104); font-weight: 600;"
+        >
+          Pipeline
+        </div>
+        <div
+          style="padding: 9px 20px; font-size: 14px; cursor: pointer; color: rgb(214, 212, 224); background: transparent; border-left: 3px solid transparent; font-weight: 400;"
+        >
+          Review & Enrichment
+        </div>
+        <div
+          style="padding: 9px 20px; font-size: 14px; cursor: pointer; color: rgb(214, 212, 224); background: transparent; border-left: 3px solid transparent; font-weight: 400;"
+        >
+          Grab Policy
+        </div>
+        <div
+          style="padding: 9px 20px; font-size: 14px; cursor: pointer; color: rgb(214, 212, 224); background: transparent; border-left: 3px solid transparent; font-weight: 400;"
+        >
+          Snatch Budget
+        </div>
+        <div
+          style="padding: 9px 20px; font-size: 14px; cursor: pointer; color: rgb(214, 212, 224); background: transparent; border-left: 3px solid transparent; font-weight: 400;"
+        >
+          MyAnonamouse
+        </div>
+        <div
+          style="padding: 9px 20px; font-size: 14px; cursor: pointer; color: rgb(214, 212, 224); background: transparent; border-left: 3px solid transparent; font-weight: 400;"
+        >
+          Download Client
+        </div>
+        <div
+          style="padding: 9px 20px; font-size: 14px; cursor: pointer; color: rgb(214, 212, 224); background: transparent; border-left: 3px solid transparent; font-weight: 400;"
+        >
+          Sinks & Delivery
+        </div>
+        <div
+          style="padding: 9px 20px; font-size: 14px; cursor: pointer; color: rgb(214, 212, 224); background: transparent; border-left: 3px solid transparent; font-weight: 400;"
+        >
+          Notifications
+        </div>
+        <div
+          style="padding: 9px 20px; font-size: 14px; cursor: pointer; color: rgb(214, 212, 224); background: transparent; border-left: 3px solid transparent; font-weight: 400;"
+        >
+          Quality Metadata
+        </div>
+        <div
+          style="padding: 9px 20px; font-size: 14px; cursor: pointer; color: rgb(214, 212, 224); background: transparent; border-left: 3px solid transparent; font-weight: 400;"
+        >
+          Active Replacement
+        </div>
+      </div>
+      <div>
+        <div
+          style="font-size: 11px; font-weight: 700; color: rgb(150, 148, 172); text-transform: uppercase; letter-spacing: 0.06em; padding: 14px 20px 6px;"
+        >
+          Discovery
+        </div>
+        <div
+          style="padding: 9px 20px; font-size: 14px; cursor: pointer; color: rgb(214, 212, 224); background: transparent; border-left: 3px solid transparent; font-weight: 400;"
+        >
+          Metadata Sources
+        </div>
+        <div
+          style="padding: 9px 20px; font-size: 14px; cursor: pointer; color: rgb(214, 212, 224); background: transparent; border-left: 3px solid transparent; font-weight: 400;"
+        >
+          Author Scanning
+        </div>
+        <div
+          style="padding: 9px 20px; font-size: 14px; cursor: pointer; color: rgb(214, 212, 224); background: transparent; border-left: 3px solid transparent; font-weight: 400;"
+        >
+          Library Management
+        </div>
+        <div
+          style="padding: 9px 20px; font-size: 14px; cursor: pointer; color: rgb(214, 212, 224); background: transparent; border-left: 3px solid transparent; font-weight: 400;"
+        >
+          Audiobookshelf
+        </div>
+        <div
+          style="padding: 9px 20px; font-size: 14px; cursor: pointer; color: rgb(214, 212, 224); background: transparent; border-left: 3px solid transparent; font-weight: 400;"
+        >
+          Discovery MAM
+        </div>
+      </div>
+      <div>
+        <div
+          style="font-size: 11px; font-weight: 700; color: rgb(150, 148, 172); text-transform: uppercase; letter-spacing: 0.06em; padding: 14px 20px 6px;"
+        >
+          Shared
+        </div>
+        <div
+          style="padding: 9px 20px; font-size: 14px; cursor: pointer; color: rgb(214, 212, 224); background: transparent; border-left: 3px solid transparent; font-weight: 400;"
+        >
+          Operational
+        </div>
+        <div
+          style="padding: 9px 20px; font-size: 14px; cursor: pointer; color: rgb(214, 212, 224); background: transparent; border-left: 3px solid transparent; font-weight: 400;"
+        >
+          Data Management
+        </div>
+      </div>
+      <div
+        style="padding: 16px 20px 8px; font-size: 10px; color: rgb(124, 122, 148);"
+      >
+        Build: 
+        <code
+          style="color: rgb(150, 148, 172);"
+        >
+          98d6075
+        </code>
+      </div>
+    </div>
+    <div
+      style="flex: 1 1 0%; padding: 20px 32px; min-width: 0px;"
+    >
+      <div
+        style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; gap: 12px;"
+      >
+        <h1
+          style="font-size: 22px; font-weight: 700; color: rgb(236, 234, 244); margin: 0px;"
+        >
+          Settings 
+          <span
+            style="margin-left: 10px; font-size: 13px; font-weight: 500; color: rgb(124, 122, 148);"
+          >
+            · filtering 
+            <span
+              style="color: rgb(228, 184, 104);"
+            >
+              “wedge”
+            </span>
+          </span>
+        </h1>
+        <div
+          style="display: flex; align-items: center; gap: 10px;"
+        >
+          <div
+            style="position: relative;"
+          >
+            <input
+              placeholder="Search fields…"
+              style="padding: 7px 32px 7px 12px; font-size: 13px; background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 6px; color: rgb(214, 212, 224); min-width: 220px; font-family: inherit; outline: none;"
+              type="search"
+              value="wedge"
+            />
+            <button
+              aria-label="Clear search"
+              style="position: absolute; right: 6px; top: 50%; transform: translateY(-50%); background: transparent; border: medium; color: rgb(124, 122, 148); cursor: pointer; font-size: 14px; padding: 0px 6px; line-height: 1;"
+            >
+              ✕
+            </button>
+          </div>
+          <button
+            style="background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+          >
+            Save
+          </button>
+        </div>
+      </div>
+      <div
+        style="padding: 10px 14px; margin-bottom: 16px; font-size: 12px; background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 6px; color: rgb(136, 134, 160);"
+      >
+        Searching across all sections. Each match shows its source section above the field name. Clear the search to return to single-section view.
+      </div>
+      <div
+        style="display: grid; grid-template-columns: 1fr; align-items: center; padding: 14px 0px; border-bottom: 1px solid rgb(46, 48, 72); gap: 6px 16px;"
+      >
+        <div
+          style="min-width: 0px;"
+        >
+          <div
+            style="font-size: 10px; font-weight: 700; color: rgb(124, 122, 148); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;"
+          >
+            Grab Policy
+          </div>
+          <div
+            style="font-size: 15px; font-weight: 600; color: rgb(236, 234, 244);"
+          >
+            Grab Policy
+          </div>
+          <div
+            style="font-size: 13px; color: rgb(136, 134, 160); margin-top: 3px; line-height: 1.5;"
+          >
+            These toggles + numbers all feed the policy engine that decides whether each torrent actually gets grabbed. Grab Mode narrows what's eligible; ratio floor + min wedges reserved are guardrails.
+          </div>
+        </div>
+        <div
+          style="display: flex; align-items: center; justify-content: flex-end; min-height: 32px;"
+        >
+          <div
+            style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px 28px; width: 100%; margin-top: 8px;"
+          >
+            <div
+              style="display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 12px; background: rgb(30, 32, 52); border-radius: 6px; grid-column: span 2;"
+            >
+              <div
+                style="display: flex; flex-direction: column; min-width: 0px;"
+              >
+                <span
+                  style="font-size: 13px; font-weight: 600; color: rgb(236, 234, 244);"
+                >
+                  Grab Mode
+                </span>
+                <span
+                  style="font-size: 11px; color: rgb(136, 134, 160);"
+                >
+                  Follow other rules — grab anything policy allows
+                </span>
+              </div>
+              <select
+                style="padding: 6px 10px; border-radius: 6px; border: 1px solid rgb(58, 60, 86); background: rgb(34, 36, 56); color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; cursor: pointer;"
+              >
+                <option
+                  value="any"
+                >
+                  Any
+                </option>
+                <option
+                  value="free"
+                >
+                  Free only
+                </option>
+                <option
+                  value="vip"
+                >
+                  VIP only
+                </option>
+              </select>
+            </div>
+            <div
+              style="display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 12px; background: rgb(30, 32, 52); border-radius: 6px;"
+            >
+              <div
+                style="display: flex; flex-direction: column; min-width: 0px;"
+              >
+                <span
+                  style="font-size: 13px; font-weight: 600; color: rgb(236, 234, 244);"
+                >
+                  Always grab VIP
+                </span>
+                <span
+                  style="font-size: 11px; color: rgb(136, 134, 160);"
+                >
+                  VIP bypasses other checks
+                </span>
+              </div>
+              <div
+                style="display: flex; align-items: center; gap: 8px;"
+              >
+                <div
+                  style="width: 44px; height: 24px; border-radius: 12px; background: rgb(76, 184, 136); cursor: pointer; padding: 3px; transition: background 0.2s; opacity: 1;"
+                >
+                  <div
+                    style="width: 18px; height: 18px; border-radius: 50%; background: rgb(255, 255, 255); transform: translateX(20px); transition: transform 0.2s;"
+                  />
+                </div>
+              </div>
+            </div>
+            <div
+              style="display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 12px; background: rgb(30, 32, 52); border-radius: 6px;"
+            >
+              <div
+                style="display: flex; flex-direction: column; min-width: 0px;"
+              >
+                <span
+                  style="font-size: 13px; font-weight: 600; color: rgb(236, 234, 244);"
+                >
+                  Use freeleech wedges
+                </span>
+                <span
+                  style="font-size: 11px; color: rgb(136, 134, 160);"
+                >
+                  Spend a wedge to make non-free free
+                </span>
+              </div>
+              <div
+                style="display: flex; align-items: center; gap: 8px;"
+              >
+                <div
+                  style="width: 44px; height: 24px; border-radius: 12px; background: rgb(42, 44, 66); cursor: pointer; padding: 3px; transition: background 0.2s; opacity: 1;"
+                >
+                  <div
+                    style="width: 18px; height: 18px; border-radius: 50%; background: rgb(255, 255, 255); transform: translateX(0); transition: transform 0.2s;"
+                  />
+                </div>
+              </div>
+            </div>
+            <div
+              style="display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 12px; background: rgb(30, 32, 52); border-radius: 6px;"
+            >
+              <div
+                style="display: flex; flex-direction: column; min-width: 0px;"
+              >
+                <span
+                  style="font-size: 13px; font-weight: 600; color: rgb(236, 234, 244);"
+                >
+                  Ratio floor
+                </span>
+                <span
+                  style="font-size: 11px; color: rgb(136, 134, 160);"
+                >
+                  0 = disabled
+                </span>
+              </div>
+              <input
+                min="0"
+                step="0.1"
+                style="padding: 7px 12px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 6px; color: rgb(214, 212, 224); font-size: 13px; outline: none; width: 70px; text-align: center;"
+                type="number"
+                value="0"
+              />
+            </div>
+            <div
+              style="display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 12px; background: rgb(30, 32, 52); border-radius: 6px;"
+            >
+              <div
+                style="display: flex; flex-direction: column; min-width: 0px;"
+              >
+                <span
+                  style="font-size: 13px; font-weight: 600; color: rgb(236, 234, 244);"
+                >
+                  Min wedges reserved
+                </span>
+                <span
+                  style="font-size: 11px; color: rgb(136, 134, 160);"
+                >
+                  Don't auto-spend below this
+                </span>
+              </div>
+              <input
+                min="0"
+                style="padding: 7px 12px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 6px; color: rgb(214, 212, 224); font-size: 13px; outline: none; width: 70px; text-align: center;"
+                type="number"
+                value="0"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+      <details
+        style="margin-top: 4px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 8px; padding: 8px 14px;"
+      >
+        <summary
+          style="cursor: pointer; font-size: 13px; font-weight: 600; color: rgb(214, 212, 224); user-select: none;"
+        >
+          Advanced paths
+          <span
+            style="font-size: 11px; color: rgb(136, 134, 160); font-weight: 400; margin-left: 8px;"
+          >
+            (CWA ingest, staging, review staging, folder sink, emergency export — defaults work for most setups)
+          </span>
+        </summary>
+        <div
+          style="margin-top: 10px; display: flex; flex-direction: column; gap: 6px;"
+        >
+          <div
+            style="display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, 320px); align-items: center; padding: 14px 0px; border-bottom: 1px solid rgb(46, 48, 72); gap: 6px 16px;"
+          >
+            <div
+              style="min-width: 0px;"
+            >
+              <div
+                style="font-size: 10px; font-weight: 700; color: rgb(124, 122, 148); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;"
+              >
+                Sinks & Delivery
+              </div>
+              <div
+                style="font-size: 15px; font-weight: 600; color: rgb(236, 234, 244);"
+              >
+                CWA Inter-Book Delay
+              </div>
+              <div
+                style="font-size: 13px; color: rgb(136, 134, 160); margin-top: 3px; line-height: 1.5;"
+              >
+                Minimum gap between successive book drops into the CWA ingest folder. CWA's post-import duplicate scan runs inside its single-threaded web process; overlapping ingests can wedge it until the container restarts. Default 10s covers CWA's stock 5s import-debounce with margin. Set to 0 if you've turned off CWA's 'Enable automatic duplicate scans' (it's then unnecessary). Raise above 10 if you've increased CWA's import-debounce setting.
+              </div>
+            </div>
+            <div
+              style="display: flex; align-items: center; justify-content: flex-end; min-height: 32px;"
+            >
+              <div
+                style="display: flex; align-items: center; gap: 8px;"
+              >
+                <input
+                  max="120"
+                  min="0"
+                  step="1"
+                  style="padding: 7px 12px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 6px; color: rgb(214, 212, 224); font-size: 13px; outline: none; width: 80px; text-align: center;"
+                  type="number"
+                  value="10"
+                />
+                <span
+                  style="font-size: 13px; color: rgb(136, 134, 160);"
+                >
+                  seconds
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </details>
+      <div
+        style="border: 1px solid rgb(58, 60, 86); border-radius: 8px; padding: 16px; margin-top: 16px; background: rgb(34, 36, 56);"
+      >
+        <div
+          style="font-weight: 600; font-size: 14px; margin-bottom: 4px; color: rgb(236, 234, 244);"
+        >
+          Advanced Routing & Quiet Hours
+        </div>
+        <div
+          style="font-size: 12px; color: rgb(136, 134, 160); margin-bottom: 12px; max-width: 720px;"
+        >
+          Per-event topic routing and priority overrides — supports wildcards (e.g. 
+          <code>
+            grab.*
+          </code>
+          , 
+          <code>
+            *
+          </code>
+          ) under 
+          <em>
+            Per-event Overrides
+          </em>
+          . When an event has no override here, the legacy toggles above remain authoritative. Quiet hours silently drop routine successes; errors and warnings always fire through.
+        </div>
+        <label
+          style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px; cursor: pointer; font-size: 13px; color: rgb(214, 212, 224);"
+        >
+          <input
+            checked=""
+            type="checkbox"
+          />
+          <span>
+            <strong>
+              Master enabled
+            </strong>
+             — uncheck to mute every notification this bus produces.
+          </span>
+        </label>
+        <details
+          style="margin-bottom: 12px;"
+        >
+          <summary
+            style="cursor: pointer; font-size: 13px; color: rgb(214, 212, 224); font-weight: 600;"
+          >
+            Quiet hours (off)
+          </summary>
+          <div
+            style="margin-top: 10px; padding-left: 14px; display: grid; row-gap: 8px;"
+          >
+            <label
+              style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; color: rgb(214, 212, 224);"
+            >
+              <input
+                type="checkbox"
+              />
+              Enable quiet hours
+            </label>
+            <div
+              style="display: flex; gap: 12px; flex-wrap: wrap; align-items: center; font-size: 12px; color: rgb(136, 134, 160);"
+            >
+              <label>
+                Start 
+                <input
+                  style="padding: 5px 8px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 4px; color: rgb(214, 212, 224); font-size: 12px; outline: none;"
+                  type="time"
+                  value="23:00"
+                />
+              </label>
+              <label>
+                End 
+                <input
+                  style="padding: 5px 8px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 4px; color: rgb(214, 212, 224); font-size: 12px; outline: none;"
+                  type="time"
+                  value="07:00"
+                />
+              </label>
+              <label>
+                Timezone 
+                <input
+                  placeholder="(system local)"
+                  style="padding: 5px 8px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 4px; color: rgb(214, 212, 224); font-size: 12px; outline: none; width: 200px;"
+                  type="text"
+                  value=""
+                />
+              </label>
+            </div>
+            <div
+              style="font-size: 11px; color: rgb(136, 134, 160);"
+            >
+              Overnight windows (e.g. 23:00 → 07:00) are supported. Timezone uses IANA names (
+              <code>
+                America/New_York
+              </code>
+              ); leave blank for system local.
+            </div>
+          </div>
+        </details>
+        <details>
+          <summary
+            style="cursor: pointer; font-size: 13px; color: rgb(214, 212, 224); font-weight: 600;"
+          >
+            Per-event Overrides (0 configured)
+          </summary>
+          <div
+            style="margin-top: 10px;"
+          >
+            <div
+              style="border: 1px solid rgb(58, 60, 86); border-radius: 6px; padding: 8px;"
+            >
+              <div
+                style="font-size: 11px; color: rgb(136, 134, 160); margin-bottom: 6px;"
+              >
+                Wildcard rules: 
+                <code>
+                  grab.*
+                </code>
+                , 
+                <code>
+                  discovery.*
+                </code>
+                , 
+                <code>
+                  *
+                </code>
+                 as fallback. Exact event overrides below always win over wildcards; longest prefix wins among wildcards.
+              </div>
+              <div
+                style="font-size: 12px; color: rgb(136, 134, 160); font-style: italic;"
+              >
+                No wildcard rules yet.
+              </div>
+              <div
+                style="display: flex; gap: 6px; align-items: center; margin-top: 8px;"
+              >
+                <input
+                  placeholder="e.g. grab.* or *"
+                  style="padding: 5px 8px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 4px; color: rgb(214, 212, 224); font-size: 12px; outline: none; width: 180px;"
+                  type="text"
+                  value=""
+                />
+                <button
+                  style="font-size: 12px; padding: 5px 10px; background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: medium; border-radius: 4px; cursor: pointer; font-weight: 600;"
+                >
+                  Add pattern
+                </button>
+              </div>
+            </div>
+            <table
+              style="width: 100%; font-size: 12px; border-collapse: collapse; margin-top: 14px;"
+            >
+              <thead>
+                <tr
+                  style="color: rgb(136, 134, 160);"
+                >
+                  <th
+                    style="text-align: left; padding: 6px 4px; border-bottom: 1px solid rgb(58, 60, 86);"
+                  >
+                    Event
+                  </th>
+                  <th
+                    style="text-align: left; padding: 6px 4px; border-bottom: 1px solid rgb(58, 60, 86);"
+                  >
+                    Enabled
+                  </th>
+                  <th
+                    style="text-align: left; padding: 6px 4px; border-bottom: 1px solid rgb(58, 60, 86);"
+                  >
+                    Topic Override
+                  </th>
+                  <th
+                    style="text-align: left; padding: 6px 4px; border-bottom: 1px solid rgb(58, 60, 86);"
+                  >
+                    Priority
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td
+                    style="padding: 6px 4px; border-bottom: 1px solid rgb(58, 60, 86); color: rgb(214, 212, 224);"
+                  >
+                    <div
+                      style="font-family: monospace;"
+                    >
+                      grab.submitted
+                    </div>
+                    <div
+                      style="font-size: 11px; color: rgb(136, 134, 160);"
+                    >
+                      A grab was sent to the download client
+                    </div>
+                  </td>
+                  <td
+                    style="padding: 6px 4px; border-bottom: 1px solid rgb(58, 60, 86);"
+                  >
+                    <select
+                      style="padding: 5px 8px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 4px; color: rgb(214, 212, 224); font-size: 12px; outline: none;"
+                    >
+                      <option
+                        value="default"
+                      >
+                        Default
+                      </option>
+                      <option
+                        value="on"
+                      >
+                        On
+                      </option>
+                      <option
+                        value="off"
+                      >
+                        Off
+                      </option>
+                    </select>
+                  </td>
+                  <td
+                    style="padding: 6px 4px; border-bottom: 1px solid rgb(58, 60, 86);"
+                  >
+                    <input
+                      placeholder="(default ntfy_topic)"
+                      style="padding: 5px 8px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 4px; color: rgb(214, 212, 224); font-size: 12px; outline: none; width: 180px;"
+                      type="text"
+                      value=""
+                    />
+                  </td>
+                  <td
+                    style="padding: 6px 4px; border-bottom: 1px solid rgb(58, 60, 86);"
+                  >
+                    <select
+                      style="padding: 5px 8px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 4px; color: rgb(214, 212, 224); font-size: 12px; outline: none;"
+                    >
+                      <option
+                        value=""
+                      >
+                        Default (3)
+                      </option>
+                      <option
+                        value="1"
+                      >
+                        1
+                      </option>
+                      <option
+                        value="2"
+                      >
+                        2
+                      </option>
+                      <option
+                        value="3"
+                      >
+                        3
+                      </option>
+                      <option
+                        value="4"
+                      >
+                        4
+                      </option>
+                      <option
+                        value="5"
+                      >
+                        5
+                      </option>
+                    </select>
+                  </td>
+                </tr>
+                <tr>
+                  <td
+                    style="padding: 6px 4px; border-bottom: 1px solid rgb(58, 60, 86); color: rgb(214, 212, 224);"
+                  >
+                    <div
+                      style="font-family: monospace;"
+                    >
+                      pipeline.import_failed
+                    </div>
+                    <div
+                      style="font-size: 11px; color: rgb(136, 134, 160);"
+                    >
+                      CWA didn't import a delivered ebook
+                    </div>
+                    <div
+                      style="font-size: 10px; color: rgb(224, 192, 96); margin-top: 2px;"
+                    >
+                      ⚠ Bypasses quiet hours
+                    </div>
+                  </td>
+                  <td
+                    style="padding: 6px 4px; border-bottom: 1px solid rgb(58, 60, 86);"
+                  >
+                    <select
+                      style="padding: 5px 8px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 4px; color: rgb(214, 212, 224); font-size: 12px; outline: none;"
+                    >
+                      <option
+                        value="default"
+                      >
+                        Default
+                      </option>
+                      <option
+                        value="on"
+                      >
+                        On
+                      </option>
+                      <option
+                        value="off"
+                      >
+                        Off
+                      </option>
+                    </select>
+                  </td>
+                  <td
+                    style="padding: 6px 4px; border-bottom: 1px solid rgb(58, 60, 86);"
+                  >
+                    <input
+                      placeholder="(default ntfy_topic)"
+                      style="padding: 5px 8px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 4px; color: rgb(214, 212, 224); font-size: 12px; outline: none; width: 180px;"
+                      type="text"
+                      value=""
+                    />
+                  </td>
+                  <td
+                    style="padding: 6px 4px; border-bottom: 1px solid rgb(58, 60, 86);"
+                  >
+                    <select
+                      style="padding: 5px 8px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 4px; color: rgb(214, 212, 224); font-size: 12px; outline: none;"
+                    >
+                      <option
+                        value=""
+                      >
+                        Default (4)
+                      </option>
+                      <option
+                        value="1"
+                      >
+                        1
+                      </option>
+                      <option
+                        value="2"
+                      >
+                        2
+                      </option>
+                      <option
+                        value="3"
+                      >
+                        3
+                      </option>
+                      <option
+                        value="4"
+                      >
+                        4
+                      </option>
+                      <option
+                        value="5"
+                      >
+                        5
+                      </option>
+                    </select>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </details>
+      </div>
+      <div
+        style="display: flex; flex-direction: column; gap: 12px;"
+      >
+        <div
+          style="font-size: 13px; color: rgb(136, 134, 160); line-height: 1.6; margin: 0px; padding: 10px 14px; background: rgb(30, 32, 52); border-radius: 8px; border: 1px solid rgb(46, 48, 72);"
+        >
+          <div
+            style="margin-bottom: 4px;"
+          >
+            <strong
+              style="color: rgb(214, 212, 224);"
+            >
+              Enrich
+            </strong>
+             — sources run after a book downloads, merging title / description / ISBN / cover / narrator / etc. into the review-queue metadata.
+          </div>
+          <div
+            style="margin-bottom: 4px;"
+          >
+            <strong
+              style="color: rgb(214, 212, 224);"
+            >
+              Scan
+            </strong>
+             — sources run during library-side author scanning to find books you don't have yet.
+          </div>
+          <div>
+            <strong
+              style="color: rgb(214, 212, 224);"
+            >
+              Rate (s)
+            </strong>
+             — the minimum gap between any two requests to this source, from anything in Seshat (scans, the cache workers, enrichment). Higher = gentler on the upstream, slower scans. Leave at default if unsure.
+          </div>
+          <div
+            style="margin-top: 6px; color: rgb(136, 134, 160);"
+          >
+            Priority is top-to-bottom; drag rows to reorder. MAM is always first and free — its row is locked.
+          </div>
+        </div>
+        <div
+          style="background: rgba(228, 184, 104, 0.094); border: 1px solid rgba(228, 184, 104, 0.333); color: rgb(236, 234, 244); padding: 10px 14px; border-radius: 8px; font-size: 13px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;"
+        >
+          <span
+            style="flex: 1 1 0%;"
+          >
+            <b>
+              v2.13.0:
+            </b>
+             Goodreads's default rate limit is now 
+            <b>
+              5.0s
+            </b>
+             (was 2.0s). Goodreads' bot protection (AWS WAF) scores request density, so the slower pace keeps scans from being blocked. Your current setting is 
+            <b>
+              1s
+            </b>
+            .
+          </span>
+          <button
+            style="background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+          >
+            Bump to 5.0s
+          </button>
+        </div>
+        <div
+          style="display: grid; grid-template-columns: minmax(220px, 280px) 1fr; gap: 16px; align-items: start;"
+        >
+          <div
+            style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 8px; overflow: hidden; display: flex; flex-direction: column;"
+          >
+            <div
+              style="padding: 8px 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: rgb(136, 134, 160); border-bottom: 1px solid rgb(46, 48, 72); background: rgb(30, 32, 52);"
+            >
+              Sources
+            </div>
+            <button
+              style="display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; background: rgba(228, 184, 104, 0.1); border-width: medium medium 1px 3px; border-style: none none solid solid; border-color: currentcolor currentcolor rgb(46, 48, 72) rgb(228, 184, 104); border-image: none; cursor: pointer; color: rgb(236, 234, 244); text-align: left; font-size: 13px; opacity: 1;"
+            >
+              <span
+                style="font-size: 11px; font-weight: 700; color: rgb(228, 184, 104); text-align: center;"
+              >
+                🔒
+              </span>
+              <span
+                style="font-weight: 700; color: rgb(228, 184, 104);"
+              >
+                MyAnonamouse
+              </span>
+              <span
+                style="display: flex; gap: 4px;"
+              >
+                <span
+                  style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+                >
+                  E
+                </span>
+                <span
+                  style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+                >
+                  A
+                </span>
+              </span>
+            </button>
+            <button
+              style="display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; background: transparent; border-width: medium medium 1px 3px; border-style: none none solid solid; border-color: currentcolor currentcolor rgb(46, 48, 72) transparent; border-image: none; cursor: pointer; color: rgb(236, 234, 244); text-align: left; font-size: 13px; opacity: 1;"
+            >
+              <span
+                style="font-size: 11px; font-weight: 700; color: rgb(136, 134, 160); text-align: center;"
+              >
+                2
+              </span>
+              <span
+                style="font-weight: 500; color: rgb(236, 234, 244);"
+              >
+                Goodreads
+              </span>
+              <span
+                style="display: flex; gap: 4px;"
+              >
+                <span
+                  style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+                >
+                  E
+                </span>
+                <span
+                  style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+                >
+                  A
+                </span>
+              </span>
+            </button>
+            <button
+              style="display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; background: transparent; border-width: medium medium 1px 3px; border-style: none none solid solid; border-color: currentcolor currentcolor rgb(46, 48, 72) transparent; border-image: none; cursor: pointer; color: rgb(236, 234, 244); text-align: left; font-size: 13px; opacity: 1;"
+            >
+              <span
+                style="font-size: 11px; font-weight: 700; color: rgb(136, 134, 160); text-align: center;"
+              >
+                3
+              </span>
+              <span
+                style="font-weight: 500; color: rgb(236, 234, 244);"
+              >
+                Hardcover
+              </span>
+              <span
+                style="display: flex; gap: 4px;"
+              >
+                <span
+                  style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+                >
+                  E
+                </span>
+                <span
+                  style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+                >
+                  A
+                </span>
+              </span>
+            </button>
+            <button
+              style="display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; background: transparent; border-width: medium medium 1px 3px; border-style: none none solid solid; border-color: currentcolor currentcolor rgb(46, 48, 72) transparent; border-image: none; cursor: pointer; color: rgb(236, 234, 244); text-align: left; font-size: 13px; opacity: 1;"
+            >
+              <span
+                style="font-size: 11px; font-weight: 700; color: rgb(136, 134, 160); text-align: center;"
+              >
+                4
+              </span>
+              <span
+                style="font-weight: 500; color: rgb(236, 234, 244);"
+              >
+                Open Library
+              </span>
+              <span
+                style="display: flex; gap: 4px;"
+              >
+                <span
+                  style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+                >
+                  E
+                </span>
+                <span
+                  style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+                >
+                  A
+                </span>
+              </span>
+            </button>
+            <button
+              style="display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; background: transparent; border-width: medium medium 1px 3px; border-style: none none solid solid; border-color: currentcolor currentcolor rgb(46, 48, 72) transparent; border-image: none; cursor: pointer; color: rgb(236, 234, 244); text-align: left; font-size: 13px; opacity: 1;"
+            >
+              <span
+                style="font-size: 11px; font-weight: 700; color: rgb(136, 134, 160); text-align: center;"
+              >
+                5
+              </span>
+              <span
+                style="font-weight: 500; color: rgb(236, 234, 244);"
+              >
+                Google Books
+              </span>
+              <span
+                style="display: flex; gap: 4px;"
+              >
+                <span
+                  style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+                >
+                  E
+                </span>
+                <span
+                  style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgb(30, 32, 52); color: rgb(136, 134, 160); border: 1px solid rgb(46, 48, 72);"
+                >
+                  A
+                </span>
+              </span>
+            </button>
+            <button
+              style="display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; background: transparent; border-width: medium medium 1px 3px; border-style: none none solid solid; border-color: currentcolor currentcolor rgb(46, 48, 72) transparent; border-image: none; cursor: pointer; color: rgb(236, 234, 244); text-align: left; font-size: 13px; opacity: 1;"
+            >
+              <span
+                style="font-size: 11px; font-weight: 700; color: rgb(136, 134, 160); text-align: center;"
+              >
+                6
+              </span>
+              <span
+                style="font-weight: 500; color: rgb(236, 234, 244);"
+              >
+                Kobo
+              </span>
+              <span
+                style="display: flex; gap: 4px;"
+              >
+                <span
+                  style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+                >
+                  E
+                </span>
+                <span
+                  style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgb(30, 32, 52); color: rgb(46, 48, 72); border: 1px solid rgb(46, 48, 72);"
+                  title="Not available for audiobook"
+                >
+                  A
+                </span>
+              </span>
+            </button>
+            <button
+              style="display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; background: transparent; border-width: medium medium 1px 3px; border-style: none none solid solid; border-color: currentcolor currentcolor rgb(46, 48, 72) transparent; border-image: none; cursor: pointer; color: rgb(236, 234, 244); text-align: left; font-size: 13px; opacity: 1;"
+            >
+              <span
+                style="font-size: 11px; font-weight: 700; color: rgb(136, 134, 160); text-align: center;"
+              >
+                7
+              </span>
+              <span
+                style="font-weight: 500; color: rgb(236, 234, 244);"
+              >
+                Amazon
+              </span>
+              <span
+                style="display: flex; gap: 4px;"
+              >
+                <span
+                  style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+                >
+                  E
+                </span>
+                <span
+                  style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+                >
+                  A
+                </span>
+              </span>
+            </button>
+            <button
+              style="display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; background: transparent; border-width: medium medium 1px 3px; border-style: none none solid solid; border-color: currentcolor currentcolor rgb(46, 48, 72) transparent; border-image: none; cursor: pointer; color: rgb(236, 234, 244); text-align: left; font-size: 13px; opacity: 1;"
+            >
+              <span
+                style="font-size: 11px; font-weight: 700; color: rgb(136, 134, 160); text-align: center;"
+              >
+                8
+              </span>
+              <span
+                style="font-weight: 500; color: rgb(236, 234, 244);"
+              >
+                IBDB
+              </span>
+              <span
+                style="display: flex; gap: 4px;"
+              >
+                <span
+                  style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgb(30, 32, 52); color: rgb(136, 134, 160); border: 1px solid rgb(46, 48, 72);"
+                >
+                  E
+                </span>
+                <span
+                  style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgb(30, 32, 52); color: rgb(46, 48, 72); border: 1px solid rgb(46, 48, 72);"
+                  title="Not available for audiobook"
+                >
+                  A
+                </span>
+              </span>
+            </button>
+            <button
+              style="display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; background: transparent; border-width: medium medium 1px 3px; border-style: none none solid solid; border-color: currentcolor currentcolor rgb(46, 48, 72) transparent; border-image: none; cursor: pointer; color: rgb(236, 234, 244); text-align: left; font-size: 13px; opacity: 0.55;"
+            >
+              <span
+                style="font-size: 11px; font-weight: 700; color: rgb(136, 134, 160); text-align: center;"
+              >
+                9
+              </span>
+              <span
+                style="font-weight: 500; color: rgb(236, 234, 244);"
+              >
+                Audible
+              </span>
+              <span
+                style="display: flex; gap: 4px;"
+              >
+                <span
+                  style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgb(30, 32, 52); color: rgb(46, 48, 72); border: 1px solid rgb(46, 48, 72);"
+                  title="Not available for ebook"
+                >
+                  E
+                </span>
+                <span
+                  style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+                >
+                  A
+                </span>
+              </span>
+            </button>
+          </div>
+          <div
+            style="padding: 14px 18px; background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 8px; display: flex; flex-direction: column; gap: 12px;"
+          >
+            <div
+              style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;"
+            >
+              <h3
+                style="margin: 0px; font-size: 17px; font-weight: 700; color: rgb(236, 234, 244);"
+              >
+                MyAnonamouse
+              </h3>
+              <span
+                style="font-size: 10px; font-weight: 700; text-transform: uppercase; padding: 3px 8px; border-radius: 99px; background: rgba(228, 184, 104, 0.133); color: rgb(228, 184, 104); letter-spacing: 0.4px;"
+              >
+                🔒 Always first
+              </span>
+              <span
+                style="flex: 1 1 0%;"
+              />
+              <div
+                style="display: inline-flex; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 6px; padding: 2px; gap: 0px;"
+              >
+                <button
+                  style="padding: 4px 14px; font-size: 12px; font-weight: 600; background: rgba(228, 184, 104, 0.133); color: rgb(228, 184, 104); border: medium; border-radius: 4px; cursor: default; text-transform: capitalize;"
+                >
+                  ebook
+                </button>
+                <button
+                  style="padding: 4px 14px; font-size: 12px; font-weight: 600; background: transparent; color: rgb(214, 212, 224); border: medium; border-radius: 4px; cursor: pointer; text-transform: capitalize;"
+                >
+                  audiobook
+                </button>
+              </div>
+            </div>
+            <div
+              style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;"
+            >
+              <label
+                style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 6px; cursor: not-allowed; opacity: 0.5;"
+                title="MAM enriches every grab automatically via the announce torrent_id"
+              >
+                <input
+                  checked=""
+                  disabled=""
+                  style="width: 18px; height: 18px; cursor: not-allowed;"
+                  type="checkbox"
+                />
+                <span
+                  style="font-size: 13px; font-weight: 600; color: rgb(236, 234, 244);"
+                >
+                  Enrich
+                </span>
+              </label>
+              <label
+                style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 6px; cursor: not-allowed; opacity: 0.5;"
+                title="Include in per-author ebook scans."
+              >
+                <input
+                  checked=""
+                  disabled=""
+                  style="width: 18px; height: 18px; cursor: not-allowed;"
+                  type="checkbox"
+                />
+                <span
+                  style="font-size: 13px; font-weight: 600; color: rgb(236, 234, 244);"
+                >
+                  Scan
+                </span>
+              </label>
+              <label
+                style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 6px; cursor: not-allowed; opacity: 0.5;"
+                title="MAM is not part of the source-scan registry; the mandatory flag has no effect."
+              >
+                <input
+                  disabled=""
+                  style="width: 18px; height: 18px; cursor: not-allowed;"
+                  type="checkbox"
+                />
+                <span
+                  style="font-size: 13px; font-weight: 600; color: rgb(236, 234, 244);"
+                >
+                  Mandatory
+                </span>
+              </label>
+            </div>
+            <div
+              style="display: flex; align-items: center; gap: 12px;"
+            >
+              <span
+                style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: rgb(136, 134, 160); min-width: 80px;"
+              >
+                Rate (s)
+              </span>
+              <input
+                disabled=""
+                max="100"
+                min="0.1"
+                step="0.5"
+                style="width: 90px; padding: 5px 8px; text-align: center; border-radius: 6px; border: 1px solid rgb(58, 60, 86); background: rgb(34, 36, 56); color: rgb(214, 212, 224); font-size: 13px; outline: none; opacity: 0.5;"
+                type="number"
+                value="1"
+              />
+              <span
+                style="font-size: 11px; color: rgb(136, 134, 160); font-style: italic;"
+              >
+                Minimum gap between any two requests to this source, from any part of Seshat.
+              </span>
+            </div>
+            <div
+              style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;"
+            >
+              <div
+                style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 6px; opacity: 1;"
+              >
+                <span
+                  style="font-size: 11px; font-weight: 700; text-transform: capitalize; letter-spacing: 0.5px; color: rgb(136, 134, 160);"
+                >
+                  ebook
+                </span>
+                <span
+                  style="font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+                >
+                  #1
+                </span>
+                <span
+                  style="flex: 1 1 0%;"
+                />
+                <button
+                  disabled=""
+                  style="background: none; border: 1px solid rgb(46, 48, 72); border-radius: 4px; padding: 3px 7px; cursor: default; color: rgb(46, 48, 72); opacity: 0.4; font-size: 11px;"
+                  title="MAM is locked at #1"
+                >
+                  ▲
+                </button>
+                <button
+                  disabled=""
+                  style="background: none; border: 1px solid rgb(46, 48, 72); border-radius: 4px; padding: 3px 7px; cursor: default; color: rgb(46, 48, 72); opacity: 0.4; font-size: 11px;"
+                  title="Already at bottom"
+                >
+                  ▼
+                </button>
+              </div>
+              <div
+                style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 6px; opacity: 1;"
+              >
+                <span
+                  style="font-size: 11px; font-weight: 700; text-transform: capitalize; letter-spacing: 0.5px; color: rgb(136, 134, 160);"
+                >
+                  audiobook
+                </span>
+                <span
+                  style="font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+                >
+                  #1
+                </span>
+                <span
+                  style="flex: 1 1 0%;"
+                />
+                <button
+                  disabled=""
+                  style="background: none; border: 1px solid rgb(46, 48, 72); border-radius: 4px; padding: 3px 7px; cursor: default; color: rgb(46, 48, 72); opacity: 0.4; font-size: 11px;"
+                  title="MAM is locked at #1"
+                >
+                  ▲
+                </button>
+                <button
+                  disabled=""
+                  style="background: none; border: 1px solid rgb(46, 48, 72); border-radius: 4px; padding: 3px 7px; cursor: default; color: rgb(46, 48, 72); opacity: 0.4; font-size: 11px;"
+                  title="Already at bottom"
+                >
+                  ▼
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div
+          style="position: sticky; bottom: 12px; display: flex; justify-content: flex-end; gap: 10px; background: rgba(26, 28, 48, 0.933); backdrop-filter: blur(8px); padding: 12px 0px; border-top: 1px solid rgb(46, 48, 72); margin-top: 8px;"
+        >
+          <button
+            style="background: transparent; color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+            title="Wipe all panel settings + reapply v2.11.x ship-defaults"
+          >
+            Reset to defaults
+          </button>
+          <span
+            style="flex: 1 1 0%;"
+          />
+          <span
+            style="font-size: 13px; color: rgb(136, 134, 160); align-self: center;"
+          >
+            No unsaved changes
+          </span>
+          <button
+            disabled=""
+            style="background: transparent; color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+          >
+            Discard
+          </button>
+          <button
+            disabled=""
+            style="background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+          >
+            Save
+          </button>
+        </div>
+      </div>
+      <div
+        style="margin-bottom: 16px;"
+      >
+        <div
+          style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;"
+        >
+          <div
+            style="font-size: 14px; font-weight: 600; color: rgb(236, 234, 244);"
+          >
+            Discovered Libraries
+          </div>
+          <button
+            style="background: transparent; color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+          >
+            Rescan
+          </button>
+        </div>
+        <div
+          style="display: flex; flex-direction: column; gap: 6px;"
+        >
+          <div
+            style="display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-radius: 8px; cursor: pointer; background: rgba(222, 176, 96, 0.16); border: 1px solid rgb(228, 184, 104);"
+          >
+            <div>
+              <div
+                style="font-size: 14px; font-weight: 600; color: rgb(228, 184, 104);"
+              >
+                Calibre Library
+              </div>
+              <div
+                style="font-size: 11px; color: rgb(136, 134, 160);"
+              >
+                Calibre Library · ebook · calibre-library
+              </div>
+            </div>
+            <span
+              style="font-size: 11px; font-weight: 600; color: rgb(76, 184, 136);"
+            >
+              Active
+            </span>
+          </div>
+          <div
+            style="display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-radius: 8px; cursor: pointer; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72);"
+          >
+            <div>
+              <div
+                style="font-size: 14px; font-weight: 600; color: rgb(236, 234, 244);"
+              >
+                Audiobookshelf
+              </div>
+              <div
+                style="font-size: 11px; color: rgb(136, 134, 160);"
+              >
+                Audiobookshelf · audiobook · audiobookshelf
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div
+        style="margin-top: 12px; padding-top: 12px; border-top: 1px solid rgb(46, 48, 72);"
+      >
+        <div
+          style="font-size: 13px; font-weight: 700; color: rgb(214, 212, 224); margin-bottom: 6px;"
+        >
+          Calibre push-back via CWA (slim image only)
+        </div>
+        <div
+          style="font-size: 12px; color: rgb(136, 134, 160); margin-bottom: 10px;"
+        >
+          When the slim image is in use, Seshat pushes metadata edits to Calibre by driving CWA's admin form. Leave blank if you run the full image — push-back uses calibredb directly there.
+        </div>
+      </div>
+      <p
+        style="font-size: 12px; color: rgb(136, 134, 160); margin-bottom: 12px; line-height: 1.5;"
+      >
+        Audiobookshelf pairs with your Calibre library as a second content source. Seshat discovers audiobooks via the ABS REST API, syncs them into a per-library discovery DB, and auto-links ebook ↔ audiobook pairs into cross-library "works".
+      </p>
+      <p
+        style="font-size: 12px; color: rgb(136, 134, 160); margin-bottom: 12px; line-height: 1.5;"
+      >
+        Discovery scan data clears (per-author or global) come first. Pipeline-side cleanups follow. Dangerous operations (⚠) ask for confirmation.
+      </p>
+      <div
+        style="margin-top: 24px; padding-top: 16px; border-top: 1px solid rgb(58, 60, 86);"
+      >
+        <div
+          style="font-size: 13px; font-weight: 600; color: rgb(214, 212, 224); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;"
+        >
+          Pipeline tables
+        </div>
+        <p
+          style="font-size: 12px; color: rgb(136, 134, 160); margin-bottom: 12px; line-height: 1.5;"
+        >
+          Safe operations clear data that rebuilds from future announces. Dangerous operations (⚠) require typed confirmation.
+        </p>
+      </div>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Settings search (desktop) > a search across sections > requests 1`] = `
+[
+  "GET /discovery/libraries",
+  "GET /discovery/mam/status",
+  "GET /quality/backfill/status",
+  "GET /quality/library-safety",
+  "GET /quality/library-safety",
+  "GET /quality/replacement-opportunities/counts",
+  "GET /quality/replacement-opportunities/counts",
+  "GET /quality/stats",
+  "GET /v1/credentials",
+  "GET /v1/data/counts",
+  "GET /v1/metadata-sources",
+  "GET /v1/notifications/events",
+  "GET /v1/settings",
+  "GET /version",
+]
+`;
+
 exports[`Settings sections (desktop) > Active Replacement > markup 1`] = `
 <DocumentFragment>
   <div

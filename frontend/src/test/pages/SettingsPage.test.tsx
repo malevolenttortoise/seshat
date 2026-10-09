@@ -41,6 +41,19 @@ describe("Settings sections (desktop)", () => {
   });
 });
 
+describe("Settings search (desktop)", () => {
+  // Every section renders while a search is on, and each field hides
+  // itself unless its label, description or section matches.
+  it("a search across sections", async () => {
+    const r = await renderPage(<SettingsPage />, { viewport: "desktop", routes: settingsSectionRoutes });
+    act(() => {
+      fireEvent.change(r.getByPlaceholderText("Search fields…"), { target: { value: "wedge" } });
+    });
+    await r.settle();
+    expectRendered(r, "Searching across all sections");
+  });
+});
+
 describe("Settings sections (phone)", () => {
   it("every section open", async () => {
     const r = await renderPage(<SettingsPage />, { viewport: "phone", routes: settingsSectionRoutes });
