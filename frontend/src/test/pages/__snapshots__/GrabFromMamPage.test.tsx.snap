@@ -241,6 +241,501 @@ exports[`Manual Grab (desktop) > two carried links previewed > requests 1`] = `
 ]
 `;
 
+exports[`Manual Grab (desktop) > wedge balance unreadable > markup 1`] = `
+<DocumentFragment>
+  <div
+    style="display: flex; flex-direction: column; gap: 20px;"
+  >
+    <div>
+      <h1
+        style="font-size: 24px; font-weight: 700; color: rgb(236, 234, 244); margin: 0px 0px 4px;"
+      >
+        Grab from MAM
+      </h1>
+      <p
+        style="font-size: 14px; color: rgb(136, 134, 160); margin: 0px;"
+      >
+        Paste MAM links or torrent IDs, or drop .torrent files you downloaded from MAM, up to 30 at a time. Seshat shows what each one is and what you already have, then grabs the ones you tick. A dropped .torrent goes straight to qBittorrent, with no second download from MAM.
+      </p>
+    </div>
+    <div
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 12px; padding: 20px;"
+    >
+      <textarea
+        placeholder="One per line:
+https://www.myanonamouse.net/t/1274788
+1274722"
+        rows="4"
+        style="width: 100%; padding: 12px; font-size: 13px; font-family: monospace; border-radius: 8px; resize: vertical; background: rgb(34, 36, 56); color: rgb(236, 234, 244); border: 1px solid rgb(58, 60, 86);"
+      />
+      <div
+        style="display: flex; align-items: center; gap: 12px; margin-top: 8px;"
+      >
+        <button
+          disabled=""
+          style="background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+        >
+          Look up
+        </button>
+        <span
+          style="font-size: 12px; color: rgb(150, 148, 172);"
+        >
+          Already downloaded the .torrent? Drop the file instead — MAM takes up to 20 min to show it as snatched, and a pasted link downloads it again.
+        </span>
+      </div>
+      <div
+        style="margin-top: 14px;"
+      >
+        <div
+          style="display: flex; align-items: center; justify-content: center; gap: 12px; padding: 18px 14px; border-radius: 10px; border: 2px dashed rgb(58, 60, 86); background: transparent; color: rgb(150, 148, 172); font-size: 13px;"
+        >
+          <span>
+            Drop .torrent files here or
+          </span>
+          <input
+            accept=".torrent,application/x-bittorrent"
+            multiple=""
+            style="display: none;"
+            type="file"
+          />
+          <button
+            style="padding: 6px 12px; font-size: 13px; font-weight: 600; border-radius: 6px; background: rgb(42, 44, 66); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); cursor: pointer;"
+            type="button"
+          >
+            Add .torrent files
+          </button>
+        </div>
+      </div>
+    </div>
+    <div
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 12px; padding: 12px 20px 16px;"
+    >
+      <div
+        style="display: flex; align-items: center; justify-content: space-between; padding-bottom: 8px;"
+      >
+        <span
+          style="font-size: 13px; color: rgb(150, 148, 172);"
+        >
+          2 of 30
+        </span>
+        <button
+          style="background: transparent; color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+        >
+          Clear list
+        </button>
+      </div>
+      <div
+        style="display: flex; gap: 12px; padding: 12px 4px; border-top: 1px solid rgb(46, 48, 72); opacity: 1;"
+      >
+        <input
+          aria-label="Grab this torrent"
+          style="margin-top: 4px; width: 18px; height: 18px; accent-color: rgb(228, 184, 104); flex-shrink: 0;"
+          type="checkbox"
+        />
+        <div
+          style="width: 48px; height: 70px; flex-shrink: 0; border-radius: 4px; background: rgb(42, 44, 66); overflow: hidden; display: flex; align-items: center; justify-content: center;"
+        >
+          <span
+            style="font-size: 18px; color: rgb(98, 96, 122);"
+          >
+            📕
+          </span>
+        </div>
+        <div
+          style="flex: 1 1 0%; min-width: 0px; display: flex; flex-direction: column; gap: 3px;"
+        >
+          <div
+            style="display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;"
+          >
+            <a
+              href="https://www.myanonamouse.net/t/900021"
+              rel="noreferrer"
+              style="font-size: 15px; font-weight: 600; color: rgb(236, 234, 244); text-decoration: none;"
+              target="_blank"
+            >
+              The Glass Orchard
+            </a>
+            <span
+              style="font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 4px; letter-spacing: 0.3px; white-space: nowrap; color: rgb(76, 184, 136); background: rgba(76, 184, 136, 0.14); border: 1px solid rgb(76, 184, 136);"
+            >
+              FREE · Wedge
+            </span>
+          </div>
+          <div
+            style="font-size: 13px; color: rgb(214, 212, 224);"
+          >
+            Ada Quill
+          </div>
+          <div
+            style="font-size: 12px; color: rgb(150, 148, 172);"
+          >
+            Orchard Cycle #2
+          </div>
+          <div
+            style="font-size: 12px; color: rgb(150, 148, 172);"
+          >
+            EPUB · 2.29 MB · 31 seeders · Ebooks - Fantasy
+          </div>
+        </div>
+        <button
+          aria-label="Remove from the list"
+          style="align-self: flex-start; background: transparent; border: medium; color: rgb(124, 122, 148); font-size: 16px; cursor: pointer; padding: 0px 4px;"
+          title="Remove from the list"
+        >
+          ×
+        </button>
+      </div>
+      <div
+        style="display: flex; gap: 12px; padding: 12px 4px; border-top: 1px solid rgb(46, 48, 72); opacity: 1;"
+      >
+        <input
+          aria-label="Grab this torrent"
+          style="margin-top: 4px; width: 18px; height: 18px; accent-color: rgb(228, 184, 104); flex-shrink: 0;"
+          type="checkbox"
+        />
+        <div
+          style="width: 48px; height: 70px; flex-shrink: 0; border-radius: 4px; background: rgb(42, 44, 66); overflow: hidden; display: flex; align-items: center; justify-content: center;"
+        >
+          <span
+            style="font-size: 18px; color: rgb(98, 96, 122);"
+          >
+            📕
+          </span>
+        </div>
+        <div
+          style="flex: 1 1 0%; min-width: 0px; display: flex; flex-direction: column; gap: 3px;"
+        >
+          <div
+            style="display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;"
+          >
+            <a
+              href="https://www.myanonamouse.net/t/900022"
+              rel="noreferrer"
+              style="font-size: 15px; font-weight: 600; color: rgb(236, 234, 244); text-decoration: none;"
+              target="_blank"
+            >
+              Saltwind
+            </a>
+            <span
+              style="font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 4px; letter-spacing: 0.3px; white-space: nowrap; color: rgb(76, 184, 136); background: rgba(76, 184, 136, 0.14); border: 1px solid rgb(76, 184, 136);"
+            >
+              FREE · Wedge
+            </span>
+          </div>
+          <div
+            style="font-size: 13px; color: rgb(214, 212, 224);"
+          >
+            Bram Okafor
+            <span
+              style="color: rgb(150, 148, 172);"
+            >
+               · read by Rhea Vance
+            </span>
+          </div>
+          <div
+            style="font-size: 12px; color: rgb(150, 148, 172);"
+          >
+            M4B · 583.65 MB · 12 seeders · Audiobooks - Science Fiction
+          </div>
+        </div>
+        <button
+          aria-label="Remove from the list"
+          style="align-self: flex-start; background: transparent; border: medium; color: rgb(124, 122, 148); font-size: 16px; cursor: pointer; padding: 0px 4px;"
+          title="Remove from the list"
+        >
+          ×
+        </button>
+      </div>
+      <div
+        style="border-top: 1px solid rgb(46, 48, 72); padding-top: 12px; margin-top: 4px; display: flex; flex-direction: column; gap: 8px;"
+      >
+        <label
+          style="font-size: 13px; color: rgb(214, 212, 224); display: flex; align-items: center; gap: 8px;"
+        >
+          <input
+            style="accent-color: rgb(228, 184, 104);"
+            type="checkbox"
+          />
+          Use wedges on the ticked rows that aren't free
+        </label>
+        <div
+          style="font-size: 12px; color: rgb(224, 96, 96);"
+        >
+          Error: MAM didn't answer
+        </div>
+        <div
+          style="display: flex; justify-content: flex-end; align-items: center; gap: 12px;"
+        >
+          <button
+            disabled=""
+            style="background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+          >
+            Grab 2 · 2 wedges
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Manual Grab (desktop) > wedge balance unreadable > requests 1`] = `
+[
+  "GET /v1/grabs/budget",
+  "GET /v1/mam/economy/config",
+  "GET /v1/manual-grab/wedges",
+  "POST /v1/manual-grab/preview {"kind":"link","value":"900021"}",
+  "POST /v1/manual-grab/preview {"kind":"link","value":"900022"}",
+]
+`;
+
+exports[`Manual Grab (desktop) > wedges on, enough to spend > markup 1`] = `
+<DocumentFragment>
+  <div
+    style="display: flex; flex-direction: column; gap: 20px;"
+  >
+    <div>
+      <h1
+        style="font-size: 24px; font-weight: 700; color: rgb(236, 234, 244); margin: 0px 0px 4px;"
+      >
+        Grab from MAM
+      </h1>
+      <p
+        style="font-size: 14px; color: rgb(136, 134, 160); margin: 0px;"
+      >
+        Paste MAM links or torrent IDs, or drop .torrent files you downloaded from MAM, up to 30 at a time. Seshat shows what each one is and what you already have, then grabs the ones you tick. A dropped .torrent goes straight to qBittorrent, with no second download from MAM.
+      </p>
+    </div>
+    <div
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 12px; padding: 20px;"
+    >
+      <textarea
+        placeholder="One per line:
+https://www.myanonamouse.net/t/1274788
+1274722"
+        rows="4"
+        style="width: 100%; padding: 12px; font-size: 13px; font-family: monospace; border-radius: 8px; resize: vertical; background: rgb(34, 36, 56); color: rgb(236, 234, 244); border: 1px solid rgb(58, 60, 86);"
+      />
+      <div
+        style="display: flex; align-items: center; gap: 12px; margin-top: 8px;"
+      >
+        <button
+          disabled=""
+          style="background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+        >
+          Look up
+        </button>
+        <span
+          style="font-size: 12px; color: rgb(150, 148, 172);"
+        >
+          Already downloaded the .torrent? Drop the file instead — MAM takes up to 20 min to show it as snatched, and a pasted link downloads it again.
+        </span>
+      </div>
+      <div
+        style="margin-top: 14px;"
+      >
+        <div
+          style="display: flex; align-items: center; justify-content: center; gap: 12px; padding: 18px 14px; border-radius: 10px; border: 2px dashed rgb(58, 60, 86); background: transparent; color: rgb(150, 148, 172); font-size: 13px;"
+        >
+          <span>
+            Drop .torrent files here or
+          </span>
+          <input
+            accept=".torrent,application/x-bittorrent"
+            multiple=""
+            style="display: none;"
+            type="file"
+          />
+          <button
+            style="padding: 6px 12px; font-size: 13px; font-weight: 600; border-radius: 6px; background: rgb(42, 44, 66); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); cursor: pointer;"
+            type="button"
+          >
+            Add .torrent files
+          </button>
+        </div>
+      </div>
+    </div>
+    <div
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 12px; padding: 12px 20px 16px;"
+    >
+      <div
+        style="display: flex; align-items: center; justify-content: space-between; padding-bottom: 8px;"
+      >
+        <span
+          style="font-size: 13px; color: rgb(150, 148, 172);"
+        >
+          2 of 30
+        </span>
+        <button
+          style="background: transparent; color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+        >
+          Clear list
+        </button>
+      </div>
+      <div
+        style="display: flex; gap: 12px; padding: 12px 4px; border-top: 1px solid rgb(46, 48, 72); opacity: 1;"
+      >
+        <input
+          aria-label="Grab this torrent"
+          style="margin-top: 4px; width: 18px; height: 18px; accent-color: rgb(228, 184, 104); flex-shrink: 0;"
+          type="checkbox"
+        />
+        <div
+          style="width: 48px; height: 70px; flex-shrink: 0; border-radius: 4px; background: rgb(42, 44, 66); overflow: hidden; display: flex; align-items: center; justify-content: center;"
+        >
+          <span
+            style="font-size: 18px; color: rgb(98, 96, 122);"
+          >
+            📕
+          </span>
+        </div>
+        <div
+          style="flex: 1 1 0%; min-width: 0px; display: flex; flex-direction: column; gap: 3px;"
+        >
+          <div
+            style="display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;"
+          >
+            <a
+              href="https://www.myanonamouse.net/t/900021"
+              rel="noreferrer"
+              style="font-size: 15px; font-weight: 600; color: rgb(236, 234, 244); text-decoration: none;"
+              target="_blank"
+            >
+              The Glass Orchard
+            </a>
+            <span
+              style="font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 4px; letter-spacing: 0.3px; white-space: nowrap; color: rgb(76, 184, 136); background: rgba(76, 184, 136, 0.14); border: 1px solid rgb(76, 184, 136);"
+            >
+              FREE · Wedge
+            </span>
+          </div>
+          <div
+            style="font-size: 13px; color: rgb(214, 212, 224);"
+          >
+            Ada Quill
+          </div>
+          <div
+            style="font-size: 12px; color: rgb(150, 148, 172);"
+          >
+            Orchard Cycle #2
+          </div>
+          <div
+            style="font-size: 12px; color: rgb(150, 148, 172);"
+          >
+            EPUB · 2.29 MB · 31 seeders · Ebooks - Fantasy
+          </div>
+        </div>
+        <button
+          aria-label="Remove from the list"
+          style="align-self: flex-start; background: transparent; border: medium; color: rgb(124, 122, 148); font-size: 16px; cursor: pointer; padding: 0px 4px;"
+          title="Remove from the list"
+        >
+          ×
+        </button>
+      </div>
+      <div
+        style="display: flex; gap: 12px; padding: 12px 4px; border-top: 1px solid rgb(46, 48, 72); opacity: 1;"
+      >
+        <input
+          aria-label="Grab this torrent"
+          style="margin-top: 4px; width: 18px; height: 18px; accent-color: rgb(228, 184, 104); flex-shrink: 0;"
+          type="checkbox"
+        />
+        <div
+          style="width: 48px; height: 70px; flex-shrink: 0; border-radius: 4px; background: rgb(42, 44, 66); overflow: hidden; display: flex; align-items: center; justify-content: center;"
+        >
+          <span
+            style="font-size: 18px; color: rgb(98, 96, 122);"
+          >
+            📕
+          </span>
+        </div>
+        <div
+          style="flex: 1 1 0%; min-width: 0px; display: flex; flex-direction: column; gap: 3px;"
+        >
+          <div
+            style="display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;"
+          >
+            <a
+              href="https://www.myanonamouse.net/t/900022"
+              rel="noreferrer"
+              style="font-size: 15px; font-weight: 600; color: rgb(236, 234, 244); text-decoration: none;"
+              target="_blank"
+            >
+              Saltwind
+            </a>
+            <span
+              style="font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 4px; letter-spacing: 0.3px; white-space: nowrap; color: rgb(76, 184, 136); background: rgba(76, 184, 136, 0.14); border: 1px solid rgb(76, 184, 136);"
+            >
+              FREE · Wedge
+            </span>
+          </div>
+          <div
+            style="font-size: 13px; color: rgb(214, 212, 224);"
+          >
+            Bram Okafor
+            <span
+              style="color: rgb(150, 148, 172);"
+            >
+               · read by Rhea Vance
+            </span>
+          </div>
+          <div
+            style="font-size: 12px; color: rgb(150, 148, 172);"
+          >
+            M4B · 583.65 MB · 12 seeders · Audiobooks - Science Fiction
+          </div>
+        </div>
+        <button
+          aria-label="Remove from the list"
+          style="align-self: flex-start; background: transparent; border: medium; color: rgb(124, 122, 148); font-size: 16px; cursor: pointer; padding: 0px 4px;"
+          title="Remove from the list"
+        >
+          ×
+        </button>
+      </div>
+      <div
+        style="border-top: 1px solid rgb(46, 48, 72); padding-top: 12px; margin-top: 4px; display: flex; flex-direction: column; gap: 8px;"
+      >
+        <label
+          style="font-size: 13px; color: rgb(214, 212, 224); display: flex; align-items: center; gap: 8px;"
+        >
+          <input
+            style="accent-color: rgb(228, 184, 104);"
+            type="checkbox"
+          />
+          Use wedges on the ticked rows that aren't free
+          <span
+            style="color: rgb(150, 148, 172);"
+          >
+            (4 spendable: 6 − 2 reserved)
+          </span>
+        </label>
+        <div
+          style="display: flex; justify-content: flex-end; align-items: center; gap: 12px;"
+        >
+          <button
+            style="background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+          >
+            Grab 2 · 2 wedges
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Manual Grab (desktop) > wedges on, enough to spend > requests 1`] = `
+[
+  "GET /v1/grabs/budget",
+  "GET /v1/mam/economy/config",
+  "GET /v1/manual-grab/wedges",
+  "POST /v1/manual-grab/preview {"kind":"link","value":"900021"}",
+  "POST /v1/manual-grab/preview {"kind":"link","value":"900022"}",
+]
+`;
+
 exports[`Manual Grab (desktop) > wedges on, short of wedges > markup 1`] = `
 <DocumentFragment>
   <div
@@ -494,6 +989,250 @@ exports[`Manual Grab (desktop) > wedges on, short of wedges > requests 1`] = `
 ]
 `;
 
+exports[`Manual Grab (desktop) > wedges switched off on the MAM page > markup 1`] = `
+<DocumentFragment>
+  <div
+    style="display: flex; flex-direction: column; gap: 20px;"
+  >
+    <div>
+      <h1
+        style="font-size: 24px; font-weight: 700; color: rgb(236, 234, 244); margin: 0px 0px 4px;"
+      >
+        Grab from MAM
+      </h1>
+      <p
+        style="font-size: 14px; color: rgb(136, 134, 160); margin: 0px;"
+      >
+        Paste MAM links or torrent IDs, or drop .torrent files you downloaded from MAM, up to 30 at a time. Seshat shows what each one is and what you already have, then grabs the ones you tick. A dropped .torrent goes straight to qBittorrent, with no second download from MAM.
+      </p>
+    </div>
+    <div
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 12px; padding: 20px;"
+    >
+      <textarea
+        placeholder="One per line:
+https://www.myanonamouse.net/t/1274788
+1274722"
+        rows="4"
+        style="width: 100%; padding: 12px; font-size: 13px; font-family: monospace; border-radius: 8px; resize: vertical; background: rgb(34, 36, 56); color: rgb(236, 234, 244); border: 1px solid rgb(58, 60, 86);"
+      />
+      <div
+        style="display: flex; align-items: center; gap: 12px; margin-top: 8px;"
+      >
+        <button
+          disabled=""
+          style="background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+        >
+          Look up
+        </button>
+        <span
+          style="font-size: 12px; color: rgb(150, 148, 172);"
+        >
+          Already downloaded the .torrent? Drop the file instead — MAM takes up to 20 min to show it as snatched, and a pasted link downloads it again.
+        </span>
+      </div>
+      <div
+        style="margin-top: 14px;"
+      >
+        <div
+          style="display: flex; align-items: center; justify-content: center; gap: 12px; padding: 18px 14px; border-radius: 10px; border: 2px dashed rgb(58, 60, 86); background: transparent; color: rgb(150, 148, 172); font-size: 13px;"
+        >
+          <span>
+            Drop .torrent files here or
+          </span>
+          <input
+            accept=".torrent,application/x-bittorrent"
+            multiple=""
+            style="display: none;"
+            type="file"
+          />
+          <button
+            style="padding: 6px 12px; font-size: 13px; font-weight: 600; border-radius: 6px; background: rgb(42, 44, 66); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); cursor: pointer;"
+            type="button"
+          >
+            Add .torrent files
+          </button>
+        </div>
+      </div>
+    </div>
+    <div
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 12px; padding: 12px 20px 16px;"
+    >
+      <div
+        style="display: flex; align-items: center; justify-content: space-between; padding-bottom: 8px;"
+      >
+        <span
+          style="font-size: 13px; color: rgb(150, 148, 172);"
+        >
+          2 of 30
+        </span>
+        <button
+          style="background: transparent; color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+        >
+          Clear list
+        </button>
+      </div>
+      <div
+        style="display: flex; gap: 12px; padding: 12px 4px; border-top: 1px solid rgb(46, 48, 72); opacity: 1;"
+      >
+        <input
+          aria-label="Grab this torrent"
+          style="margin-top: 4px; width: 18px; height: 18px; accent-color: rgb(228, 184, 104); flex-shrink: 0;"
+          type="checkbox"
+        />
+        <div
+          style="width: 48px; height: 70px; flex-shrink: 0; border-radius: 4px; background: rgb(42, 44, 66); overflow: hidden; display: flex; align-items: center; justify-content: center;"
+        >
+          <span
+            style="font-size: 18px; color: rgb(98, 96, 122);"
+          >
+            📕
+          </span>
+        </div>
+        <div
+          style="flex: 1 1 0%; min-width: 0px; display: flex; flex-direction: column; gap: 3px;"
+        >
+          <div
+            style="display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;"
+          >
+            <a
+              href="https://www.myanonamouse.net/t/900021"
+              rel="noreferrer"
+              style="font-size: 15px; font-weight: 600; color: rgb(236, 234, 244); text-decoration: none;"
+              target="_blank"
+            >
+              The Glass Orchard
+            </a>
+            <span
+              style="font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 4px; letter-spacing: 0.3px; white-space: nowrap; color: rgb(224, 192, 96); background: rgba(224, 192, 96, 0.14); border: 1px solid rgb(224, 192, 96);"
+            >
+              PAID · 2.29 MB from buffer
+            </span>
+          </div>
+          <div
+            style="font-size: 13px; color: rgb(214, 212, 224);"
+          >
+            Ada Quill
+          </div>
+          <div
+            style="font-size: 12px; color: rgb(150, 148, 172);"
+          >
+            Orchard Cycle #2
+          </div>
+          <div
+            style="font-size: 12px; color: rgb(150, 148, 172);"
+          >
+            EPUB · 2.29 MB · 31 seeders · Ebooks - Fantasy
+          </div>
+        </div>
+        <button
+          aria-label="Remove from the list"
+          style="align-self: flex-start; background: transparent; border: medium; color: rgb(124, 122, 148); font-size: 16px; cursor: pointer; padding: 0px 4px;"
+          title="Remove from the list"
+        >
+          ×
+        </button>
+      </div>
+      <div
+        style="display: flex; gap: 12px; padding: 12px 4px; border-top: 1px solid rgb(46, 48, 72); opacity: 1;"
+      >
+        <input
+          aria-label="Grab this torrent"
+          style="margin-top: 4px; width: 18px; height: 18px; accent-color: rgb(228, 184, 104); flex-shrink: 0;"
+          type="checkbox"
+        />
+        <div
+          style="width: 48px; height: 70px; flex-shrink: 0; border-radius: 4px; background: rgb(42, 44, 66); overflow: hidden; display: flex; align-items: center; justify-content: center;"
+        >
+          <span
+            style="font-size: 18px; color: rgb(98, 96, 122);"
+          >
+            📕
+          </span>
+        </div>
+        <div
+          style="flex: 1 1 0%; min-width: 0px; display: flex; flex-direction: column; gap: 3px;"
+        >
+          <div
+            style="display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;"
+          >
+            <a
+              href="https://www.myanonamouse.net/t/900022"
+              rel="noreferrer"
+              style="font-size: 15px; font-weight: 600; color: rgb(236, 234, 244); text-decoration: none;"
+              target="_blank"
+            >
+              Saltwind
+            </a>
+            <span
+              style="font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 4px; letter-spacing: 0.3px; white-space: nowrap; color: rgb(224, 192, 96); background: rgba(224, 192, 96, 0.14); border: 1px solid rgb(224, 192, 96);"
+            >
+              PAID · 583.65 MB from buffer
+            </span>
+          </div>
+          <div
+            style="font-size: 13px; color: rgb(214, 212, 224);"
+          >
+            Bram Okafor
+            <span
+              style="color: rgb(150, 148, 172);"
+            >
+               · read by Rhea Vance
+            </span>
+          </div>
+          <div
+            style="font-size: 12px; color: rgb(150, 148, 172);"
+          >
+            M4B · 583.65 MB · 12 seeders · Audiobooks - Science Fiction
+          </div>
+        </div>
+        <button
+          aria-label="Remove from the list"
+          style="align-self: flex-start; background: transparent; border: medium; color: rgb(124, 122, 148); font-size: 16px; cursor: pointer; padding: 0px 4px;"
+          title="Remove from the list"
+        >
+          ×
+        </button>
+      </div>
+      <div
+        style="border-top: 1px solid rgb(46, 48, 72); padding-top: 12px; margin-top: 4px; display: flex; flex-direction: column; gap: 8px;"
+      >
+        <div
+          style="font-size: 12px; color: rgb(150, 148, 172);"
+        >
+          Wedges are off for manual grabs. Turn them on in 
+          <a
+            href="#"
+            style="color: rgb(228, 184, 104);"
+          >
+            MAM Status › Wedges on manual grabs
+          </a>
+          .
+        </div>
+        <div
+          style="display: flex; justify-content: flex-end; align-items: center; gap: 12px;"
+        >
+          <button
+            style="background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+          >
+            Grab 2
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Manual Grab (desktop) > wedges switched off on the MAM page > requests 1`] = `
+[
+  "GET /v1/grabs/budget",
+  "GET /v1/mam/economy/config",
+  "POST /v1/manual-grab/preview {"kind":"link","value":"900021"}",
+  "POST /v1/manual-grab/preview {"kind":"link","value":"900022"}",
+]
+`;
+
 exports[`Manual Grab (phone) > two carried links previewed > markup 1`] = `
 <DocumentFragment>
   <div
@@ -716,6 +1455,473 @@ exports[`Manual Grab (phone) > two carried links previewed > requests 1`] = `
 [
   "GET /v1/grabs/budget",
   "GET /v1/mam/economy/config",
+  "POST /v1/manual-grab/preview {"kind":"link","value":"900021"}",
+  "POST /v1/manual-grab/preview {"kind":"link","value":"900022"}",
+]
+`;
+
+exports[`Manual Grab (phone) > wedge balance unreadable > markup 1`] = `
+<DocumentFragment>
+  <div
+    style="display: flex; flex-direction: column; gap: 12px;"
+  >
+    <button
+      aria-label="Dashboard"
+      style="display: inline-flex; align-items: center; gap: 6px; height: 44px; padding: 0px 14px 0px 10px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 9999px; font-size: 14px; font-weight: 600; cursor: pointer; align-self: flex-start;"
+    >
+      <span
+        style="font-size: 18px; line-height: 1;"
+      >
+        ‹
+      </span>
+      <span>
+        Dashboard
+      </span>
+    </button>
+    <div>
+      <h1
+        style="margin: 0px; font-size: 22px; font-weight: 700; color: rgb(236, 234, 244);"
+      >
+        Grab from MAM
+      </h1>
+      <p
+        style="font-size: 13px; color: rgb(150, 148, 172); margin: 4px 0px 0px;"
+      >
+        Paste MAM links or IDs (one per line), or add .torrent files you downloaded. Up to 30 at a time.
+      </p>
+    </div>
+    <textarea
+      placeholder="MAM links or torrent IDs, one per line"
+      rows="3"
+      style="width: 100%; padding: 10px; font-size: 16px; border-radius: 10px; font-family: ui-monospace, monospace; resize: vertical; background: rgb(34, 36, 56); color: rgb(236, 234, 244); border: 1px solid rgb(58, 60, 86);"
+    />
+    <button
+      disabled=""
+      style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 48px; padding: 0px 16px; width: 100%; cursor: pointer;"
+    >
+      <span>
+        Look up
+      </span>
+    </button>
+    <p
+      style="font-size: 12px; color: rgb(150, 148, 172); margin: 0px;"
+    >
+      Already downloaded the .torrent? Drop the file instead — MAM takes up to 20 min to show it as snatched, and a pasted link downloads it again.
+    </p>
+    <input
+      accept=".torrent,application/x-bittorrent"
+      multiple=""
+      style="display: none;"
+      type="file"
+    />
+    <button
+      style="padding: 12px 14px; width: 100%; font-size: 15px; font-weight: 600; border-radius: 10px; background: rgb(42, 44, 66); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); cursor: pointer;"
+      type="button"
+    >
+      Add .torrent files
+    </button>
+    <div>
+      <div
+        style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; color: rgb(150, 148, 172);"
+      >
+        <span>
+          2 of 30
+        </span>
+        <button
+          style="background: transparent; border: medium; color: rgb(228, 184, 104); font-size: 14px; padding: 8px;"
+        >
+          Clear
+        </button>
+      </div>
+      <div
+        style="display: flex; gap: 10px; padding: 10px 0px; border-top: 1px solid rgb(46, 48, 72); opacity: 1;"
+      >
+        <input
+          aria-label="Grab this torrent"
+          style="margin-top: 4px; width: 18px; height: 18px; accent-color: rgb(228, 184, 104); flex-shrink: 0;"
+          type="checkbox"
+        />
+        <div
+          style="width: 40px; height: 58px; flex-shrink: 0; border-radius: 4px; background: rgb(42, 44, 66); overflow: hidden; display: flex; align-items: center; justify-content: center;"
+        >
+          <span
+            style="font-size: 18px; color: rgb(98, 96, 122);"
+          >
+            📕
+          </span>
+        </div>
+        <div
+          style="flex: 1 1 0%; min-width: 0px; display: flex; flex-direction: column; gap: 3px;"
+        >
+          <div
+            style="display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;"
+          >
+            <a
+              href="https://www.myanonamouse.net/t/900021"
+              rel="noreferrer"
+              style="font-size: 14px; font-weight: 600; color: rgb(236, 234, 244); text-decoration: none;"
+              target="_blank"
+            >
+              The Glass Orchard
+            </a>
+            <span
+              style="font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 4px; letter-spacing: 0.3px; white-space: nowrap; color: rgb(76, 184, 136); background: rgba(76, 184, 136, 0.14); border: 1px solid rgb(76, 184, 136);"
+            >
+              FREE · Wedge
+            </span>
+          </div>
+          <div
+            style="font-size: 13px; color: rgb(214, 212, 224);"
+          >
+            Ada Quill
+          </div>
+          <div
+            style="font-size: 12px; color: rgb(150, 148, 172);"
+          >
+            Orchard Cycle #2
+          </div>
+          <div
+            style="font-size: 12px; color: rgb(150, 148, 172);"
+          >
+            EPUB · 2.29 MB · 31 seeders
+          </div>
+        </div>
+        <button
+          aria-label="Remove from the list"
+          style="align-self: flex-start; background: transparent; border: medium; color: rgb(124, 122, 148); font-size: 16px; cursor: pointer; padding: 0px 4px;"
+          title="Remove from the list"
+        >
+          ×
+        </button>
+      </div>
+      <div
+        style="display: flex; gap: 10px; padding: 10px 0px; border-top: 1px solid rgb(46, 48, 72); opacity: 1;"
+      >
+        <input
+          aria-label="Grab this torrent"
+          style="margin-top: 4px; width: 18px; height: 18px; accent-color: rgb(228, 184, 104); flex-shrink: 0;"
+          type="checkbox"
+        />
+        <div
+          style="width: 40px; height: 58px; flex-shrink: 0; border-radius: 4px; background: rgb(42, 44, 66); overflow: hidden; display: flex; align-items: center; justify-content: center;"
+        >
+          <span
+            style="font-size: 18px; color: rgb(98, 96, 122);"
+          >
+            📕
+          </span>
+        </div>
+        <div
+          style="flex: 1 1 0%; min-width: 0px; display: flex; flex-direction: column; gap: 3px;"
+        >
+          <div
+            style="display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;"
+          >
+            <a
+              href="https://www.myanonamouse.net/t/900022"
+              rel="noreferrer"
+              style="font-size: 14px; font-weight: 600; color: rgb(236, 234, 244); text-decoration: none;"
+              target="_blank"
+            >
+              Saltwind
+            </a>
+            <span
+              style="font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 4px; letter-spacing: 0.3px; white-space: nowrap; color: rgb(76, 184, 136); background: rgba(76, 184, 136, 0.14); border: 1px solid rgb(76, 184, 136);"
+            >
+              FREE · Wedge
+            </span>
+          </div>
+          <div
+            style="font-size: 13px; color: rgb(214, 212, 224);"
+          >
+            Bram Okafor
+            <span
+              style="color: rgb(150, 148, 172);"
+            >
+               · read by Rhea Vance
+            </span>
+          </div>
+          <div
+            style="font-size: 12px; color: rgb(150, 148, 172);"
+          >
+            M4B · 583.65 MB · 12 seeders
+          </div>
+        </div>
+        <button
+          aria-label="Remove from the list"
+          style="align-self: flex-start; background: transparent; border: medium; color: rgb(124, 122, 148); font-size: 16px; cursor: pointer; padding: 0px 4px;"
+          title="Remove from the list"
+        >
+          ×
+        </button>
+      </div>
+      <label
+        style="font-size: 14px; color: rgb(214, 212, 224); display: flex; align-items: center; gap: 10px; padding: 10px 0px;"
+      >
+        <input
+          style="width: 20px; height: 20px; accent-color: rgb(228, 184, 104);"
+          type="checkbox"
+        />
+        <span>
+          Use wedges on rows that aren't free
+        </span>
+      </label>
+      <div
+        style="font-size: 12px; color: rgb(224, 96, 96);"
+      >
+        Error: MAM didn't answer
+      </div>
+      <button
+        disabled=""
+        style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 48px; padding: 0px 16px; width: 100%; cursor: pointer;"
+      >
+        <span>
+          Grab 2 · 2 wedges
+        </span>
+      </button>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Manual Grab (phone) > wedge balance unreadable > requests 1`] = `
+[
+  "GET /v1/grabs/budget",
+  "GET /v1/mam/economy/config",
+  "GET /v1/manual-grab/wedges",
+  "POST /v1/manual-grab/preview {"kind":"link","value":"900021"}",
+  "POST /v1/manual-grab/preview {"kind":"link","value":"900022"}",
+]
+`;
+
+exports[`Manual Grab (phone) > wedges on, enough to spend > markup 1`] = `
+<DocumentFragment>
+  <div
+    style="display: flex; flex-direction: column; gap: 12px;"
+  >
+    <button
+      aria-label="Dashboard"
+      style="display: inline-flex; align-items: center; gap: 6px; height: 44px; padding: 0px 14px 0px 10px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 9999px; font-size: 14px; font-weight: 600; cursor: pointer; align-self: flex-start;"
+    >
+      <span
+        style="font-size: 18px; line-height: 1;"
+      >
+        ‹
+      </span>
+      <span>
+        Dashboard
+      </span>
+    </button>
+    <div>
+      <h1
+        style="margin: 0px; font-size: 22px; font-weight: 700; color: rgb(236, 234, 244);"
+      >
+        Grab from MAM
+      </h1>
+      <p
+        style="font-size: 13px; color: rgb(150, 148, 172); margin: 4px 0px 0px;"
+      >
+        Paste MAM links or IDs (one per line), or add .torrent files you downloaded. Up to 30 at a time.
+      </p>
+    </div>
+    <textarea
+      placeholder="MAM links or torrent IDs, one per line"
+      rows="3"
+      style="width: 100%; padding: 10px; font-size: 16px; border-radius: 10px; font-family: ui-monospace, monospace; resize: vertical; background: rgb(34, 36, 56); color: rgb(236, 234, 244); border: 1px solid rgb(58, 60, 86);"
+    />
+    <button
+      disabled=""
+      style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 48px; padding: 0px 16px; width: 100%; cursor: pointer;"
+    >
+      <span>
+        Look up
+      </span>
+    </button>
+    <p
+      style="font-size: 12px; color: rgb(150, 148, 172); margin: 0px;"
+    >
+      Already downloaded the .torrent? Drop the file instead — MAM takes up to 20 min to show it as snatched, and a pasted link downloads it again.
+    </p>
+    <input
+      accept=".torrent,application/x-bittorrent"
+      multiple=""
+      style="display: none;"
+      type="file"
+    />
+    <button
+      style="padding: 12px 14px; width: 100%; font-size: 15px; font-weight: 600; border-radius: 10px; background: rgb(42, 44, 66); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); cursor: pointer;"
+      type="button"
+    >
+      Add .torrent files
+    </button>
+    <div>
+      <div
+        style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; color: rgb(150, 148, 172);"
+      >
+        <span>
+          2 of 30
+        </span>
+        <button
+          style="background: transparent; border: medium; color: rgb(228, 184, 104); font-size: 14px; padding: 8px;"
+        >
+          Clear
+        </button>
+      </div>
+      <div
+        style="display: flex; gap: 10px; padding: 10px 0px; border-top: 1px solid rgb(46, 48, 72); opacity: 1;"
+      >
+        <input
+          aria-label="Grab this torrent"
+          style="margin-top: 4px; width: 18px; height: 18px; accent-color: rgb(228, 184, 104); flex-shrink: 0;"
+          type="checkbox"
+        />
+        <div
+          style="width: 40px; height: 58px; flex-shrink: 0; border-radius: 4px; background: rgb(42, 44, 66); overflow: hidden; display: flex; align-items: center; justify-content: center;"
+        >
+          <span
+            style="font-size: 18px; color: rgb(98, 96, 122);"
+          >
+            📕
+          </span>
+        </div>
+        <div
+          style="flex: 1 1 0%; min-width: 0px; display: flex; flex-direction: column; gap: 3px;"
+        >
+          <div
+            style="display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;"
+          >
+            <a
+              href="https://www.myanonamouse.net/t/900021"
+              rel="noreferrer"
+              style="font-size: 14px; font-weight: 600; color: rgb(236, 234, 244); text-decoration: none;"
+              target="_blank"
+            >
+              The Glass Orchard
+            </a>
+            <span
+              style="font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 4px; letter-spacing: 0.3px; white-space: nowrap; color: rgb(76, 184, 136); background: rgba(76, 184, 136, 0.14); border: 1px solid rgb(76, 184, 136);"
+            >
+              FREE · Wedge
+            </span>
+          </div>
+          <div
+            style="font-size: 13px; color: rgb(214, 212, 224);"
+          >
+            Ada Quill
+          </div>
+          <div
+            style="font-size: 12px; color: rgb(150, 148, 172);"
+          >
+            Orchard Cycle #2
+          </div>
+          <div
+            style="font-size: 12px; color: rgb(150, 148, 172);"
+          >
+            EPUB · 2.29 MB · 31 seeders
+          </div>
+        </div>
+        <button
+          aria-label="Remove from the list"
+          style="align-self: flex-start; background: transparent; border: medium; color: rgb(124, 122, 148); font-size: 16px; cursor: pointer; padding: 0px 4px;"
+          title="Remove from the list"
+        >
+          ×
+        </button>
+      </div>
+      <div
+        style="display: flex; gap: 10px; padding: 10px 0px; border-top: 1px solid rgb(46, 48, 72); opacity: 1;"
+      >
+        <input
+          aria-label="Grab this torrent"
+          style="margin-top: 4px; width: 18px; height: 18px; accent-color: rgb(228, 184, 104); flex-shrink: 0;"
+          type="checkbox"
+        />
+        <div
+          style="width: 40px; height: 58px; flex-shrink: 0; border-radius: 4px; background: rgb(42, 44, 66); overflow: hidden; display: flex; align-items: center; justify-content: center;"
+        >
+          <span
+            style="font-size: 18px; color: rgb(98, 96, 122);"
+          >
+            📕
+          </span>
+        </div>
+        <div
+          style="flex: 1 1 0%; min-width: 0px; display: flex; flex-direction: column; gap: 3px;"
+        >
+          <div
+            style="display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;"
+          >
+            <a
+              href="https://www.myanonamouse.net/t/900022"
+              rel="noreferrer"
+              style="font-size: 14px; font-weight: 600; color: rgb(236, 234, 244); text-decoration: none;"
+              target="_blank"
+            >
+              Saltwind
+            </a>
+            <span
+              style="font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 4px; letter-spacing: 0.3px; white-space: nowrap; color: rgb(76, 184, 136); background: rgba(76, 184, 136, 0.14); border: 1px solid rgb(76, 184, 136);"
+            >
+              FREE · Wedge
+            </span>
+          </div>
+          <div
+            style="font-size: 13px; color: rgb(214, 212, 224);"
+          >
+            Bram Okafor
+            <span
+              style="color: rgb(150, 148, 172);"
+            >
+               · read by Rhea Vance
+            </span>
+          </div>
+          <div
+            style="font-size: 12px; color: rgb(150, 148, 172);"
+          >
+            M4B · 583.65 MB · 12 seeders
+          </div>
+        </div>
+        <button
+          aria-label="Remove from the list"
+          style="align-self: flex-start; background: transparent; border: medium; color: rgb(124, 122, 148); font-size: 16px; cursor: pointer; padding: 0px 4px;"
+          title="Remove from the list"
+        >
+          ×
+        </button>
+      </div>
+      <label
+        style="font-size: 14px; color: rgb(214, 212, 224); display: flex; align-items: center; gap: 10px; padding: 10px 0px;"
+      >
+        <input
+          style="width: 20px; height: 20px; accent-color: rgb(228, 184, 104);"
+          type="checkbox"
+        />
+        <span>
+          Use wedges on rows that aren't free
+          <span
+            style="color: rgb(150, 148, 172);"
+          >
+             (4 spendable)
+          </span>
+        </span>
+      </label>
+      <button
+        style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 48px; padding: 0px 16px; width: 100%; cursor: pointer;"
+      >
+        <span>
+          Grab 2 · 2 wedges
+        </span>
+      </button>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Manual Grab (phone) > wedges on, enough to spend > requests 1`] = `
+[
+  "GET /v1/grabs/budget",
+  "GET /v1/mam/economy/config",
+  "GET /v1/manual-grab/wedges",
   "POST /v1/manual-grab/preview {"kind":"link","value":"900021"}",
   "POST /v1/manual-grab/preview {"kind":"link","value":"900022"}",
 ]
@@ -955,6 +2161,234 @@ exports[`Manual Grab (phone) > wedges on, short of wedges > requests 1`] = `
   "GET /v1/grabs/budget",
   "GET /v1/mam/economy/config",
   "GET /v1/manual-grab/wedges",
+  "POST /v1/manual-grab/preview {"kind":"link","value":"900021"}",
+  "POST /v1/manual-grab/preview {"kind":"link","value":"900022"}",
+]
+`;
+
+exports[`Manual Grab (phone) > wedges switched off on the MAM page > markup 1`] = `
+<DocumentFragment>
+  <div
+    style="display: flex; flex-direction: column; gap: 12px;"
+  >
+    <button
+      aria-label="Dashboard"
+      style="display: inline-flex; align-items: center; gap: 6px; height: 44px; padding: 0px 14px 0px 10px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 9999px; font-size: 14px; font-weight: 600; cursor: pointer; align-self: flex-start;"
+    >
+      <span
+        style="font-size: 18px; line-height: 1;"
+      >
+        ‹
+      </span>
+      <span>
+        Dashboard
+      </span>
+    </button>
+    <div>
+      <h1
+        style="margin: 0px; font-size: 22px; font-weight: 700; color: rgb(236, 234, 244);"
+      >
+        Grab from MAM
+      </h1>
+      <p
+        style="font-size: 13px; color: rgb(150, 148, 172); margin: 4px 0px 0px;"
+      >
+        Paste MAM links or IDs (one per line), or add .torrent files you downloaded. Up to 30 at a time.
+      </p>
+    </div>
+    <textarea
+      placeholder="MAM links or torrent IDs, one per line"
+      rows="3"
+      style="width: 100%; padding: 10px; font-size: 16px; border-radius: 10px; font-family: ui-monospace, monospace; resize: vertical; background: rgb(34, 36, 56); color: rgb(236, 234, 244); border: 1px solid rgb(58, 60, 86);"
+    />
+    <button
+      disabled=""
+      style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 48px; padding: 0px 16px; width: 100%; cursor: pointer;"
+    >
+      <span>
+        Look up
+      </span>
+    </button>
+    <p
+      style="font-size: 12px; color: rgb(150, 148, 172); margin: 0px;"
+    >
+      Already downloaded the .torrent? Drop the file instead — MAM takes up to 20 min to show it as snatched, and a pasted link downloads it again.
+    </p>
+    <input
+      accept=".torrent,application/x-bittorrent"
+      multiple=""
+      style="display: none;"
+      type="file"
+    />
+    <button
+      style="padding: 12px 14px; width: 100%; font-size: 15px; font-weight: 600; border-radius: 10px; background: rgb(42, 44, 66); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); cursor: pointer;"
+      type="button"
+    >
+      Add .torrent files
+    </button>
+    <div>
+      <div
+        style="display: flex; justify-content: space-between; align-items: center; font-size: 13px; color: rgb(150, 148, 172);"
+      >
+        <span>
+          2 of 30
+        </span>
+        <button
+          style="background: transparent; border: medium; color: rgb(228, 184, 104); font-size: 14px; padding: 8px;"
+        >
+          Clear
+        </button>
+      </div>
+      <div
+        style="display: flex; gap: 10px; padding: 10px 0px; border-top: 1px solid rgb(46, 48, 72); opacity: 1;"
+      >
+        <input
+          aria-label="Grab this torrent"
+          style="margin-top: 4px; width: 18px; height: 18px; accent-color: rgb(228, 184, 104); flex-shrink: 0;"
+          type="checkbox"
+        />
+        <div
+          style="width: 40px; height: 58px; flex-shrink: 0; border-radius: 4px; background: rgb(42, 44, 66); overflow: hidden; display: flex; align-items: center; justify-content: center;"
+        >
+          <span
+            style="font-size: 18px; color: rgb(98, 96, 122);"
+          >
+            📕
+          </span>
+        </div>
+        <div
+          style="flex: 1 1 0%; min-width: 0px; display: flex; flex-direction: column; gap: 3px;"
+        >
+          <div
+            style="display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;"
+          >
+            <a
+              href="https://www.myanonamouse.net/t/900021"
+              rel="noreferrer"
+              style="font-size: 14px; font-weight: 600; color: rgb(236, 234, 244); text-decoration: none;"
+              target="_blank"
+            >
+              The Glass Orchard
+            </a>
+            <span
+              style="font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 4px; letter-spacing: 0.3px; white-space: nowrap; color: rgb(224, 192, 96); background: rgba(224, 192, 96, 0.14); border: 1px solid rgb(224, 192, 96);"
+            >
+              PAID · 2.29 MB from buffer
+            </span>
+          </div>
+          <div
+            style="font-size: 13px; color: rgb(214, 212, 224);"
+          >
+            Ada Quill
+          </div>
+          <div
+            style="font-size: 12px; color: rgb(150, 148, 172);"
+          >
+            Orchard Cycle #2
+          </div>
+          <div
+            style="font-size: 12px; color: rgb(150, 148, 172);"
+          >
+            EPUB · 2.29 MB · 31 seeders
+          </div>
+        </div>
+        <button
+          aria-label="Remove from the list"
+          style="align-self: flex-start; background: transparent; border: medium; color: rgb(124, 122, 148); font-size: 16px; cursor: pointer; padding: 0px 4px;"
+          title="Remove from the list"
+        >
+          ×
+        </button>
+      </div>
+      <div
+        style="display: flex; gap: 10px; padding: 10px 0px; border-top: 1px solid rgb(46, 48, 72); opacity: 1;"
+      >
+        <input
+          aria-label="Grab this torrent"
+          style="margin-top: 4px; width: 18px; height: 18px; accent-color: rgb(228, 184, 104); flex-shrink: 0;"
+          type="checkbox"
+        />
+        <div
+          style="width: 40px; height: 58px; flex-shrink: 0; border-radius: 4px; background: rgb(42, 44, 66); overflow: hidden; display: flex; align-items: center; justify-content: center;"
+        >
+          <span
+            style="font-size: 18px; color: rgb(98, 96, 122);"
+          >
+            📕
+          </span>
+        </div>
+        <div
+          style="flex: 1 1 0%; min-width: 0px; display: flex; flex-direction: column; gap: 3px;"
+        >
+          <div
+            style="display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;"
+          >
+            <a
+              href="https://www.myanonamouse.net/t/900022"
+              rel="noreferrer"
+              style="font-size: 14px; font-weight: 600; color: rgb(236, 234, 244); text-decoration: none;"
+              target="_blank"
+            >
+              Saltwind
+            </a>
+            <span
+              style="font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 4px; letter-spacing: 0.3px; white-space: nowrap; color: rgb(224, 192, 96); background: rgba(224, 192, 96, 0.14); border: 1px solid rgb(224, 192, 96);"
+            >
+              PAID · 583.65 MB from buffer
+            </span>
+          </div>
+          <div
+            style="font-size: 13px; color: rgb(214, 212, 224);"
+          >
+            Bram Okafor
+            <span
+              style="color: rgb(150, 148, 172);"
+            >
+               · read by Rhea Vance
+            </span>
+          </div>
+          <div
+            style="font-size: 12px; color: rgb(150, 148, 172);"
+          >
+            M4B · 583.65 MB · 12 seeders
+          </div>
+        </div>
+        <button
+          aria-label="Remove from the list"
+          style="align-self: flex-start; background: transparent; border: medium; color: rgb(124, 122, 148); font-size: 16px; cursor: pointer; padding: 0px 4px;"
+          title="Remove from the list"
+        >
+          ×
+        </button>
+      </div>
+      <div
+        style="font-size: 12px; color: rgb(150, 148, 172); padding-bottom: 8px;"
+      >
+        Wedges are off for manual grabs. Turn them on in 
+        <a
+          href="#"
+          style="color: rgb(228, 184, 104);"
+        >
+          MAM Status › Wedges on manual grabs
+        </a>
+        .
+      </div>
+      <button
+        style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 48px; padding: 0px 16px; width: 100%; cursor: pointer;"
+      >
+        <span>
+          Grab 2
+        </span>
+      </button>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Manual Grab (phone) > wedges switched off on the MAM page > requests 1`] = `
+[
+  "GET /v1/grabs/budget",
+  "GET /v1/mam/economy/config",
   "POST /v1/manual-grab/preview {"kind":"link","value":"900021"}",
   "POST /v1/manual-grab/preview {"kind":"link","value":"900022"}",
 ]
