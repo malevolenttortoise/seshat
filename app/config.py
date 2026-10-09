@@ -958,7 +958,6 @@ RUNTIME_SETTINGS_KEYS: frozenset[str] = frozenset({
 # Read with a default, written by nothing: a value set by hand survives.
 READ_ONLY_SETTINGS_KEYS: frozenset[str] = frozenset({
     "format_dedup_release_tick_seconds",  # main: hold-release tick
-    "ebook_format_priority",              # reingest (nothing writes it)
 })
 # Plaintext copies `app.secrets.migrate_from_settings` moves into the
 # encrypted store at boot (mirrors `app.secrets.SECRET_KEYS`; a test

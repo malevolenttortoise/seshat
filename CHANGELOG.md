@@ -231,6 +231,9 @@ themselves.
 
 ### Fixed
 
+- Reingest from disk now honours the ebook format priority (Settings →
+  Format Priorities) when a torrent holds several formats (wave 5a): it
+  read a settings key nothing writes, so it never had one.
 - A failed delivery's automatic retry now runs (wave 5a). When a drop
   failed outright (the ingest folder unwritable), the review was set to
   retry on the next review-timeout tick, but the retry refused anything

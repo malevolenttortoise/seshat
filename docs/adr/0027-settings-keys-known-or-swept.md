@@ -50,8 +50,8 @@ Two settings were also dead in the code itself and part of observable shapes:
 - **New code must register a settings key** it writes outside `DEFAULT_SETTINGS`, or the test fails; a key that slips
   past the scan (a key from data it can't follow) is deleted on the next load. Write keys through `DEFAULT_SETTINGS`
   where possible.
-- Found by the scan, kept as known rather than changed here: `reingest` reads `ebook_format_priority`, a key nothing
-  writes (the rest of the pipeline uses `mam_format_priority`), so reingest's ebook format priority is always unset.
+- Found by the scan: `reingest` read `ebook_format_priority`, a key nothing writes (the pipeline uses
+  `mam_format_priority`), so a multi-format reingest ignored the ebook format priority. Fixed with this ADR (G134).
 
 ## Related
 
