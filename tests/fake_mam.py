@@ -62,7 +62,7 @@ DEFAULT_USER_STATUS_BODY = (
     b'"country_name":"United States","downloaded":"91.71 MiB",'
     b'"downloaded_bytes":96160650,"ratio":91184.8,"seedbonus":71088,'
     b'"uid":224285,"uploaded":"7.975 TiB",'
-    b'"uploaded_bytes":8768386723586,"username":"Turtles81","wedges":462}'
+    b'"uploaded_bytes":8768386723586,"username":"ExampleMouse","wedges":462}'
 )
 
 # Default bonusBuy.php success response — shape is from a real upload

@@ -507,7 +507,7 @@ class IrcClient:
             # flow they show up.
             if msg.command == "433":
                 # Real-world example from MAM IRC:
-                #   :irc1.myanonamouse.net 433 * Turtles81_arrbot :Nickname is already in use.
+                #   :irc1.myanonamouse.net 433 * ExampleMouse_arrbot :Nickname is already in use.
                 attempted = msg.params[1] if len(msg.params) > 1 else self._current_nick
                 if self._nick_attempt < self.config.nick_suffix_max:
                     # Try a suffixed nick: nick_2, nick_3, etc.

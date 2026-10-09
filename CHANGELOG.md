@@ -210,6 +210,13 @@ themselves.
 ### Removed
 
 - The `requests` dependency (Amazon enrichment was its last user).
+- Dead code (audit issue 24): seven functions nothing called
+  (`author_has_cached_books`, three cache-worker helpers,
+  `verify_search_auth`, `digest_size`, the never-wired
+  `notify_mam_cookie_rotated`) and five only tests called (the pre-v2.28
+  ntfy senders `notify_grab` / `notify_download_complete` / `notify_error`,
+  `is_event_enabled`, `find_grab_by_torrent_id`, the queue's `pop_next`).
+  The Goodreads session is now closed at shutdown.
 
 ### Fixed
 

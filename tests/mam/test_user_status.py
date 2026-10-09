@@ -37,7 +37,7 @@ class TestGetUserStatusSuccess:
         assert status.wedges == 462
         assert status.seedbonus == 71088
         assert status.classname == "Elite VIP"
-        assert status.username == "Turtles81"
+        assert status.username == "ExampleMouse"
         assert status.uid == 224285
         assert status.uploaded_bytes == 8768386723586
         assert status.downloaded_bytes == 96160650

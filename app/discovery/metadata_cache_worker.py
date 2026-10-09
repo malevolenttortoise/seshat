@@ -562,57 +562,7 @@ def _seconds_until_next_window_open(source_name: str) -> float:
     return float(delta)
 
 
-def _library_content_type(library_slug: str) -> str:
-    """Map a library slug to its `content_type` (`"ebook"` /
-    `"audiobook"`). Reads from `state._discovered_libraries`; falls
-    back to `"ebook"` for unknown slugs so the worker keeps moving
-    instead of crashing on a stale queue row."""
-    for lib in state._discovered_libraries:
-        if lib.get("slug") == library_slug:
-            return lib.get("content_type") or "ebook"
-    return "ebook"
-
-
-def _amazon_filters_for_content_type(content_type: str) -> tuple[str, str]:
-    """Pick (format_filter, language) for an Amazon scan based on
-    the library's content_type. Reads settings on every call so a
-    panel change applies to the next worker iteration."""
-    s = app_config.load_settings()
-    amz = (s.get("metadata_sources") or {}).get("amazon") or {}
-    language = amz.get("language") or "English"
-    if content_type == "audiobook":
-        fmt = amz.get("audiobook_format") or "audible_audiobook"
-    else:
-        fmt = amz.get("format") or "kindle"
-    return fmt, language
-
-
 # ─── Worker-state row helpers ──────────────────────────────────
-
-
-async def _read_worker_state(
-    db: aiosqlite.Connection, source_name: str,
-) -> dict[str, Any]:
-    """Read the singleton worker_state row. Always exists (Phase B's
-    init seeds it with id=1 + default columns)."""
-    table = metadata_cache.worker_state_table(source_name)
-    cur = await db.execute(f"SELECT * FROM {table} WHERE id = 1")
-    row = await cur.fetchone()
-    if row is None:
-        # Defensive — Phase B init seeds the row. Re-seed silently.
-        await db.execute(f"INSERT OR IGNORE INTO {table} (id) VALUES (1)")
-        await db.commit()
-        return {
-            "id": 1,
-            "last_block_at": 0.0,
-            "block_cooldown_s": 600.0,
-            "consecutive_blocks": 0,
-            "last_heartbeat_at": None,
-            "last_scan_completed_at": None,
-            "today_scan_count": 0,
-            "today_block_count": 0,
-        }
-    return dict(row)
 
 
 async def _stamp_heartbeat(

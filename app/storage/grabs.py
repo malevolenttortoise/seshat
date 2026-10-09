@@ -366,28 +366,6 @@ async def get_source_metadata(
     return row[0]  # None if column is NULL
 
 
-async def find_grab_by_torrent_id(
-    db: aiosqlite.Connection, mam_torrent_id: str
-) -> Optional[GrabRow]:
-    """Look up the most recent grab for a given MAM torrent ID, in any
-    state. For the snatch-safety question ("may we fetch this torrent
-    again?") use `find_blocking_grab` — the most recent row can be a
-    harmless pre-fetch failure sitting on top of an earlier download.
-    """
-    cursor = await db.execute(
-        """
-        SELECT id, announce_id, mam_torrent_id, torrent_name, category,
-               author_blob, torrent_file_path, qbit_hash, state, grabbed_at,
-               submitted_at, failed_reason
-        FROM grabs WHERE mam_torrent_id = ?
-        ORDER BY id DESC LIMIT 1
-        """,
-        (mam_torrent_id,),
-    )
-    row = await cursor.fetchone()
-    return _row_to_grab(row) if row else None
-
-
 # States that mean a grab of this torrent is in flight or MAM has
 # already served its .torrent. `pending_queue` and `fetched` are written
 # by `create_grab` BEFORE the fetch, so they also cover a concurrent

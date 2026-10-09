@@ -1426,6 +1426,13 @@ async def lifespan(app: FastAPI):
             await ntfy_aclose()
         except Exception:
             _log.exception("error closing ntfy client during shutdown")
+        # And Goodreads' shared curl_cffi session (never closed before
+        # the 2026-10 audit, issue 24).
+        try:
+            from app.metadata.goodreads_session import close_session
+            await close_session()
+        except Exception:
+            _log.exception("error closing the Goodreads session during shutdown")
         state.dispatcher = None
         state.irc_client = None
 

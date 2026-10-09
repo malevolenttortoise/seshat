@@ -133,34 +133,6 @@ async def peek_next(
     return _row_to_queued(row) if row else None
 
 
-async def pop_next(db: aiosqlite.Connection) -> Optional[QueuedGrab]:
-    """Atomically remove and return the next grab.
-
-    Returns None if the queue is empty. The atomicity matters: the
-    budget watcher loop pops a grab, then submits it to qBit; we
-    don't want a concurrent worker (the inject endpoint, say) to
-    pop the same row.
-
-    SQLite's WAL mode + the implicit transaction wrapping a single
-    statement gives us this for free — DELETE...RETURNING is one
-    statement, atomic against other writers waiting on busy_timeout.
-    """
-    cursor = await db.execute(
-        """
-        DELETE FROM pending_queue
-        WHERE grab_id = (
-            SELECT grab_id FROM pending_queue
-            ORDER BY priority DESC, queued_at ASC
-            LIMIT 1
-        )
-        RETURNING grab_id, priority, queued_at
-        """
-    )
-    row = await cursor.fetchone()
-    await db.commit()
-    return _row_to_queued(row) if row else None
-
-
 async def list_all(db: aiosqlite.Connection) -> list[QueuedGrab]:
     """Every queued grab, in pop order. Used by the dashboard."""
     cursor = await db.execute(
