@@ -775,6 +775,18 @@ async def lifespan(app: FastAPI):
         f"Hold-release loop started (interval={hold_release_interval}s)"
     )
 
+    # Wave 5a (G121): look for every CWA drop in Calibre's metadata.db; a
+    # drop that never shows up fails its review as "import failed". Idle
+    # (one indexed query a minute) when nothing is pending.
+    from app.orchestrator.import_check import run_loop as import_check_loop
+
+    async def _import_check_factory():
+        await import_check_loop(interval_seconds=60)
+
+    state._import_check_task = state.supervised_task(
+        _import_check_factory, name="import-check",
+    )
+
     # APScheduler: always construct so discovery-domain interval jobs
     # (library sync + scheduled author lookup) have somewhere to land.
     # Digest jobs only register when daily_digest_enabled + ntfy_url are
@@ -1353,6 +1365,7 @@ async def lifespan(app: FastAPI):
             "_cookie_retry_task",
             "_review_timeout_task",
             "_hold_release_task",
+            "_import_check_task",
             "_mam_scheduler_task",
             "_digest_scheduler_task",
             "_economy_vip_task",

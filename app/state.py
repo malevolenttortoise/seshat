@@ -129,6 +129,7 @@ _review_timeout_task: Optional[asyncio.Task] = None
 
 # Format-priority dedup hold release (v2.9.0): wakes due `pending_holds`.
 _hold_release_task: Optional[asyncio.Task] = None
+_import_check_task: Optional[asyncio.Task] = None
 
 
 # ─── APScheduler ────────────────────────────────────────────

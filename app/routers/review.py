@@ -26,6 +26,8 @@ from app.mam.cookie import get_current_token as _get_mam_token
 from app.metadata.text_clean import description_to_plain_text
 from app.orchestrator.pipeline import deliver_reviewed, settle_reviewed_grab
 from app.storage import grabs as grabs_storage
+from app.storage import import_checks as import_checks_storage
+from app.storage import pipeline as pipe_storage
 from app.storage import review_queue as review_storage
 
 _log = logging.getLogger("seshat.routers.review")
@@ -117,7 +119,10 @@ def _to_item(row: review_storage.ReviewRow) -> ReviewItem:
 async def list_pending() -> ReviewListResponse:
     db = await get_db()
     try:
-        rows = await review_storage.list_pending(db, limit=500)
+        # Reviews whose CWA import failed come first: they need a Re-drop
+        # or "Mark as imported" (wave 5a, G121 / G133).
+        rows = await review_storage.list_import_failed(db)
+        rows += await review_storage.list_pending(db, limit=500)
         count = await review_storage.count_by_status(
             db, review_storage.STATUS_PENDING
         )
@@ -660,6 +665,102 @@ async def claim_for_owned(
         )
         return ReviewActionResponse(
             ok=True, id=review_id, status=review_storage.STATUS_REJECTED,
+        )
+    finally:
+        await db.close()
+
+
+@router.post("/{review_id}/redrop", response_model=ReviewActionResponse)
+async def redrop(review_id: int) -> ReviewActionResponse:
+    """Deliver an "import failed" review again from its kept files (G121).
+
+    If Seshat's earlier drop is still sitting in the ingest folder (CWA
+    wasn't taking files), that exact file goes first, so CWA doesn't import
+    two copies once it's back (G132).
+    """
+    if state.dispatcher is None:
+        raise HTTPException(status_code=503, detail="dispatcher not initialized")
+    deps = state.dispatcher
+    db = await get_db()
+    try:
+        row = await review_storage.get_entry(db, review_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="review not found")
+        if row.status != review_storage.STATUS_IMPORT_FAILED:
+            return ReviewActionResponse(
+                ok=False, id=review_id, status=row.status,
+                error=f"not an import failure (status {row.status})",
+            )
+        check = await import_checks_storage.latest_for_review(db, review_id)
+        if check is not None:
+            _remove_stale_drop(Path(check.drop_path), deps.cwa_ingest_path)
+        ok = await deliver_reviewed(
+            db,
+            review_id=review_id,
+            default_sink=deps.default_sink,
+            calibre_library_path=deps.calibre_library_path,
+            folder_sink_path=deps.folder_sink_path,
+            audiobookshelf_library_path=deps.audiobookshelf_library_path,
+            cwa_ingest_path=deps.cwa_ingest_path,
+            cwa_min_inter_book_seconds=deps.cwa_min_inter_book_seconds,
+            ntfy_url=deps.ntfy_url,
+            ntfy_topic=deps.ntfy_topic,
+            auto_train_enabled=deps.auto_train_enabled,
+            was_timeout=False,
+            per_event_notifications=deps.per_event_notifications,
+        )
+        refreshed = await review_storage.get_entry(db, review_id)
+        return ReviewActionResponse(
+            ok=ok,
+            id=review_id,
+            status=refreshed.status if refreshed else "unknown",
+            error=None if ok else "sink delivery failed",
+        )
+    finally:
+        await db.close()
+
+
+def _remove_stale_drop(drop: Path, ingest_path: str) -> None:
+    """Delete Seshat's own earlier drop, only inside the ingest folder."""
+    if not ingest_path or not drop.is_file():
+        return
+    root = Path(ingest_path).resolve()
+    if root not in drop.resolve().parents:
+        return
+    try:
+        drop.unlink()
+        _log.info("re-drop: removed the earlier drop still in the ingest folder: %s", drop)
+    except OSError:
+        _log.exception("re-drop: couldn't remove the earlier drop %s", drop)
+
+
+@router.post("/{review_id}/mark-imported", response_model=ReviewActionResponse)
+async def mark_imported(review_id: int) -> ReviewActionResponse:
+    """Close an "import failed" review as delivered without a drop: the
+    book is in the library some other way (G133)."""
+    db = await get_db()
+    try:
+        row = await review_storage.get_entry(db, review_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="review not found")
+        if row.status != review_storage.STATUS_IMPORT_FAILED:
+            return ReviewActionResponse(
+                ok=False, id=review_id, status=row.status,
+                error=f"not an import failure (status {row.status})",
+            )
+        await review_storage.set_status(
+            db, review_id, review_storage.STATUS_DELIVERED,
+            decision_note="marked as imported by hand",
+        )
+        check = await import_checks_storage.latest_for_review(db, review_id)
+        if check is not None and check.pipeline_run_id:
+            await pipe_storage.set_state(
+                db, check.pipeline_run_id, pipe_storage.PIPE_COMPLETE,
+            )
+        await settle_reviewed_grab(db, row.grab_id)
+        shutil.rmtree(row.staged_path, ignore_errors=True)
+        return ReviewActionResponse(
+            ok=True, id=review_id, status=review_storage.STATUS_DELIVERED,
         )
     finally:
         await db.close()

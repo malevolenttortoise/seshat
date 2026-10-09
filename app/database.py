@@ -713,6 +713,26 @@ CREATE TABLE IF NOT EXISTS source_counters (
     capped    INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (day, source, caller, kind)
 );
+-- 2026-10 audit wave 5a (G121): every ebook dropped into CWA's ingest
+-- folder is checked against Calibre's metadata.db. `state`: pending →
+-- confirmed (a matching record appeared; `calibre_book_id`) or failed at
+-- 15 min (`reason`). Written and read by `app.orchestrator.import_check`.
+CREATE TABLE IF NOT EXISTS import_checks (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    review_id       INTEGER,
+    grab_id         INTEGER NOT NULL,
+    pipeline_run_id INTEGER,
+    library_slug    TEXT,
+    drop_path       TEXT NOT NULL,
+    title           TEXT,
+    authors_json    TEXT,
+    dropped_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    state           TEXT NOT NULL DEFAULT 'pending',
+    calibre_book_id INTEGER,
+    reason          TEXT,
+    checked_at      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_import_checks_state ON import_checks(state);
 """
 
 
@@ -1122,6 +1142,23 @@ MIGRATIONS: list[str] = [
         capped    INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (day, source, caller, kind)
     )""",
+    # ── 2026-10 audit wave 5a, G121: CWA import checks ──
+    """CREATE TABLE IF NOT EXISTS import_checks (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        review_id       INTEGER,
+        grab_id         INTEGER NOT NULL,
+        pipeline_run_id INTEGER,
+        library_slug    TEXT,
+        drop_path       TEXT NOT NULL,
+        title           TEXT,
+        authors_json    TEXT,
+        dropped_at      TEXT NOT NULL DEFAULT (datetime('now')),
+        state           TEXT NOT NULL DEFAULT 'pending',
+        calibre_book_id INTEGER,
+        reason          TEXT,
+        checked_at      TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_import_checks_state ON import_checks(state)",
 ]
 
 

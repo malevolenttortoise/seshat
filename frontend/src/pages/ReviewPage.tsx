@@ -25,6 +25,7 @@ import { useViewport } from "../hooks/useViewport";
 import { useMobileCodepath } from "../components/mobile";
 import MobileReviewPage from "./MobileReviewPage";
 import { storedCoverUrl } from "../lib/covers";
+import { ImportFailedCard } from "../components/review/ImportFailedCard";
 
 interface ReviewItem {
   id: number;
@@ -87,6 +88,8 @@ interface ReviewItem {
   cover_path: string | null;
   status: string;
   created_at: string;
+  // Why the CWA import failed, for status "import_failed" (wave 5a).
+  decision_note?: string | null;
 }
 
 interface ReviewListResponse {
@@ -189,10 +192,43 @@ function DesktopReviewPage() {
     }
   }
 
+  async function redrop(id: number) {
+    setBusyId(id);
+    setError(null);
+    try {
+      const r = await api.post<{ ok: boolean; error?: string | null }>(`/v1/review/${id}/redrop`);
+      if (!r.ok) setError(`Re-drop failed: ${r.error ?? "unknown error"}`);
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function markImported(id: number) {
+    setBusyId(id);
+    setError(null);
+    try {
+      const r = await api.post<{ ok: boolean; error?: string | null }>(`/v1/review/${id}/mark-imported`);
+      if (!r.ok) setError(`Couldn't mark as imported: ${r.error ?? "unknown error"}`);
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  // Import failures (wave 5a) come first and take their own actions;
+  // bulk approve / reject only ever touch pending reviews.
+  const failed = (items ?? []).filter((i) => i.status === "import_failed");
+  const pending = (items ?? []).filter((i) => i.status !== "import_failed");
+
   const [bulkBusy, setBulkBusy] = useState(false);
 
   async function bulkApprove() {
-    const count = items?.length ?? 0;
+    const count = pending.length;
     if (count === 0) return;
     if (!confirm(`Approve all ${count} pending review(s)? Each one will go to its configured sink.`)) return;
     setBulkBusy(true);
@@ -215,7 +251,7 @@ function DesktopReviewPage() {
   }
 
   async function bulkReject() {
-    const count = items?.length ?? 0;
+    const count = pending.length;
     if (count === 0) return;
     if (!confirm(`Reject all ${count} pending review(s)? Staged files will be deleted; seeding originals untouched.`)) return;
     setBulkBusy(true);
@@ -254,7 +290,7 @@ function DesktopReviewPage() {
             Books waiting on your approval before delivery to Calibre.
           </p>
         </div>
-        {items !== null && items.length > 0 && (
+        {pending.length > 0 && (
           <div style={{ display: "flex", gap: 8 }}>
             <Btn
               variant="primary"
@@ -262,7 +298,7 @@ function DesktopReviewPage() {
               onClick={bulkApprove}
               disabled={bulkBusy || busyId !== null}
             >
-              {bulkBusy ? <Spin size={14} /> : `Approve All (${items.length})`}
+              {bulkBusy ? <Spin size={14} /> : `Approve All (${pending.length})`}
             </Btn>
             <Btn
               variant="danger"
@@ -305,7 +341,16 @@ function DesktopReviewPage() {
         </Section>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {groupBundles(items).map((group) =>
+          {failed.map((item) => (
+            <ImportFailedCard
+              key={item.id}
+              item={item}
+              busy={busyId === item.id}
+              onRedrop={() => redrop(item.id)}
+              onMarkImported={() => markImported(item.id)}
+            />
+          ))}
+          {groupBundles(pending).map((group) =>
             group.length === 1 ? (
               <ReviewCard
                 key={group[0].id}

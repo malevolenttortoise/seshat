@@ -26,6 +26,19 @@ themselves.
   `duplicate_in_qbit`) but whose torrent qBit has complete goes back to
   `submitted` and through the pipeline, within 7 days. Nothing is fetched
   from MAM or re-added to qBit.
+- **Every ebook dropped into Calibre-Web-Automated is checked against
+  Calibre** (wave 5a). CWA reports nothing back, so Seshat looks for the
+  book in Calibre's `metadata.db` (read-only): a record added or changed
+  since the drop with the same title or one of its authors confirms it.
+  Nothing within 15 minutes → a new `pipeline.import_failed` notification
+  (on by default), the review comes back as **Import failed** at the top of
+  the Review page with **Re-drop** and **Mark as imported**, its grab goes
+  back to `processing` and its run to `failed`. The review's files are now
+  kept until the import is confirmed (so a Re-drop has something to send).
+  From 2026-09-29 to 10-09 CWA deleted every patched ebook unimported while
+  Seshat said delivered; this is what would have caught it.
+- **Database migration**: the app database goes to `user_version` 63 (a new
+  `import_checks` table).
 - **Drop mode keeps a grab's .torrent when qBit can't be reached** (wave
   5a): a qBit login or network failure now saves the bytes and queues the
   grab in both full-budget modes, as queue mode already did. Before, drop
@@ -142,6 +155,11 @@ themselves.
 
 ### Added
 
+- `POST /api/v1/review/{id}/redrop` and `POST /api/v1/review/{id}/mark-imported`
+  for reviews whose CWA import failed; `GET /api/v1/review` lists those
+  (status `import_failed`, the reason in `decision_note`) ahead of the
+  pending ones (`pending_count` still counts pending only). Re-drop first
+  removes Seshat's earlier drop if it's still in the ingest folder.
 - **Goodreads candidate worker + detail store** (wave 4b, ADR-0026): the
   Goodreads cache worker checks, between list-page refreshes, the books
   Goodreads lists that discovery doesn't have, for authors a scan has
@@ -183,6 +201,11 @@ themselves.
 
 ### Fixed
 
+- A failed delivery's automatic retry now runs (wave 5a). When a drop
+  failed outright (the ingest folder unwritable), the review was set to
+  retry on the next review-timeout tick, but the retry refused anything
+  that wasn't `pending`, so it never ran and never reached the emergency
+  export after 3 attempts.
 - A source scan of an author whose only owned book is a box set or
   omnibus no longer rejects every source (wave 5a). Calibre keeps
   "Cyberratum Trilogy Box Set" while sources list Artifex, Annulus and

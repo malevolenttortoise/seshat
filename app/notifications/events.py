@@ -39,6 +39,8 @@ PIPELINE_DOWNLOAD_COMPLETE = "pipeline.download_complete"
 PIPELINE_REVIEW_QUEUED = "pipeline.review_queued"
 PIPELINE_LIBRARY_INGEST = "pipeline.library_ingest"
 PIPELINE_ERROR = "pipeline.error"
+# An ebook dropped into CWA never appeared in Calibre (wave 5a, G121).
+PIPELINE_IMPORT_FAILED = "pipeline.import_failed"
 
 # Discovery events (source scanning, MAM matching).
 DISCOVERY_SCAN_COMPLETE = "discovery.scan_complete"
@@ -149,6 +151,16 @@ _REGISTRY_ENTRIES: tuple[EventMeta, ...] = (
         suppressible_during_quiet_hours=False,
         legacy_setting_key="notify_on_pipeline_error",
         legacy_requires_master=True,
+    ),
+    EventMeta(
+        name=PIPELINE_IMPORT_FAILED,
+        description=(
+            "An ebook Seshat dropped into Calibre-Web-Automated never "
+            "showed up in Calibre."
+        ),
+        default_priority=4,
+        default_tags=("warning",),
+        suppressible_during_quiet_hours=False,
     ),
     # ── Discovery ───────────────────────────────────────────
     EventMeta(

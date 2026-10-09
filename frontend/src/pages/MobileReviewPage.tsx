@@ -16,6 +16,7 @@ import {
   MobileSection,
   MobileBackButton,
 } from "../components/mobile";
+import { ImportFailedCard } from "../components/review/ImportFailedCard";
 
 interface ReviewItem {
   id: number;
@@ -59,6 +60,8 @@ interface ReviewItem {
   cover_path: string | null;
   status: string;
   created_at: string;
+  // Why the CWA import failed, for status "import_failed" (wave 5a).
+  decision_note?: string | null;
 }
 
 interface ReviewListResponse {
@@ -168,11 +171,44 @@ export default function MobileReviewPage() {
     }
   };
 
+  const redrop = async (id: number) => {
+    setBusyId(id);
+    setError(null);
+    try {
+      const r = await api.post<{ ok: boolean; error?: string | null }>(`/v1/review/${id}/redrop`);
+      if (!r.ok) setError(`Re-drop failed: ${r.error ?? "unknown error"}`);
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const markImported = async (id: number) => {
+    setBusyId(id);
+    setError(null);
+    try {
+      const r = await api.post<{ ok: boolean; error?: string | null }>(`/v1/review/${id}/mark-imported`);
+      if (!r.ok) setError(`Couldn't mark as imported: ${r.error ?? "unknown error"}`);
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  // Import failures (wave 5a) come first with their own actions; the bulk
+  // chips only ever touch pending reviews.
+  const failed = (items ?? []).filter((i) => i.status === "import_failed");
+  const pending = (items ?? []).filter((i) => i.status !== "import_failed");
+
   const bulkAction = async (action: "approve" | "reject") => {
-    if (!items || items.length === 0) return;
+    if (pending.length === 0) return;
     if (
       !confirm(
-        `${action === "approve" ? "Approve" : "Reject"} all ${items.length} pending review(s)?`,
+        `${action === "approve" ? "Approve" : "Reject"} all ${pending.length} pending review(s)?`,
       )
     )
       return;
@@ -215,7 +251,7 @@ export default function MobileReviewPage() {
         </div>
       )}
 
-      {items && items.length > 1 && (
+      {pending.length > 1 && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
           <MobileBtn
             variant="primary"
@@ -224,7 +260,7 @@ export default function MobileReviewPage() {
             onClick={() => bulkAction("approve")}
             disabled={bulkBusy}
           >
-            Approve all ({items.length})
+            Approve all ({pending.length})
           </MobileBtn>
           <MobileBtn
             variant="danger"
@@ -256,7 +292,18 @@ export default function MobileReviewPage() {
           Review queue is empty.
         </div>
       ) : (
-        items.map((item) => (
+        [
+          ...failed.map((item) => (
+            <ImportFailedCard
+              key={item.id}
+              item={item}
+              mobile
+              busy={busyId === item.id}
+              onRedrop={() => redrop(item.id)}
+              onMarkImported={() => markImported(item.id)}
+            />
+          )),
+          ...pending.map((item) => (
           <ReviewCard
             key={item.id}
             item={item}
@@ -267,7 +314,8 @@ export default function MobileReviewPage() {
             onClaimForOwned={claimForOwned}
             busy={busyId === item.id}
           />
-        ))
+          )),
+        ]
       )}
     </div>
   );
