@@ -6,62 +6,25 @@
 //
 // Auto-refreshes every 5 seconds while the tab is visible. Pauses
 // when the user scrolls up (reading older entries) to avoid jumping.
-import { useEffect, useRef, useState } from "react";
+import { useRef } from "react";
 import { Btn } from "../components/Btn";
 import { CategoryChips } from "../components/CategoryChips";
 import { Spin } from "../components/Spin";
-import { api } from "../api";
 import { useTheme } from "../theme";
-import { useVisibleInterval } from "../hooks/useVisibleInterval";
+import { useLogFeed, type AnnounceRow, type DecisionFilter, type LogTab } from "../hooks/useLogFeed";
 import { useViewport } from "../hooks/useViewport";
 import { useMobileCodepath } from "../components/mobile";
 import MobileLogsPage from "./MobileLogsPage";
-
-interface LogEntry {
-  ts: string;
-  level: string;
-  logger: string;
-  message: string;
-  is_announce: boolean;
-}
-
-interface LogsResponse {
-  entries: LogEntry[];
-  total_buffered: number;
-}
 
 // v2.9.0 Announce Log: structured rows from the SQLite announces table.
 // Distinct from the in-memory log buffer above. The "Announces" tab
 // renders these instead of LogEntry rows so format-dedup decisions
 // (hold / skip with reason) are filter-able + glanceable.
-interface AnnounceRow {
-  id: number;
-  seen_at: string;
-  torrent_name: string;
-  author_blob: string;
-  category: string;
-  filetype: string;
-  decision: string;
-  decision_reason: string;
-  matched_author: string;
-  // Every MAM content tag the announce carried (wave 5a); null when
-  // only `category` is known.
-  categories?: string[] | null;
-}
-
-interface AnnouncesResponse {
-  rows: AnnounceRow[];
-  total_matched: number;
-  decision_counts: Record<string, number>;
-}
-
-type DecisionFilter = "all" | "allow" | "skip" | "hold";
-
 // Tab set mirrors the backend category query param +
 // existing "announces" pseudo-category. "application" and "irc"
 // slice by logger-name prefix (everything not under
 // `seshat.mam.irc` vs everything under it).
-type Tab = "all" | "announces" | "application" | "irc" | "scans";
+type Tab = LogTab;
 
 export default function LogsPage() {
   const vp = useViewport();
@@ -71,73 +34,12 @@ export default function LogsPage() {
 
 function DesktopLogsPage() {
   const theme = useTheme();
-  const [tab, setTab] = useState<Tab>("all");
-  const [entries, setEntries] = useState<LogEntry[] | null>(null);
-  const [total, setTotal] = useState(0);
-  const [error, setError] = useState<string | null>(null);
-  const [autoScroll, setAutoScroll] = useState(true);
-  // Client-side filter — narrows the visible rows in real time
-  // without re-querying the backend. Case-insensitive substring
-  // match against logger + message.
-  const [filter, setFilter] = useState("");
-  // v2.9.0 Announce Log: separate state shape, kept in parallel
-  // because the "Announces" tab swaps data sources.
-  const [announces, setAnnounces] = useState<AnnouncesResponse | null>(null);
-  const [decisionFilter, setDecisionFilter] = useState<DecisionFilter>("all");
+  const {
+    tab, setTab, entries, clearEntries, total, error, setAutoScroll, filter, setFilter,
+    announces, decisionFilter, setDecisionFilter, load,
+  } = useLogFeed();
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  async function load() {
-    try {
-      if (tab === "announces") {
-        // Pull structured decisions from the v2.9.0 audit endpoint.
-        // The substring filter input + decision chip both narrow
-        // server-side so dedup-skipped rows surface immediately.
-        const params = new URLSearchParams({ limit: "500" });
-        if (decisionFilter !== "all") {
-          params.set("decision", decisionFilter);
-        }
-        if (filter.trim()) params.set("q", filter.trim());
-        const r = await api.get<AnnouncesResponse>(
-          `/v1/announces?${params}`,
-        );
-        setAnnounces(r);
-        setEntries([]);  // hide the log-line code path
-        setTotal(r.total_matched);
-        setError(null);
-        return;
-      }
-      // 2000 lines balances "enough history to actually be useful"
-      // against "render fast on slower machines." The backend ring
-      // buffer holds 20000 records; a user who needs more can
-      // query /api/v1/logs?lines=... directly.
-      const params = new URLSearchParams({ lines: "2000" });
-      // "application" / "irc" map to the backend's category query
-      // param which slices by logger-name prefix.
-      if (tab === "application") params.set("category", "application");
-      else if (tab === "irc") params.set("category", "irc");
-      else if (tab === "scans") params.set("category", "scans");
-      const r = await api.get<LogsResponse>(`/v1/logs?${params}`);
-      setEntries(r.entries);
-      setAnnounces(null);
-      setTotal(r.total_buffered);
-      setError(null);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  useEffect(() => { load(); }, [tab, decisionFilter]);
-  // For the Announces tab the substring filter is server-side, so
-  // re-query on input change too (debounced lightly via a timeout).
-  useEffect(() => {
-    if (tab !== "announces") return;
-    const t = setTimeout(load, 250);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter, tab]);
-  // useVisibleInterval handles document.hidden internally; only the
-  // autoScroll gate stays in the closure here.
-  useVisibleInterval(() => { if (autoScroll) load(); }, 5000);
 
   const levelColor = (level: string) => {
     switch (level) {
@@ -220,7 +122,7 @@ function DesktopLogsPage() {
             key={t}
             onClick={() => {
               setTab(t);
-              setEntries(null);
+              clearEntries();
             }}
             style={{
               background: "transparent",

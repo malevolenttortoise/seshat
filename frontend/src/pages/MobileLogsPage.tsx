@@ -1,10 +1,9 @@
 // Mobile-native logs viewer. Tab chips for category, search input,
 // auto-refresh every 5s while visible, monospace scrolling list.
-import { useEffect, useRef, useState } from "react";
-import { api } from "../api";
+import { useEffect, useRef } from "react";
 import { useTheme } from "../theme";
 import { CategoryChips } from "../components/CategoryChips";
-import { useVisibleInterval } from "../hooks/useVisibleInterval";
+import { useLogFeed, type DecisionFilter, type LogTab } from "../hooks/useLogFeed";
 import { Ic } from "../icons";
 import {
   MobileChip,
@@ -13,44 +12,8 @@ import {
   MobileBackButton,
 } from "../components/mobile";
 
-interface LogEntry {
-  ts: string;
-  level: string;
-  logger: string;
-  message: string;
-  is_announce: boolean;
-}
-
-interface LogsResponse {
-  entries: LogEntry[];
-  total_buffered: number;
-}
-
 // v2.9.0 — structured announces audit row.
-interface AnnounceRow {
-  id: number;
-  seen_at: string;
-  torrent_name: string;
-  author_blob: string;
-  category: string;
-  filetype: string;
-  decision: string;
-  decision_reason: string;
-  matched_author: string;
-  // Every MAM content tag the announce carried (wave 5a); null when
-  // only `category` is known.
-  categories?: string[] | null;
-}
-
-interface AnnouncesResponse {
-  rows: AnnounceRow[];
-  total_matched: number;
-  decision_counts: Record<string, number>;
-}
-
-type DecisionFilter = "all" | "allow" | "skip" | "hold";
-
-type Tab = "all" | "announces" | "application" | "irc" | "scans";
+type Tab = LogTab;
 
 const TABS: { v: Tab; label: string }[] = [
   { v: "all", label: "All" },
@@ -62,57 +25,12 @@ const TABS: { v: Tab; label: string }[] = [
 
 export default function MobileLogsPage() {
   const t = useTheme();
-  const [tab, setTab] = useState<Tab>("all");
-  const [entries, setEntries] = useState<LogEntry[] | null>(null);
-  const [total, setTotal] = useState(0);
-  const [error, setError] = useState<string | null>(null);
-  const [autoScroll, setAutoScroll] = useState(true);
-  const [filter, setFilter] = useState("");
+  const {
+    tab, setTab, entries, total, error, autoScroll, setAutoScroll, filter, setFilter,
+    announces, decisionFilter, setDecisionFilter, load,
+  } = useLogFeed();
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  const [announces, setAnnounces] = useState<AnnouncesResponse | null>(null);
-  const [decisionFilter, setDecisionFilter] = useState<DecisionFilter>("all");
-
-  const load = async () => {
-    try {
-      if (tab === "announces") {
-        const params = new URLSearchParams({ limit: "500" });
-        if (decisionFilter !== "all") params.set("decision", decisionFilter);
-        if (filter.trim()) params.set("q", filter.trim());
-        const r = await api.get<AnnouncesResponse>(
-          `/v1/announces?${params}`,
-        );
-        setAnnounces(r);
-        setEntries([]);
-        setTotal(r.total_matched);
-        setError(null);
-        return;
-      }
-      const params = new URLSearchParams({ lines: "2000" });
-      if (tab !== "all") params.set("category", tab);
-      const r = await api.get<LogsResponse>(`/v1/logs?${params}`);
-      setEntries(r.entries);
-      setAnnounces(null);
-      setTotal(r.total_buffered);
-      setError(null);
-    } catch (e) {
-      setError(String(e));
-    }
-  };
-
-  useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, decisionFilter]);
-  useEffect(() => {
-    if (tab !== "announces") return;
-    const t = setTimeout(load, 250);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter, tab]);
-  useVisibleInterval(() => {
-    if (autoScroll) load();
-  }, 5000);
 
   useEffect(() => {
     if (autoScroll && bottomRef.current) {
