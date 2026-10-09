@@ -11,6 +11,7 @@ import { api, slugQuery } from "../api";
 import { runBatchJob } from "../lib/batchJob";
 import { useTheme } from "../theme";
 import { usePersist } from "../hooks/usePersist";
+import { useBookSidebar } from "../hooks/useBookSidebar";
 import { BookSidebar } from "../components/BookSidebar";
 import { Ic } from "../icons";
 import {
@@ -114,8 +115,7 @@ export default function MobileMAMPage({ onNav }: { onNav: NavFn }) {
   const [scanLimit, setScanLimit] = useState<number>(100);
   const [scanStarting, setScanStarting] = useState(false);
   const [mamScan, setMamScan] = useState<MamScanStatus | null>(null);
-  const [sb, setSb] = useState<Book | null>(null);
-  const [sbClosing, setSbClosing] = useState(false);
+  const { sb, setSb, sbClosing, closeSb } = useBookSidebar();
   const [sortSheet, setSortSheet] = useState(false);
   const [pipelineReady, setPipelineReady] = useState(false);
 
@@ -257,14 +257,6 @@ export default function MobileMAMPage({ onNav }: { onNav: NavFn }) {
     } catch { /* ignore */ }
   };
 
-  const closeSb = () => {
-    if (!sb) return;
-    setSbClosing(true);
-    setTimeout(() => {
-      setSb(null);
-      setSbClosing(false);
-    }, 200);
-  };
 
   const onAction = async (act: BookAction, id: number, slug?: string) => {
     if (act === "hide") await api.post(`/discovery/books/${id}/hide${slugQuery(slug)}`);

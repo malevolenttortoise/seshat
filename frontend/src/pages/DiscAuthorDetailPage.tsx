@@ -33,13 +33,14 @@ import { useScanPolling } from "../hooks/useScanPolling";
 import { useAuthorDetail } from "../hooks/useAuthorDetail";
 import { useBulkSelection } from "../hooks/useBulkSelection";
 import { usePenNames } from "../hooks/usePenNames";
+import { useBookSidebar } from "../hooks/useBookSidebar";
+import { useMamEnabled } from "../hooks/useMamEnabled";
 import { useMobileCodepath } from "../components/mobile";
 import MobileAuthorDetailPage from "./MobileAuthorDetailPage";
 import type {
   Book,
   BookAction,
   BookActionHandler,
-  MamStatusResponse,
   NavFn,
   Series,
 } from "../types";
@@ -481,10 +482,9 @@ function DesktopAuthorDetailPage({
   const [clearing, setClearing] = useState(false);
   const [vm, setVm] = usePersist<ViewMode>("adp_vm", "grid");
   const [rk, setRk] = useState(0);
-  const [sb, setSb] = useState<Book | null>(null);
-  const [sbClosing, setSbClosing] = useState(false);
+  const { sb, sbClosing, closeSb, toggleSb } = useBookSidebar();
   const [allCol, setAllCol] = useState(false);
-  const [mamOn, setMamOn] = useState(false);
+  const mamOn = useMamEnabled();
   const [fmtTab, setFmtTab] = useState<string>("combined");
 
   // Multi-select state. `selMode` flips the cards into checkbox-like
@@ -538,28 +538,6 @@ function DesktopAuthorDetailPage({
     }
   };
 
-  useEffect(() => {
-    api
-      .get<MamStatusResponse>("/discovery/mam/status")
-      .then((r) => setMamOn(!!r.enabled))
-      .catch(() => {});
-  }, []);
-
-  const closeSb = () => {
-    if (!sb) return;
-    setSbClosing(true);
-    setTimeout(() => {
-      setSb(null);
-      setSbClosing(false);
-    }, 200);
-  };
-  const toggleSb = (b: Book) => {
-    if (sb && sb.id === b.id) closeSb();
-    else {
-      setSbClosing(false);
-      setSb(b);
-    }
-  };
 
   // Author scans run as background tasks on the server. The flow:
   //   1. Dispatch `seshat:scan-started` so the Dashboard widget

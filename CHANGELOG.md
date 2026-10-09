@@ -239,7 +239,9 @@ frontend test suite.
   scan-finished poll (`useScanPolling`) and its author load
   (`useAuthorDetail`) and pen names (`usePenNames`); the multi-select of
   the author and Tentative pages (`useBulkSelection`); the Review queue
-  (`useReviewQueue`).
+  (`useReviewQueue`); the book sidebar's open / close and the "is MAM on"
+  check of the author, MAM and Books pages (`useBookSidebar`,
+  `useMamEnabled`).
 - **The metadata-cache status is fetched once for every place that shows
   it** (wave 5b, audit L4-03): the navbar cloud icon, the Dashboard's
   Amazon / Goodreads cache rails and the Settings cache cards each polled

@@ -12,6 +12,7 @@
 import { useEffect, useState } from "react";
 import { useTheme } from "../theme";
 import { useViewport } from "../hooks/useViewport";
+import { useMamEnabled } from "../hooks/useMamEnabled";
 import { useMobileCodepath } from "./mobile";
 import { api } from "../api";
 import { runBatchJob } from "../lib/batchJob";
@@ -32,7 +33,6 @@ import type {
   BookAction,
   BookActionHandler,
   Contributor,
-  MamStatusResponse,
   WorkSibling,
 } from "../types";
 import { EVT } from "../types";
@@ -253,7 +253,7 @@ export function BookSidebar({
   const [absUrl, setAbsUrl] = useState("");
   const [mamScanning, setMamScanning] = useState(false);
   const [mamDeciding, setMamDeciding] = useState(false);
-  const [mamOn, setMamOn] = useState(false);
+  const mamOn = useMamEnabled();
   const [suggestion, setSuggestion] = useState<SeriesSuggestion | null>(null);
   const [sugBusy, setSugBusy] = useState<SuggestionAction | null>(null);
   const [sending, setSending] = useState(false);
@@ -305,13 +305,6 @@ export function BookSidebar({
         setOfferWedge(!!cfg.mam_economy_manual_wedge_offer_enabled);
         setBufferGateOn(!!cfg.mam_economy_buffer_gate_enabled);
       })
-      .catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    api
-      .get<MamStatusResponse>("/discovery/mam/status")
-      .then((r) => setMamOn(!!r.enabled))
       .catch(() => {});
   }, []);
 

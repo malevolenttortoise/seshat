@@ -20,6 +20,8 @@ import { useScanPolling } from "../hooks/useScanPolling";
 import { useAuthorDetail } from "../hooks/useAuthorDetail";
 import { useBulkSelection } from "../hooks/useBulkSelection";
 import { usePenNames } from "../hooks/usePenNames";
+import { useBookSidebar } from "../hooks/useBookSidebar";
+import { useMamEnabled } from "../hooks/useMamEnabled";
 import {
   MobileBtn,
   MobileChip,
@@ -32,7 +34,6 @@ import {
 import type {
   Book,
   BookAction,
-  MamStatusResponse,
   NavFn,
   Series,
 } from "../types";
@@ -240,9 +241,8 @@ export default function MobileAuthorDetailPage({
   const { a, ld, loadErr, loadA, authorIdNum, authorSlug } = useAuthorDetail(authorId);
   const [ref, setRef] = useState(false);
   const [mamRef, setMamRef] = useState(false);
-  const [sb, setSb] = useState<Book | null>(null);
-  const [sbClosing, setSbClosing] = useState(false);
-  const [mamOn, setMamOn] = useState(false);
+  const { sb, setSb, sbClosing, closeSb } = useBookSidebar();
+  const mamOn = useMamEnabled();
   const [fmtTab, setFmtTab] = useState<string>("combined");
 
   // Multi-select. Mirrors the desktop wiring — page-wide selection
@@ -265,13 +265,6 @@ export default function MobileAuthorDetailPage({
   // `authorId` because that's the nav-arg form the list snapshotted.
   const walk = useAuthorWalk(authorId);
 
-  useEffect(() => {
-    api
-      .get<MamStatusResponse>("/discovery/mam/status")
-      .then((r) => setMamOn(!!r.enabled))
-      .catch(() => {});
-  }, []);
-
   // v2.14.0 — page-local scan-completion poll (useScanPolling, shared
   // with the desktop DiscAuthorDetailPage): on a running→idle transition
   // for `lookup` or `mam`, clear the corresponding local spinner state
@@ -293,14 +286,6 @@ export default function MobileAuthorDetailPage({
     link: linkPenName, unlink: unlinkPenName,
   } = usePenNames({ authorIdNum, personId: a?.person_id, onLinked: loadA });
 
-  const closeSb = () => {
-    if (!sb) return;
-    setSbClosing(true);
-    setTimeout(() => {
-      setSb(null);
-      setSbClosing(false);
-    }, 200);
-  };
 
   const onAction = async (act: BookAction, id: number, slug?: string) => {
     if (act === "hide") await api.post(`/discovery/books/${id}/hide${slugQuery(slug)}`);

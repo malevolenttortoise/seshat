@@ -14,6 +14,8 @@ import { useCallback, useEffect, useState } from "react";
 import { api, slugQuery } from "../api";
 import { useTheme } from "../theme";
 import { usePersist } from "../hooks/usePersist";
+import { useBookSidebar } from "../hooks/useBookSidebar";
+import { useMamEnabled } from "../hooks/useMamEnabled";
 import { BookSidebar } from "../components/BookSidebar";
 import { Ic } from "../icons";
 import {
@@ -29,7 +31,6 @@ import type {
   Book,
   BookAction,
   BooksResponse,
-  MamStatusResponse,
 } from "../types";
 
 export interface MobileBooksPageProps {
@@ -81,19 +82,10 @@ export default function MobileBooksPage({
   const [ownedFilter, setOwnedFilter] = usePersist<string>(
     `bp_${title}_owned`, "all",
   );
-  const [mamOn, setMamOn] = useState(false);
-  const [sb, setSb] = useState<Book | null>(null);
-  const [sbClosing, setSbClosing] = useState(false);
+  const mamOn = useMamEnabled();
+  const { sb, setSb, sbClosing, closeSb } = useBookSidebar();
   const [sortSheet, setSortSheet] = useState(false);
 
-  const closeSb = () => {
-    if (!sb) return;
-    setSbClosing(true);
-    setTimeout(() => {
-      setSb(null);
-      setSbClosing(false);
-    }, 200);
-  };
 
   const perPage = 60;
 
@@ -133,13 +125,6 @@ export default function MobileBooksPage({
     load(1, c.signal);
     return () => c.abort();
   }, [load]);
-
-  useEffect(() => {
-    api
-      .get<MamStatusResponse>("/discovery/mam/status")
-      .then((r) => setMamOn(!!r.enabled))
-      .catch(() => {});
-  }, []);
 
   const totalPages = Math.max(1, Math.ceil(total / perPage));
 

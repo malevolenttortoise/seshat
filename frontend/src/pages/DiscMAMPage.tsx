@@ -27,6 +27,7 @@ import { BGrid, BList } from "../components/BookViews";
 import { BookSidebar } from "../components/BookSidebar";
 import { ClearMenu } from "../components/ClearMenu";
 import { useViewport } from "../hooks/useViewport";
+import { useBookSidebar } from "../hooks/useBookSidebar";
 import { useMobileCodepath } from "../components/mobile";
 import { toast } from "../lib/toast";
 import MobileMAMPage from "./MobileMAMPage";
@@ -186,8 +187,7 @@ function DesktopMAMPage({ onNav }: { onNav: NavFn }) {
   const [mamScan, setMamScan] = useState<MamScanStatus | null>(null);
 
   // Sidebar
-  const [sb, setSb] = useState<Book | null>(null);
-  const [sbClosing, setSbClosing] = useState(false);
+  const { sb, sbClosing, closeSb, toggleSb } = useBookSidebar();
 
   // Multi-select
   const [selMode, setSelMode] = useState(false);
@@ -356,21 +356,6 @@ function DesktopMAMPage({ onNav }: { onNav: NavFn }) {
     }
   };
 
-  const closeSb = () => {
-    if (!sb) return;
-    setSbClosing(true);
-    setTimeout(() => {
-      setSb(null);
-      setSbClosing(false);
-    }, 200);
-  };
-  const toggleSb = (b: Book) => {
-    if (sb && sb.id === b.id) closeSb();
-    else {
-      setSbClosing(false);
-      setSb(b);
-    }
-  };
 
   const onAction = async (act: BookAction, id: number, slug?: string) => {
     const scrollY = window.scrollY;

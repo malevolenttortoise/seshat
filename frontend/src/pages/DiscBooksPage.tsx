@@ -23,13 +23,14 @@ import { ClearMenu } from "../components/ClearMenu";
 import { toast } from "../lib/toast";
 import { ExportModal } from "../components/ExportModal";
 import { useViewport } from "../hooks/useViewport";
+import { useBookSidebar } from "../hooks/useBookSidebar";
+import { useMamEnabled } from "../hooks/useMamEnabled";
 import { useMobileCodepath } from "../components/mobile";
 import MobileBooksPage from "./MobileBooksPage";
 import type {
   Book,
   BookAction,
   BooksResponse,
-  MamStatusResponse,
 } from "../types";
 
 interface BooksPageProps {
@@ -109,8 +110,7 @@ function DesktopBooksPage({
   // direction. Defaults asc; the chevron toggle below flips it.
   const [sortDir, setSortDir] = usePersist<string>(`bp_${title}_sort_dir`, "asc");
   const [fmt, setFmt] = usePersist<string>(`bp_${title}_fmt`, "all");
-  const [sb, setSb] = useState<Book | null>(null);
-  const [sbClosing, setSbClosing] = useState(false);
+  const { sb, sbClosing, closeSb, openSb, toggleSb } = useBookSidebar();
   const [allCollapsed, setAllCollapsed] = useState(false);
   const [showExp, setShowExp] = useState(false);
   const [mamFilter, setMamFilter] = usePersist<string>(`bp_${title}_mam`, "");
@@ -119,7 +119,7 @@ function DesktopBooksPage({
   const [ownedFilter, setOwnedFilter] = usePersist<string>(
     `bp_${title}_owned`, "all",
   );
-  const [mamOn, setMamOn] = useState(false);
+  const mamOn = useMamEnabled();
   const [selMode, setSelMode] = useState(false);
   const [sel, setSel] = useState<Set<number>>(new Set());
   // v2.4.x: live MAM scan progress for the in-page banner. Polled
@@ -150,21 +150,6 @@ function DesktopBooksPage({
   // wiping cross-page selections — click on each page to accumulate.
   const selectAllVisible = () =>
     setSel((p) => new Set([...p, ...bks.map((b) => b.id)]));
-  const closeSb = () => {
-    if (!sb) return;
-    setSbClosing(true);
-    setTimeout(() => {
-      setSb(null);
-      setSbClosing(false);
-    }, 200);
-  };
-  const toggleSb = (b: Book) => {
-    if (sb && sb.id === b.id) closeSb();
-    else {
-      setSbClosing(false);
-      setSb(b);
-    }
-  };
 
   const isGrouped = grp !== "all";
   const perPage = isGrouped ? 5000 : 60;
@@ -209,13 +194,6 @@ function DesktopBooksPage({
     return () => c.abort();
   }, [load]);
 
-  useEffect(() => {
-    api
-      .get<MamStatusResponse>("/discovery/mam/status")
-      .then((r) => setMamOn(!!r.enabled))
-      .catch(() => {});
-  }, []);
-
   // v2.15.1 — listen for `seshat:focus` events with kind=book from
   // the global navbar search. When a user clicks a book result in
   // the dropdown, App routes to disc-library and dispatches this
@@ -232,8 +210,7 @@ function DesktopBooksPage({
       api
         .get<Book>(`/discovery/books/${detail.book_id}${qs}`)
         .then((book) => {
-          setSbClosing(false);
-          setSb(book);
+          openSb(book);
         })
         .catch(() => { /* book not reachable — silently skip */ });
     }
