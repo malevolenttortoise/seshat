@@ -8,37 +8,15 @@
 // All values are stored in their **normalized** form (lowercase,
 // punctuation collapsed) so they compare correctly against live IRC
 // announces. The display labels come from the enums endpoint.
-import { useEffect, useState, useMemo } from "react";
+import { useMemo } from "react";
 import { Btn } from "../components/Btn";
 import { Section } from "../components/Section";
 import { Spin } from "../components/Spin";
-import { api } from "../api";
+import { useFilterSettings } from "../hooks/useFilterSettings";
 import { useTheme } from "../theme";
 import { useViewport } from "../hooks/useViewport";
 import { useMobileCodepath } from "../components/mobile";
 import MobileFiltersPage from "./MobileFiltersPage";
-
-interface CategoryEntry {
-  id: string;
-  name: string;
-  main_id: string;
-  main_name: string;
-  normalized: string;
-}
-
-interface EnumsResponse {
-  categories: CategoryEntry[];
-  languages: string[];
-  formats: string[];
-}
-
-type SettingsMap = Record<string, unknown>;
-
-interface PatchResponse {
-  ok: boolean;
-  updated: string[];
-  rejected: string[];
-}
 
 export default function FiltersPage() {
   const vp = useViewport();
@@ -48,75 +26,9 @@ export default function FiltersPage() {
 
 function DesktopFiltersPage() {
   const theme = useTheme();
-  const [enums, setEnums] = useState<EnumsResponse | null>(null);
-  const [settings, setSettings] = useState<SettingsMap | null>(null);
-  const [draft, setDraft] = useState<SettingsMap>({});
-  const [error, setError] = useState<string | null>(null);
-  const [ok, setOk] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    Promise.all([
-      api.get<EnumsResponse>("/v1/enums"),
-      api.get<SettingsMap>("/v1/settings"),
-    ])
-      .then(([e, s]) => {
-        setEnums(e);
-        setSettings(s);
-      })
-      .catch((e) => setError(String(e)));
-  }, []);
-
-  const effective: SettingsMap = { ...(settings ?? {}), ...draft };
-
-  function setField(key: string, value: unknown) {
-    setDraft((d) => {
-      const next = { ...d, [key]: value };
-      if (
-        settings &&
-        JSON.stringify(settings[key]) === JSON.stringify(value)
-      ) {
-        delete next[key];
-      }
-      return next;
-    });
-    setOk(null);
-  }
-
-  async function save() {
-    if (Object.keys(draft).length === 0) return;
-    setSaving(true);
-    setError(null);
-    setOk(null);
-    try {
-      const r = await api.patch<PatchResponse>("/v1/settings", draft);
-      if (r.rejected.length > 0) {
-        setError(`Rejected: ${r.rejected.join(", ")}`);
-      } else {
-        setOk(`Updated ${r.updated.length} filter(s).`);
-      }
-      // Reload settings so the draft resets cleanly.
-      const fresh = await api.get<SettingsMap>("/v1/settings");
-      setSettings(fresh);
-      setDraft({});
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  // Group categories by their main_name (AudioBooks, E-Books, etc.)
-  // Hook must be called unconditionally (Rules of Hooks) — before
-  // any early return. Safe because enums?.categories is just [].
-  const catGroups = useMemo(() => {
-    const cats = enums?.categories ?? [];
-    const groups: Record<string, CategoryEntry[]> = {};
-    for (const c of cats) {
-      (groups[c.main_name] ??= []).push(c);
-    }
-    return groups;
-  }, [enums?.categories]);
+  const {
+    enums, settings, draft, discard, error, ok, saving, effective, setField, save, catGroups, allowedCats, allowedAudiobookCats, excludedCats, allowedLangs, allowedFormats, excludedFormats, acceptAudiobooks, formatPriority,
+  } = useFilterSettings();
 
   if (!enums || !settings) {
     return (
@@ -125,37 +37,6 @@ function DesktopFiltersPage() {
       </div>
     );
   }
-
-  const allowedCats = new Set(
-    (effective.allowed_categories as string[]) ?? [],
-  );
-  const allowedAudiobookCats = new Set(
-    (effective.allowed_audiobook_categories as string[]) ?? [],
-  );
-  const excludedCats = new Set(
-    (effective.excluded_categories as string[]) ?? [],
-  );
-  const allowedLangs = new Set(
-    (effective.allowed_languages as string[]) ?? [],
-  );
-  const allowedFormats = new Set(
-    (effective.allowed_formats as string[]) ?? [],
-  );
-  const excludedFormats = new Set(
-    (effective.excluded_formats as string[]) ?? [],
-  );
-  // v2.9.0: audiobook acceptance is derived from the Media Type
-  // filter. Empty allowed_formats means "accept all" — including
-  // audiobooks. Otherwise the user must have ticked the audiobooks
-  // chip explicitly. Mirrors `_build_filter_config` in app/main.py.
-  const acceptAudiobooks =
-    allowedFormats.size === 0 || allowedFormats.has("audiobooks");
-
-  // Format Priority — per-media-type list of {fmt, enabled} entries.
-  // Drives the v2.9.0 format-priority dedup gate. Top = highest.
-  type FmtEntry = { fmt: string; enabled: boolean };
-  const formatPriority =
-    (effective.format_priority as Record<string, FmtEntry[]>) ?? {};
 
   function toggleInSet(
     settingKey: string,
@@ -357,7 +238,7 @@ function DesktopFiltersPage() {
         <Btn
           variant="ghost"
           disabled={dirty === 0 || saving}
-          onClick={() => setDraft({})}
+          onClick={discard}
         >
           Discard
         </Btn>

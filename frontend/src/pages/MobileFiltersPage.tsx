@@ -2,8 +2,8 @@
 // formats, languages from /v1/enums + /v1/settings), but tap-only
 // chip interactions: tap a chip to cycle Off → Allowed → Excluded
 // → Off (replaces the desktop's left/right-click split).
-import { useEffect, useMemo, useState } from "react";
-import { api } from "../api";
+import { useMemo } from "react";
+import { useFilterSettings } from "../hooks/useFilterSettings";
 import { useTheme } from "../theme";
 import {
   MobileBtn,
@@ -11,95 +11,13 @@ import {
   MobileBackButton,
 } from "../components/mobile";
 
-interface CategoryEntry {
-  id: string;
-  name: string;
-  main_id: string;
-  main_name: string;
-  normalized: string;
-}
-
-interface EnumsResponse {
-  categories: CategoryEntry[];
-  languages: string[];
-  formats: string[];
-}
-
-type SettingsMap = Record<string, unknown>;
-
-interface PatchResponse {
-  ok: boolean;
-  updated: string[];
-  rejected: string[];
-}
-
 type ChipState = "off" | "allow" | "exclude";
 
 export default function MobileFiltersPage() {
   const t = useTheme();
-  const [enums, setEnums] = useState<EnumsResponse | null>(null);
-  const [settings, setSettings] = useState<SettingsMap | null>(null);
-  const [draft, setDraft] = useState<SettingsMap>({});
-  const [error, setError] = useState<string | null>(null);
-  const [ok, setOk] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    Promise.all([
-      api.get<EnumsResponse>("/v1/enums"),
-      api.get<SettingsMap>("/v1/settings"),
-    ])
-      .then(([e, s]) => {
-        setEnums(e);
-        setSettings(s);
-      })
-      .catch((e) => setError(String(e)));
-  }, []);
-
-  const effective: SettingsMap = { ...(settings ?? {}), ...draft };
-
-  const setField = (key: string, value: unknown) => {
-    setDraft((d) => {
-      const next = { ...d, [key]: value };
-      if (
-        settings &&
-        JSON.stringify(settings[key]) === JSON.stringify(value)
-      ) {
-        delete next[key];
-      }
-      return next;
-    });
-    setOk(null);
-  };
-
-  const save = async () => {
-    if (Object.keys(draft).length === 0) return;
-    setSaving(true);
-    setError(null);
-    setOk(null);
-    try {
-      const r = await api.patch<PatchResponse>("/v1/settings", draft);
-      if (r.rejected.length > 0) {
-        setError(`Rejected: ${r.rejected.join(", ")}`);
-      } else {
-        setOk(`Updated ${r.updated.length} filter(s).`);
-      }
-      const fresh = await api.get<SettingsMap>("/v1/settings");
-      setSettings(fresh);
-      setDraft({});
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const catGroups = useMemo(() => {
-    const cats = enums?.categories ?? [];
-    const groups: Record<string, CategoryEntry[]> = {};
-    for (const c of cats) (groups[c.main_name] ??= []).push(c);
-    return groups;
-  }, [enums?.categories]);
+  const {
+    enums, settings, draft, discard, error, ok, saving, setField, save, catGroups, allowedCats, allowedAudiobookCats, excludedCats, allowedLangs, allowedFormats, excludedFormats, acceptAudiobooks, formatPriority,
+  } = useFilterSettings();
 
   if (!enums || !settings) {
     return (
@@ -108,32 +26,6 @@ export default function MobileFiltersPage() {
       </div>
     );
   }
-
-  const allowedCats = new Set(
-    (effective.allowed_categories as string[]) ?? [],
-  );
-  const allowedAudiobookCats = new Set(
-    (effective.allowed_audiobook_categories as string[]) ?? [],
-  );
-  const excludedCats = new Set(
-    (effective.excluded_categories as string[]) ?? [],
-  );
-  const allowedLangs = new Set(
-    (effective.allowed_languages as string[]) ?? [],
-  );
-  const allowedFormats = new Set(
-    (effective.allowed_formats as string[]) ?? [],
-  );
-  const excludedFormats = new Set(
-    (effective.excluded_formats as string[]) ?? [],
-  );
-  // v2.9.0: audiobook acceptance derived from the Media Type filter.
-  const acceptAudiobooks =
-    allowedFormats.size === 0 || allowedFormats.has("audiobooks");
-
-  type FmtEntry = { fmt: string; enabled: boolean };
-  const formatPriority =
-    (effective.format_priority as Record<string, FmtEntry[]>) ?? {};
 
   // 3-state chip: Off → Allow → Exclude → Off. supportExclude=false
   // collapses it to Off ↔ Allow.
@@ -409,7 +301,7 @@ export default function MobileFiltersPage() {
           >
             {dirty} change(s)
           </span>
-          <MobileBtn variant="ghost" onClick={() => setDraft({})}>
+          <MobileBtn variant="ghost" onClick={discard}>
             Discard
           </MobileBtn>
           <MobileBtn
