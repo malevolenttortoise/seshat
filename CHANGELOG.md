@@ -251,7 +251,10 @@ frontend test suite.
   phone) and the book sidebar's "Use wedge" tick are one `WedgeToggle`
   component; the book sidebar's series suggestion, reingest from disk,
   send to pipeline and contributors each moved to their own file
-  (`components/bookSidebar/`), the sidebar 2,691 → 1,984 lines.
+  (`components/bookSidebar/`), the sidebar 2,691 → 1,984 lines; the
+  desktop and phone Dashboards share one hook for their data load, poll
+  and commands (`useDashboard`), and the Amazon / Goodreads cache rails
+  moved to their own file (desktop 2,373 → 1,754 lines, phone 766 → 544).
 - **The metadata-cache status is fetched once for every place that shows
   it** (wave 5b, audit L4-03): the navbar cloud icon, the Dashboard's
   Amazon / Goodreads cache rails and the Settings cache cards each polled

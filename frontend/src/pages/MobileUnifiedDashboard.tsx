@@ -3,18 +3,12 @@
 // or iPad). Renders a vertical stack of sections instead of the
 // 2-3 column grid the desktop uses.
 //
-// Data-fetching is duplicated from the desktop component for now —
-// extracting a shared `useUnifiedDashboardData` hook is a follow-up
-// after this design lands. Keeping the duplication keeps the desktop
-// code untouched while we iterate on mobile UX.
-import { useCallback, useEffect, useState } from "react";
-import { api } from "../api";
+// Its data and commands come from useDashboard, shared with the desktop.
 import { toast } from "../lib/toast";
 import { useTheme } from "../theme";
 import { fmtNum } from "../lib/format";
-import { useVisibleInterval } from "../hooks/useVisibleInterval";
-import { useVisibleEventSource } from "../hooks/useVisibleEventSource";
-import type { MamStatusResponse, NavFn, ScanProgress } from "../types";
+import { useDashboard } from "../hooks/useDashboard";
+import type { NavFn, ScanProgress } from "../types";
 import {
   MobileBtn,
   MobileSection,
@@ -34,239 +28,19 @@ interface Props {
   onNav: NavFn;
 }
 
-const POLL = 30;
-
-// A failed command's reason, for its toast (G148 wording).
-const why = (e: unknown) => (e instanceof Error ? e.message : String(e));
-
-interface DashboardStats {
-  owned_books?: number;
-  total_books?: number;
-  missing_books?: number;
-  new_books?: number;
-  upcoming_books?: number;
-  total_series?: number;
-  authors?: number;
-  hidden_books?: number;
-  suggestions?: number;
-  library_name?: string;
-  library_display_name?: string;
-  content_type?: string;
-  mam?: {
-    upload_candidates?: number;
-    available_to_download?: number;
-    missing_everywhere?: number;
-    total_unscanned?: number;
-  };
-  total_duration_sec?: number;
-  narrator_count?: number;
-  unabridged_count?: number;
-}
-
-interface HealthResponse {
-  dispatcher_ready?: boolean;
-}
-
-interface MamUserStatus extends MamStatusResponse {
-  username?: string;
-  classname?: string;
-  ratio?: number;
-  wedges?: number;
-  seedbonus?: number;
-  upload_buffer_bytes?: number;
-  uploaded_bytes?: number;
-  downloaded_bytes?: number;
-  cookie_configured?: boolean;
-  error?: string;
-}
-
-interface BudgetResponse {
-  budget_used?: number;
-  budget_cap?: number;
-  next_release_seconds?: number;
-  ledger_active?: number;
-  qbit_extras?: number;
-  queue_size?: number;
-  seed_seconds_required?: number;
-  entries?: {
-    grab_id?: number;
-    torrent_name?: string;
-    source?: string;
-    seeding_seconds?: number;
-    remaining_seconds?: number;
-  }[];
-}
-
-interface CountsResponse {
-  authors_allowed?: number;
-  authors_ignored?: number;
-  grabs?: number;
-  calibre_additions?: number;
-}
-
-interface GrabRow {
-  torrent_name?: string;
-  grabbed_at?: string;
-}
-
-interface SettingsBlob {
-  cwa_web_url?: string;
-  calibre_web_url?: string;
-  abs_web_url?: string;
-}
-
 export default function MobileUnifiedDashboard({ onNav }: Props) {
   const t = useTheme();
-  const [d, setD] = useState<DashboardStats | null>(null);
-  const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [mam, setMam] = useState<MamUserStatus | null>(null);
-  const [budget, setBudget] = useState<BudgetResponse | null>(null);
-  const [reviewCount, setReviewCount] = useState(0);
-  const [tentativeCount, setTentativeCount] = useState(0);
-  const [counts, setCounts] = useState<CountsResponse | null>(null);
-  const [grabs, setGrabs] = useState<GrabRow[]>([]);
-  const [settings, setSettings] = useState<SettingsBlob | null>(null);
-  const [scanStatus, setScanStatus] = useState<ScanProgress[]>([]);
-  const [statsBySlug, setStatsBySlug] = useState<Record<string, DashboardStats>>({});
-  const [syncingSlug, setSyncingSlug] = useState<string | null>(null);
-  const [scanning, setScanning] = useState(false);
-  const [mamScanning, setMamScanning] = useState(false);
-
-  const refresh = useCallback(async () => {
-    const r = await Promise.all([
-      api.get<DashboardStats>("/discovery/stats").catch(() => null),
-      api.get<HealthResponse>("/health").catch(() => null),
-      api.get<MamUserStatus>("/v1/mam/status").catch(() => null),
-      api.get<BudgetResponse>("/v1/grabs/budget").catch(() => null),
-      api.get<{ pending_count?: number }>("/v1/review").catch(() => ({ pending_count: 0 })),
-      api.get<{ items?: unknown[] }>("/v1/tentative").catch(() => ({ items: [] })),
-      api.get<CountsResponse>("/v1/data/counts").catch(() => null),
-      api.get<{ grabs?: GrabRow[] }>("/v1/grabs/recent").catch(() => ({ grabs: [] })),
-      api.get<SettingsBlob>("/v1/settings").catch(() => null),
-      api.get<{ scans?: ScanProgress[] }>("/discovery/scan-status").catch(() => null),
-    ]);
-    setD(r[0]);
-    setHealth(r[1]);
-    setMam(r[2]);
-    setBudget(r[3]);
-    setReviewCount(r[4]?.pending_count ?? 0);
-    setTentativeCount(r[5]?.items?.length ?? 0);
-    setCounts(r[6]);
-    setGrabs(r[7]?.grabs ?? []);
-    setSettings(r[8]);
-    if (r[9]?.scans) setScanStatus(r[9].scans);
-    const libs = (r[9]?.scans || []).filter((s) => s.kind === "library");
-    if (libs.length > 0) {
-      const byPair = await Promise.all(
-        libs.map(async (ls) => {
-          const slug = (ls as ScanProgress & { slug?: string }).slug || "";
-          const s = await api
-            .get<DashboardStats>(`/discovery/stats?slug=${encodeURIComponent(slug)}`)
-            .catch(() => null);
-          return [slug, s] as const;
-        }),
-      );
-      const map: Record<string, DashboardStats> = {};
-      for (const [slug, stats] of byPair) {
-        if (stats && slug) map[slug] = stats;
-      }
-      setStatsBySlug(map);
-    }
-  }, []);
-
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
-
-  // Poll faster while a scan is in flight, slower while idle.
-  const anyRunning =
-    scanStatus.some((s) => s.running) || syncingSlug !== null;
-  const pollMs = anyRunning ? 3000 : POLL * 1000;
-  useVisibleInterval(refresh, pollMs);
-
-  // Live MAM stat patches (ratio/wedges/seedbonus) come over SSE.
-  useVisibleEventSource({
-    "mam-stats": (e) => {
-      setMam((prev) => ({
-        enabled: prev?.enabled ?? true,
-        validation_ok: prev?.validation_ok,
-        stats: prev?.stats,
-        ...prev,
-        ratio: e.ratio,
-        seedbonus: e.seedbonus,
-        wedges: e.wedges,
-        upload_buffer_bytes: e.upload_buffer_bytes,
-      }));
-    },
-  });
-
-  // Per-library splits — first ebook lib + first audiobook lib.
-  const statsEntries: DashboardStats[] = Object.values(statsBySlug);
-  const ebookStats: DashboardStats =
-    statsEntries.find((s) => s?.content_type === "ebook") || (d ?? {});
-  const audiobookStats: DashboardStats | undefined = statsEntries.find(
-    (s) => s?.content_type === "audiobook",
-  );
+  const {
+    health, mam, budget, reviewCount, counts, scans: scanStatus, ebookStats, audiobookStats, settings, grabs,
+    tentativeCount, syncingSlug, scanning, mamScanning, showHygieneConfirm, setShowHygieneConfirm, hygieneStarting,
+    triggerSync, triggerEbookSources, triggerAudiobookSources, triggerMam,
+    cancelSources, cancelMam, triggerHygiene, cancelHygiene,
+  } = useDashboard(toast.error);
 
   // Pipeline health derivations
   const dispatcherOk = !!health?.dispatcher_ready;
   const mamCookieOk = !!mam?.cookie_configured && !mam?.error;
   const ircOk = !!mam?.username; // proxy: if MAM stats are flowing, IRC + MAM are reachable
-
-  // Commands
-  const triggerSync = async (slug?: string) => {
-    setSyncingSlug(slug || "__active__");
-    try {
-      const qs = slug ? `?slug=${encodeURIComponent(slug)}` : "";
-      await api.post(`/discovery/sync/library${qs}`);
-    } catch (e) { toast.error(`Couldn't start the library sync: ${why(e)}`); }
-    setSyncingSlug(null);
-    refresh();
-  };
-  // v2.12.0 — paired ebook/audiobook triggers, each cross-library.
-  const triggerEbookSources = async () => {
-    setScanning(true);
-    try { await api.post("/discovery/lookup?content_type=ebook"); } catch (e) { toast.error(`Couldn't start the ebook source scan: ${why(e)}`); }
-    setScanning(false);
-    refresh();
-  };
-  const triggerAudiobookSources = async () => {
-    setScanning(true);
-    try { await api.post("/discovery/lookup?content_type=audiobook"); } catch (e) { toast.error(`Couldn't start the audiobook source scan: ${why(e)}`); }
-    setScanning(false);
-    refresh();
-  };
-  const triggerMam = async () => {
-    setMamScanning(true);
-    try { await api.post("/discovery/mam/scan"); } catch (e) { toast.error(`Couldn't start the MAM scan: ${why(e)}`); }
-    setMamScanning(false);
-    refresh();
-  };
-  const cancelSources = async () => {
-    try { await api.post("/discovery/lookup/cancel"); } catch (e) { toast.error(`Couldn't cancel the source scan: ${why(e)}`); }
-    refresh();
-  };
-  const cancelMam = async () => {
-    try { await api.post("/discovery/mam/scan/cancel"); } catch (e) { toast.error(`Couldn't cancel the MAM scan: ${why(e)}`); }
-    refresh();
-  };
-
-  // v2.16.0 — Data Hygiene chain mirror of the desktop flow.
-  // Confirmation gate before kicking off; busy state derives from
-  // the in-flight scan-status entry.
-  const [showHygieneConfirm, setShowHygieneConfirm] = useState(false);
-  const [hygieneStarting, setHygieneStarting] = useState(false);
-  const triggerHygiene = async () => {
-    setHygieneStarting(true);
-    try { await api.post("/discovery/hygiene/run"); } catch (e) { toast.error(`Couldn't start Data Hygiene: ${why(e)}`); }
-    setHygieneStarting(false);
-    setShowHygieneConfirm(false);
-    refresh();
-  };
-  const cancelHygiene = async () => {
-    try { await api.post("/discovery/hygiene/cancel"); } catch (e) { toast.error(`Couldn't cancel Data Hygiene: ${why(e)}`); }
-    refresh();
-  };
 
   const calibreWebUrl = settings?.cwa_web_url || settings?.calibre_web_url || "";
   const absWebUrl = settings?.abs_web_url || "";
