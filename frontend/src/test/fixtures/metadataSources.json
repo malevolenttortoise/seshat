@@ -1,0 +1,405 @@
+{
+ "metadataSources": {
+  "derived": {
+   "audiobook_enrich": [
+    "mam",
+    "audible",
+    "goodreads",
+    "hardcover",
+    "openlibrary",
+    "amazon"
+   ],
+   "audiobook_scan": [
+    "mam",
+    "audible",
+    "goodreads",
+    "hardcover",
+    "openlibrary",
+    "amazon"
+   ],
+   "ebook_enrich": [
+    "mam",
+    "goodreads",
+    "hardcover",
+    "openlibrary",
+    "google_books",
+    "kobo",
+    "amazon"
+   ],
+   "ebook_scan": [
+    "mam",
+    "goodreads",
+    "hardcover",
+    "openlibrary",
+    "google_books",
+    "kobo",
+    "amazon"
+   ]
+  },
+  "known": [
+   {
+    "available_for": [
+     "ebook",
+     "audiobook"
+    ],
+    "display": "MyAnonamouse",
+    "mam_only": true,
+    "name": "mam"
+   },
+   {
+    "available_for": [
+     "ebook",
+     "audiobook"
+    ],
+    "display": "Goodreads",
+    "mam_only": false,
+    "name": "goodreads"
+   },
+   {
+    "available_for": [
+     "ebook",
+     "audiobook"
+    ],
+    "display": "Amazon",
+    "mam_only": false,
+    "name": "amazon"
+   },
+   {
+    "available_for": [
+     "ebook",
+     "audiobook"
+    ],
+    "display": "Hardcover",
+    "mam_only": false,
+    "name": "hardcover"
+   },
+   {
+    "available_for": [
+     "ebook"
+    ],
+    "display": "Kobo",
+    "mam_only": false,
+    "name": "kobo"
+   },
+   {
+    "available_for": [
+     "ebook"
+    ],
+    "display": "IBDB",
+    "mam_only": false,
+    "name": "ibdb"
+   },
+   {
+    "available_for": [
+     "ebook",
+     "audiobook"
+    ],
+    "display": "Google Books",
+    "mam_only": false,
+    "name": "google_books"
+   },
+   {
+    "available_for": [
+     "ebook",
+     "audiobook"
+    ],
+    "display": "Open Library",
+    "mam_only": false,
+    "name": "openlibrary"
+   },
+   {
+    "available_for": [
+     "audiobook"
+    ],
+    "display": "Audible",
+    "mam_only": false,
+    "name": "audible"
+   }
+  ],
+  "state": {
+   "priority": {
+    "audiobook": [
+     "mam",
+     "audible",
+     "goodreads",
+     "hardcover",
+     "openlibrary",
+     "google_books",
+     "amazon",
+     "kobo",
+     "ibdb"
+    ],
+    "ebook": [
+     "mam",
+     "goodreads",
+     "hardcover",
+     "openlibrary",
+     "google_books",
+     "kobo",
+     "amazon",
+     "ibdb",
+     "audible"
+    ]
+   },
+   "sources": {
+    "amazon": {
+     "audiobook_enrich": true,
+     "audiobook_format": "audible_audiobook",
+     "audiobook_scan": true,
+     "book_page_gap": null,
+     "concurrency": null,
+     "ebook_enrich": true,
+     "ebook_scan": true,
+     "format": "kindle",
+     "include_nonfiction": null,
+     "language": "English",
+     "mandatory": false,
+     "rate_limit": 1.0
+    },
+    "audible": {
+     "audiobook_enrich": true,
+     "audiobook_format": null,
+     "audiobook_scan": true,
+     "book_page_gap": null,
+     "concurrency": null,
+     "ebook_enrich": false,
+     "ebook_scan": false,
+     "format": null,
+     "include_nonfiction": null,
+     "language": null,
+     "mandatory": true,
+     "rate_limit": 1.0
+    },
+    "goodreads": {
+     "audiobook_enrich": true,
+     "audiobook_format": null,
+     "audiobook_scan": true,
+     "book_page_gap": 120.0,
+     "concurrency": null,
+     "ebook_enrich": true,
+     "ebook_scan": true,
+     "format": null,
+     "include_nonfiction": false,
+     "language": null,
+     "mandatory": true,
+     "rate_limit": 1.0
+    },
+    "google_books": {
+     "audiobook_enrich": false,
+     "audiobook_format": null,
+     "audiobook_scan": false,
+     "book_page_gap": null,
+     "concurrency": null,
+     "ebook_enrich": true,
+     "ebook_scan": true,
+     "format": null,
+     "include_nonfiction": null,
+     "language": null,
+     "mandatory": false,
+     "rate_limit": 1.0
+    },
+    "hardcover": {
+     "audiobook_enrich": true,
+     "audiobook_format": null,
+     "audiobook_scan": true,
+     "book_page_gap": null,
+     "concurrency": null,
+     "ebook_enrich": true,
+     "ebook_scan": true,
+     "format": null,
+     "include_nonfiction": null,
+     "language": null,
+     "mandatory": true,
+     "rate_limit": 1.0
+    },
+    "ibdb": {
+     "audiobook_enrich": false,
+     "audiobook_format": null,
+     "audiobook_scan": false,
+     "book_page_gap": null,
+     "concurrency": null,
+     "ebook_enrich": false,
+     "ebook_scan": false,
+     "format": null,
+     "include_nonfiction": null,
+     "language": null,
+     "mandatory": false,
+     "rate_limit": 1.0
+    },
+    "kobo": {
+     "audiobook_enrich": false,
+     "audiobook_format": null,
+     "audiobook_scan": false,
+     "book_page_gap": null,
+     "concurrency": 4,
+     "ebook_enrich": true,
+     "ebook_scan": true,
+     "format": null,
+     "include_nonfiction": null,
+     "language": null,
+     "mandatory": false,
+     "rate_limit": 1.0
+    },
+    "mam": {
+     "audiobook_enrich": true,
+     "audiobook_format": null,
+     "audiobook_scan": true,
+     "book_page_gap": null,
+     "concurrency": null,
+     "ebook_enrich": true,
+     "ebook_scan": true,
+     "format": null,
+     "include_nonfiction": null,
+     "language": null,
+     "mandatory": false,
+     "rate_limit": 1.0
+    },
+    "openlibrary": {
+     "audiobook_enrich": true,
+     "audiobook_format": null,
+     "audiobook_scan": true,
+     "book_page_gap": null,
+     "concurrency": null,
+     "ebook_enrich": true,
+     "ebook_scan": true,
+     "format": null,
+     "include_nonfiction": null,
+     "language": null,
+     "mandatory": false,
+     "rate_limit": 1.0
+    }
+   }
+  }
+ },
+ "traffic": {
+  "days": [
+   "2026-10-09",
+   "2026-10-08",
+   "2026-10-07",
+   "2026-10-06",
+   "2026-10-05",
+   "2026-10-04",
+   "2026-10-03",
+   "2026-10-02"
+  ],
+  "sources": {
+   "goodreads": {
+    "daily": [
+     {
+      "blocks": 0,
+      "capped": 0,
+      "created": 0,
+      "day": "2026-10-09",
+      "errors": 0,
+      "ok": 27,
+      "requests": 37,
+      "timeouts": 0,
+      "updated": 0
+     },
+     {
+      "blocks": 0,
+      "capped": 0,
+      "created": 0,
+      "day": "2026-10-08",
+      "errors": 0,
+      "ok": 26,
+      "requests": 36,
+      "timeouts": 0,
+      "updated": 0
+     },
+     {
+      "blocks": 0,
+      "capped": 0,
+      "created": 0,
+      "day": "2026-10-07",
+      "errors": 0,
+      "ok": 25,
+      "requests": 35,
+      "timeouts": 0,
+      "updated": 0
+     },
+     {
+      "blocks": 0,
+      "capped": 0,
+      "created": 0,
+      "day": "2026-10-06",
+      "errors": 0,
+      "ok": 24,
+      "requests": 34,
+      "timeouts": 0,
+      "updated": 0
+     },
+     {
+      "blocks": 0,
+      "capped": 0,
+      "created": 0,
+      "day": "2026-10-05",
+      "errors": 0,
+      "ok": 23,
+      "requests": 33,
+      "timeouts": 0,
+      "updated": 0
+     },
+     {
+      "blocks": 0,
+      "capped": 0,
+      "created": 0,
+      "day": "2026-10-04",
+      "errors": 0,
+      "ok": 22,
+      "requests": 32,
+      "timeouts": 0,
+      "updated": 0
+     },
+     {
+      "blocks": 0,
+      "capped": 0,
+      "created": 0,
+      "day": "2026-10-03",
+      "errors": 0,
+      "ok": 21,
+      "requests": 31,
+      "timeouts": 0,
+      "updated": 0
+     },
+     {
+      "blocks": 0,
+      "capped": 0,
+      "created": 0,
+      "day": "2026-10-02",
+      "errors": 0,
+      "ok": 20,
+      "requests": 30,
+      "timeouts": 0,
+      "updated": 0
+     }
+    ],
+    "today": {
+     "blocks": 0,
+     "capped": 0,
+     "created": 0,
+     "errors": 0,
+     "ok": 31,
+     "requests": 40,
+     "timeouts": 0,
+     "updated": 0
+    },
+    "today_rows": [
+     {
+      "blocks": 0,
+      "caller": "worker",
+      "capped": 0,
+      "created": 0,
+      "errors": 0,
+      "kind": "book_page",
+      "ok": 31,
+      "requests": 40,
+      "timeouts": 0,
+      "updated": 0
+     }
+    ]
+   }
+  },
+  "today": "2026-10-09"
+ }
+}

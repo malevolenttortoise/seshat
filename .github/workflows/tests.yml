@@ -13,6 +13,11 @@ name: Tests
 #     run the same suite twice per push.
 #   - PRs into `main` run it here; branch protection on `main` requires
 #     `pytest (py3.12)` and `pytest (py3.13)` to pass before a merge.
+#
+# Since audit wave 5b (2026-10) the frontend's Vitest suite runs here too
+# (`vitest` job): hook tests plus render snapshots of every page the
+# shared-hook refactor touches. It gates the image the same way pytest
+# does, because a called workflow only succeeds when every job does.
 on:
   pull_request:
     branches: [main, development]
@@ -83,3 +88,36 @@ jobs:
         # short traceback and the `-ra` summary are what make a red run
         # diagnosable without re-running locally.
         run: pytest tests/ --tb=short -ra --durations=10
+
+  vitest:
+    name: vitest (node 26)
+    runs-on: ubuntu-latest
+    # The suite renders ~50 page states in jsdom: well under a minute
+    # locally. 15 min is headroom, not an expectation.
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node 26
+        # The major the images' frontend build stage uses from wave 5b on.
+        uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Typecheck
+        # `tsc -b` covers the test files too (they live under src/).
+        run: npx tsc -b
+
+      - name: Run frontend tests
+        # `npm test` pins TZ=UTC and LANG=en_US.UTF-8 so dates and
+        # number formatting in the snapshots match on every machine.
+        run: npm test

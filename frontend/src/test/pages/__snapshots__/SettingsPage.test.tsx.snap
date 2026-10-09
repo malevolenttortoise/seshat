@@ -1,0 +1,683 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Settings (desktop) > a configured install > markup 1`] = `
+<DocumentFragment>
+  <div
+    style="display: flex; gap: 0px; min-height: calc(100vh - 100px);"
+  >
+    <div
+      style="width: 220px; flex-shrink: 0; background: rgb(34, 36, 56); border-right: 1px solid rgb(58, 60, 86); border-radius: 12px 0 0 12px; padding: 16px 0px; position: sticky; top: 60px; align-self: flex-start;"
+    >
+      <div>
+        <div
+          style="font-size: 11px; font-weight: 700; color: rgb(150, 148, 172); text-transform: uppercase; letter-spacing: 0.06em; padding: 14px 20px 6px;"
+        >
+          Pipeline
+        </div>
+        <div
+          style="padding: 9px 20px; font-size: 14px; cursor: pointer; color: rgb(228, 184, 104); background: rgba(222, 176, 96, 0.16); border-left: 3px solid rgb(228, 184, 104); font-weight: 600;"
+        >
+          Pipeline
+        </div>
+        <div
+          style="padding: 9px 20px; font-size: 14px; cursor: pointer; color: rgb(214, 212, 224); background: transparent; border-left: 3px solid transparent; font-weight: 400;"
+        >
+          Review & Enrichment
+        </div>
+        <div
+          style="padding: 9px 20px; font-size: 14px; cursor: pointer; color: rgb(214, 212, 224); background: transparent; border-left: 3px solid transparent; font-weight: 400;"
+        >
+          Grab Policy
+        </div>
+        <div
+          style="padding: 9px 20px; font-size: 14px; cursor: pointer; color: rgb(214, 212, 224); background: transparent; border-left: 3px solid transparent; font-weight: 400;"
+        >
+          Snatch Budget
+        </div>
+        <div
+          style="padding: 9px 20px; font-size: 14px; cursor: pointer; color: rgb(214, 212, 224); background: transparent; border-left: 3px solid transparent; font-weight: 400;"
+        >
+          MyAnonamouse
+        </div>
+        <div
+          style="padding: 9px 20px; font-size: 14px; cursor: pointer; color: rgb(214, 212, 224); background: transparent; border-left: 3px solid transparent; font-weight: 400;"
+        >
+          Download Client
+        </div>
+        <div
+          style="padding: 9px 20px; font-size: 14px; cursor: pointer; color: rgb(214, 212, 224); background: transparent; border-left: 3px solid transparent; font-weight: 400;"
+        >
+          Sinks & Delivery
+        </div>
+        <div
+          style="padding: 9px 20px; font-size: 14px; cursor: pointer; color: rgb(214, 212, 224); background: transparent; border-left: 3px solid transparent; font-weight: 400;"
+        >
+          Notifications
+        </div>
+        <div
+          style="padding: 9px 20px; font-size: 14px; cursor: pointer; color: rgb(214, 212, 224); background: transparent; border-left: 3px solid transparent; font-weight: 400;"
+        >
+          Quality Metadata
+        </div>
+        <div
+          style="padding: 9px 20px; font-size: 14px; cursor: pointer; color: rgb(214, 212, 224); background: transparent; border-left: 3px solid transparent; font-weight: 400;"
+        >
+          Active Replacement
+        </div>
+      </div>
+      <div>
+        <div
+          style="font-size: 11px; font-weight: 700; color: rgb(150, 148, 172); text-transform: uppercase; letter-spacing: 0.06em; padding: 14px 20px 6px;"
+        >
+          Discovery
+        </div>
+        <div
+          style="padding: 9px 20px; font-size: 14px; cursor: pointer; color: rgb(214, 212, 224); background: transparent; border-left: 3px solid transparent; font-weight: 400;"
+        >
+          Metadata Sources
+        </div>
+        <div
+          style="padding: 9px 20px; font-size: 14px; cursor: pointer; color: rgb(214, 212, 224); background: transparent; border-left: 3px solid transparent; font-weight: 400;"
+        >
+          Author Scanning
+        </div>
+        <div
+          style="padding: 9px 20px; font-size: 14px; cursor: pointer; color: rgb(214, 212, 224); background: transparent; border-left: 3px solid transparent; font-weight: 400;"
+        >
+          Library Management
+        </div>
+        <div
+          style="padding: 9px 20px; font-size: 14px; cursor: pointer; color: rgb(214, 212, 224); background: transparent; border-left: 3px solid transparent; font-weight: 400;"
+        >
+          Audiobookshelf
+        </div>
+        <div
+          style="padding: 9px 20px; font-size: 14px; cursor: pointer; color: rgb(214, 212, 224); background: transparent; border-left: 3px solid transparent; font-weight: 400;"
+        >
+          Discovery MAM
+        </div>
+      </div>
+      <div>
+        <div
+          style="font-size: 11px; font-weight: 700; color: rgb(150, 148, 172); text-transform: uppercase; letter-spacing: 0.06em; padding: 14px 20px 6px;"
+        >
+          Shared
+        </div>
+        <div
+          style="padding: 9px 20px; font-size: 14px; cursor: pointer; color: rgb(214, 212, 224); background: transparent; border-left: 3px solid transparent; font-weight: 400;"
+        >
+          Operational
+        </div>
+        <div
+          style="padding: 9px 20px; font-size: 14px; cursor: pointer; color: rgb(214, 212, 224); background: transparent; border-left: 3px solid transparent; font-weight: 400;"
+        >
+          Data Management
+        </div>
+      </div>
+      <div
+        style="padding: 16px 20px 8px; font-size: 10px; color: rgb(124, 122, 148);"
+      >
+        Build: 
+        <code
+          style="color: rgb(150, 148, 172);"
+        >
+          98d6075
+        </code>
+      </div>
+    </div>
+    <div
+      style="flex: 1 1 0%; padding: 20px 32px; min-width: 0px;"
+    >
+      <div
+        style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; gap: 12px;"
+      >
+        <h1
+          style="font-size: 22px; font-weight: 700; color: rgb(236, 234, 244); margin: 0px;"
+        >
+          Pipeline
+        </h1>
+        <div
+          style="display: flex; align-items: center; gap: 10px;"
+        >
+          <div
+            style="position: relative;"
+          >
+            <input
+              placeholder="Search fields…"
+              style="padding: 7px 32px 7px 12px; font-size: 13px; background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 6px; color: rgb(214, 212, 224); min-width: 220px; font-family: inherit; outline: none;"
+              type="search"
+              value=""
+            />
+          </div>
+          <button
+            style="background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+          >
+            Save
+          </button>
+        </div>
+      </div>
+      <div
+        style="display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, 320px); align-items: center; padding: 14px 0px; border-bottom: 1px solid rgb(46, 48, 72); gap: 6px 16px;"
+      >
+        <div
+          style="min-width: 0px;"
+        >
+          <div
+            style="font-size: 15px; font-weight: 600; color: rgb(236, 234, 244);"
+          >
+            IRC Listener
+          </div>
+          <div
+            style="font-size: 13px; color: rgb(136, 134, 160); margin-top: 3px; line-height: 1.5;"
+          >
+            Connects to MAM's #announce channel and processes every new torrent through the filter gate.
+          </div>
+        </div>
+        <div
+          style="display: flex; align-items: center; justify-content: flex-end; min-height: 32px;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 8px;"
+          >
+            <span
+              style="font-size: 12px; color: rgb(76, 184, 136); font-weight: 600;"
+            >
+              ON
+            </span>
+            <div
+              style="width: 44px; height: 24px; border-radius: 12px; background: rgb(76, 184, 136); cursor: pointer; padding: 3px; transition: background 0.2s; opacity: 1;"
+            >
+              <div
+                style="width: 18px; height: 18px; border-radius: 50%; background: rgb(255, 255, 255); transform: translateX(20px); transition: transform 0.2s;"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+      <div
+        style="display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, 320px); align-items: center; padding: 14px 0px; border-bottom: 1px solid rgb(46, 48, 72); gap: 6px 16px;"
+      >
+        <div
+          style="min-width: 0px;"
+        >
+          <div
+            style="font-size: 15px; font-weight: 600; color: rgb(236, 234, 244);"
+          >
+            Auto-Train Authors
+          </div>
+          <div
+            style="font-size: 13px; color: rgb(136, 134, 160); margin-top: 3px; line-height: 1.5;"
+          >
+            When a book is grabbed from a co-author, the other co-authors are automatically added to the allow list.
+          </div>
+        </div>
+        <div
+          style="display: flex; align-items: center; justify-content: flex-end; min-height: 32px;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 8px;"
+          >
+            <span
+              style="font-size: 12px; color: rgb(76, 184, 136); font-weight: 600;"
+            >
+              ON
+            </span>
+            <div
+              style="width: 44px; height: 24px; border-radius: 12px; background: rgb(76, 184, 136); cursor: pointer; padding: 3px; transition: background 0.2s; opacity: 1;"
+            >
+              <div
+                style="width: 18px; height: 18px; border-radius: 50%; background: rgb(255, 255, 255); transform: translateX(20px); transition: transform 0.2s;"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+      <div
+        style="display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, 320px); align-items: center; padding: 14px 0px; border-bottom: 1px solid rgb(46, 48, 72); gap: 6px 16px;"
+      >
+        <div
+          style="min-width: 0px;"
+        >
+          <div
+            style="font-size: 15px; font-weight: 600; color: rgb(236, 234, 244);"
+          >
+            Dry Run
+          </div>
+          <div
+            style="font-size: 13px; color: rgb(136, 134, 160); margin-top: 3px; line-height: 1.5;"
+          >
+            Filter + policy run normally but nothing is downloaded. The announce log records what would have happened.
+          </div>
+        </div>
+        <div
+          style="display: flex; align-items: center; justify-content: flex-end; min-height: 32px;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 8px;"
+          >
+            <span
+              style="font-size: 12px; color: rgb(136, 134, 160); font-weight: 600;"
+            >
+              OFF
+            </span>
+            <div
+              style="width: 44px; height: 24px; border-radius: 12px; background: rgb(42, 44, 66); cursor: pointer; padding: 3px; transition: background 0.2s; opacity: 1;"
+            >
+              <div
+                style="width: 18px; height: 18px; border-radius: 50%; background: rgb(255, 255, 255); transform: translateX(0); transition: transform 0.2s;"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Settings (desktop) > a configured install > requests 1`] = `
+[
+  "GET /v1/credentials",
+  "GET /v1/settings",
+  "GET /version",
+]
+`;
+
+exports[`Settings (phone) > a configured install > markup 1`] = `
+<DocumentFragment>
+  <div
+    style="display: flex; flex-direction: column; gap: 12px; padding-bottom: 80px;"
+  >
+    <button
+      aria-label="Dashboard"
+      style="display: inline-flex; align-items: center; gap: 6px; height: 44px; padding: 0px 14px 0px 10px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 9999px; font-size: 14px; font-weight: 600; cursor: pointer; align-self: flex-start;"
+    >
+      <span
+        style="font-size: 18px; line-height: 1;"
+      >
+        ‹
+      </span>
+      <span>
+        Dashboard
+      </span>
+    </button>
+    <h1
+      style="margin: 0px; font-size: 22px; font-weight: 700; color: rgb(236, 234, 244);"
+    >
+      Settings
+    </h1>
+    <section
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
+    >
+      <header
+        style="display: flex; align-items: center; gap: 8px; min-height: 36px; margin-bottom: 0px; cursor: pointer; user-select: none;"
+      >
+        <div
+          style="flex: 1 1 0%; min-width: 0px;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 6px; font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+          >
+            <span
+              style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+            >
+              Pipeline
+            </span>
+          </div>
+        </div>
+        <span
+          aria-hidden="true"
+          style="display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; font-size: 18px; font-weight: 700; color: rgb(150, 148, 172); background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 9999px; flex-shrink: 0; transform: rotate(-90deg); transition: transform 0.15s;"
+        >
+          ▾
+        </span>
+      </header>
+    </section>
+    <section
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
+    >
+      <header
+        style="display: flex; align-items: center; gap: 8px; min-height: 36px; margin-bottom: 0px; cursor: pointer; user-select: none;"
+      >
+        <div
+          style="flex: 1 1 0%; min-width: 0px;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 6px; font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+          >
+            <span
+              style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+            >
+              Review & Enrichment
+            </span>
+          </div>
+        </div>
+        <span
+          aria-hidden="true"
+          style="display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; font-size: 18px; font-weight: 700; color: rgb(150, 148, 172); background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 9999px; flex-shrink: 0; transform: rotate(-90deg); transition: transform 0.15s;"
+        >
+          ▾
+        </span>
+      </header>
+    </section>
+    <section
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
+    >
+      <header
+        style="display: flex; align-items: center; gap: 8px; min-height: 36px; margin-bottom: 0px; cursor: pointer; user-select: none;"
+      >
+        <div
+          style="flex: 1 1 0%; min-width: 0px;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 6px; font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+          >
+            <span
+              style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+            >
+              Grab Policy
+            </span>
+          </div>
+        </div>
+        <span
+          aria-hidden="true"
+          style="display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; font-size: 18px; font-weight: 700; color: rgb(150, 148, 172); background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 9999px; flex-shrink: 0; transform: rotate(-90deg); transition: transform 0.15s;"
+        >
+          ▾
+        </span>
+      </header>
+    </section>
+    <section
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
+    >
+      <header
+        style="display: flex; align-items: center; gap: 8px; min-height: 36px; margin-bottom: 0px; cursor: pointer; user-select: none;"
+      >
+        <div
+          style="flex: 1 1 0%; min-width: 0px;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 6px; font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+          >
+            <span
+              style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+            >
+              Snatch Budget
+            </span>
+          </div>
+        </div>
+        <span
+          aria-hidden="true"
+          style="display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; font-size: 18px; font-weight: 700; color: rgb(150, 148, 172); background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 9999px; flex-shrink: 0; transform: rotate(-90deg); transition: transform 0.15s;"
+        >
+          ▾
+        </span>
+      </header>
+    </section>
+    <section
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
+    >
+      <header
+        style="display: flex; align-items: center; gap: 8px; min-height: 36px; margin-bottom: 0px; cursor: pointer; user-select: none;"
+      >
+        <div
+          style="flex: 1 1 0%; min-width: 0px;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 6px; font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+          >
+            <span
+              style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+            >
+              MyAnonamouse
+            </span>
+          </div>
+        </div>
+        <span
+          aria-hidden="true"
+          style="display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; font-size: 18px; font-weight: 700; color: rgb(150, 148, 172); background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 9999px; flex-shrink: 0; transform: rotate(-90deg); transition: transform 0.15s;"
+        >
+          ▾
+        </span>
+      </header>
+    </section>
+    <section
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
+    >
+      <header
+        style="display: flex; align-items: center; gap: 8px; min-height: 36px; margin-bottom: 0px; cursor: pointer; user-select: none;"
+      >
+        <div
+          style="flex: 1 1 0%; min-width: 0px;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 6px; font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+          >
+            <span
+              style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+            >
+              Download Client
+            </span>
+          </div>
+        </div>
+        <span
+          aria-hidden="true"
+          style="display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; font-size: 18px; font-weight: 700; color: rgb(150, 148, 172); background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 9999px; flex-shrink: 0; transform: rotate(-90deg); transition: transform 0.15s;"
+        >
+          ▾
+        </span>
+      </header>
+    </section>
+    <section
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
+    >
+      <header
+        style="display: flex; align-items: center; gap: 8px; min-height: 36px; margin-bottom: 0px; cursor: pointer; user-select: none;"
+      >
+        <div
+          style="flex: 1 1 0%; min-width: 0px;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 6px; font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+          >
+            <span
+              style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+            >
+              Notifications
+            </span>
+          </div>
+        </div>
+        <span
+          aria-hidden="true"
+          style="display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; font-size: 18px; font-weight: 700; color: rgb(150, 148, 172); background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 9999px; flex-shrink: 0; transform: rotate(-90deg); transition: transform 0.15s;"
+        >
+          ▾
+        </span>
+      </header>
+    </section>
+    <section
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
+    >
+      <header
+        style="display: flex; align-items: center; gap: 8px; min-height: 36px; margin-bottom: 0px; cursor: pointer; user-select: none;"
+      >
+        <div
+          style="flex: 1 1 0%; min-width: 0px;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 6px; font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+          >
+            <span
+              style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+            >
+              Metadata Sources
+            </span>
+          </div>
+        </div>
+        <span
+          aria-hidden="true"
+          style="display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; font-size: 18px; font-weight: 700; color: rgb(150, 148, 172); background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 9999px; flex-shrink: 0; transform: rotate(-90deg); transition: transform 0.15s;"
+        >
+          ▾
+        </span>
+      </header>
+    </section>
+    <section
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
+    >
+      <header
+        style="display: flex; align-items: center; gap: 8px; min-height: 36px; margin-bottom: 0px; cursor: pointer; user-select: none;"
+      >
+        <div
+          style="flex: 1 1 0%; min-width: 0px;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 6px; font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+          >
+            <span
+              style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+            >
+              Author Scanning
+            </span>
+          </div>
+        </div>
+        <span
+          aria-hidden="true"
+          style="display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; font-size: 18px; font-weight: 700; color: rgb(150, 148, 172); background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 9999px; flex-shrink: 0; transform: rotate(-90deg); transition: transform 0.15s;"
+        >
+          ▾
+        </span>
+      </header>
+    </section>
+    <section
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
+    >
+      <header
+        style="display: flex; align-items: center; gap: 8px; min-height: 36px; margin-bottom: 0px; cursor: pointer; user-select: none;"
+      >
+        <div
+          style="flex: 1 1 0%; min-width: 0px;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 6px; font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+          >
+            <span
+              style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+            >
+              Library Management
+            </span>
+          </div>
+        </div>
+        <span
+          aria-hidden="true"
+          style="display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; font-size: 18px; font-weight: 700; color: rgb(150, 148, 172); background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 9999px; flex-shrink: 0; transform: rotate(-90deg); transition: transform 0.15s;"
+        >
+          ▾
+        </span>
+      </header>
+    </section>
+    <section
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
+    >
+      <header
+        style="display: flex; align-items: center; gap: 8px; min-height: 36px; margin-bottom: 0px; cursor: pointer; user-select: none;"
+      >
+        <div
+          style="flex: 1 1 0%; min-width: 0px;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 6px; font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+          >
+            <span
+              style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+            >
+              Audiobookshelf
+            </span>
+          </div>
+        </div>
+        <span
+          aria-hidden="true"
+          style="display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; font-size: 18px; font-weight: 700; color: rgb(150, 148, 172); background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 9999px; flex-shrink: 0; transform: rotate(-90deg); transition: transform 0.15s;"
+        >
+          ▾
+        </span>
+      </header>
+    </section>
+    <section
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
+    >
+      <header
+        style="display: flex; align-items: center; gap: 8px; min-height: 36px; margin-bottom: 0px; cursor: pointer; user-select: none;"
+      >
+        <div
+          style="flex: 1 1 0%; min-width: 0px;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 6px; font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+          >
+            <span
+              style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+            >
+              Discovery MAM
+            </span>
+          </div>
+        </div>
+        <span
+          aria-hidden="true"
+          style="display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; font-size: 18px; font-weight: 700; color: rgb(150, 148, 172); background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 9999px; flex-shrink: 0; transform: rotate(-90deg); transition: transform 0.15s;"
+        >
+          ▾
+        </span>
+      </header>
+    </section>
+    <section
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
+    >
+      <header
+        style="display: flex; align-items: center; gap: 8px; min-height: 36px; margin-bottom: 0px; cursor: pointer; user-select: none;"
+      >
+        <div
+          style="flex: 1 1 0%; min-width: 0px;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 6px; font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+          >
+            <span
+              style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+            >
+              Operational
+            </span>
+          </div>
+        </div>
+        <span
+          aria-hidden="true"
+          style="display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; font-size: 18px; font-weight: 700; color: rgb(150, 148, 172); background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 9999px; flex-shrink: 0; transform: rotate(-90deg); transition: transform 0.15s;"
+        >
+          ▾
+        </span>
+      </header>
+    </section>
+    <div
+      style="position: fixed; left: 0px; right: 0px; bottom: 0px; padding: 12px 12px max(12px, env(safe-area-inset-bottom)); background: rgb(34, 36, 56); border-top: 1px solid rgb(58, 60, 86); display: flex; gap: 8px; align-items: center; z-index: 50;"
+    >
+      <span
+        style="flex: 1 1 0%; font-size: 13px; color: rgb(76, 184, 136); font-weight: 600;"
+      />
+      <button
+        style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 48px; padding: 0px 16px; cursor: pointer;"
+      >
+        <span>
+          Save settings
+        </span>
+      </button>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Settings (phone) > a configured install > requests 1`] = `
+[
+  "GET /v1/credentials",
+  "GET /v1/settings",
+]
+`;

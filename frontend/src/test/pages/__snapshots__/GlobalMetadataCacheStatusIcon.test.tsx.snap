@@ -1,0 +1,45 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Navbar cache-worker icon (desktop) > Goodreads in cooldown > markup 1`] = `
+<DocumentFragment>
+  <button
+    aria-label="Metadata cache workers: Cooldown"
+    style="background: transparent; border: medium; cursor: pointer; font-size: 18px; padding: 4px 8px; border-radius: 4px; color: rgb(204, 153, 51); opacity: 0.85; display: inline-flex; align-items: center; justify-content: center;"
+    title="Cache workers: Cooldown
+Metadata cache workers:
+  Amazon: active · queue 12 · cached 595/640 · today 42 scans
+  Goodreads: cooldown (1800s) · queue 12 · cached 595/640 · today 17 scans"
+  >
+    ☁
+  </button>
+</DocumentFragment>
+`;
+
+exports[`Navbar cache-worker icon (desktop) > Goodreads in cooldown > requests 1`] = `
+[
+  "GET /v1/metadata-cache/amazon/status",
+  "GET /v1/metadata-cache/goodreads/status",
+]
+`;
+
+exports[`Navbar cache-worker icon (desktop) > both workers active > markup 1`] = `
+<DocumentFragment>
+  <button
+    aria-label="Metadata cache workers: Active"
+    style="background: transparent; border: medium; cursor: pointer; font-size: 18px; padding: 4px 8px; border-radius: 4px; color: rgb(76, 184, 136); opacity: 0.85; display: inline-flex; align-items: center; justify-content: center;"
+    title="Cache workers: Active
+Metadata cache workers:
+  Amazon: active · queue 12 · cached 595/640 · today 42 scans
+  Goodreads: active · queue 12 · cached 595/640 · today 17 scans"
+  >
+    ☁
+  </button>
+</DocumentFragment>
+`;
+
+exports[`Navbar cache-worker icon (desktop) > both workers active > requests 1`] = `
+[
+  "GET /v1/metadata-cache/amazon/status",
+  "GET /v1/metadata-cache/goodreads/status",
+]
+`;

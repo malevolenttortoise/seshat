@@ -14,7 +14,9 @@ Phase 2 of the 2026-10 roadmap, the codebase audit, waves 4a and 4b: the
 gate that paces and counts it, and Goodreads-only books are found by a
 background worker instead of during scans. Wave 5a: **reliability** —
 grabs a restart or a failed qBit submit left stranded now heal
-themselves.
+themselves. Wave 5b: **frontend structure** — the desktop and phone
+versions of each page share their logic through hooks, under a new
+frontend test suite.
 
 **Behaviour changes to know about:**
 
@@ -213,6 +215,13 @@ themselves.
 - ADR-0025: source access stays within tiers 0–1 (no challenge solving,
   no borrowed browser cookies, no proxies or grey API routes), enforced
   through one gate per source.
+- **A frontend test suite** (wave 5b): Vitest + jsdom + Testing Library
+  (`npm test` in `frontend/`), run by CI beside pytest and gating the
+  image the same way. Besides unit tests for the shared page hooks, it
+  renders every page wave 5b's refactor touches (desktop and phone, with
+  canned API responses) and snapshots the markup and the requests each
+  page makes while loading, so moving page logic into shared hooks has to
+  leave both unchanged.
 
 ### Removed
 

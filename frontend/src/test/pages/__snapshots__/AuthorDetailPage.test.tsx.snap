@@ -1,0 +1,3521 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Author detail (desktop) > an author with series, standalones and a second library > markup 1`] = `
+<DocumentFragment>
+  <div
+    style="display: flex; flex-direction: column; gap: 24px;"
+  >
+    <div
+      style="position: sticky; top: 56px; z-index: 40; background: rgba(26, 28, 48, 0.933); backdrop-filter: blur(8px); padding: 12px 0px;"
+    >
+      <div
+        style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;"
+      >
+        <button
+          style="background: rgb(42, 44, 66); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 16px; font-size: 14px;"
+        >
+          ← Back to Authors
+        </button>
+      </div>
+      <div
+        class="author-header"
+        style="display: flex; gap: 20px; align-items: flex-start;"
+      >
+        <div
+          style="width: 72px; height: 72px; border-radius: 50%; background: rgb(42, 44, 66); display: flex; align-items: center; justify-content: center; font-size: 28px; font-weight: 700; color: rgb(98, 96, 122);"
+        >
+          A
+        </div>
+        <div
+          style="flex: 1 1 0%;"
+        >
+          <h1
+            style="font-size: 22px; font-weight: 700; color: rgb(236, 234, 244); margin: 0px;"
+          >
+            Ada Quill
+          </h1>
+          <p
+            style="font-size: 13px; color: rgb(150, 148, 172); margin-top: 6px; line-height: 1.5; max-height: 60px; overflow: hidden;"
+          >
+            Ada Quill writes botanical mysteries.
+          </p>
+          <div
+            style="display: flex; gap: 16px; margin-top: 8px; font-size: 13px;"
+          >
+            <span
+              style="color: rgb(58, 148, 104);"
+            >
+              3 owned
+            </span>
+            <span
+              style="color: rgb(200, 168, 72);"
+            >
+              3 missing
+            </span>
+            <span
+              style="color: rgb(136, 112, 180);"
+            >
+              1 series
+            </span>
+          </div>
+          <div
+            style="display: flex; align-items: center; gap: 6px; margin-top: 6px; flex-wrap: wrap;"
+          >
+            <button
+              style="background: none; color: rgb(150, 148, 172); cursor: pointer; padding: 4px 10px; font-size: 12px; border-radius: 5px; border: 1.5px dashed rgb(124, 122, 148);"
+            >
+              + link author
+            </button>
+          </div>
+          <div
+            style="margin-top: 8px;"
+          >
+            <div
+              style="height: 5px; border-radius: 3px; background: rgb(42, 44, 66); overflow: hidden;"
+            >
+              <div
+                style="width: 50%; height: 100%; border-radius: 3px; background: rgb(224, 96, 96); transition: width 0.3s;"
+              />
+            </div>
+          </div>
+        </div>
+        <div
+          class="author-controls"
+          style="display: flex; gap: 6px; align-items: center; flex-shrink: 0;"
+        >
+          <button
+            style="background: transparent; color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; width: 34px; padding: 0px; font-size: 12px; height: 38px; display: inline-flex; align-items: center; justify-content: center;"
+            title="Refresh"
+          >
+            <svg
+              fill="none"
+              height="16"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2.5"
+              viewBox="0 0 24 24"
+              width="16"
+            >
+              <path
+                d="M3 12a9 9 0 019-9 9.75 9.75 0 016.74 2.74L21 8"
+              />
+              <path
+                d="M21 3v5h-5"
+              />
+              <path
+                d="M21 12a9 9 0 01-9 9 9.75 9.75 0 01-6.74-2.74L3 16"
+              />
+              <path
+                d="M3 21v-5h5"
+              />
+            </svg>
+          </button>
+          <button
+            style="background: transparent; color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; width: 34px; padding: 0px; font-size: 12px; height: 38px; display: inline-flex; align-items: center; justify-content: center;"
+            title="Collapse All"
+          >
+            <svg
+              fill="none"
+              height="16"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2.5"
+              viewBox="0 0 24 24"
+              width="16"
+            >
+              <polyline
+                points="18 15 12 9 6 15"
+              />
+            </svg>
+          </button>
+          <div
+            style="display: flex; border-radius: 6px; border: 1px solid rgb(58, 60, 86); overflow: hidden; height: 34px;"
+          >
+            <button
+              style="padding: 0px 12px; font-size: 12px; font-weight: 500; border: medium; cursor: pointer; background: rgb(42, 44, 66); color: rgb(228, 184, 104); text-transform: capitalize; height: 100%;"
+            >
+              Grid
+            </button>
+            <button
+              style="padding: 0px 12px; font-size: 12px; font-weight: 500; border: medium; cursor: pointer; background: transparent; color: rgb(98, 96, 122); text-transform: capitalize; height: 100%;"
+            >
+              List
+            </button>
+          </div>
+          <button
+            style="background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px; height: 38px;"
+          >
+            Select
+          </button>
+          <button
+            style="background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px; height: 38px;"
+          >
+            <svg
+              fill="none"
+              height="16"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2.5"
+              viewBox="0 0 24 24"
+              width="16"
+            >
+              <path
+                d="M21 12a9 9 0 11-6.22-8.56"
+              />
+              <path
+                d="M21 3v5h-5"
+              />
+            </svg>
+             Re-sync
+          </button>
+          <button
+            style="background: rgba(224, 192, 96, 0.133); color: rgb(200, 168, 72); border: 1px solid rgba(224, 192, 96, 0.267); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px; height: 38px;"
+          >
+            <svg
+              fill="none"
+              height="16"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2.5"
+              viewBox="0 0 24 24"
+              width="16"
+            >
+              <path
+                d="M3 12a9 9 0 019-9 9.75 9.75 0 016.74 2.74L21 8"
+              />
+              <path
+                d="M21 3v5h-5"
+              />
+              <path
+                d="M21 12a9 9 0 01-9 9 9.75 9.75 0 01-6.74-2.74L3 16"
+              />
+              <path
+                d="M3 21v-5h5"
+              />
+            </svg>
+             Full
+          </button>
+          <button
+            style="background: rgba(76, 184, 136, 0.133); color: rgb(58, 148, 104); border: 1px solid rgba(76, 184, 136, 0.267); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px; height: 38px;"
+            title="Scan this author across every ebook library"
+          >
+            Scan Ebooks
+          </button>
+          <button
+            style="background: rgba(160, 136, 204, 0.133); color: rgb(136, 112, 180); border: 1px solid rgba(160, 136, 204, 0.267); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px; height: 38px;"
+            title="Scan this author across every audiobook library"
+          >
+            Scan Audiobooks
+          </button>
+          <button
+            style="background: rgba(88, 184, 204, 0.133); color: rgb(72, 152, 176); border: 1px solid rgba(88, 184, 204, 0.267); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px; height: 38px;"
+            title="Scan all un-scanned books for this author against MAM"
+          >
+             Scan MAM
+          </button>
+          <span
+            style="width: 1px; height: 20px; background: rgb(58, 60, 86); margin: 0px 2px;"
+          />
+          <div
+            style="position: relative; display: inline-block;"
+          >
+            <button
+              style="background: rgba(224, 192, 96, 0.133); color: rgb(200, 168, 72); border: 1px solid rgba(224, 192, 96, 0.267); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+            >
+              Clear ▾
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div
+      style="margin-bottom: 12px;"
+    >
+      <div
+        style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase; margin-bottom: 6px; letter-spacing: 0.04em;"
+      >
+        Source IDs
+      </div>
+      <div
+        style="display: flex; gap: 4px; flex-wrap: wrap;"
+      >
+        <button
+          style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px 3px 10px; border-radius: 5px; font-size: 12px; font-weight: 600; background: rgb(61, 46, 26); color: rgb(240, 168, 60); border: 1px solid rgb(122, 92, 42); text-decoration: none; opacity: 0.45; cursor: pointer;"
+          title="Add amazon ID"
+          type="button"
+        >
+          amazon
+          <span
+            style="font-size: 10px; opacity: 0.7;"
+          >
+            +
+          </span>
+        </button>
+        <div
+          style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px 3px 10px; border-radius: 5px; font-size: 12px; font-weight: 600; background: rgb(85, 59, 26); color: rgb(232, 192, 112); border: 1px solid rgb(136, 100, 42); text-decoration: none; opacity: 1;"
+        >
+          <a
+            href="https://www.goodreads.com/author/show/g-1001"
+            rel="noopener noreferrer"
+            style="display: inline-flex; align-items: center; gap: 4px; color: rgb(232, 192, 112); text-decoration: none;"
+            target="_blank"
+            title="Open goodreads (g-1001)"
+          >
+            <span>
+              goodreads
+            </span>
+            <span
+              style="font-size: 10px; opacity: 0.7;"
+            >
+              ↗
+            </span>
+          </a>
+          <button
+            aria-label="Edit goodreads ID"
+            style="background: transparent; border-width: medium medium medium 1px; border-style: none none none solid; border-color: currentcolor currentcolor currentcolor rgb(136, 100, 42); border-image: none; color: rgb(232, 192, 112); cursor: pointer; padding: 0px 0px 0px 6px; margin-left: 2px; font-size: 11px; line-height: 1; opacity: 0.75;"
+            title="Edit goodreads ID"
+            type="button"
+          >
+            ✏
+          </button>
+        </div>
+        <div
+          style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px 3px 10px; border-radius: 5px; font-size: 12px; font-weight: 600; background: rgb(26, 51, 85); color: rgb(112, 168, 232); border: 1px solid rgb(42, 85, 136); text-decoration: none; opacity: 1;"
+        >
+          <a
+            href="https://hardcover.app/authors/ada-quill"
+            rel="noopener noreferrer"
+            style="display: inline-flex; align-items: center; gap: 4px; color: rgb(112, 168, 232); text-decoration: none;"
+            target="_blank"
+            title="Open hardcover (ada-quill)"
+          >
+            <span>
+              hardcover
+            </span>
+            <span
+              style="font-size: 10px; opacity: 0.7;"
+            >
+              ↗
+            </span>
+          </a>
+          <button
+            aria-label="Edit hardcover ID"
+            style="background: transparent; border-width: medium medium medium 1px; border-style: none none none solid; border-color: currentcolor currentcolor currentcolor rgb(42, 85, 136); border-image: none; color: rgb(112, 168, 232); cursor: pointer; padding: 0px 0px 0px 6px; margin-left: 2px; font-size: 11px; line-height: 1; opacity: 0.75;"
+            title="Edit hardcover ID"
+            type="button"
+          >
+            ✏
+          </button>
+        </div>
+        <button
+          style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px 3px 10px; border-radius: 5px; font-size: 12px; font-weight: 600; background: rgb(58, 29, 26); color: rgb(232, 122, 106); border: 1px solid rgb(136, 51, 42); text-decoration: none; opacity: 0.45; cursor: pointer;"
+          title="Add openlibrary ID"
+          type="button"
+        >
+          openlibrary
+          <span
+            style="font-size: 10px; opacity: 0.7;"
+          >
+            +
+          </span>
+        </button>
+        <button
+          style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px 3px 10px; border-radius: 5px; font-size: 12px; font-weight: 600; background: rgb(61, 32, 16); color: rgb(240, 136, 56); border: 1px solid rgb(122, 66, 24); text-decoration: none; opacity: 0.45; cursor: pointer;"
+          title="Add audible ID"
+          type="button"
+        >
+          audible
+          <span
+            style="font-size: 10px; opacity: 0.7;"
+          >
+            +
+          </span>
+        </button>
+        <button
+          style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px 3px 10px; border-radius: 5px; font-size: 12px; font-weight: 600; background: rgb(26, 69, 51); color: rgb(112, 232, 168); border: 1px solid rgb(42, 136, 85); text-decoration: none; opacity: 0.45; cursor: pointer;"
+          title="Add kobo ID"
+          type="button"
+        >
+          kobo
+          <span
+            style="font-size: 10px; opacity: 0.7;"
+          >
+            +
+          </span>
+        </button>
+        <button
+          style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px 3px 10px; border-radius: 5px; font-size: 12px; font-weight: 600; background: rgb(42, 26, 61); color: rgb(192, 112, 232); border: 1px solid rgb(90, 42, 136); text-decoration: none; opacity: 0.45; cursor: pointer;"
+          title="Add ibdb ID"
+          type="button"
+        >
+          ibdb
+          <span
+            style="font-size: 10px; opacity: 0.7;"
+          >
+            +
+          </span>
+        </button>
+        <button
+          style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px 3px 10px; border-radius: 5px; font-size: 12px; font-weight: 600; background: rgb(26, 51, 51); color: rgb(112, 200, 232); border: 1px solid rgb(42, 119, 136); text-decoration: none; opacity: 0.45; cursor: pointer;"
+          title="Add google books ID"
+          type="button"
+        >
+          google books
+          <span
+            style="font-size: 10px; opacity: 0.7;"
+          >
+            +
+          </span>
+        </button>
+        <button
+          style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px 3px 10px; border-radius: 5px; font-size: 12px; font-weight: 600; background: rgb(26, 37, 51); color: rgb(112, 144, 200); border: 1px solid rgb(42, 69, 119); text-decoration: none; opacity: 0.45; cursor: pointer;"
+          title="Add fictiondb ID"
+          type="button"
+        >
+          fictiondb
+          <span
+            style="font-size: 10px; opacity: 0.7;"
+          >
+            +
+          </span>
+        </button>
+      </div>
+    </div>
+    <section
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 20px; margin-bottom: 16px;"
+    >
+      <header
+        style="display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 16px; cursor: pointer; user-select: none;"
+      >
+        <div
+          style="display: flex; align-items: center; gap: 8px;"
+        >
+          <h2
+            style="font-size: 16px; font-weight: 700; color: rgb(236, 234, 244);"
+          >
+            Source records
+          </h2>
+          <span
+            style="font-size: 12px; color: rgb(136, 134, 160); font-weight: 500;"
+          >
+            (
+            <span
+              style="color: rgb(224, 192, 96);"
+            >
+              1 to review
+            </span>
+            )
+          </span>
+        </div>
+        <div
+          style="display: flex; align-items: center; gap: 8px;"
+        >
+          <span
+            style="font-size: 13px; color: rgb(136, 134, 160);"
+          >
+            What each source contributed for this author, and whether anything else confirms it.
+          </span>
+          <span
+            style="font-size: 12px; color: rgb(136, 134, 160);"
+          >
+            ▾
+          </span>
+        </div>
+      </header>
+      <div
+        style="display: grid; gap: 10px;"
+      >
+        <div
+          style="display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 10px 12px; border-radius: 8px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); opacity: 1;"
+        >
+          <span
+            style="width: 8px; height: 8px; border-radius: 8px; background: rgb(76, 184, 136); flex-shrink: 0;"
+          />
+          <div
+            style="min-width: 140px;"
+          >
+            <div
+              style="font-weight: 600; color: rgb(236, 234, 244);"
+            >
+              hardcover
+            </div>
+            <div
+              style="font-size: 12px; color: rgb(214, 212, 224); font-family: monospace;"
+            >
+              ada-quill
+            </div>
+          </div>
+          <div
+            style="display: flex; gap: 18px; flex-wrap: wrap;"
+          >
+            <div
+              style="text-align: center; min-width: 56px;"
+            >
+              <div
+                style="font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+              >
+                4
+              </div>
+              <div
+                style="font-size: 11px; color: rgb(214, 212, 224);"
+              >
+                books
+              </div>
+            </div>
+            <div
+              style="text-align: center; min-width: 56px;"
+            >
+              <div
+                style="font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+              >
+                3
+              </div>
+              <div
+                style="font-size: 11px; color: rgb(214, 212, 224);"
+              >
+                confirmed elsewhere
+              </div>
+            </div>
+          </div>
+          <div
+            style="flex: 1 1 0%; min-width: 220px; font-size: 12px; color: rgb(214, 212, 224);"
+          >
+            <div
+              style="color: rgb(214, 212, 224); margin-top: 2px;"
+            >
+              This source identifies authors by name only, so its agreement doesn't confirm identity.
+            </div>
+            <div
+              style="margin-top: 6px; line-height: 1.5;"
+            >
+              <span
+                style="color: rgb(214, 212, 224);"
+              >
+                What it added: 
+              </span>
+              <span
+                style="color: rgb(236, 234, 244);"
+              >
+                The Glass Orchard · Rootbound … +2 more
+              </span>
+            </div>
+          </div>
+          <button
+            style="background: transparent; color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+          >
+            Blacklist record
+          </button>
+        </div>
+        <div
+          style="display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 10px 12px; border-radius: 8px; background: rgb(30, 32, 52); border: 1px solid rgb(224, 192, 96); opacity: 1;"
+        >
+          <span
+            style="width: 8px; height: 8px; border-radius: 8px; background: rgb(224, 192, 96); flex-shrink: 0;"
+          />
+          <div
+            style="min-width: 140px;"
+          >
+            <div
+              style="font-weight: 600; color: rgb(236, 234, 244);"
+            >
+              goodreads
+            </div>
+            <div
+              style="font-size: 12px; color: rgb(214, 212, 224); font-family: monospace;"
+            >
+              g-1001
+            </div>
+          </div>
+          <div
+            style="display: flex; gap: 18px; flex-wrap: wrap;"
+          >
+            <div
+              style="text-align: center; min-width: 56px;"
+            >
+              <div
+                style="font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+              >
+                2
+              </div>
+              <div
+                style="font-size: 11px; color: rgb(214, 212, 224);"
+              >
+                books
+              </div>
+            </div>
+            <div
+              style="text-align: center; min-width: 56px;"
+            >
+              <div
+                style="font-size: 18px; font-weight: 700; color: rgb(214, 212, 224);"
+              >
+                0
+              </div>
+              <div
+                style="font-size: 11px; color: rgb(214, 212, 224);"
+              >
+                confirmed elsewhere
+              </div>
+            </div>
+          </div>
+          <div
+            style="flex: 1 1 0%; min-width: 220px; font-size: 12px; color: rgb(214, 212, 224);"
+          >
+            Nothing else lists these.
+            <div
+              style="margin-top: 6px; line-height: 1.5;"
+            >
+              <span
+                style="color: rgb(214, 212, 224);"
+              >
+                What it added: 
+              </span>
+              <span
+                style="color: rgb(236, 234, 244);"
+              >
+                A Lantern for Wolves … +1 more
+              </span>
+            </div>
+          </div>
+          <button
+            style="background: rgb(224, 96, 96); color: rgb(26, 28, 48); border: 1px solid rgb(224, 96, 96); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+          >
+            Blacklist record
+          </button>
+        </div>
+      </div>
+    </section>
+    <div
+      style="display: flex; gap: 12px; align-items: flex-start; padding: 6px 12px; background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 8px; margin-top: 6px; min-height: 28px;"
+    >
+      <span
+        style="background: rgb(85, 59, 26); color: rgb(232, 192, 112); border: 1px solid rgb(136, 100, 42); padding: 1px 7px; border-radius: 99px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; flex-shrink: 0; height: 18px; display: inline-flex; align-items: center;"
+      >
+        goodreads
+      </span>
+      <div
+        style="display: flex; flex-direction: column; gap: 4px; font-size: 12px; min-width: 0px;"
+      >
+        <div
+          style="display: flex; gap: 8px; align-items: baseline;"
+        >
+          <span
+            style="color: rgb(136, 134, 160); font-size: 11px; font-family: ui-monospace, Consolas, monospace;"
+          >
+            calibre-library
+          </span>
+          <span
+            style="color: rgb(76, 184, 136);"
+          >
+            scanned 2.3d ago — 1 page / 6 books cached
+          </span>
+        </div>
+      </div>
+    </div>
+    <div
+      style="display: flex; gap: 4px; border-bottom: 1px solid rgb(58, 60, 86); padding-bottom: 0px;"
+    >
+      <button
+        style="padding: 10px 18px; background: rgba(228, 184, 104, 0.133); color: rgb(228, 184, 104); border-width: medium medium 2px; border-style: none none solid; border-color: currentcolor currentcolor rgb(228, 184, 104); border-image: none; cursor: pointer; font-size: 14px; font-weight: 600; margin-bottom: -1px;"
+      >
+        Combined
+      </button>
+      <button
+        style="padding: 10px 18px; background: transparent; color: rgb(150, 148, 172); border-width: medium medium 2px; border-style: none none solid; border-color: currentcolor currentcolor transparent; border-image: none; cursor: pointer; font-size: 14px; font-weight: 500; margin-bottom: -1px;"
+      >
+        Ebook
+      </button>
+      <button
+        style="padding: 10px 18px; background: transparent; color: rgb(150, 148, 172); border-width: medium medium 2px; border-style: none none solid; border-color: currentcolor currentcolor transparent; border-image: none; cursor: pointer; font-size: 14px; font-weight: 500; margin-bottom: -1px;"
+      >
+        Audiobook
+      </button>
+    </div>
+    <div
+      style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 6px; font-size: 13px;"
+    >
+      <span
+        style="color: rgb(124, 122, 148); font-weight: 500;"
+      >
+        Jump to:
+      </span>
+      <button
+        style="padding: 4px 12px; background: rgba(228, 184, 104, 0.133); color: rgb(228, 184, 104); border: 1px solid rgba(228, 184, 104, 0.267); border-radius: 5px; font-size: 13px; font-weight: 600; cursor: pointer;"
+      >
+        Ebook
+      </button>
+      <button
+        style="padding: 4px 12px; background: rgba(160, 136, 204, 0.133); color: rgb(160, 136, 204); border: 1px solid rgba(160, 136, 204, 0.267); border-radius: 5px; font-size: 13px; font-weight: 600; cursor: pointer;"
+      >
+        Audiobook
+      </button>
+    </div>
+    <div
+      id="block-calibre-library"
+      style="display: flex; flex-direction: column; gap: 16px; scroll-margin-top: 200px;"
+    >
+      <div
+        style="display: flex; align-items: center; gap: 8px; margin-top: 4px;"
+      >
+        <div
+          style="width: 6px; height: 26px; background: rgb(228, 184, 104); border-radius: 3px;"
+        />
+        <span
+          style="font-size: 16px; font-weight: 700; color: rgb(228, 184, 104); text-transform: uppercase; letter-spacing: 0.05em;"
+        >
+          Ebook
+        </span>
+        <div
+          style="flex: 1 1 0%; height: 1px; background: rgb(46, 48, 72);"
+        />
+        <button
+          style="font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 5px; background: rgba(228, 184, 104, 0.133); color: rgb(228, 184, 104); border: 1px solid rgba(228, 184, 104, 0.267); cursor: pointer; white-space: nowrap;"
+          title="Scan ebook sources for this author"
+        >
+          Scan Ebook
+        </button>
+      </div>
+      <section
+        style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 20px; margin-bottom: 16px;"
+      >
+        <header
+          style="display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 16px; cursor: pointer; user-select: none;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 8px;"
+          >
+            <h2
+              style="font-size: 16px; font-weight: 700; color: rgb(236, 234, 244);"
+            >
+              <span>
+                Orchard Cycle
+              </span>
+            </h2>
+            <span
+              style="font-size: 12px; color: rgb(136, 134, 160); font-weight: 500;"
+            >
+              (1/3)
+            </span>
+          </div>
+          <div
+            style="display: flex; align-items: center; gap: 8px;"
+          >
+            <span
+              style="font-size: 12px; color: rgb(136, 134, 160);"
+            >
+              ▾
+            </span>
+          </div>
+        </header>
+        <div
+          class="book-grid"
+          style="display: flex; flex-wrap: wrap; gap: 12px; align-items: start;"
+        >
+          <div
+            class="bcard"
+            style="min-width: 160px; max-width: 200px; flex: 1 1 160px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 10px; overflow: hidden; cursor: pointer; transition: border-color 0.2s, background 0.15s, transform 0.18s ease-out, box-shadow 0.18s ease-out; position: relative;"
+          >
+            <span
+              style="position: absolute; top: 6px; right: 6px; font-size: 9px; font-weight: 600; background: rgb(76, 184, 136); color: rgb(255, 255, 255); padding: 2px 6px; border-radius: 4px; z-index: 2;"
+            >
+              OWNED
+            </span>
+            <div
+              style="height: 200px; background: rgb(30, 32, 52); display: flex; align-items: center; justify-content: center; overflow: hidden; opacity: 1;"
+            >
+              <div
+                style="display: flex; flex-direction: column; align-items: center; gap: 4px; color: rgb(98, 96, 122); font-size: 12px; text-align: center; padding: 12px;"
+              >
+                <span
+                  style="font-size: 28px;"
+                >
+                  ?
+                </span>
+                <span>
+                  The Seed Vault
+                </span>
+              </div>
+            </div>
+            <div
+              style="padding: 8px 10px;"
+            >
+              <div
+                style="font-size: 13px; font-weight: 600; color: rgb(214, 212, 224); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+              >
+                The Seed Vault
+              </div>
+              <div
+                style="font-size: 10px; color: rgb(136, 112, 180); margin-top: 1px;"
+              >
+                #1
+              </div>
+            </div>
+          </div>
+          <div
+            class="bcard"
+            style="min-width: 160px; max-width: 200px; flex: 1 1 160px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 10px; overflow: hidden; cursor: pointer; transition: border-color 0.2s, background 0.15s, transform 0.18s ease-out, box-shadow 0.18s ease-out; position: relative;"
+          >
+            <span
+              style="position: absolute; top: 6px; right: 6px; font-size: 9px; font-weight: 700; background: rgba(0, 0, 0, 0.82); color: rgb(192, 72, 72); padding: 2px 6px; border-radius: 4px; z-index: 2; border: 1px solid rgb(224, 96, 96); letter-spacing: 0.04em;"
+            >
+              MISSING
+            </span>
+            <div
+              style="height: 200px; background: rgb(30, 32, 52); display: flex; align-items: center; justify-content: center; overflow: hidden; opacity: 1;"
+            >
+              <div
+                style="display: flex; flex-direction: column; align-items: center; gap: 4px; color: rgb(98, 96, 122); font-size: 12px; text-align: center; padding: 12px;"
+              >
+                <span
+                  style="font-size: 28px;"
+                >
+                  ?
+                </span>
+                <span>
+                  The Glass Orchard
+                </span>
+              </div>
+            </div>
+            <div
+              style="padding: 8px 10px;"
+            >
+              <div
+                style="font-size: 13px; font-weight: 600; color: rgb(214, 212, 224); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+              >
+                The Glass Orchard
+              </div>
+              <div
+                style="font-size: 10px; color: rgb(136, 112, 180); margin-top: 1px;"
+              >
+                #2
+              </div>
+            </div>
+          </div>
+          <div
+            class="bcard"
+            style="min-width: 160px; max-width: 200px; flex: 1 1 160px; background: rgb(34, 36, 56); border: 1px solid rgba(88, 184, 204, 0.4); border-radius: 10px; overflow: hidden; cursor: pointer; transition: border-color 0.2s, background 0.15s, transform 0.18s ease-out, box-shadow 0.18s ease-out; position: relative;"
+          >
+            <span
+              style="position: absolute; top: 6px; left: 6px; font-size: 9px; font-weight: 700; background: rgb(88, 184, 204); color: rgb(255, 255, 255); padding: 2px 6px; border-radius: 4px; z-index: 2;"
+            >
+              UPCOMING
+            </span>
+            <div
+              style="height: 200px; background: rgb(30, 32, 52); display: flex; align-items: center; justify-content: center; overflow: hidden; opacity: 0.7;"
+            >
+              <div
+                style="display: flex; flex-direction: column; align-items: center; gap: 4px; color: rgb(98, 96, 122); font-size: 12px; text-align: center; padding: 12px;"
+              >
+                <span
+                  style="font-size: 28px;"
+                >
+                  ?
+                </span>
+                <span>
+                  Rootbound
+                </span>
+              </div>
+            </div>
+            <div
+              style="padding: 8px 10px;"
+            >
+              <div
+                style="font-size: 13px; font-weight: 600; color: rgb(214, 212, 224); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+              >
+                Rootbound
+              </div>
+              <div
+                style="font-size: 10px; color: rgb(136, 112, 180); margin-top: 1px;"
+              >
+                #3
+              </div>
+              <div
+                style="font-size: 11px; color: rgb(72, 152, 176); margin-top: 2px;"
+              >
+                Expected: 2027-02-02
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+      <section
+        style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 20px; margin-bottom: 16px;"
+      >
+        <header
+          style="display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 16px; cursor: pointer; user-select: none;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 8px;"
+          >
+            <h2
+              style="font-size: 16px; font-weight: 700; color: rgb(236, 234, 244);"
+            >
+              Standalone
+            </h2>
+            <span
+              style="font-size: 12px; color: rgb(136, 134, 160); font-weight: 500;"
+            >
+              (2)
+            </span>
+          </div>
+          <div
+            style="display: flex; align-items: center; gap: 8px;"
+          >
+            <span
+              style="font-size: 12px; color: rgb(136, 134, 160);"
+            >
+              ▾
+            </span>
+          </div>
+        </header>
+        <div
+          class="book-grid"
+          style="display: flex; flex-wrap: wrap; gap: 12px; align-items: start;"
+        >
+          <div
+            class="bcard"
+            style="min-width: 160px; max-width: 200px; flex: 1 1 160px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 10px; overflow: hidden; cursor: pointer; transition: border-color 0.2s, background 0.15s, transform 0.18s ease-out, box-shadow 0.18s ease-out; position: relative;"
+          >
+            <span
+              style="position: absolute; top: 6px; right: 6px; font-size: 9px; font-weight: 600; background: rgb(76, 184, 136); color: rgb(255, 255, 255); padding: 2px 6px; border-radius: 4px; z-index: 2;"
+            >
+              OWNED
+            </span>
+            <div
+              style="height: 200px; background: rgb(30, 32, 52); display: flex; align-items: center; justify-content: center; overflow: hidden; opacity: 1;"
+            >
+              <div
+                style="display: flex; flex-direction: column; align-items: center; gap: 4px; color: rgb(98, 96, 122); font-size: 12px; text-align: center; padding: 12px;"
+              >
+                <span
+                  style="font-size: 28px;"
+                >
+                  ?
+                </span>
+                <span>
+                  Ninefold Tide
+                </span>
+              </div>
+            </div>
+            <div
+              style="padding: 8px 10px;"
+            >
+              <div
+                style="font-size: 13px; font-weight: 600; color: rgb(214, 212, 224); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+              >
+                Ninefold Tide
+              </div>
+            </div>
+          </div>
+          <div
+            class="bcard"
+            style="min-width: 160px; max-width: 200px; flex: 1 1 160px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 10px; overflow: hidden; cursor: pointer; transition: border-color 0.2s, background 0.15s, transform 0.18s ease-out, box-shadow 0.18s ease-out; position: relative;"
+          >
+            <span
+              style="position: absolute; top: 6px; right: 6px; font-size: 9px; font-weight: 700; background: rgb(224, 96, 96); color: rgb(255, 255, 255); padding: 2px 6px; border-radius: 4px; z-index: 2;"
+            >
+              NEW
+            </span>
+            <div
+              style="height: 200px; background: rgb(30, 32, 52); display: flex; align-items: center; justify-content: center; overflow: hidden; opacity: 1;"
+            >
+              <div
+                style="display: flex; flex-direction: column; align-items: center; gap: 4px; color: rgb(98, 96, 122); font-size: 12px; text-align: center; padding: 12px;"
+              >
+                <span
+                  style="font-size: 28px;"
+                >
+                  ?
+                </span>
+                <span>
+                  A Lantern for Wolves
+                </span>
+              </div>
+            </div>
+            <div
+              style="padding: 8px 10px;"
+            >
+              <div
+                style="font-size: 13px; font-weight: 600; color: rgb(214, 212, 224); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+              >
+                A Lantern for Wolves
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+    <div
+      id="block-audiobookshelf"
+      style="display: flex; flex-direction: column; gap: 16px; scroll-margin-top: 200px;"
+    >
+      <div
+        style="display: flex; align-items: center; gap: 8px; margin-top: 4px;"
+      >
+        <div
+          style="width: 6px; height: 26px; background: rgb(160, 136, 204); border-radius: 3px;"
+        />
+        <span
+          style="font-size: 16px; font-weight: 700; color: rgb(160, 136, 204); text-transform: uppercase; letter-spacing: 0.05em;"
+        >
+          Audiobook
+        </span>
+        <div
+          style="flex: 1 1 0%; height: 1px; background: rgb(46, 48, 72);"
+        />
+        <button
+          style="font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 5px; background: rgba(160, 136, 204, 0.133); color: rgb(160, 136, 204); border: 1px solid rgba(160, 136, 204, 0.267); cursor: pointer; white-space: nowrap;"
+          title="Scan audiobook sources for this author"
+        >
+          Scan Audiobook
+        </button>
+      </div>
+      <section
+        style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 20px; margin-bottom: 16px;"
+      >
+        <header
+          style="display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 16px; cursor: pointer; user-select: none;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 8px;"
+          >
+            <h2
+              style="font-size: 16px; font-weight: 700; color: rgb(236, 234, 244);"
+            >
+              Standalone
+            </h2>
+            <span
+              style="font-size: 12px; color: rgb(136, 134, 160); font-weight: 500;"
+            >
+              (1)
+            </span>
+          </div>
+          <div
+            style="display: flex; align-items: center; gap: 8px;"
+          >
+            <span
+              style="font-size: 12px; color: rgb(136, 134, 160);"
+            >
+              ▾
+            </span>
+          </div>
+        </header>
+        <div
+          class="book-grid"
+          style="display: flex; flex-wrap: wrap; gap: 12px; align-items: start;"
+        >
+          <div
+            class="bcard"
+            style="min-width: 160px; max-width: 200px; flex: 1 1 160px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 10px; overflow: hidden; cursor: pointer; transition: border-color 0.2s, background 0.15s, transform 0.18s ease-out, box-shadow 0.18s ease-out; position: relative;"
+          >
+            <span
+              style="position: absolute; top: 6px; right: 6px; font-size: 9px; font-weight: 600; background: rgb(76, 184, 136); color: rgb(255, 255, 255); padding: 2px 6px; border-radius: 4px; z-index: 2;"
+            >
+              OWNED
+            </span>
+            <div
+              style="height: 200px; background: rgb(30, 32, 52); display: flex; align-items: center; justify-content: center; overflow: hidden; opacity: 1;"
+            >
+              <img
+                alt=""
+                class="bcard-cover"
+                loading="lazy"
+                src="/api/discovery/covers/audiobookshelf/301"
+                style="width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 0.35s ease-out;"
+              />
+              <div
+                style="display: none; flex-direction: column; align-items: center; gap: 4px; color: rgb(98, 96, 122); font-size: 12px; text-align: center; padding: 12px;"
+              >
+                <span
+                  style="font-size: 28px;"
+                >
+                  ?
+                </span>
+                <span>
+                  Ninefold Tide
+                </span>
+              </div>
+            </div>
+            <div
+              style="padding: 8px 10px;"
+            >
+              <div
+                style="font-size: 13px; font-weight: 600; color: rgb(214, 212, 224); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+              >
+                Ninefold Tide
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Author detail (desktop) > an author with series, standalones and a second library > requests 1`] = `
+[
+  "GET /discovery/authors/11/pen-names",
+  "GET /discovery/authors/11/source-breakdown?slug=calibre-library",
+  "GET /discovery/authors/11?include_cross_library=1&slug=calibre-library",
+  "GET /discovery/mam/status",
+  "GET /discovery/persons/5",
+  "GET /discovery/scan-status",
+  "GET /discovery/series/7?slug=calibre-library",
+  "GET /v1/metadata-cache/goodreads/author/g-1001",
+]
+`;
+
+exports[`Author detail (desktop) > with pen-name links while a source scan runs > markup 1`] = `
+<DocumentFragment>
+  <div
+    style="display: flex; flex-direction: column; gap: 24px;"
+  >
+    <div
+      style="position: sticky; top: 56px; z-index: 40; background: rgba(26, 28, 48, 0.933); backdrop-filter: blur(8px); padding: 12px 0px;"
+    >
+      <div
+        style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;"
+      >
+        <button
+          style="background: rgb(42, 44, 66); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 16px; font-size: 14px;"
+        >
+          ← Back to Authors
+        </button>
+      </div>
+      <div
+        class="author-header"
+        style="display: flex; gap: 20px; align-items: flex-start;"
+      >
+        <div
+          style="width: 72px; height: 72px; border-radius: 50%; background: rgb(42, 44, 66); display: flex; align-items: center; justify-content: center; font-size: 28px; font-weight: 700; color: rgb(98, 96, 122);"
+        >
+          A
+        </div>
+        <div
+          style="flex: 1 1 0%;"
+        >
+          <h1
+            style="font-size: 22px; font-weight: 700; color: rgb(236, 234, 244); margin: 0px;"
+          >
+            Ada Quill
+          </h1>
+          <p
+            style="font-size: 13px; color: rgb(150, 148, 172); margin-top: 6px; line-height: 1.5; max-height: 60px; overflow: hidden;"
+          >
+            Ada Quill writes botanical mysteries.
+          </p>
+          <div
+            style="display: flex; gap: 16px; margin-top: 8px; font-size: 13px;"
+          >
+            <span
+              style="color: rgb(58, 148, 104);"
+            >
+              3 owned
+            </span>
+            <span
+              style="color: rgb(200, 168, 72);"
+            >
+              3 missing
+            </span>
+            <span
+              style="color: rgb(136, 112, 180);"
+            >
+              1 series
+            </span>
+          </div>
+          <div
+            style="display: flex; align-items: center; gap: 6px; margin-top: 6px; flex-wrap: wrap;"
+          >
+            <span
+              style="display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 4px; font-size: 11px; background: rgba(160, 136, 204, 0.14); color: rgb(136, 112, 180); border: 1px solid rgba(160, 136, 204, 0.2);"
+            >
+              <span
+                style="color: rgb(98, 96, 122); font-size: 10px;"
+              >
+                aka
+              </span>
+               
+              <button
+                style="background: none; border: medium; color: rgb(136, 112, 180); cursor: pointer; padding: 0px; font-size: 11px; font-weight: 500;"
+              >
+                A. Q. Thorne
+              </button>
+              <button
+                style="background: none; border: medium; color: rgb(98, 96, 122); cursor: pointer; padding: 0px; font-size: 12px;"
+              >
+                ×
+              </button>
+            </span>
+            <button
+              style="background: none; color: rgb(150, 148, 172); cursor: pointer; padding: 4px 10px; font-size: 12px; border-radius: 5px; border: 1.5px dashed rgb(124, 122, 148);"
+            >
+              + link author
+            </button>
+          </div>
+          <div
+            style="margin-top: 8px;"
+          >
+            <div
+              style="height: 5px; border-radius: 3px; background: rgb(42, 44, 66); overflow: hidden;"
+            >
+              <div
+                style="width: 50%; height: 100%; border-radius: 3px; background: rgb(224, 96, 96); transition: width 0.3s;"
+              />
+            </div>
+          </div>
+        </div>
+        <div
+          class="author-controls"
+          style="display: flex; gap: 6px; align-items: center; flex-shrink: 0;"
+        >
+          <button
+            style="background: transparent; color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; width: 34px; padding: 0px; font-size: 12px; height: 38px; display: inline-flex; align-items: center; justify-content: center;"
+            title="Refresh"
+          >
+            <svg
+              fill="none"
+              height="16"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2.5"
+              viewBox="0 0 24 24"
+              width="16"
+            >
+              <path
+                d="M3 12a9 9 0 019-9 9.75 9.75 0 016.74 2.74L21 8"
+              />
+              <path
+                d="M21 3v5h-5"
+              />
+              <path
+                d="M21 12a9 9 0 01-9 9 9.75 9.75 0 01-6.74-2.74L3 16"
+              />
+              <path
+                d="M3 21v-5h5"
+              />
+            </svg>
+          </button>
+          <button
+            style="background: transparent; color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; width: 34px; padding: 0px; font-size: 12px; height: 38px; display: inline-flex; align-items: center; justify-content: center;"
+            title="Collapse All"
+          >
+            <svg
+              fill="none"
+              height="16"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2.5"
+              viewBox="0 0 24 24"
+              width="16"
+            >
+              <polyline
+                points="18 15 12 9 6 15"
+              />
+            </svg>
+          </button>
+          <div
+            style="display: flex; border-radius: 6px; border: 1px solid rgb(58, 60, 86); overflow: hidden; height: 34px;"
+          >
+            <button
+              style="padding: 0px 12px; font-size: 12px; font-weight: 500; border: medium; cursor: pointer; background: rgb(42, 44, 66); color: rgb(228, 184, 104); text-transform: capitalize; height: 100%;"
+            >
+              Grid
+            </button>
+            <button
+              style="padding: 0px 12px; font-size: 12px; font-weight: 500; border: medium; cursor: pointer; background: transparent; color: rgb(98, 96, 122); text-transform: capitalize; height: 100%;"
+            >
+              List
+            </button>
+          </div>
+          <button
+            style="background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px; height: 38px;"
+          >
+            Select
+          </button>
+          <button
+            style="background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px; height: 38px;"
+          >
+            <svg
+              fill="none"
+              height="16"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2.5"
+              viewBox="0 0 24 24"
+              width="16"
+            >
+              <path
+                d="M21 12a9 9 0 11-6.22-8.56"
+              />
+              <path
+                d="M21 3v5h-5"
+              />
+            </svg>
+             Re-sync
+          </button>
+          <button
+            style="background: rgba(224, 192, 96, 0.133); color: rgb(200, 168, 72); border: 1px solid rgba(224, 192, 96, 0.267); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px; height: 38px;"
+          >
+            <svg
+              fill="none"
+              height="16"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2.5"
+              viewBox="0 0 24 24"
+              width="16"
+            >
+              <path
+                d="M3 12a9 9 0 019-9 9.75 9.75 0 016.74 2.74L21 8"
+              />
+              <path
+                d="M21 3v5h-5"
+              />
+              <path
+                d="M21 12a9 9 0 01-9 9 9.75 9.75 0 01-6.74-2.74L3 16"
+              />
+              <path
+                d="M3 21v-5h5"
+              />
+            </svg>
+             Full
+          </button>
+          <button
+            style="background: rgba(76, 184, 136, 0.133); color: rgb(58, 148, 104); border: 1px solid rgba(76, 184, 136, 0.267); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px; height: 38px;"
+            title="Scan this author across every ebook library"
+          >
+            Scan Ebooks
+          </button>
+          <button
+            style="background: rgba(160, 136, 204, 0.133); color: rgb(136, 112, 180); border: 1px solid rgba(160, 136, 204, 0.267); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px; height: 38px;"
+            title="Scan this author across every audiobook library"
+          >
+            Scan Audiobooks
+          </button>
+          <button
+            style="background: rgba(88, 184, 204, 0.133); color: rgb(72, 152, 176); border: 1px solid rgba(88, 184, 204, 0.267); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px; height: 38px;"
+            title="Scan all un-scanned books for this author against MAM"
+          >
+             Scan MAM
+          </button>
+          <span
+            style="width: 1px; height: 20px; background: rgb(58, 60, 86); margin: 0px 2px;"
+          />
+          <div
+            style="position: relative; display: inline-block;"
+          >
+            <button
+              style="background: rgba(224, 192, 96, 0.133); color: rgb(200, 168, 72); border: 1px solid rgba(224, 192, 96, 0.267); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+            >
+              Clear ▾
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div
+      style="margin-bottom: 12px;"
+    >
+      <div
+        style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase; margin-bottom: 6px; letter-spacing: 0.04em;"
+      >
+        Source IDs
+      </div>
+      <div
+        style="display: flex; gap: 4px; flex-wrap: wrap;"
+      >
+        <button
+          style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px 3px 10px; border-radius: 5px; font-size: 12px; font-weight: 600; background: rgb(61, 46, 26); color: rgb(240, 168, 60); border: 1px solid rgb(122, 92, 42); text-decoration: none; opacity: 0.45; cursor: pointer;"
+          title="Add amazon ID"
+          type="button"
+        >
+          amazon
+          <span
+            style="font-size: 10px; opacity: 0.7;"
+          >
+            +
+          </span>
+        </button>
+        <div
+          style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px 3px 10px; border-radius: 5px; font-size: 12px; font-weight: 600; background: rgb(85, 59, 26); color: rgb(232, 192, 112); border: 1px solid rgb(136, 100, 42); text-decoration: none; opacity: 1;"
+        >
+          <a
+            href="https://www.goodreads.com/author/show/g-1001"
+            rel="noopener noreferrer"
+            style="display: inline-flex; align-items: center; gap: 4px; color: rgb(232, 192, 112); text-decoration: none;"
+            target="_blank"
+            title="Open goodreads (g-1001)"
+          >
+            <span>
+              goodreads
+            </span>
+            <span
+              style="font-size: 10px; opacity: 0.7;"
+            >
+              ↗
+            </span>
+          </a>
+          <button
+            aria-label="Edit goodreads ID"
+            style="background: transparent; border-width: medium medium medium 1px; border-style: none none none solid; border-color: currentcolor currentcolor currentcolor rgb(136, 100, 42); border-image: none; color: rgb(232, 192, 112); cursor: pointer; padding: 0px 0px 0px 6px; margin-left: 2px; font-size: 11px; line-height: 1; opacity: 0.75;"
+            title="Edit goodreads ID"
+            type="button"
+          >
+            ✏
+          </button>
+        </div>
+        <div
+          style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px 3px 10px; border-radius: 5px; font-size: 12px; font-weight: 600; background: rgb(26, 51, 85); color: rgb(112, 168, 232); border: 1px solid rgb(42, 85, 136); text-decoration: none; opacity: 1;"
+        >
+          <a
+            href="https://hardcover.app/authors/ada-quill"
+            rel="noopener noreferrer"
+            style="display: inline-flex; align-items: center; gap: 4px; color: rgb(112, 168, 232); text-decoration: none;"
+            target="_blank"
+            title="Open hardcover (ada-quill)"
+          >
+            <span>
+              hardcover
+            </span>
+            <span
+              style="font-size: 10px; opacity: 0.7;"
+            >
+              ↗
+            </span>
+          </a>
+          <button
+            aria-label="Edit hardcover ID"
+            style="background: transparent; border-width: medium medium medium 1px; border-style: none none none solid; border-color: currentcolor currentcolor currentcolor rgb(42, 85, 136); border-image: none; color: rgb(112, 168, 232); cursor: pointer; padding: 0px 0px 0px 6px; margin-left: 2px; font-size: 11px; line-height: 1; opacity: 0.75;"
+            title="Edit hardcover ID"
+            type="button"
+          >
+            ✏
+          </button>
+        </div>
+        <button
+          style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px 3px 10px; border-radius: 5px; font-size: 12px; font-weight: 600; background: rgb(58, 29, 26); color: rgb(232, 122, 106); border: 1px solid rgb(136, 51, 42); text-decoration: none; opacity: 0.45; cursor: pointer;"
+          title="Add openlibrary ID"
+          type="button"
+        >
+          openlibrary
+          <span
+            style="font-size: 10px; opacity: 0.7;"
+          >
+            +
+          </span>
+        </button>
+        <button
+          style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px 3px 10px; border-radius: 5px; font-size: 12px; font-weight: 600; background: rgb(61, 32, 16); color: rgb(240, 136, 56); border: 1px solid rgb(122, 66, 24); text-decoration: none; opacity: 0.45; cursor: pointer;"
+          title="Add audible ID"
+          type="button"
+        >
+          audible
+          <span
+            style="font-size: 10px; opacity: 0.7;"
+          >
+            +
+          </span>
+        </button>
+        <button
+          style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px 3px 10px; border-radius: 5px; font-size: 12px; font-weight: 600; background: rgb(26, 69, 51); color: rgb(112, 232, 168); border: 1px solid rgb(42, 136, 85); text-decoration: none; opacity: 0.45; cursor: pointer;"
+          title="Add kobo ID"
+          type="button"
+        >
+          kobo
+          <span
+            style="font-size: 10px; opacity: 0.7;"
+          >
+            +
+          </span>
+        </button>
+        <button
+          style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px 3px 10px; border-radius: 5px; font-size: 12px; font-weight: 600; background: rgb(42, 26, 61); color: rgb(192, 112, 232); border: 1px solid rgb(90, 42, 136); text-decoration: none; opacity: 0.45; cursor: pointer;"
+          title="Add ibdb ID"
+          type="button"
+        >
+          ibdb
+          <span
+            style="font-size: 10px; opacity: 0.7;"
+          >
+            +
+          </span>
+        </button>
+        <button
+          style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px 3px 10px; border-radius: 5px; font-size: 12px; font-weight: 600; background: rgb(26, 51, 51); color: rgb(112, 200, 232); border: 1px solid rgb(42, 119, 136); text-decoration: none; opacity: 0.45; cursor: pointer;"
+          title="Add google books ID"
+          type="button"
+        >
+          google books
+          <span
+            style="font-size: 10px; opacity: 0.7;"
+          >
+            +
+          </span>
+        </button>
+        <button
+          style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px 3px 10px; border-radius: 5px; font-size: 12px; font-weight: 600; background: rgb(26, 37, 51); color: rgb(112, 144, 200); border: 1px solid rgb(42, 69, 119); text-decoration: none; opacity: 0.45; cursor: pointer;"
+          title="Add fictiondb ID"
+          type="button"
+        >
+          fictiondb
+          <span
+            style="font-size: 10px; opacity: 0.7;"
+          >
+            +
+          </span>
+        </button>
+      </div>
+    </div>
+    <section
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 20px; margin-bottom: 16px;"
+    >
+      <header
+        style="display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 16px; cursor: pointer; user-select: none;"
+      >
+        <div
+          style="display: flex; align-items: center; gap: 8px;"
+        >
+          <h2
+            style="font-size: 16px; font-weight: 700; color: rgb(236, 234, 244);"
+          >
+            Source records
+          </h2>
+          <span
+            style="font-size: 12px; color: rgb(136, 134, 160); font-weight: 500;"
+          >
+            (
+            <span
+              style="color: rgb(224, 192, 96);"
+            >
+              1 to review
+            </span>
+            )
+          </span>
+        </div>
+        <div
+          style="display: flex; align-items: center; gap: 8px;"
+        >
+          <span
+            style="font-size: 13px; color: rgb(136, 134, 160);"
+          >
+            What each source contributed for this author, and whether anything else confirms it.
+          </span>
+          <span
+            style="font-size: 12px; color: rgb(136, 134, 160);"
+          >
+            ▾
+          </span>
+        </div>
+      </header>
+      <div
+        style="display: grid; gap: 10px;"
+      >
+        <div
+          style="display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 10px 12px; border-radius: 8px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); opacity: 1;"
+        >
+          <span
+            style="width: 8px; height: 8px; border-radius: 8px; background: rgb(76, 184, 136); flex-shrink: 0;"
+          />
+          <div
+            style="min-width: 140px;"
+          >
+            <div
+              style="font-weight: 600; color: rgb(236, 234, 244);"
+            >
+              hardcover
+            </div>
+            <div
+              style="font-size: 12px; color: rgb(214, 212, 224); font-family: monospace;"
+            >
+              ada-quill
+            </div>
+          </div>
+          <div
+            style="display: flex; gap: 18px; flex-wrap: wrap;"
+          >
+            <div
+              style="text-align: center; min-width: 56px;"
+            >
+              <div
+                style="font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+              >
+                4
+              </div>
+              <div
+                style="font-size: 11px; color: rgb(214, 212, 224);"
+              >
+                books
+              </div>
+            </div>
+            <div
+              style="text-align: center; min-width: 56px;"
+            >
+              <div
+                style="font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+              >
+                3
+              </div>
+              <div
+                style="font-size: 11px; color: rgb(214, 212, 224);"
+              >
+                confirmed elsewhere
+              </div>
+            </div>
+          </div>
+          <div
+            style="flex: 1 1 0%; min-width: 220px; font-size: 12px; color: rgb(214, 212, 224);"
+          >
+            <div
+              style="color: rgb(214, 212, 224); margin-top: 2px;"
+            >
+              This source identifies authors by name only, so its agreement doesn't confirm identity.
+            </div>
+            <div
+              style="margin-top: 6px; line-height: 1.5;"
+            >
+              <span
+                style="color: rgb(214, 212, 224);"
+              >
+                What it added: 
+              </span>
+              <span
+                style="color: rgb(236, 234, 244);"
+              >
+                The Glass Orchard · Rootbound … +2 more
+              </span>
+            </div>
+          </div>
+          <button
+            style="background: transparent; color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+          >
+            Blacklist record
+          </button>
+        </div>
+        <div
+          style="display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 10px 12px; border-radius: 8px; background: rgb(30, 32, 52); border: 1px solid rgb(224, 192, 96); opacity: 1;"
+        >
+          <span
+            style="width: 8px; height: 8px; border-radius: 8px; background: rgb(224, 192, 96); flex-shrink: 0;"
+          />
+          <div
+            style="min-width: 140px;"
+          >
+            <div
+              style="font-weight: 600; color: rgb(236, 234, 244);"
+            >
+              goodreads
+            </div>
+            <div
+              style="font-size: 12px; color: rgb(214, 212, 224); font-family: monospace;"
+            >
+              g-1001
+            </div>
+          </div>
+          <div
+            style="display: flex; gap: 18px; flex-wrap: wrap;"
+          >
+            <div
+              style="text-align: center; min-width: 56px;"
+            >
+              <div
+                style="font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+              >
+                2
+              </div>
+              <div
+                style="font-size: 11px; color: rgb(214, 212, 224);"
+              >
+                books
+              </div>
+            </div>
+            <div
+              style="text-align: center; min-width: 56px;"
+            >
+              <div
+                style="font-size: 18px; font-weight: 700; color: rgb(214, 212, 224);"
+              >
+                0
+              </div>
+              <div
+                style="font-size: 11px; color: rgb(214, 212, 224);"
+              >
+                confirmed elsewhere
+              </div>
+            </div>
+          </div>
+          <div
+            style="flex: 1 1 0%; min-width: 220px; font-size: 12px; color: rgb(214, 212, 224);"
+          >
+            Nothing else lists these.
+            <div
+              style="margin-top: 6px; line-height: 1.5;"
+            >
+              <span
+                style="color: rgb(214, 212, 224);"
+              >
+                What it added: 
+              </span>
+              <span
+                style="color: rgb(236, 234, 244);"
+              >
+                A Lantern for Wolves … +1 more
+              </span>
+            </div>
+          </div>
+          <button
+            style="background: rgb(224, 96, 96); color: rgb(26, 28, 48); border: 1px solid rgb(224, 96, 96); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+          >
+            Blacklist record
+          </button>
+        </div>
+      </div>
+    </section>
+    <div
+      style="display: flex; gap: 12px; align-items: flex-start; padding: 6px 12px; background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 8px; margin-top: 6px; min-height: 28px;"
+    >
+      <span
+        style="background: rgb(85, 59, 26); color: rgb(232, 192, 112); border: 1px solid rgb(136, 100, 42); padding: 1px 7px; border-radius: 99px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; flex-shrink: 0; height: 18px; display: inline-flex; align-items: center;"
+      >
+        goodreads
+      </span>
+      <div
+        style="display: flex; flex-direction: column; gap: 4px; font-size: 12px; min-width: 0px;"
+      >
+        <div
+          style="display: flex; gap: 8px; align-items: baseline;"
+        >
+          <span
+            style="color: rgb(136, 134, 160); font-size: 11px; font-family: ui-monospace, Consolas, monospace;"
+          >
+            calibre-library
+          </span>
+          <span
+            style="color: rgb(76, 184, 136);"
+          >
+            scanned 2.3d ago — 1 page / 6 books cached
+          </span>
+        </div>
+      </div>
+    </div>
+    <div
+      style="display: flex; gap: 4px; border-bottom: 1px solid rgb(58, 60, 86); padding-bottom: 0px;"
+    >
+      <button
+        style="padding: 10px 18px; background: rgba(228, 184, 104, 0.133); color: rgb(228, 184, 104); border-width: medium medium 2px; border-style: none none solid; border-color: currentcolor currentcolor rgb(228, 184, 104); border-image: none; cursor: pointer; font-size: 14px; font-weight: 600; margin-bottom: -1px;"
+      >
+        Combined
+      </button>
+      <button
+        style="padding: 10px 18px; background: transparent; color: rgb(150, 148, 172); border-width: medium medium 2px; border-style: none none solid; border-color: currentcolor currentcolor transparent; border-image: none; cursor: pointer; font-size: 14px; font-weight: 500; margin-bottom: -1px;"
+      >
+        Ebook
+      </button>
+      <button
+        style="padding: 10px 18px; background: transparent; color: rgb(150, 148, 172); border-width: medium medium 2px; border-style: none none solid; border-color: currentcolor currentcolor transparent; border-image: none; cursor: pointer; font-size: 14px; font-weight: 500; margin-bottom: -1px;"
+      >
+        Audiobook
+      </button>
+    </div>
+    <div
+      style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 6px; font-size: 13px;"
+    >
+      <span
+        style="color: rgb(124, 122, 148); font-weight: 500;"
+      >
+        Jump to:
+      </span>
+      <button
+        style="padding: 4px 12px; background: rgba(228, 184, 104, 0.133); color: rgb(228, 184, 104); border: 1px solid rgba(228, 184, 104, 0.267); border-radius: 5px; font-size: 13px; font-weight: 600; cursor: pointer;"
+      >
+        Ebook
+      </button>
+      <button
+        style="padding: 4px 12px; background: rgba(160, 136, 204, 0.133); color: rgb(160, 136, 204); border: 1px solid rgba(160, 136, 204, 0.267); border-radius: 5px; font-size: 13px; font-weight: 600; cursor: pointer;"
+      >
+        Audiobook
+      </button>
+    </div>
+    <div
+      id="block-calibre-library"
+      style="display: flex; flex-direction: column; gap: 16px; scroll-margin-top: 200px;"
+    >
+      <div
+        style="display: flex; align-items: center; gap: 8px; margin-top: 4px;"
+      >
+        <div
+          style="width: 6px; height: 26px; background: rgb(228, 184, 104); border-radius: 3px;"
+        />
+        <span
+          style="font-size: 16px; font-weight: 700; color: rgb(228, 184, 104); text-transform: uppercase; letter-spacing: 0.05em;"
+        >
+          Ebook
+        </span>
+        <div
+          style="flex: 1 1 0%; height: 1px; background: rgb(46, 48, 72);"
+        />
+        <button
+          style="font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 5px; background: rgba(228, 184, 104, 0.133); color: rgb(228, 184, 104); border: 1px solid rgba(228, 184, 104, 0.267); cursor: pointer; white-space: nowrap;"
+          title="Scan ebook sources for this author"
+        >
+          Scan Ebook
+        </button>
+      </div>
+      <section
+        style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 20px; margin-bottom: 16px;"
+      >
+        <header
+          style="display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 16px; cursor: pointer; user-select: none;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 8px;"
+          >
+            <h2
+              style="font-size: 16px; font-weight: 700; color: rgb(236, 234, 244);"
+            >
+              <span>
+                Orchard Cycle
+              </span>
+            </h2>
+            <span
+              style="font-size: 12px; color: rgb(136, 134, 160); font-weight: 500;"
+            >
+              (1/3)
+            </span>
+          </div>
+          <div
+            style="display: flex; align-items: center; gap: 8px;"
+          >
+            <span
+              style="font-size: 12px; color: rgb(136, 134, 160);"
+            >
+              ▾
+            </span>
+          </div>
+        </header>
+        <div
+          class="book-grid"
+          style="display: flex; flex-wrap: wrap; gap: 12px; align-items: start;"
+        >
+          <div
+            class="bcard"
+            style="min-width: 160px; max-width: 200px; flex: 1 1 160px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 10px; overflow: hidden; cursor: pointer; transition: border-color 0.2s, background 0.15s, transform 0.18s ease-out, box-shadow 0.18s ease-out; position: relative;"
+          >
+            <span
+              style="position: absolute; top: 6px; right: 6px; font-size: 9px; font-weight: 600; background: rgb(76, 184, 136); color: rgb(255, 255, 255); padding: 2px 6px; border-radius: 4px; z-index: 2;"
+            >
+              OWNED
+            </span>
+            <div
+              style="height: 200px; background: rgb(30, 32, 52); display: flex; align-items: center; justify-content: center; overflow: hidden; opacity: 1;"
+            >
+              <div
+                style="display: flex; flex-direction: column; align-items: center; gap: 4px; color: rgb(98, 96, 122); font-size: 12px; text-align: center; padding: 12px;"
+              >
+                <span
+                  style="font-size: 28px;"
+                >
+                  ?
+                </span>
+                <span>
+                  The Seed Vault
+                </span>
+              </div>
+            </div>
+            <div
+              style="padding: 8px 10px;"
+            >
+              <div
+                style="font-size: 13px; font-weight: 600; color: rgb(214, 212, 224); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+              >
+                The Seed Vault
+              </div>
+              <div
+                style="font-size: 10px; color: rgb(136, 112, 180); margin-top: 1px;"
+              >
+                #1
+              </div>
+            </div>
+          </div>
+          <div
+            class="bcard"
+            style="min-width: 160px; max-width: 200px; flex: 1 1 160px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 10px; overflow: hidden; cursor: pointer; transition: border-color 0.2s, background 0.15s, transform 0.18s ease-out, box-shadow 0.18s ease-out; position: relative;"
+          >
+            <span
+              style="position: absolute; top: 6px; right: 6px; font-size: 9px; font-weight: 700; background: rgba(0, 0, 0, 0.82); color: rgb(192, 72, 72); padding: 2px 6px; border-radius: 4px; z-index: 2; border: 1px solid rgb(224, 96, 96); letter-spacing: 0.04em;"
+            >
+              MISSING
+            </span>
+            <div
+              style="height: 200px; background: rgb(30, 32, 52); display: flex; align-items: center; justify-content: center; overflow: hidden; opacity: 1;"
+            >
+              <div
+                style="display: flex; flex-direction: column; align-items: center; gap: 4px; color: rgb(98, 96, 122); font-size: 12px; text-align: center; padding: 12px;"
+              >
+                <span
+                  style="font-size: 28px;"
+                >
+                  ?
+                </span>
+                <span>
+                  The Glass Orchard
+                </span>
+              </div>
+            </div>
+            <div
+              style="padding: 8px 10px;"
+            >
+              <div
+                style="font-size: 13px; font-weight: 600; color: rgb(214, 212, 224); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+              >
+                The Glass Orchard
+              </div>
+              <div
+                style="font-size: 10px; color: rgb(136, 112, 180); margin-top: 1px;"
+              >
+                #2
+              </div>
+            </div>
+          </div>
+          <div
+            class="bcard"
+            style="min-width: 160px; max-width: 200px; flex: 1 1 160px; background: rgb(34, 36, 56); border: 1px solid rgba(88, 184, 204, 0.4); border-radius: 10px; overflow: hidden; cursor: pointer; transition: border-color 0.2s, background 0.15s, transform 0.18s ease-out, box-shadow 0.18s ease-out; position: relative;"
+          >
+            <span
+              style="position: absolute; top: 6px; left: 6px; font-size: 9px; font-weight: 700; background: rgb(88, 184, 204); color: rgb(255, 255, 255); padding: 2px 6px; border-radius: 4px; z-index: 2;"
+            >
+              UPCOMING
+            </span>
+            <div
+              style="height: 200px; background: rgb(30, 32, 52); display: flex; align-items: center; justify-content: center; overflow: hidden; opacity: 0.7;"
+            >
+              <div
+                style="display: flex; flex-direction: column; align-items: center; gap: 4px; color: rgb(98, 96, 122); font-size: 12px; text-align: center; padding: 12px;"
+              >
+                <span
+                  style="font-size: 28px;"
+                >
+                  ?
+                </span>
+                <span>
+                  Rootbound
+                </span>
+              </div>
+            </div>
+            <div
+              style="padding: 8px 10px;"
+            >
+              <div
+                style="font-size: 13px; font-weight: 600; color: rgb(214, 212, 224); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+              >
+                Rootbound
+              </div>
+              <div
+                style="font-size: 10px; color: rgb(136, 112, 180); margin-top: 1px;"
+              >
+                #3
+              </div>
+              <div
+                style="font-size: 11px; color: rgb(72, 152, 176); margin-top: 2px;"
+              >
+                Expected: 2027-02-02
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+      <section
+        style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 20px; margin-bottom: 16px;"
+      >
+        <header
+          style="display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 16px; cursor: pointer; user-select: none;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 8px;"
+          >
+            <h2
+              style="font-size: 16px; font-weight: 700; color: rgb(236, 234, 244);"
+            >
+              Standalone
+            </h2>
+            <span
+              style="font-size: 12px; color: rgb(136, 134, 160); font-weight: 500;"
+            >
+              (2)
+            </span>
+          </div>
+          <div
+            style="display: flex; align-items: center; gap: 8px;"
+          >
+            <span
+              style="font-size: 12px; color: rgb(136, 134, 160);"
+            >
+              ▾
+            </span>
+          </div>
+        </header>
+        <div
+          class="book-grid"
+          style="display: flex; flex-wrap: wrap; gap: 12px; align-items: start;"
+        >
+          <div
+            class="bcard"
+            style="min-width: 160px; max-width: 200px; flex: 1 1 160px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 10px; overflow: hidden; cursor: pointer; transition: border-color 0.2s, background 0.15s, transform 0.18s ease-out, box-shadow 0.18s ease-out; position: relative;"
+          >
+            <span
+              style="position: absolute; top: 6px; right: 6px; font-size: 9px; font-weight: 600; background: rgb(76, 184, 136); color: rgb(255, 255, 255); padding: 2px 6px; border-radius: 4px; z-index: 2;"
+            >
+              OWNED
+            </span>
+            <div
+              style="height: 200px; background: rgb(30, 32, 52); display: flex; align-items: center; justify-content: center; overflow: hidden; opacity: 1;"
+            >
+              <div
+                style="display: flex; flex-direction: column; align-items: center; gap: 4px; color: rgb(98, 96, 122); font-size: 12px; text-align: center; padding: 12px;"
+              >
+                <span
+                  style="font-size: 28px;"
+                >
+                  ?
+                </span>
+                <span>
+                  Ninefold Tide
+                </span>
+              </div>
+            </div>
+            <div
+              style="padding: 8px 10px;"
+            >
+              <div
+                style="font-size: 13px; font-weight: 600; color: rgb(214, 212, 224); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+              >
+                Ninefold Tide
+              </div>
+            </div>
+          </div>
+          <div
+            class="bcard"
+            style="min-width: 160px; max-width: 200px; flex: 1 1 160px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 10px; overflow: hidden; cursor: pointer; transition: border-color 0.2s, background 0.15s, transform 0.18s ease-out, box-shadow 0.18s ease-out; position: relative;"
+          >
+            <span
+              style="position: absolute; top: 6px; right: 6px; font-size: 9px; font-weight: 700; background: rgb(224, 96, 96); color: rgb(255, 255, 255); padding: 2px 6px; border-radius: 4px; z-index: 2;"
+            >
+              NEW
+            </span>
+            <div
+              style="height: 200px; background: rgb(30, 32, 52); display: flex; align-items: center; justify-content: center; overflow: hidden; opacity: 1;"
+            >
+              <div
+                style="display: flex; flex-direction: column; align-items: center; gap: 4px; color: rgb(98, 96, 122); font-size: 12px; text-align: center; padding: 12px;"
+              >
+                <span
+                  style="font-size: 28px;"
+                >
+                  ?
+                </span>
+                <span>
+                  A Lantern for Wolves
+                </span>
+              </div>
+            </div>
+            <div
+              style="padding: 8px 10px;"
+            >
+              <div
+                style="font-size: 13px; font-weight: 600; color: rgb(214, 212, 224); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+              >
+                A Lantern for Wolves
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+    <div
+      id="block-audiobookshelf"
+      style="display: flex; flex-direction: column; gap: 16px; scroll-margin-top: 200px;"
+    >
+      <div
+        style="display: flex; align-items: center; gap: 8px; margin-top: 4px;"
+      >
+        <div
+          style="width: 6px; height: 26px; background: rgb(160, 136, 204); border-radius: 3px;"
+        />
+        <span
+          style="font-size: 16px; font-weight: 700; color: rgb(160, 136, 204); text-transform: uppercase; letter-spacing: 0.05em;"
+        >
+          Audiobook
+        </span>
+        <div
+          style="flex: 1 1 0%; height: 1px; background: rgb(46, 48, 72);"
+        />
+        <button
+          style="font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 5px; background: rgba(160, 136, 204, 0.133); color: rgb(160, 136, 204); border: 1px solid rgba(160, 136, 204, 0.267); cursor: pointer; white-space: nowrap;"
+          title="Scan audiobook sources for this author"
+        >
+          Scan Audiobook
+        </button>
+      </div>
+      <section
+        style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 20px; margin-bottom: 16px;"
+      >
+        <header
+          style="display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 16px; cursor: pointer; user-select: none;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 8px;"
+          >
+            <h2
+              style="font-size: 16px; font-weight: 700; color: rgb(236, 234, 244);"
+            >
+              Standalone
+            </h2>
+            <span
+              style="font-size: 12px; color: rgb(136, 134, 160); font-weight: 500;"
+            >
+              (1)
+            </span>
+          </div>
+          <div
+            style="display: flex; align-items: center; gap: 8px;"
+          >
+            <span
+              style="font-size: 12px; color: rgb(136, 134, 160);"
+            >
+              ▾
+            </span>
+          </div>
+        </header>
+        <div
+          class="book-grid"
+          style="display: flex; flex-wrap: wrap; gap: 12px; align-items: start;"
+        >
+          <div
+            class="bcard"
+            style="min-width: 160px; max-width: 200px; flex: 1 1 160px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 10px; overflow: hidden; cursor: pointer; transition: border-color 0.2s, background 0.15s, transform 0.18s ease-out, box-shadow 0.18s ease-out; position: relative;"
+          >
+            <span
+              style="position: absolute; top: 6px; right: 6px; font-size: 9px; font-weight: 600; background: rgb(76, 184, 136); color: rgb(255, 255, 255); padding: 2px 6px; border-radius: 4px; z-index: 2;"
+            >
+              OWNED
+            </span>
+            <div
+              style="height: 200px; background: rgb(30, 32, 52); display: flex; align-items: center; justify-content: center; overflow: hidden; opacity: 1;"
+            >
+              <img
+                alt=""
+                class="bcard-cover"
+                loading="lazy"
+                src="/api/discovery/covers/audiobookshelf/301"
+                style="width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 0.35s ease-out;"
+              />
+              <div
+                style="display: none; flex-direction: column; align-items: center; gap: 4px; color: rgb(98, 96, 122); font-size: 12px; text-align: center; padding: 12px;"
+              >
+                <span
+                  style="font-size: 28px;"
+                >
+                  ?
+                </span>
+                <span>
+                  Ninefold Tide
+                </span>
+              </div>
+            </div>
+            <div
+              style="padding: 8px 10px;"
+            >
+              <div
+                style="font-size: 13px; font-weight: 600; color: rgb(214, 212, 224); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+              >
+                Ninefold Tide
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Author detail (desktop) > with pen-name links while a source scan runs > requests 1`] = `
+[
+  "GET /discovery/authors/11/pen-names",
+  "GET /discovery/authors/11/source-breakdown?slug=calibre-library",
+  "GET /discovery/authors/11?include_cross_library=1&slug=calibre-library",
+  "GET /discovery/mam/status",
+  "GET /discovery/persons/5",
+  "GET /discovery/scan-status",
+  "GET /discovery/series/7?slug=calibre-library",
+  "GET /v1/metadata-cache/goodreads/author/g-1001",
+]
+`;
+
+exports[`Author detail (phone) > an author with series, standalones and a second library > markup 1`] = `
+<DocumentFragment>
+  <div
+    style="display: flex; flex-direction: column; gap: 12px;"
+  >
+    <button
+      aria-label="Authors"
+      style="display: inline-flex; align-items: center; gap: 6px; height: 44px; padding: 0px 14px 0px 10px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 9999px; font-size: 14px; font-weight: 600; cursor: pointer; align-self: flex-start;"
+    >
+      <span
+        style="font-size: 18px; line-height: 1;"
+      >
+        ‹
+      </span>
+      <span>
+        Authors
+      </span>
+    </button>
+    <div
+      style="display: flex; gap: 12px; padding: 12px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 12px;"
+    >
+      <div
+        style="width: 72px; height: 72px; border-radius: 50%; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); flex-shrink: 0; display: flex; align-items: center; justify-content: center; overflow: hidden;"
+      >
+        <span
+          style="color: rgb(150, 148, 172); font-weight: 700; font-size: 22px;"
+        >
+          A
+        </span>
+      </div>
+      <div
+        style="flex: 1 1 0%; min-width: 0px;"
+      >
+        <div
+          style="font-size: 18px; font-weight: 700; color: rgb(236, 234, 244); line-height: 1.2;"
+        >
+          Ada Quill
+        </div>
+        <div
+          style="display: flex; gap: 12px; margin-top: 6px; font-size: 13px; color: rgb(150, 148, 172); flex-wrap: wrap;"
+        >
+          <span>
+            <strong
+              style="color: rgb(236, 234, 244);"
+            >
+              3
+            </strong>
+             / 6 owned
+          </span>
+          <span
+            style="color: rgb(224, 96, 96);"
+          >
+            3 missing
+          </span>
+          <span
+            style="display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; background: rgba(222, 176, 96, 0.16); color: rgb(228, 184, 104); border: 1px solid rgba(222, 176, 96, 0.32); border-radius: 9999px; font-size: 12px; font-weight: 600; line-height: 1.2; white-space: nowrap;"
+          >
+            1 new
+          </span>
+        </div>
+      </div>
+    </div>
+    <div
+      style="display: flex; gap: 8px; flex-wrap: wrap;"
+    >
+      <button
+        style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 44px; padding: 0px 16px; cursor: pointer;"
+      >
+        <span>
+          Re-scan sources
+        </span>
+      </button>
+      <button
+        style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 44px; padding: 0px 16px; cursor: pointer;"
+      >
+        <span>
+          Scan MAM
+        </span>
+      </button>
+      <button
+        style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 44px; padding: 0px 16px; cursor: pointer;"
+      >
+        <span>
+          Select
+        </span>
+      </button>
+    </div>
+    <section
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
+    >
+      <header
+        style="display: flex; align-items: center; gap: 8px; min-height: 36px; margin-bottom: 0px; cursor: pointer; user-select: none;"
+      >
+        <div
+          style="flex: 1 1 0%; min-width: 0px;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 6px; font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+          >
+            <span
+              style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+            >
+              Source IDs
+            </span>
+          </div>
+        </div>
+        <span
+          aria-hidden="true"
+          style="display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; font-size: 18px; font-weight: 700; color: rgb(150, 148, 172); background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 9999px; flex-shrink: 0; transform: rotate(-90deg); transition: transform 0.15s;"
+        >
+          ▾
+        </span>
+      </header>
+    </section>
+    <section
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 20px; margin-bottom: 16px;"
+    >
+      <header
+        style="display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 16px; cursor: pointer; user-select: none;"
+      >
+        <div
+          style="display: flex; align-items: center; gap: 8px;"
+        >
+          <h2
+            style="font-size: 16px; font-weight: 700; color: rgb(236, 234, 244);"
+          >
+            Source records
+          </h2>
+          <span
+            style="font-size: 12px; color: rgb(136, 134, 160); font-weight: 500;"
+          >
+            (
+            <span
+              style="color: rgb(224, 192, 96);"
+            >
+              1 to review
+            </span>
+            )
+          </span>
+        </div>
+        <div
+          style="display: flex; align-items: center; gap: 8px;"
+        >
+          <span
+            style="font-size: 13px; color: rgb(136, 134, 160);"
+          >
+            What each source contributed for this author, and whether anything else confirms it.
+          </span>
+          <span
+            style="font-size: 12px; color: rgb(136, 134, 160);"
+          >
+            ▾
+          </span>
+        </div>
+      </header>
+      <div
+        style="display: grid; gap: 10px;"
+      >
+        <div
+          style="display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 10px 12px; border-radius: 8px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); opacity: 1;"
+        >
+          <span
+            style="width: 8px; height: 8px; border-radius: 8px; background: rgb(76, 184, 136); flex-shrink: 0;"
+          />
+          <div
+            style="min-width: 140px;"
+          >
+            <div
+              style="font-weight: 600; color: rgb(236, 234, 244);"
+            >
+              hardcover
+            </div>
+            <div
+              style="font-size: 12px; color: rgb(214, 212, 224); font-family: monospace;"
+            >
+              ada-quill
+            </div>
+          </div>
+          <div
+            style="display: flex; gap: 18px; flex-wrap: wrap;"
+          >
+            <div
+              style="text-align: center; min-width: 56px;"
+            >
+              <div
+                style="font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+              >
+                4
+              </div>
+              <div
+                style="font-size: 11px; color: rgb(214, 212, 224);"
+              >
+                books
+              </div>
+            </div>
+            <div
+              style="text-align: center; min-width: 56px;"
+            >
+              <div
+                style="font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+              >
+                3
+              </div>
+              <div
+                style="font-size: 11px; color: rgb(214, 212, 224);"
+              >
+                confirmed elsewhere
+              </div>
+            </div>
+          </div>
+          <div
+            style="flex: 1 1 0%; min-width: 220px; font-size: 12px; color: rgb(214, 212, 224);"
+          >
+            <div
+              style="color: rgb(214, 212, 224); margin-top: 2px;"
+            >
+              This source identifies authors by name only, so its agreement doesn't confirm identity.
+            </div>
+            <div
+              style="margin-top: 6px; line-height: 1.5;"
+            >
+              <span
+                style="color: rgb(214, 212, 224);"
+              >
+                What it added: 
+              </span>
+              <span
+                style="color: rgb(236, 234, 244);"
+              >
+                The Glass Orchard · Rootbound … +2 more
+              </span>
+            </div>
+          </div>
+          <button
+            style="background: transparent; color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+          >
+            Blacklist record
+          </button>
+        </div>
+        <div
+          style="display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 10px 12px; border-radius: 8px; background: rgb(30, 32, 52); border: 1px solid rgb(224, 192, 96); opacity: 1;"
+        >
+          <span
+            style="width: 8px; height: 8px; border-radius: 8px; background: rgb(224, 192, 96); flex-shrink: 0;"
+          />
+          <div
+            style="min-width: 140px;"
+          >
+            <div
+              style="font-weight: 600; color: rgb(236, 234, 244);"
+            >
+              goodreads
+            </div>
+            <div
+              style="font-size: 12px; color: rgb(214, 212, 224); font-family: monospace;"
+            >
+              g-1001
+            </div>
+          </div>
+          <div
+            style="display: flex; gap: 18px; flex-wrap: wrap;"
+          >
+            <div
+              style="text-align: center; min-width: 56px;"
+            >
+              <div
+                style="font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+              >
+                2
+              </div>
+              <div
+                style="font-size: 11px; color: rgb(214, 212, 224);"
+              >
+                books
+              </div>
+            </div>
+            <div
+              style="text-align: center; min-width: 56px;"
+            >
+              <div
+                style="font-size: 18px; font-weight: 700; color: rgb(214, 212, 224);"
+              >
+                0
+              </div>
+              <div
+                style="font-size: 11px; color: rgb(214, 212, 224);"
+              >
+                confirmed elsewhere
+              </div>
+            </div>
+          </div>
+          <div
+            style="flex: 1 1 0%; min-width: 220px; font-size: 12px; color: rgb(214, 212, 224);"
+          >
+            Nothing else lists these.
+            <div
+              style="margin-top: 6px; line-height: 1.5;"
+            >
+              <span
+                style="color: rgb(214, 212, 224);"
+              >
+                What it added: 
+              </span>
+              <span
+                style="color: rgb(236, 234, 244);"
+              >
+                A Lantern for Wolves … +1 more
+              </span>
+            </div>
+          </div>
+          <button
+            style="background: rgb(224, 96, 96); color: rgb(26, 28, 48); border: 1px solid rgb(224, 96, 96); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+          >
+            Blacklist record
+          </button>
+        </div>
+      </div>
+    </section>
+    <section
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
+    >
+      <header
+        style="display: flex; align-items: center; gap: 8px; min-height: 36px; margin-bottom: 0px; cursor: pointer; user-select: none;"
+      >
+        <div
+          style="flex: 1 1 0%; min-width: 0px;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 6px; font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+          >
+            <span
+              style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+            >
+              Bio
+            </span>
+          </div>
+        </div>
+        <span
+          aria-hidden="true"
+          style="display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; font-size: 18px; font-weight: 700; color: rgb(150, 148, 172); background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 9999px; flex-shrink: 0; transform: rotate(-90deg); transition: transform 0.15s;"
+        >
+          ▾
+        </span>
+      </header>
+    </section>
+    <section
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
+    >
+      <header
+        style="display: flex; align-items: center; gap: 8px; min-height: 36px; margin-bottom: 0px; cursor: pointer; user-select: none;"
+      >
+        <div
+          style="flex: 1 1 0%; min-width: 0px;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 6px; font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+          >
+            <span
+              style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+            >
+              Pen names
+            </span>
+            <span
+              style="font-size: 13px; font-weight: 500; color: rgb(150, 148, 172);"
+            >
+              (0)
+            </span>
+          </div>
+        </div>
+        <span
+          aria-hidden="true"
+          style="display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; font-size: 18px; font-weight: 700; color: rgb(150, 148, 172); background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 9999px; flex-shrink: 0; transform: rotate(-90deg); transition: transform 0.15s;"
+        >
+          ▾
+        </span>
+      </header>
+    </section>
+    <div
+      style="display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none;"
+    >
+      <button
+        style="display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; min-height: 36px; background: rgba(222, 176, 96, 0.16); color: rgb(228, 184, 104); border: 1px solid rgba(222, 176, 96, 0.32); border-radius: 9999px; font-size: 13px; font-weight: 700; cursor: pointer; white-space: nowrap;"
+      >
+        Combined
+      </button>
+      <button
+        style="display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; min-height: 36px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 9999px; font-size: 13px; font-weight: 500; cursor: pointer; white-space: nowrap;"
+      >
+        📖 Ebook
+      </button>
+      <button
+        style="display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; min-height: 36px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 9999px; font-size: 13px; font-weight: 500; cursor: pointer; white-space: nowrap;"
+      >
+        🎧 Audio
+      </button>
+    </div>
+    <div
+      style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 6px; font-size: 13px; overflow-x: auto; scrollbar-width: none;"
+    >
+      <span
+        style="color: rgb(124, 122, 148); font-weight: 500; white-space: nowrap;"
+      >
+        Jump to:
+      </span>
+      <button
+        style="padding: 6px 14px; background: rgba(228, 184, 104, 0.133); color: rgb(228, 184, 104); border: 1px solid rgba(228, 184, 104, 0.267); border-radius: 5px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; min-height: 32px;"
+      >
+        📖 Ebook
+      </button>
+      <button
+        style="padding: 6px 14px; background: rgba(160, 136, 204, 0.133); color: rgb(160, 136, 204); border: 1px solid rgba(160, 136, 204, 0.267); border-radius: 5px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; min-height: 32px;"
+      >
+        🎧 Audio
+      </button>
+    </div>
+    <div
+      id="block-calibre-library"
+      style="scroll-margin-top: 80px;"
+    >
+      <div
+        style="display: flex; align-items: center; gap: 8px; padding: 16px 4px 8px;"
+      >
+        <div
+          style="width: 5px; height: 22px; background: rgb(228, 184, 104); border-radius: 3px;"
+        />
+        <span
+          style="font-size: 14px; color: rgb(228, 184, 104); font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;"
+        >
+          📖 Ebook
+        </span>
+      </div>
+      <section
+        style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
+      >
+        <header
+          style="display: flex; align-items: center; gap: 8px; min-height: 36px; margin-bottom: 0px; cursor: pointer; user-select: none;"
+        >
+          <div
+            style="flex: 1 1 0%; min-width: 0px;"
+          >
+            <div
+              style="display: flex; align-items: center; gap: 6px; font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+            >
+              <span
+                style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+              >
+                Orchard Cycle
+              </span>
+              <span
+                style="font-size: 13px; font-weight: 500; color: rgb(150, 148, 172);"
+              >
+                (1/3)
+              </span>
+            </div>
+            <div
+              style="font-size: 13px; color: rgb(150, 148, 172); margin-top: 2px;"
+            >
+              2 missing
+            </div>
+          </div>
+          <span
+            aria-hidden="true"
+            style="display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; font-size: 18px; font-weight: 700; color: rgb(150, 148, 172); background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 9999px; flex-shrink: 0; transform: rotate(-90deg); transition: transform 0.15s;"
+          >
+            ▾
+          </span>
+        </header>
+      </section>
+      <section
+        style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
+      >
+        <header
+          style="display: flex; align-items: center; gap: 8px; min-height: 36px; margin-bottom: 12px; cursor: pointer; user-select: none;"
+        >
+          <div
+            style="flex: 1 1 0%; min-width: 0px;"
+          >
+            <div
+              style="display: flex; align-items: center; gap: 6px; font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+            >
+              <span
+                style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+              >
+                Standalone
+              </span>
+              <span
+                style="font-size: 13px; font-weight: 500; color: rgb(150, 148, 172);"
+              >
+                (2)
+              </span>
+            </div>
+          </div>
+          <span
+            aria-hidden="true"
+            style="display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; font-size: 18px; font-weight: 700; color: rgb(150, 148, 172); background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 9999px; flex-shrink: 0; transform: rotate(0deg); transition: transform 0.15s;"
+          >
+            ▾
+          </span>
+        </header>
+        <div
+          style="display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr)); gap: 8px;"
+        >
+          <div
+            style="display: flex; gap: 12px; padding: 8px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 12px; cursor: pointer; opacity: 1;"
+          >
+            <div
+              style="width: 64px; height: 96px; flex-shrink: 0; background: rgb(30, 32, 52); border-radius: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center;"
+            >
+              <span
+                style="font-size: 24px; color: rgb(98, 96, 122);"
+              >
+                ?
+              </span>
+            </div>
+            <div
+              style="flex: 1 1 0%; min-width: 0px; display: flex; flex-direction: column; gap: 2px;"
+            >
+              <div
+                style="display: flex; align-items: baseline; gap: 4px; font-size: 15px; font-weight: 600; color: rgb(236, 234, 244); line-height: 1.3;"
+              >
+                <span
+                  style="flex: 1 1 0%; min-width: 0px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;"
+                >
+                  Ninefold Tide
+                </span>
+              </div>
+              <div
+                style="display: flex; align-items: center; gap: 4px; margin-top: 4px; flex-wrap: wrap;"
+              >
+                <span
+                  style="display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; background: rgba(76, 184, 136, 0.14); color: rgb(76, 184, 136); border: 1px solid rgb(58, 148, 104); border-radius: 9999px; font-size: 12px; font-weight: 600; line-height: 1.2; white-space: nowrap;"
+                >
+                  Owned
+                </span>
+              </div>
+            </div>
+          </div>
+          <div
+            style="display: flex; gap: 12px; padding: 8px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 12px; cursor: pointer; opacity: 1;"
+          >
+            <div
+              style="width: 64px; height: 96px; flex-shrink: 0; background: rgb(30, 32, 52); border-radius: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center;"
+            >
+              <span
+                style="font-size: 24px; color: rgb(98, 96, 122);"
+              >
+                ?
+              </span>
+            </div>
+            <div
+              style="flex: 1 1 0%; min-width: 0px; display: flex; flex-direction: column; gap: 2px;"
+            >
+              <div
+                style="display: flex; align-items: baseline; gap: 4px; font-size: 15px; font-weight: 600; color: rgb(236, 234, 244); line-height: 1.3;"
+              >
+                <span
+                  style="flex: 1 1 0%; min-width: 0px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;"
+                >
+                  A Lantern for Wolves
+                </span>
+              </div>
+              <div
+                style="display: flex; align-items: center; gap: 4px; margin-top: 4px; flex-wrap: wrap;"
+              >
+                <span
+                  style="display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; background: rgba(222, 176, 96, 0.16); color: rgb(228, 184, 104); border: 1px solid rgba(222, 176, 96, 0.32); border-radius: 9999px; font-size: 12px; font-weight: 600; line-height: 1.2; white-space: nowrap;"
+                >
+                  New
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+    <div
+      id="block-audiobookshelf"
+      style="scroll-margin-top: 80px;"
+    >
+      <div
+        style="display: flex; align-items: center; gap: 8px; padding: 16px 4px 8px;"
+      >
+        <div
+          style="width: 5px; height: 22px; background: rgb(160, 136, 204); border-radius: 3px;"
+        />
+        <span
+          style="font-size: 14px; color: rgb(160, 136, 204); font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;"
+        >
+          🎧 Audio
+        </span>
+      </div>
+      <section
+        style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
+      >
+        <header
+          style="display: flex; align-items: center; gap: 8px; min-height: 36px; margin-bottom: 12px; cursor: pointer; user-select: none;"
+        >
+          <div
+            style="flex: 1 1 0%; min-width: 0px;"
+          >
+            <div
+              style="display: flex; align-items: center; gap: 6px; font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+            >
+              <span
+                style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+              >
+                Standalone
+              </span>
+              <span
+                style="font-size: 13px; font-weight: 500; color: rgb(150, 148, 172);"
+              >
+                (1)
+              </span>
+            </div>
+          </div>
+          <span
+            aria-hidden="true"
+            style="display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; font-size: 18px; font-weight: 700; color: rgb(150, 148, 172); background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 9999px; flex-shrink: 0; transform: rotate(0deg); transition: transform 0.15s;"
+          >
+            ▾
+          </span>
+        </header>
+        <div
+          style="display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr)); gap: 8px;"
+        >
+          <div
+            style="display: flex; gap: 12px; padding: 8px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 12px; cursor: pointer; opacity: 1;"
+          >
+            <div
+              style="width: 64px; height: 96px; flex-shrink: 0; background: rgb(30, 32, 52); border-radius: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center;"
+            >
+              <img
+                alt=""
+                loading="lazy"
+                src="/api/discovery/covers/audiobookshelf/301"
+                style="width: 100%; height: 100%; object-fit: cover;"
+              />
+            </div>
+            <div
+              style="flex: 1 1 0%; min-width: 0px; display: flex; flex-direction: column; gap: 2px;"
+            >
+              <div
+                style="display: flex; align-items: baseline; gap: 4px; font-size: 15px; font-weight: 600; color: rgb(236, 234, 244); line-height: 1.3;"
+              >
+                <span
+                  style="flex: 1 1 0%; min-width: 0px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;"
+                >
+                  Ninefold Tide
+                </span>
+              </div>
+              <div
+                style="display: flex; align-items: center; gap: 4px; margin-top: 4px; flex-wrap: wrap;"
+              >
+                <span
+                  style="display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; background: rgba(76, 184, 136, 0.14); color: rgb(76, 184, 136); border: 1px solid rgb(58, 148, 104); border-radius: 9999px; font-size: 12px; font-weight: 600; line-height: 1.2; white-space: nowrap;"
+                >
+                  Owned
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Author detail (phone) > an author with series, standalones and a second library > requests 1`] = `
+[
+  "GET /discovery/authors/11/pen-names",
+  "GET /discovery/authors/11/source-breakdown?slug=calibre-library",
+  "GET /discovery/authors/11?include_cross_library=1&slug=calibre-library",
+  "GET /discovery/mam/status",
+  "GET /discovery/persons/5",
+  "GET /discovery/scan-status",
+  "GET /discovery/series/7?slug=calibre-library",
+]
+`;
+
+exports[`Author detail (phone) > with pen-name links while a source scan runs > markup 1`] = `
+<DocumentFragment>
+  <div
+    style="display: flex; flex-direction: column; gap: 12px;"
+  >
+    <button
+      aria-label="Authors"
+      style="display: inline-flex; align-items: center; gap: 6px; height: 44px; padding: 0px 14px 0px 10px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 9999px; font-size: 14px; font-weight: 600; cursor: pointer; align-self: flex-start;"
+    >
+      <span
+        style="font-size: 18px; line-height: 1;"
+      >
+        ‹
+      </span>
+      <span>
+        Authors
+      </span>
+    </button>
+    <div
+      style="display: flex; gap: 12px; padding: 12px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 12px;"
+    >
+      <div
+        style="width: 72px; height: 72px; border-radius: 50%; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); flex-shrink: 0; display: flex; align-items: center; justify-content: center; overflow: hidden;"
+      >
+        <span
+          style="color: rgb(150, 148, 172); font-weight: 700; font-size: 22px;"
+        >
+          A
+        </span>
+      </div>
+      <div
+        style="flex: 1 1 0%; min-width: 0px;"
+      >
+        <div
+          style="font-size: 18px; font-weight: 700; color: rgb(236, 234, 244); line-height: 1.2;"
+        >
+          Ada Quill
+        </div>
+        <div
+          style="display: flex; gap: 12px; margin-top: 6px; font-size: 13px; color: rgb(150, 148, 172); flex-wrap: wrap;"
+        >
+          <span>
+            <strong
+              style="color: rgb(236, 234, 244);"
+            >
+              3
+            </strong>
+             / 6 owned
+          </span>
+          <span
+            style="color: rgb(224, 96, 96);"
+          >
+            3 missing
+          </span>
+          <span
+            style="display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; background: rgba(222, 176, 96, 0.16); color: rgb(228, 184, 104); border: 1px solid rgba(222, 176, 96, 0.32); border-radius: 9999px; font-size: 12px; font-weight: 600; line-height: 1.2; white-space: nowrap;"
+          >
+            1 new
+          </span>
+        </div>
+      </div>
+    </div>
+    <div
+      style="display: flex; gap: 8px; flex-wrap: wrap;"
+    >
+      <button
+        style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 44px; padding: 0px 16px; cursor: pointer;"
+      >
+        <span>
+          Re-scan sources
+        </span>
+      </button>
+      <button
+        style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 44px; padding: 0px 16px; cursor: pointer;"
+      >
+        <span>
+          Scan MAM
+        </span>
+      </button>
+      <button
+        style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 44px; padding: 0px 16px; cursor: pointer;"
+      >
+        <span>
+          Select
+        </span>
+      </button>
+    </div>
+    <section
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
+    >
+      <header
+        style="display: flex; align-items: center; gap: 8px; min-height: 36px; margin-bottom: 0px; cursor: pointer; user-select: none;"
+      >
+        <div
+          style="flex: 1 1 0%; min-width: 0px;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 6px; font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+          >
+            <span
+              style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+            >
+              Source IDs
+            </span>
+          </div>
+        </div>
+        <span
+          aria-hidden="true"
+          style="display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; font-size: 18px; font-weight: 700; color: rgb(150, 148, 172); background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 9999px; flex-shrink: 0; transform: rotate(-90deg); transition: transform 0.15s;"
+        >
+          ▾
+        </span>
+      </header>
+    </section>
+    <section
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 20px; margin-bottom: 16px;"
+    >
+      <header
+        style="display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 16px; cursor: pointer; user-select: none;"
+      >
+        <div
+          style="display: flex; align-items: center; gap: 8px;"
+        >
+          <h2
+            style="font-size: 16px; font-weight: 700; color: rgb(236, 234, 244);"
+          >
+            Source records
+          </h2>
+          <span
+            style="font-size: 12px; color: rgb(136, 134, 160); font-weight: 500;"
+          >
+            (
+            <span
+              style="color: rgb(224, 192, 96);"
+            >
+              1 to review
+            </span>
+            )
+          </span>
+        </div>
+        <div
+          style="display: flex; align-items: center; gap: 8px;"
+        >
+          <span
+            style="font-size: 13px; color: rgb(136, 134, 160);"
+          >
+            What each source contributed for this author, and whether anything else confirms it.
+          </span>
+          <span
+            style="font-size: 12px; color: rgb(136, 134, 160);"
+          >
+            ▾
+          </span>
+        </div>
+      </header>
+      <div
+        style="display: grid; gap: 10px;"
+      >
+        <div
+          style="display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 10px 12px; border-radius: 8px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); opacity: 1;"
+        >
+          <span
+            style="width: 8px; height: 8px; border-radius: 8px; background: rgb(76, 184, 136); flex-shrink: 0;"
+          />
+          <div
+            style="min-width: 140px;"
+          >
+            <div
+              style="font-weight: 600; color: rgb(236, 234, 244);"
+            >
+              hardcover
+            </div>
+            <div
+              style="font-size: 12px; color: rgb(214, 212, 224); font-family: monospace;"
+            >
+              ada-quill
+            </div>
+          </div>
+          <div
+            style="display: flex; gap: 18px; flex-wrap: wrap;"
+          >
+            <div
+              style="text-align: center; min-width: 56px;"
+            >
+              <div
+                style="font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+              >
+                4
+              </div>
+              <div
+                style="font-size: 11px; color: rgb(214, 212, 224);"
+              >
+                books
+              </div>
+            </div>
+            <div
+              style="text-align: center; min-width: 56px;"
+            >
+              <div
+                style="font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+              >
+                3
+              </div>
+              <div
+                style="font-size: 11px; color: rgb(214, 212, 224);"
+              >
+                confirmed elsewhere
+              </div>
+            </div>
+          </div>
+          <div
+            style="flex: 1 1 0%; min-width: 220px; font-size: 12px; color: rgb(214, 212, 224);"
+          >
+            <div
+              style="color: rgb(214, 212, 224); margin-top: 2px;"
+            >
+              This source identifies authors by name only, so its agreement doesn't confirm identity.
+            </div>
+            <div
+              style="margin-top: 6px; line-height: 1.5;"
+            >
+              <span
+                style="color: rgb(214, 212, 224);"
+              >
+                What it added: 
+              </span>
+              <span
+                style="color: rgb(236, 234, 244);"
+              >
+                The Glass Orchard · Rootbound … +2 more
+              </span>
+            </div>
+          </div>
+          <button
+            style="background: transparent; color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+          >
+            Blacklist record
+          </button>
+        </div>
+        <div
+          style="display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 10px 12px; border-radius: 8px; background: rgb(30, 32, 52); border: 1px solid rgb(224, 192, 96); opacity: 1;"
+        >
+          <span
+            style="width: 8px; height: 8px; border-radius: 8px; background: rgb(224, 192, 96); flex-shrink: 0;"
+          />
+          <div
+            style="min-width: 140px;"
+          >
+            <div
+              style="font-weight: 600; color: rgb(236, 234, 244);"
+            >
+              goodreads
+            </div>
+            <div
+              style="font-size: 12px; color: rgb(214, 212, 224); font-family: monospace;"
+            >
+              g-1001
+            </div>
+          </div>
+          <div
+            style="display: flex; gap: 18px; flex-wrap: wrap;"
+          >
+            <div
+              style="text-align: center; min-width: 56px;"
+            >
+              <div
+                style="font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+              >
+                2
+              </div>
+              <div
+                style="font-size: 11px; color: rgb(214, 212, 224);"
+              >
+                books
+              </div>
+            </div>
+            <div
+              style="text-align: center; min-width: 56px;"
+            >
+              <div
+                style="font-size: 18px; font-weight: 700; color: rgb(214, 212, 224);"
+              >
+                0
+              </div>
+              <div
+                style="font-size: 11px; color: rgb(214, 212, 224);"
+              >
+                confirmed elsewhere
+              </div>
+            </div>
+          </div>
+          <div
+            style="flex: 1 1 0%; min-width: 220px; font-size: 12px; color: rgb(214, 212, 224);"
+          >
+            Nothing else lists these.
+            <div
+              style="margin-top: 6px; line-height: 1.5;"
+            >
+              <span
+                style="color: rgb(214, 212, 224);"
+              >
+                What it added: 
+              </span>
+              <span
+                style="color: rgb(236, 234, 244);"
+              >
+                A Lantern for Wolves … +1 more
+              </span>
+            </div>
+          </div>
+          <button
+            style="background: rgb(224, 96, 96); color: rgb(26, 28, 48); border: 1px solid rgb(224, 96, 96); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+          >
+            Blacklist record
+          </button>
+        </div>
+      </div>
+    </section>
+    <section
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
+    >
+      <header
+        style="display: flex; align-items: center; gap: 8px; min-height: 36px; margin-bottom: 0px; cursor: pointer; user-select: none;"
+      >
+        <div
+          style="flex: 1 1 0%; min-width: 0px;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 6px; font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+          >
+            <span
+              style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+            >
+              Bio
+            </span>
+          </div>
+        </div>
+        <span
+          aria-hidden="true"
+          style="display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; font-size: 18px; font-weight: 700; color: rgb(150, 148, 172); background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 9999px; flex-shrink: 0; transform: rotate(-90deg); transition: transform 0.15s;"
+        >
+          ▾
+        </span>
+      </header>
+    </section>
+    <section
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
+    >
+      <header
+        style="display: flex; align-items: center; gap: 8px; min-height: 36px; margin-bottom: 0px; cursor: pointer; user-select: none;"
+      >
+        <div
+          style="flex: 1 1 0%; min-width: 0px;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 6px; font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+          >
+            <span
+              style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+            >
+              Pen names
+            </span>
+            <span
+              style="font-size: 13px; font-weight: 500; color: rgb(150, 148, 172);"
+            >
+              (1)
+            </span>
+          </div>
+        </div>
+        <span
+          aria-hidden="true"
+          style="display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; font-size: 18px; font-weight: 700; color: rgb(150, 148, 172); background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 9999px; flex-shrink: 0; transform: rotate(-90deg); transition: transform 0.15s;"
+        >
+          ▾
+        </span>
+      </header>
+    </section>
+    <div
+      style="display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none;"
+    >
+      <button
+        style="display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; min-height: 36px; background: rgba(222, 176, 96, 0.16); color: rgb(228, 184, 104); border: 1px solid rgba(222, 176, 96, 0.32); border-radius: 9999px; font-size: 13px; font-weight: 700; cursor: pointer; white-space: nowrap;"
+      >
+        Combined
+      </button>
+      <button
+        style="display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; min-height: 36px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 9999px; font-size: 13px; font-weight: 500; cursor: pointer; white-space: nowrap;"
+      >
+        📖 Ebook
+      </button>
+      <button
+        style="display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; min-height: 36px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 9999px; font-size: 13px; font-weight: 500; cursor: pointer; white-space: nowrap;"
+      >
+        🎧 Audio
+      </button>
+    </div>
+    <div
+      style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 6px; font-size: 13px; overflow-x: auto; scrollbar-width: none;"
+    >
+      <span
+        style="color: rgb(124, 122, 148); font-weight: 500; white-space: nowrap;"
+      >
+        Jump to:
+      </span>
+      <button
+        style="padding: 6px 14px; background: rgba(228, 184, 104, 0.133); color: rgb(228, 184, 104); border: 1px solid rgba(228, 184, 104, 0.267); border-radius: 5px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; min-height: 32px;"
+      >
+        📖 Ebook
+      </button>
+      <button
+        style="padding: 6px 14px; background: rgba(160, 136, 204, 0.133); color: rgb(160, 136, 204); border: 1px solid rgba(160, 136, 204, 0.267); border-radius: 5px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; min-height: 32px;"
+      >
+        🎧 Audio
+      </button>
+    </div>
+    <div
+      id="block-calibre-library"
+      style="scroll-margin-top: 80px;"
+    >
+      <div
+        style="display: flex; align-items: center; gap: 8px; padding: 16px 4px 8px;"
+      >
+        <div
+          style="width: 5px; height: 22px; background: rgb(228, 184, 104); border-radius: 3px;"
+        />
+        <span
+          style="font-size: 14px; color: rgb(228, 184, 104); font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;"
+        >
+          📖 Ebook
+        </span>
+      </div>
+      <section
+        style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
+      >
+        <header
+          style="display: flex; align-items: center; gap: 8px; min-height: 36px; margin-bottom: 0px; cursor: pointer; user-select: none;"
+        >
+          <div
+            style="flex: 1 1 0%; min-width: 0px;"
+          >
+            <div
+              style="display: flex; align-items: center; gap: 6px; font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+            >
+              <span
+                style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+              >
+                Orchard Cycle
+              </span>
+              <span
+                style="font-size: 13px; font-weight: 500; color: rgb(150, 148, 172);"
+              >
+                (1/3)
+              </span>
+            </div>
+            <div
+              style="font-size: 13px; color: rgb(150, 148, 172); margin-top: 2px;"
+            >
+              2 missing
+            </div>
+          </div>
+          <span
+            aria-hidden="true"
+            style="display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; font-size: 18px; font-weight: 700; color: rgb(150, 148, 172); background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 9999px; flex-shrink: 0; transform: rotate(-90deg); transition: transform 0.15s;"
+          >
+            ▾
+          </span>
+        </header>
+      </section>
+      <section
+        style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
+      >
+        <header
+          style="display: flex; align-items: center; gap: 8px; min-height: 36px; margin-bottom: 12px; cursor: pointer; user-select: none;"
+        >
+          <div
+            style="flex: 1 1 0%; min-width: 0px;"
+          >
+            <div
+              style="display: flex; align-items: center; gap: 6px; font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+            >
+              <span
+                style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+              >
+                Standalone
+              </span>
+              <span
+                style="font-size: 13px; font-weight: 500; color: rgb(150, 148, 172);"
+              >
+                (2)
+              </span>
+            </div>
+          </div>
+          <span
+            aria-hidden="true"
+            style="display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; font-size: 18px; font-weight: 700; color: rgb(150, 148, 172); background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 9999px; flex-shrink: 0; transform: rotate(0deg); transition: transform 0.15s;"
+          >
+            ▾
+          </span>
+        </header>
+        <div
+          style="display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr)); gap: 8px;"
+        >
+          <div
+            style="display: flex; gap: 12px; padding: 8px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 12px; cursor: pointer; opacity: 1;"
+          >
+            <div
+              style="width: 64px; height: 96px; flex-shrink: 0; background: rgb(30, 32, 52); border-radius: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center;"
+            >
+              <span
+                style="font-size: 24px; color: rgb(98, 96, 122);"
+              >
+                ?
+              </span>
+            </div>
+            <div
+              style="flex: 1 1 0%; min-width: 0px; display: flex; flex-direction: column; gap: 2px;"
+            >
+              <div
+                style="display: flex; align-items: baseline; gap: 4px; font-size: 15px; font-weight: 600; color: rgb(236, 234, 244); line-height: 1.3;"
+              >
+                <span
+                  style="flex: 1 1 0%; min-width: 0px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;"
+                >
+                  Ninefold Tide
+                </span>
+              </div>
+              <div
+                style="display: flex; align-items: center; gap: 4px; margin-top: 4px; flex-wrap: wrap;"
+              >
+                <span
+                  style="display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; background: rgba(76, 184, 136, 0.14); color: rgb(76, 184, 136); border: 1px solid rgb(58, 148, 104); border-radius: 9999px; font-size: 12px; font-weight: 600; line-height: 1.2; white-space: nowrap;"
+                >
+                  Owned
+                </span>
+              </div>
+            </div>
+          </div>
+          <div
+            style="display: flex; gap: 12px; padding: 8px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 12px; cursor: pointer; opacity: 1;"
+          >
+            <div
+              style="width: 64px; height: 96px; flex-shrink: 0; background: rgb(30, 32, 52); border-radius: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center;"
+            >
+              <span
+                style="font-size: 24px; color: rgb(98, 96, 122);"
+              >
+                ?
+              </span>
+            </div>
+            <div
+              style="flex: 1 1 0%; min-width: 0px; display: flex; flex-direction: column; gap: 2px;"
+            >
+              <div
+                style="display: flex; align-items: baseline; gap: 4px; font-size: 15px; font-weight: 600; color: rgb(236, 234, 244); line-height: 1.3;"
+              >
+                <span
+                  style="flex: 1 1 0%; min-width: 0px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;"
+                >
+                  A Lantern for Wolves
+                </span>
+              </div>
+              <div
+                style="display: flex; align-items: center; gap: 4px; margin-top: 4px; flex-wrap: wrap;"
+              >
+                <span
+                  style="display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; background: rgba(222, 176, 96, 0.16); color: rgb(228, 184, 104); border: 1px solid rgba(222, 176, 96, 0.32); border-radius: 9999px; font-size: 12px; font-weight: 600; line-height: 1.2; white-space: nowrap;"
+                >
+                  New
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+    <div
+      id="block-audiobookshelf"
+      style="scroll-margin-top: 80px;"
+    >
+      <div
+        style="display: flex; align-items: center; gap: 8px; padding: 16px 4px 8px;"
+      >
+        <div
+          style="width: 5px; height: 22px; background: rgb(160, 136, 204); border-radius: 3px;"
+        />
+        <span
+          style="font-size: 14px; color: rgb(160, 136, 204); font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;"
+        >
+          🎧 Audio
+        </span>
+      </div>
+      <section
+        style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
+      >
+        <header
+          style="display: flex; align-items: center; gap: 8px; min-height: 36px; margin-bottom: 12px; cursor: pointer; user-select: none;"
+        >
+          <div
+            style="flex: 1 1 0%; min-width: 0px;"
+          >
+            <div
+              style="display: flex; align-items: center; gap: 6px; font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+            >
+              <span
+                style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+              >
+                Standalone
+              </span>
+              <span
+                style="font-size: 13px; font-weight: 500; color: rgb(150, 148, 172);"
+              >
+                (1)
+              </span>
+            </div>
+          </div>
+          <span
+            aria-hidden="true"
+            style="display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; font-size: 18px; font-weight: 700; color: rgb(150, 148, 172); background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 9999px; flex-shrink: 0; transform: rotate(0deg); transition: transform 0.15s;"
+          >
+            ▾
+          </span>
+        </header>
+        <div
+          style="display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr)); gap: 8px;"
+        >
+          <div
+            style="display: flex; gap: 12px; padding: 8px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 12px; cursor: pointer; opacity: 1;"
+          >
+            <div
+              style="width: 64px; height: 96px; flex-shrink: 0; background: rgb(30, 32, 52); border-radius: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center;"
+            >
+              <img
+                alt=""
+                loading="lazy"
+                src="/api/discovery/covers/audiobookshelf/301"
+                style="width: 100%; height: 100%; object-fit: cover;"
+              />
+            </div>
+            <div
+              style="flex: 1 1 0%; min-width: 0px; display: flex; flex-direction: column; gap: 2px;"
+            >
+              <div
+                style="display: flex; align-items: baseline; gap: 4px; font-size: 15px; font-weight: 600; color: rgb(236, 234, 244); line-height: 1.3;"
+              >
+                <span
+                  style="flex: 1 1 0%; min-width: 0px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;"
+                >
+                  Ninefold Tide
+                </span>
+              </div>
+              <div
+                style="display: flex; align-items: center; gap: 4px; margin-top: 4px; flex-wrap: wrap;"
+              >
+                <span
+                  style="display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; background: rgba(76, 184, 136, 0.14); color: rgb(76, 184, 136); border: 1px solid rgb(58, 148, 104); border-radius: 9999px; font-size: 12px; font-weight: 600; line-height: 1.2; white-space: nowrap;"
+                >
+                  Owned
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Author detail (phone) > with pen-name links while a source scan runs > requests 1`] = `
+[
+  "GET /discovery/authors/11/pen-names",
+  "GET /discovery/authors/11/source-breakdown?slug=calibre-library",
+  "GET /discovery/authors/11?include_cross_library=1&slug=calibre-library",
+  "GET /discovery/mam/status",
+  "GET /discovery/persons/5",
+  "GET /discovery/scan-status",
+  "GET /discovery/series/7?slug=calibre-library",
+]
+`;

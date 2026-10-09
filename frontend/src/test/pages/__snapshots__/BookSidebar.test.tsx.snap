@@ -1,0 +1,1475 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Book sidebar (desktop) > a missing book MAM has > markup 1`] = `
+<DocumentFragment>
+  <div
+    style="position: fixed; top: 0px; right: 0px; width: 420px; max-width: 90vw; height: 100vh; background: rgb(34, 36, 56); border-left: 1px solid rgb(58, 60, 86); z-index: 100; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 16px; box-shadow: -4px 0 20px rgba(0,0,0,0.3); transform: translateX(0); transition: transform 0.25s ease-out;"
+  >
+    <div
+      style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;"
+    >
+      <h2
+        style="font-size: 18px; font-weight: 700; color: rgb(236, 234, 244); margin: 0px; flex: 1 1 0%; line-height: 1.3;"
+      >
+        The Glass Orchard
+      </h2>
+      <div
+        class="sb-actions"
+        style="display: flex; gap: 8px; flex-shrink: 0;"
+      >
+        <button
+          style="background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 8px; cursor: pointer; color: rgb(98, 96, 122); padding: 8px; min-width: 36px; min-height: 36px; display: flex; align-items: center; justify-content: center;"
+        >
+          <svg
+            fill="none"
+            height="16"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2.5"
+            viewBox="0 0 24 24"
+            width="16"
+          >
+            <path
+              d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"
+            />
+            <path
+              d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z"
+            />
+          </svg>
+        </button>
+        <button
+          style="background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 8px; cursor: pointer; color: rgb(98, 96, 122); padding: 8px 10px; min-height: 36px; font-size: 12px; font-weight: 600;"
+          title="Compare metadata across Seshat / Calibre / ABS"
+        >
+          Compare
+        </button>
+        <button
+          style="background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 8px; cursor: pointer; color: rgb(98, 96, 122); padding: 8px 10px; min-height: 36px; font-size: 12px; font-weight: 600;"
+          title="Merge this book with another (duplicate row resolution)"
+        >
+          Merge
+        </button>
+        <button
+          style="background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 8px; cursor: pointer; color: rgb(98, 96, 122); padding: 8px; min-width: 36px; min-height: 36px; display: flex; align-items: center; justify-content: center;"
+        >
+          <svg
+            fill="none"
+            height="16"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2.5"
+            viewBox="0 0 24 24"
+            width="16"
+          >
+            <line
+              x1="18"
+              x2="6"
+              y1="6"
+              y2="18"
+            />
+            <line
+              x1="6"
+              x2="18"
+              y1="6"
+              y2="18"
+            />
+          </svg>
+        </button>
+      </div>
+    </div>
+    <div
+      style="display: flex; flex-direction: column; gap: 10px;"
+    >
+      <div
+        style="display: flex; justify-content: space-between; align-items: baseline;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+        >
+          Author
+        </span>
+        <span
+          style="font-size: 13px; color: rgb(214, 212, 224); text-align: right;"
+        >
+          <span
+            style="display: inline-flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end;"
+          >
+            <span
+              style="display: inline-flex; align-items: center; gap: 4px; padding: 1px 4px 1px 8px; background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 11px; font-size: 12px; line-height: 1.5;"
+            >
+              Ada Quill
+              <button
+                aria-label="Remove Ada Quill"
+                style="display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; padding: 0px; border-radius: 50%; border: medium; background: none; color: rgb(224, 96, 96); cursor: pointer; font-size: 14px; opacity: 0.8;"
+                title="Remove Ada Quill from this book"
+              >
+                ×
+              </button>
+            </span>
+          </span>
+        </span>
+      </div>
+      <div
+        style="display: flex; justify-content: space-between; align-items: baseline;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+        >
+          Series
+        </span>
+        <span
+          style="font-size: 13px; color: rgb(136, 112, 180); text-align: right;"
+        >
+          Orchard Cycle
+          <span
+            style="color: rgb(150, 148, 172);"
+          >
+             (#2)
+          </span>
+        </span>
+      </div>
+      <div
+        style="display: flex; justify-content: space-between; align-items: baseline;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+        >
+          Published
+        </span>
+        <span
+          style="font-size: 13px; color: rgb(214, 212, 224); text-align: right;"
+        >
+          2024-05-14
+        </span>
+      </div>
+      <div
+        style="display: flex; justify-content: space-between; align-items: baseline;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+        >
+          Status
+        </span>
+        <span
+          style="font-size: 13px; color: rgb(200, 168, 72); text-align: right;"
+        >
+          Missing
+        </span>
+      </div>
+      <div
+        style="display: flex; justify-content: space-between; align-items: baseline;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+        >
+          Source
+        </span>
+        <span
+          style="font-size: 13px; color: rgb(98, 96, 122); text-align: right;"
+        >
+          Unowned
+        </span>
+      </div>
+      <div>
+        <div
+          style="display: flex; justify-content: space-between; align-items: center; gap: 4px;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+          >
+            MAM
+          </span>
+          <div
+            style="display: flex; align-items: center; gap: 6px;"
+          >
+            <a
+              href="https://example.invalid/t/900002"
+              rel="noopener noreferrer"
+              style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 5px; font-size: 12px; font-weight: 600; text-decoration: none; background: rgb(26, 58, 26); color: rgb(58, 148, 104); border: 1px solid rgb(42, 136, 42);"
+              target="_blank"
+            >
+              Found
+              <span
+                style="font-size: 10px; opacity: 0.7;"
+              >
+                ↗
+              </span>
+            </a>
+            <button
+              style="background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+              title="Re-scan this book against MAM"
+            >
+              ↻ Re-scan
+            </button>
+            <button
+              style="background: rgba(228, 184, 104, 0.133); color: rgb(228, 184, 104); border: 1px solid rgba(228, 184, 104, 0.267); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+            >
+              ⬇ Send to pipeline
+            </button>
+          </div>
+        </div>
+        <div
+          style="display: flex; justify-content: flex-end; gap: 14px; margin-top: 4px; font-size: 11px; color: rgb(98, 96, 122); flex-wrap: wrap;"
+        >
+          <label
+            style="display: flex; gap: 4px; align-items: center; cursor: pointer;"
+          >
+            <input
+              type="checkbox"
+            />
+            Use wedge
+          </label>
+        </div>
+        <div
+          style="display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 3px; flex-wrap: wrap;"
+        >
+          <span
+            style="font-size: 11px; color: rgb(150, 148, 172); font-weight: 500; text-transform: uppercase; letter-spacing: 0.03em;"
+          >
+            epub mobi
+          </span>
+        </div>
+      </div>
+      <div
+        style="display: flex; justify-content: space-between; align-items: baseline;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+        >
+          Library
+        </span>
+        <span
+          style="font-size: 13px; color: rgb(214, 212, 224); text-align: right;"
+        >
+          <span
+            style="font-size: 12px; padding: 1px 8px; border-radius: 4px; background: rgba(88, 184, 204, 0.14); color: rgb(72, 152, 176); border: 1px solid rgba(88, 184, 204, 0.2);"
+          >
+            📖 Calibre Library
+          </span>
+        </span>
+      </div>
+    </div>
+    <div
+      class="sb-actions"
+      style="display: flex; gap: 8px; margin-top: auto; padding-top: 12px; border-top: 1px solid rgb(46, 48, 72); flex-wrap: wrap;"
+    >
+      <button
+        style="background: rgba(224, 96, 96, 0.133); color: rgb(192, 72, 72); border: 1px solid rgba(224, 96, 96, 0.267); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+        title="Discard this match and mark the book as Not Found on MAM"
+      >
+         Remove MAM
+      </button>
+      <button
+        style="background: rgb(34, 36, 56); color: rgb(150, 148, 172); border: 1px solid rgb(46, 48, 72); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+        title="Mark this book as Not Applicable so MAM scans skip it (e.g. free-to-read, never on MAM)"
+      >
+         Skip MAM
+      </button>
+    </div>
+    <div
+      class="sb-actions"
+      style="display: flex; gap: 8px; margin-top: auto; padding-top: 12px; border-top: 1px solid rgb(46, 48, 72); flex-wrap: wrap;"
+    >
+      <button
+        style="background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+      >
+        Dismiss
+      </button>
+      <button
+        style="background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+      >
+        <svg
+          fill="none"
+          height="16"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2.5"
+          viewBox="0 0 24 24"
+          width="16"
+        >
+          <path
+            d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94"
+          />
+          <path
+            d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19"
+          />
+          <line
+            x1="1"
+            x2="23"
+            y1="1"
+            y2="23"
+          />
+        </svg>
+         Hide
+      </button>
+      <button
+        style="background: rgb(107, 32, 32); color: rgb(255, 144, 144); border: 1px rgb(139, 48, 48); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+      >
+        Delete
+      </button>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Book sidebar (desktop) > a missing book MAM has > requests 1`] = `
+[
+  "GET /discovery/mam/status",
+  "GET /discovery/pipeline/status",
+  "GET /discovery/series-suggestions/by-book/102",
+  "GET /discovery/settings",
+  "GET /v1/mam/economy/config",
+]
+`;
+
+exports[`Book sidebar (desktop) > an owned book with a series suggestion > markup 1`] = `
+<DocumentFragment>
+  <div
+    style="position: fixed; top: 0px; right: 0px; width: 420px; max-width: 90vw; height: 100vh; background: rgb(34, 36, 56); border-left: 1px solid rgb(58, 60, 86); z-index: 100; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 16px; box-shadow: -4px 0 20px rgba(0,0,0,0.3); transform: translateX(0); transition: transform 0.25s ease-out;"
+  >
+    <div
+      style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;"
+    >
+      <h2
+        style="font-size: 18px; font-weight: 700; color: rgb(236, 234, 244); margin: 0px; flex: 1 1 0%; line-height: 1.3;"
+      >
+        Ninefold Tide
+      </h2>
+      <div
+        class="sb-actions"
+        style="display: flex; gap: 8px; flex-shrink: 0;"
+      >
+        <button
+          style="background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 8px; cursor: pointer; color: rgb(98, 96, 122); padding: 8px; min-width: 36px; min-height: 36px; display: flex; align-items: center; justify-content: center;"
+        >
+          <svg
+            fill="none"
+            height="16"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2.5"
+            viewBox="0 0 24 24"
+            width="16"
+          >
+            <path
+              d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"
+            />
+            <path
+              d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z"
+            />
+          </svg>
+        </button>
+        <button
+          style="background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 8px; cursor: pointer; color: rgb(98, 96, 122); padding: 8px 10px; min-height: 36px; font-size: 12px; font-weight: 600;"
+          title="Compare metadata across Seshat / Calibre / ABS"
+        >
+          Compare
+        </button>
+        <button
+          style="background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 8px; cursor: pointer; color: rgb(98, 96, 122); padding: 8px 10px; min-height: 36px; font-size: 12px; font-weight: 600;"
+          title="Merge this book with another (duplicate row resolution)"
+        >
+          Merge
+        </button>
+        <button
+          style="background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 8px; cursor: pointer; color: rgb(98, 96, 122); padding: 8px; min-width: 36px; min-height: 36px; display: flex; align-items: center; justify-content: center;"
+        >
+          <svg
+            fill="none"
+            height="16"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2.5"
+            viewBox="0 0 24 24"
+            width="16"
+          >
+            <line
+              x1="18"
+              x2="6"
+              y1="6"
+              y2="18"
+            />
+            <line
+              x1="6"
+              x2="18"
+              y1="6"
+              y2="18"
+            />
+          </svg>
+        </button>
+      </div>
+    </div>
+    <div
+      style="display: flex; flex-direction: column; gap: 10px;"
+    >
+      <div
+        style="display: flex; justify-content: space-between; align-items: baseline;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+        >
+          Author
+        </span>
+        <span
+          style="font-size: 13px; color: rgb(214, 212, 224); text-align: right;"
+        >
+          <span
+            style="display: inline-flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end;"
+          >
+            <span
+              style="display: inline-flex; align-items: center; gap: 4px; padding: 1px 4px 1px 8px; background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 11px; font-size: 12px; line-height: 1.5;"
+            >
+              Ada Quill
+              <button
+                aria-label="Remove Ada Quill"
+                style="display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; padding: 0px; border-radius: 50%; border: medium; background: none; color: rgb(224, 96, 96); cursor: pointer; font-size: 14px; opacity: 0.8;"
+                title="Remove Ada Quill from this book"
+              >
+                ×
+              </button>
+            </span>
+          </span>
+        </span>
+      </div>
+      <div
+        style="display: flex; justify-content: space-between; align-items: baseline;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+        >
+          Published
+        </span>
+        <span
+          style="font-size: 13px; color: rgb(214, 212, 224); text-align: right;"
+        >
+          2024-05-14
+        </span>
+      </div>
+      <div
+        style="display: flex; justify-content: space-between; align-items: baseline;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+        >
+          Status
+        </span>
+        <span
+          style="font-size: 13px; color: rgb(58, 148, 104); text-align: right;"
+        >
+          Owned
+        </span>
+      </div>
+      <div
+        style="display: flex; justify-content: space-between; align-items: baseline;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+        >
+          Source
+        </span>
+        <span
+          style="font-size: 13px; color: rgb(150, 148, 172); text-align: right;"
+        >
+          Calibre
+        </span>
+      </div>
+      <div
+        style="display: flex; justify-content: space-between; align-items: center;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+        >
+          Calibre Web
+        </span>
+        <a
+          href="https://books.example.invalid/book/1204"
+          rel="noopener noreferrer"
+          style="font-size: 13px; color: rgb(228, 184, 104); text-decoration: none; display: flex; align-items: center; gap: 4px;"
+          target="_blank"
+        >
+          Open in Calibre Web 
+          <span
+            style="font-size: 10px;"
+          >
+            ↗
+          </span>
+        </a>
+      </div>
+      <div
+        style="background: rgba(228, 184, 104, 0.07); border: 1px solid rgba(228, 184, 104, 0.267); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px;"
+      >
+        <div
+          style="display: flex; align-items: center; gap: 6px;"
+        >
+          <span
+            style="font-size: 14px;"
+          >
+            💡
+          </span>
+          <span
+            style="font-size: 12px; font-weight: 700; color: rgb(228, 184, 104); text-transform: uppercase; letter-spacing: 0.06em;"
+          >
+            Series Suggestion
+          </span>
+        </div>
+        <div
+          style="font-size: 12px; color: rgb(214, 212, 224); line-height: 1.5;"
+        >
+          <span
+            style="color: rgb(98, 96, 122);"
+          >
+            Currently:
+          </span>
+           
+          <span
+            style="color: rgb(214, 212, 224);"
+          >
+            standalone
+          </span>
+          <br />
+          <span
+            style="color: rgb(98, 96, 122);"
+          >
+            Suggested:
+          </span>
+           
+          <span
+            style="color: rgb(228, 184, 104); font-weight: 600;"
+          >
+            Tidewater #1
+          </span>
+        </div>
+        <div
+          style="font-size: 11px; color: rgb(98, 96, 122);"
+        >
+          Agreed by: hardcover, goodreads
+        </div>
+        <div
+          style="display: flex; gap: 6px; flex-wrap: wrap;"
+        >
+          <button
+            style="background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+          >
+            <svg
+              fill="none"
+              height="16"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2.5"
+              viewBox="0 0 24 24"
+              width="16"
+            >
+              <polyline
+                points="20 6 9 17 4 12"
+              />
+            </svg>
+             Apply
+          </button>
+          <button
+            style="background: transparent; color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+          >
+            Ignore
+          </button>
+          <button
+            style="background: transparent; color: rgb(192, 72, 72); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+          >
+            <svg
+              fill="none"
+              height="16"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2.5"
+              viewBox="0 0 24 24"
+              width="16"
+            >
+              <polyline
+                points="3 6 5 6 21 6"
+              />
+              <path
+                d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+              />
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div>
+        <div
+          style="display: flex; justify-content: space-between; align-items: center; gap: 4px;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+          >
+            MAM
+          </span>
+          <div
+            style="display: flex; align-items: center; gap: 6px;"
+          >
+            <span
+              style="font-size: 12px; color: rgb(98, 96, 122); font-style: italic;"
+            >
+              Not scanned
+            </span>
+            <button
+              style="background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+              title="Re-scan this book against MAM"
+            >
+              ↻ Re-scan
+            </button>
+          </div>
+        </div>
+      </div>
+      <div
+        style="display: flex; justify-content: space-between; align-items: baseline;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+        >
+          ISBN
+        </span>
+        <span
+          style="font-size: 13px; color: rgb(214, 212, 224); text-align: right;"
+        >
+          9780000000104
+        </span>
+      </div>
+      <div
+        style="display: flex; justify-content: space-between; align-items: baseline;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+        >
+          Pages
+        </span>
+        <span
+          style="font-size: 13px; color: rgb(214, 212, 224); text-align: right;"
+        >
+          288
+        </span>
+      </div>
+      <div
+        style="display: flex; justify-content: space-between; align-items: baseline;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+        >
+          Publisher
+        </span>
+        <span
+          style="font-size: 13px; color: rgb(214, 212, 224); text-align: right;"
+        >
+          Lantern House
+        </span>
+      </div>
+      <div
+        style="display: flex; justify-content: space-between; align-items: baseline;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+        >
+          Library
+        </span>
+        <span
+          style="font-size: 13px; color: rgb(214, 212, 224); text-align: right;"
+        >
+          <span
+            style="font-size: 12px; padding: 1px 8px; border-radius: 4px; background: rgba(88, 184, 204, 0.14); color: rgb(72, 152, 176); border: 1px solid rgba(88, 184, 204, 0.2);"
+          >
+            📖 Calibre Library
+          </span>
+        </span>
+      </div>
+      <div
+        style="margin-top: 4px;"
+      >
+        <div
+          style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase; margin-bottom: 4px;"
+        >
+          Description
+        </div>
+        <p
+          style="font-size: 13px; color: rgb(150, 148, 172); line-height: 1.5; margin: 0px; max-height: 200px; overflow: auto;"
+        >
+          A tide that comes in nine times a day.
+        </p>
+      </div>
+    </div>
+    <div
+      class="sb-actions"
+      style="display: flex; gap: 8px; margin-top: auto; padding-top: 12px; border-top: 1px solid rgb(46, 48, 72); flex-wrap: wrap;"
+    >
+      <button
+        style="background: rgba(76, 184, 136, 0.133); color: rgb(58, 148, 104); border: 1px solid rgba(76, 184, 136, 0.267); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+        title="Confirm this match as Found without editing the URL"
+      >
+         Approve MAM
+      </button>
+      <button
+        style="background: rgba(224, 96, 96, 0.133); color: rgb(192, 72, 72); border: 1px solid rgba(224, 96, 96, 0.267); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+        title="Discard this match and mark the book as Not Found on MAM"
+      >
+         Remove MAM
+      </button>
+      <button
+        style="background: rgb(34, 36, 56); color: rgb(150, 148, 172); border: 1px solid rgb(46, 48, 72); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+        title="Mark this book as Not Applicable so MAM scans skip it (e.g. free-to-read, never on MAM)"
+      >
+         Skip MAM
+      </button>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Book sidebar (desktop) > an owned book with a series suggestion > requests 1`] = `
+[
+  "GET /discovery/mam/status",
+  "GET /discovery/pipeline/status",
+  "GET /discovery/series-suggestions/by-book/104",
+  "GET /discovery/settings",
+  "GET /v1/mam/economy/config",
+]
+`;
+
+exports[`Book sidebar (phone) > a missing book MAM has > markup 1`] = `
+<DocumentFragment>
+  <div
+    style="position: fixed; top: 0px; right: 0px; width: 100vw; max-width: 100vw; height: 100vh; background: rgb(34, 36, 56); border-left: medium; z-index: 100; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 16px; box-shadow: none; transform: translateX(0); transition: transform 0.25s ease-out;"
+  >
+    <div
+      style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;"
+    >
+      <h2
+        style="font-size: 18px; font-weight: 700; color: rgb(236, 234, 244); margin: 0px; flex: 1 1 0%; line-height: 1.3;"
+      >
+        The Glass Orchard
+      </h2>
+      <div
+        class="sb-actions"
+        style="display: flex; gap: 8px; flex-shrink: 0;"
+      >
+        <button
+          style="background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 8px; cursor: pointer; color: rgb(98, 96, 122); padding: 8px; min-width: 36px; min-height: 36px; display: flex; align-items: center; justify-content: center;"
+        >
+          <svg
+            fill="none"
+            height="16"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2.5"
+            viewBox="0 0 24 24"
+            width="16"
+          >
+            <path
+              d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"
+            />
+            <path
+              d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z"
+            />
+          </svg>
+        </button>
+        <button
+          style="background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 8px; cursor: pointer; color: rgb(98, 96, 122); padding: 8px 10px; min-height: 36px; font-size: 12px; font-weight: 600;"
+          title="Compare metadata across Seshat / Calibre / ABS"
+        >
+          Compare
+        </button>
+        <button
+          style="background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 8px; cursor: pointer; color: rgb(98, 96, 122); padding: 8px 10px; min-height: 36px; font-size: 12px; font-weight: 600;"
+          title="Merge this book with another (duplicate row resolution)"
+        >
+          Merge
+        </button>
+        <button
+          style="background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 8px; cursor: pointer; color: rgb(98, 96, 122); padding: 8px; min-width: 36px; min-height: 36px; display: flex; align-items: center; justify-content: center;"
+        >
+          <svg
+            fill="none"
+            height="16"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2.5"
+            viewBox="0 0 24 24"
+            width="16"
+          >
+            <line
+              x1="18"
+              x2="6"
+              y1="6"
+              y2="18"
+            />
+            <line
+              x1="6"
+              x2="18"
+              y1="6"
+              y2="18"
+            />
+          </svg>
+        </button>
+      </div>
+    </div>
+    <div
+      style="display: flex; flex-direction: column; gap: 10px;"
+    >
+      <div
+        style="display: flex; justify-content: space-between; align-items: baseline;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+        >
+          Author
+        </span>
+        <span
+          style="font-size: 13px; color: rgb(214, 212, 224); text-align: right;"
+        >
+          <span
+            style="display: inline-flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end;"
+          >
+            <span
+              style="display: inline-flex; align-items: center; gap: 4px; padding: 1px 4px 1px 8px; background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 11px; font-size: 12px; line-height: 1.5;"
+            >
+              Ada Quill
+              <button
+                aria-label="Remove Ada Quill"
+                style="display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; padding: 0px; border-radius: 50%; border: medium; background: none; color: rgb(224, 96, 96); cursor: pointer; font-size: 14px; opacity: 0.8;"
+                title="Remove Ada Quill from this book"
+              >
+                ×
+              </button>
+            </span>
+          </span>
+        </span>
+      </div>
+      <div
+        style="display: flex; justify-content: space-between; align-items: baseline;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+        >
+          Series
+        </span>
+        <span
+          style="font-size: 13px; color: rgb(136, 112, 180); text-align: right;"
+        >
+          Orchard Cycle
+          <span
+            style="color: rgb(150, 148, 172);"
+          >
+             (#2)
+          </span>
+        </span>
+      </div>
+      <div
+        style="display: flex; justify-content: space-between; align-items: baseline;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+        >
+          Published
+        </span>
+        <span
+          style="font-size: 13px; color: rgb(214, 212, 224); text-align: right;"
+        >
+          2024-05-14
+        </span>
+      </div>
+      <div
+        style="display: flex; justify-content: space-between; align-items: baseline;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+        >
+          Status
+        </span>
+        <span
+          style="font-size: 13px; color: rgb(200, 168, 72); text-align: right;"
+        >
+          Missing
+        </span>
+      </div>
+      <div
+        style="display: flex; justify-content: space-between; align-items: baseline;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+        >
+          Source
+        </span>
+        <span
+          style="font-size: 13px; color: rgb(98, 96, 122); text-align: right;"
+        >
+          Unowned
+        </span>
+      </div>
+      <div>
+        <div
+          style="display: flex; justify-content: space-between; align-items: center; gap: 4px;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+          >
+            MAM
+          </span>
+          <div
+            style="display: flex; align-items: center; gap: 6px;"
+          >
+            <a
+              href="https://example.invalid/t/900002"
+              rel="noopener noreferrer"
+              style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 5px; font-size: 12px; font-weight: 600; text-decoration: none; background: rgb(26, 58, 26); color: rgb(58, 148, 104); border: 1px solid rgb(42, 136, 42);"
+              target="_blank"
+            >
+              Found
+              <span
+                style="font-size: 10px; opacity: 0.7;"
+              >
+                ↗
+              </span>
+            </a>
+            <button
+              style="background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+              title="Re-scan this book against MAM"
+            >
+              ↻ Re-scan
+            </button>
+            <button
+              style="background: rgba(228, 184, 104, 0.133); color: rgb(228, 184, 104); border: 1px solid rgba(228, 184, 104, 0.267); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+            >
+              ⬇ Send to pipeline
+            </button>
+          </div>
+        </div>
+        <div
+          style="display: flex; justify-content: flex-end; gap: 14px; margin-top: 4px; font-size: 11px; color: rgb(98, 96, 122); flex-wrap: wrap;"
+        >
+          <label
+            style="display: flex; gap: 4px; align-items: center; cursor: pointer;"
+          >
+            <input
+              type="checkbox"
+            />
+            Use wedge
+          </label>
+        </div>
+        <div
+          style="display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 3px; flex-wrap: wrap;"
+        >
+          <span
+            style="font-size: 11px; color: rgb(150, 148, 172); font-weight: 500; text-transform: uppercase; letter-spacing: 0.03em;"
+          >
+            epub mobi
+          </span>
+        </div>
+      </div>
+      <div
+        style="display: flex; justify-content: space-between; align-items: baseline;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+        >
+          Library
+        </span>
+        <span
+          style="font-size: 13px; color: rgb(214, 212, 224); text-align: right;"
+        >
+          <span
+            style="font-size: 12px; padding: 1px 8px; border-radius: 4px; background: rgba(88, 184, 204, 0.14); color: rgb(72, 152, 176); border: 1px solid rgba(88, 184, 204, 0.2);"
+          >
+            📖 Calibre Library
+          </span>
+        </span>
+      </div>
+    </div>
+    <div
+      class="sb-actions"
+      style="display: flex; gap: 8px; margin-top: auto; padding-top: 12px; border-top: 1px solid rgb(46, 48, 72); flex-wrap: wrap;"
+    >
+      <button
+        style="background: rgba(224, 96, 96, 0.133); color: rgb(192, 72, 72); border: 1px solid rgba(224, 96, 96, 0.267); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+        title="Discard this match and mark the book as Not Found on MAM"
+      >
+         Remove MAM
+      </button>
+      <button
+        style="background: rgb(34, 36, 56); color: rgb(150, 148, 172); border: 1px solid rgb(46, 48, 72); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+        title="Mark this book as Not Applicable so MAM scans skip it (e.g. free-to-read, never on MAM)"
+      >
+         Skip MAM
+      </button>
+    </div>
+    <div
+      class="sb-actions"
+      style="display: flex; gap: 8px; margin-top: auto; padding-top: 12px; border-top: 1px solid rgb(46, 48, 72); flex-wrap: wrap;"
+    >
+      <button
+        style="background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+      >
+        Dismiss
+      </button>
+      <button
+        style="background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+      >
+        <svg
+          fill="none"
+          height="16"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2.5"
+          viewBox="0 0 24 24"
+          width="16"
+        >
+          <path
+            d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94"
+          />
+          <path
+            d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19"
+          />
+          <line
+            x1="1"
+            x2="23"
+            y1="1"
+            y2="23"
+          />
+        </svg>
+         Hide
+      </button>
+      <button
+        style="background: rgb(107, 32, 32); color: rgb(255, 144, 144); border: 1px rgb(139, 48, 48); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+      >
+        Delete
+      </button>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Book sidebar (phone) > a missing book MAM has > requests 1`] = `
+[
+  "GET /discovery/mam/status",
+  "GET /discovery/pipeline/status",
+  "GET /discovery/series-suggestions/by-book/102",
+  "GET /discovery/settings",
+  "GET /v1/mam/economy/config",
+]
+`;
+
+exports[`Book sidebar (phone) > an owned book with a series suggestion > markup 1`] = `
+<DocumentFragment>
+  <div
+    style="position: fixed; top: 0px; right: 0px; width: 100vw; max-width: 100vw; height: 100vh; background: rgb(34, 36, 56); border-left: medium; z-index: 100; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 16px; box-shadow: none; transform: translateX(0); transition: transform 0.25s ease-out;"
+  >
+    <div
+      style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;"
+    >
+      <h2
+        style="font-size: 18px; font-weight: 700; color: rgb(236, 234, 244); margin: 0px; flex: 1 1 0%; line-height: 1.3;"
+      >
+        Ninefold Tide
+      </h2>
+      <div
+        class="sb-actions"
+        style="display: flex; gap: 8px; flex-shrink: 0;"
+      >
+        <button
+          style="background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 8px; cursor: pointer; color: rgb(98, 96, 122); padding: 8px; min-width: 36px; min-height: 36px; display: flex; align-items: center; justify-content: center;"
+        >
+          <svg
+            fill="none"
+            height="16"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2.5"
+            viewBox="0 0 24 24"
+            width="16"
+          >
+            <path
+              d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"
+            />
+            <path
+              d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z"
+            />
+          </svg>
+        </button>
+        <button
+          style="background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 8px; cursor: pointer; color: rgb(98, 96, 122); padding: 8px 10px; min-height: 36px; font-size: 12px; font-weight: 600;"
+          title="Compare metadata across Seshat / Calibre / ABS"
+        >
+          Compare
+        </button>
+        <button
+          style="background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 8px; cursor: pointer; color: rgb(98, 96, 122); padding: 8px 10px; min-height: 36px; font-size: 12px; font-weight: 600;"
+          title="Merge this book with another (duplicate row resolution)"
+        >
+          Merge
+        </button>
+        <button
+          style="background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 8px; cursor: pointer; color: rgb(98, 96, 122); padding: 8px; min-width: 36px; min-height: 36px; display: flex; align-items: center; justify-content: center;"
+        >
+          <svg
+            fill="none"
+            height="16"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2.5"
+            viewBox="0 0 24 24"
+            width="16"
+          >
+            <line
+              x1="18"
+              x2="6"
+              y1="6"
+              y2="18"
+            />
+            <line
+              x1="6"
+              x2="18"
+              y1="6"
+              y2="18"
+            />
+          </svg>
+        </button>
+      </div>
+    </div>
+    <div
+      style="display: flex; flex-direction: column; gap: 10px;"
+    >
+      <div
+        style="display: flex; justify-content: space-between; align-items: baseline;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+        >
+          Author
+        </span>
+        <span
+          style="font-size: 13px; color: rgb(214, 212, 224); text-align: right;"
+        >
+          <span
+            style="display: inline-flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end;"
+          >
+            <span
+              style="display: inline-flex; align-items: center; gap: 4px; padding: 1px 4px 1px 8px; background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 11px; font-size: 12px; line-height: 1.5;"
+            >
+              Ada Quill
+              <button
+                aria-label="Remove Ada Quill"
+                style="display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; padding: 0px; border-radius: 50%; border: medium; background: none; color: rgb(224, 96, 96); cursor: pointer; font-size: 14px; opacity: 0.8;"
+                title="Remove Ada Quill from this book"
+              >
+                ×
+              </button>
+            </span>
+          </span>
+        </span>
+      </div>
+      <div
+        style="display: flex; justify-content: space-between; align-items: baseline;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+        >
+          Published
+        </span>
+        <span
+          style="font-size: 13px; color: rgb(214, 212, 224); text-align: right;"
+        >
+          2024-05-14
+        </span>
+      </div>
+      <div
+        style="display: flex; justify-content: space-between; align-items: baseline;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+        >
+          Status
+        </span>
+        <span
+          style="font-size: 13px; color: rgb(58, 148, 104); text-align: right;"
+        >
+          Owned
+        </span>
+      </div>
+      <div
+        style="display: flex; justify-content: space-between; align-items: baseline;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+        >
+          Source
+        </span>
+        <span
+          style="font-size: 13px; color: rgb(150, 148, 172); text-align: right;"
+        >
+          Calibre
+        </span>
+      </div>
+      <div
+        style="display: flex; justify-content: space-between; align-items: center;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+        >
+          Calibre Web
+        </span>
+        <a
+          href="https://books.example.invalid/book/1204"
+          rel="noopener noreferrer"
+          style="font-size: 13px; color: rgb(228, 184, 104); text-decoration: none; display: flex; align-items: center; gap: 4px;"
+          target="_blank"
+        >
+          Open in Calibre Web 
+          <span
+            style="font-size: 10px;"
+          >
+            ↗
+          </span>
+        </a>
+      </div>
+      <div
+        style="background: rgba(228, 184, 104, 0.07); border: 1px solid rgba(228, 184, 104, 0.267); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px;"
+      >
+        <div
+          style="display: flex; align-items: center; gap: 6px;"
+        >
+          <span
+            style="font-size: 14px;"
+          >
+            💡
+          </span>
+          <span
+            style="font-size: 12px; font-weight: 700; color: rgb(228, 184, 104); text-transform: uppercase; letter-spacing: 0.06em;"
+          >
+            Series Suggestion
+          </span>
+        </div>
+        <div
+          style="font-size: 12px; color: rgb(214, 212, 224); line-height: 1.5;"
+        >
+          <span
+            style="color: rgb(98, 96, 122);"
+          >
+            Currently:
+          </span>
+           
+          <span
+            style="color: rgb(214, 212, 224);"
+          >
+            standalone
+          </span>
+          <br />
+          <span
+            style="color: rgb(98, 96, 122);"
+          >
+            Suggested:
+          </span>
+           
+          <span
+            style="color: rgb(228, 184, 104); font-weight: 600;"
+          >
+            Tidewater #1
+          </span>
+        </div>
+        <div
+          style="font-size: 11px; color: rgb(98, 96, 122);"
+        >
+          Agreed by: hardcover, goodreads
+        </div>
+        <div
+          style="display: flex; gap: 6px; flex-wrap: wrap;"
+        >
+          <button
+            style="background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+          >
+            <svg
+              fill="none"
+              height="16"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2.5"
+              viewBox="0 0 24 24"
+              width="16"
+            >
+              <polyline
+                points="20 6 9 17 4 12"
+              />
+            </svg>
+             Apply
+          </button>
+          <button
+            style="background: transparent; color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+          >
+            Ignore
+          </button>
+          <button
+            style="background: transparent; color: rgb(192, 72, 72); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+          >
+            <svg
+              fill="none"
+              height="16"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2.5"
+              viewBox="0 0 24 24"
+              width="16"
+            >
+              <polyline
+                points="3 6 5 6 21 6"
+              />
+              <path
+                d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+              />
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div>
+        <div
+          style="display: flex; justify-content: space-between; align-items: center; gap: 4px;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+          >
+            MAM
+          </span>
+          <div
+            style="display: flex; align-items: center; gap: 6px;"
+          >
+            <span
+              style="font-size: 12px; color: rgb(98, 96, 122); font-style: italic;"
+            >
+              Not scanned
+            </span>
+            <button
+              style="background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+              title="Re-scan this book against MAM"
+            >
+              ↻ Re-scan
+            </button>
+          </div>
+        </div>
+      </div>
+      <div
+        style="display: flex; justify-content: space-between; align-items: baseline;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+        >
+          ISBN
+        </span>
+        <span
+          style="font-size: 13px; color: rgb(214, 212, 224); text-align: right;"
+        >
+          9780000000104
+        </span>
+      </div>
+      <div
+        style="display: flex; justify-content: space-between; align-items: baseline;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+        >
+          Pages
+        </span>
+        <span
+          style="font-size: 13px; color: rgb(214, 212, 224); text-align: right;"
+        >
+          288
+        </span>
+      </div>
+      <div
+        style="display: flex; justify-content: space-between; align-items: baseline;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+        >
+          Publisher
+        </span>
+        <span
+          style="font-size: 13px; color: rgb(214, 212, 224); text-align: right;"
+        >
+          Lantern House
+        </span>
+      </div>
+      <div
+        style="display: flex; justify-content: space-between; align-items: baseline;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+        >
+          Library
+        </span>
+        <span
+          style="font-size: 13px; color: rgb(214, 212, 224); text-align: right;"
+        >
+          <span
+            style="font-size: 12px; padding: 1px 8px; border-radius: 4px; background: rgba(88, 184, 204, 0.14); color: rgb(72, 152, 176); border: 1px solid rgba(88, 184, 204, 0.2);"
+          >
+            📖 Calibre Library
+          </span>
+        </span>
+      </div>
+      <div
+        style="margin-top: 4px;"
+      >
+        <div
+          style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase; margin-bottom: 4px;"
+        >
+          Description
+        </div>
+        <p
+          style="font-size: 13px; color: rgb(150, 148, 172); line-height: 1.5; margin: 0px; max-height: 200px; overflow: auto;"
+        >
+          A tide that comes in nine times a day.
+        </p>
+      </div>
+    </div>
+    <div
+      class="sb-actions"
+      style="display: flex; gap: 8px; margin-top: auto; padding-top: 12px; border-top: 1px solid rgb(46, 48, 72); flex-wrap: wrap;"
+    >
+      <button
+        style="background: rgba(76, 184, 136, 0.133); color: rgb(58, 148, 104); border: 1px solid rgba(76, 184, 136, 0.267); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+        title="Confirm this match as Found without editing the URL"
+      >
+         Approve MAM
+      </button>
+      <button
+        style="background: rgba(224, 96, 96, 0.133); color: rgb(192, 72, 72); border: 1px solid rgba(224, 96, 96, 0.267); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+        title="Discard this match and mark the book as Not Found on MAM"
+      >
+         Remove MAM
+      </button>
+      <button
+        style="background: rgb(34, 36, 56); color: rgb(150, 148, 172); border: 1px solid rgb(46, 48, 72); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+        title="Mark this book as Not Applicable so MAM scans skip it (e.g. free-to-read, never on MAM)"
+      >
+         Skip MAM
+      </button>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Book sidebar (phone) > an owned book with a series suggestion > requests 1`] = `
+[
+  "GET /discovery/mam/status",
+  "GET /discovery/pipeline/status",
+  "GET /discovery/series-suggestions/by-book/104",
+  "GET /discovery/settings",
+  "GET /v1/mam/economy/config",
+]
+`;
