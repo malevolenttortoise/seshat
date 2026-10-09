@@ -51,7 +51,6 @@ class TestRegistryShape:
             events.PIPELINE_DOWNLOAD_COMPLETE,
             events.PIPELINE_LIBRARY_INGEST,
             events.DISCOVERY_SCAN_COMPLETE,
-            events.SYNC_MAM_COOKIE_ROTATED,
         }
         for name in routine:
             meta = events.REGISTRY[name]
@@ -87,7 +86,6 @@ class TestRegistryShape:
             events.DISCOVERY_MAM_COMPLETE,
             events.DISCOVERY_PIPELINE_SENT,
             events.SYNC_LIBRARY,
-            events.SYNC_MAM_COOKIE_ROTATED,
             events.DIGEST_DAILY_ACCEPTED,
             events.DIGEST_DAILY_TENTATIVE,
             events.DIGEST_DAILY_IGNORED,

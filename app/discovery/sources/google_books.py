@@ -38,8 +38,8 @@ logger = logging.getLogger("seshat.discovery.google_books")
 _API = "https://www.googleapis.com/books/v1/volumes"
 
 # Circuit-breaker threshold: after this many consecutive 429 responses,
-# auto-disable the source by flipping `google_books_enabled` to False
-# in settings. The anonymous Google Books quota can run out for days on
+# auto-disable the source by switching off its toggles in
+# `metadata_sources` (see `_trip_circuit_breaker`). The anonymous Google Books quota can run out for days on
 # a modest library scan, and without this every subsequent scan wastes
 # a full per-book budget slot on a source that's guaranteed to 429.
 # 5 is tight enough to catch sustained exhaustion quickly without
@@ -113,11 +113,10 @@ class GoogleBooksSource(BaseSource):
         1 attempts" before the retry that usually succeeded.
 
         Also implements the auto-disable circuit breaker: tracks
-        consecutive 429 responses and flips `google_books_enabled` to
-        False when the threshold trips. The enricher loop gates on that
-        setting via `SourceSpec.setting_key`, so the very next author
-        skips Google Books entirely instead of burning 60s on a
-        guaranteed-to-fail request.
+        consecutive 429 responses and switches Google Books off in
+        `metadata_sources` when the threshold trips, so the very next
+        author skips it instead of burning 60s on a guaranteed-to-fail
+        request.
         """
         max_attempts = 3
         for attempt in range(max_attempts):

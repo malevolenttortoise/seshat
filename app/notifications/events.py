@@ -48,9 +48,8 @@ DISCOVERY_NEW_BOOKS = "discovery.new_books"
 DISCOVERY_MAM_COMPLETE = "discovery.mam_complete"
 DISCOVERY_PIPELINE_SENT = "discovery.pipeline_sent"
 
-# Sync events (library / cookie maintenance).
+# Sync events (library maintenance).
 SYNC_LIBRARY = "sync.library"
-SYNC_MAM_COOKIE_ROTATED = "sync.mam_cookie_rotated"
 
 # Source-health events (Goodreads canary, metadata-cache worker).
 SOURCE_GOODREADS_CANARY_FAILED = "source.goodreads_canary_failed"
@@ -193,14 +192,6 @@ _REGISTRY_ENTRIES: tuple[EventMeta, ...] = (
         description="A library finished syncing (Calibre / Audiobookshelf).",
         default_tags=("books",),
         legacy_setting_key="ntfy_on_library_sync",
-        legacy_default_enabled=False,
-    ),
-    EventMeta(
-        name=SYNC_MAM_COOKIE_ROTATED,
-        description="The MAM session cookie was automatically refreshed.",
-        default_priority=2,
-        default_tags=("key",),
-        legacy_setting_key="ntfy_on_mam_cookie_rotated",
         legacy_default_enabled=False,
     ),
     # ── Source health ───────────────────────────────────────

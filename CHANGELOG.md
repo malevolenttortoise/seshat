@@ -42,6 +42,13 @@ themselves.
   tentative torrents and grabs). At first start the MAM content tags of
   announces since 2026-10-08 (when the IRC line started being stored) are
   read back from their IRC lines.
+- **Settings keys no code knows are removed from settings.json** (wave 5a,
+  ADR-0027). On the first start, a long-running install loses its dead keys
+  (prod: 26 of 205, e.g. the old per-source `<source>_enabled` / `rate_<source>`
+  keys, `policy_lookup_torrent_info`); a copy of the file is kept first as
+  `settings.json.pre-sweep-<build>`, and each removed key is logged. Nothing
+  is removed on an install that hasn't converted to `metadata_sources` yet.
+  Downgrading after this restores those keys' defaults, not their values.
 - **Drop mode keeps a grab's .torrent when qBit can't be reached** (wave
   5a): a qBit login or network failure now saves the bytes and queues the
   grab in both full-budget modes, as queue mode already did. Before, drop
@@ -209,6 +216,10 @@ themselves.
 
 ### Removed
 
+- `mam_economy_fl_wedge_offer_enabled` (retired 2026-10-07: MAM refuses
+  personal-FL buys via the API) is gone from the settings and from
+  `GET /api/v1/economy/config`; the never-sent "MAM cookie rotated"
+  notification and its toggle are gone (ADR-0027).
 - The `requests` dependency (Amazon enrichment was its last user).
 - Dead code (audit issue 24): seven functions nothing called
   (`author_has_cached_books`, three cache-worker helpers,

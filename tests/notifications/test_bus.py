@@ -110,7 +110,6 @@ class TestIsEnabledLegacyDiscovery:
         seed_settings("{}")
         # Default-False events (legacy_default_enabled=False).
         assert bus.is_enabled(events.SYNC_LIBRARY) is False
-        assert bus.is_enabled(events.SYNC_MAM_COOKIE_ROTATED) is False
 
 
 # ─── is_enabled — new shape ──────────────────────────────────

@@ -1513,7 +1513,6 @@ function DesktopSettingsPage() {
                   <NCheck label="MAM scan complete" field="ntfy_on_mam_complete" s={s} upd={upd} />
                   <NCheck label="Sent to pipeline" field="ntfy_on_pipeline_sent" s={s} upd={upd} />
                   <NCheck label="Library sync" field="ntfy_on_library_sync" s={s} upd={upd} />
-                  <NCheck label="MAM cookie rotated" field="ntfy_on_mam_cookie_rotated" s={s} upd={upd} />
                 </div>
               </SF>
 
