@@ -7,8 +7,10 @@ import { VitePWA } from "vite-plugin-pwa";
 // - Dev server proxies /api → the FastAPI backend on :8789 so cookies
 //   work without CORS shenanigans.
 // - Build emits to ./dist; FastAPI mounts that at runtime.
-// - Manual chunk for the React vendor bundle keeps page chunks small
-//   and lets the browser cache react/react-dom across deploys.
+// - A separate chunk for the React vendor bundle keeps page chunks small
+//   and lets the browser cache react/react-dom across deploys (Rolldown
+//   `codeSplitting` group since Vite 8; Rollup's object-form
+//   `manualChunks` before).
 // - VitePWA generates the web-app manifest + service worker. The
 //   service worker only activates under HTTPS (or localhost) —
 //   browsers refuse to register SWs on plain-HTTP LAN origins, so on
@@ -183,14 +185,20 @@ export default defineConfig({
   build: {
     outDir: "dist",
     emptyOutDir: true,
-    minify: "esbuild",
+    // Minifier: Vite 8's default (oxc). Until Vite 6 this config named
+    // esbuild, which was that version's default.
     target: "es2020",
     cssCodeSplit: true,
     reportCompressedSize: false,
-    rollupOptions: {
+    rolldownOptions: {
       output: {
-        manualChunks: {
-          "react-vendor": ["react", "react-dom"],
+        codeSplitting: {
+          groups: [
+            {
+              name: "react-vendor",
+              test: /[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/,
+            },
+          ],
         },
       },
     },

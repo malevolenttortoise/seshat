@@ -15,7 +15,7 @@
 # loader expects to find at runtime.
 #
 # Three-stage build:
-#   1. node:22-alpine   compiles the React frontend (Vite + TypeScript)
+#   1. node:26-alpine   compiles the React frontend (Vite + TypeScript)
 #   2. python:3.12-slim downloads + extracts the Calibre tarball
 #   3. python:3.12-slim is the runtime; it copies /opt/calibre from
 #      stage 2 and frontend/dist from stage 1, then layers the Python
@@ -23,7 +23,7 @@
 #      ship in the runtime layer.
 
 # ─── Stage 1: frontend build ───────────────────────────────────
-FROM node:22-alpine AS frontend-build
+FROM node:26-alpine AS frontend-build
 WORKDIR /build
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
