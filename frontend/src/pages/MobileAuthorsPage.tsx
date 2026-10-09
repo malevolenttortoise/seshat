@@ -8,6 +8,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { useTheme } from "../theme";
+import { useMamEnabled } from "../hooks/useMamEnabled";
 import { usePersist } from "../hooks/usePersist";
 import { saveAuthorWalk } from "../hooks/useAuthorWalk";
 import { Ic } from "../icons";
@@ -23,7 +24,6 @@ import {
 import type {
   Author,
   AuthorsResponse,
-  MamStatusResponse,
   NavFn,
 } from "../types";
 
@@ -44,17 +44,10 @@ export default function MobileAuthorsPage({ onNav }: { onNav: NavFn }) {
   const [sort, setSort] = usePersist<string>("ap_sort", "name");
   const [fmt, setFmt] = usePersist<string>("ap_fmt", "all");
   const [pg, setPg] = usePersist<number>("ap_pg", 1);
-  const [mamOn, setMamOn] = useState(false);
+  const mamOn = useMamEnabled();
   const [sortSheet, setSortSheet] = useState(false);
 
   void mamOn; // reserved for future per-row MAM action
-
-  useEffect(() => {
-    api
-      .get<MamStatusResponse>("/discovery/mam/status")
-      .then((r) => setMamOn(!!r.enabled))
-      .catch(() => {});
-  }, []);
 
   useEffect(() => {
     const c = new AbortController();

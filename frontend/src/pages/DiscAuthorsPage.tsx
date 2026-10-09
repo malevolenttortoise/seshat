@@ -1,6 +1,7 @@
 // Authors page — alphabet sidebar + paginated grid/list.
 import { useEffect, useMemo, useState } from "react";
 import { useTheme } from "../theme";
+import { useMamEnabled } from "../hooks/useMamEnabled";
 import type { Theme } from "../theme";
 import { api } from "../api";
 import { usePersist } from "../hooks/usePersist";
@@ -18,7 +19,6 @@ import MobileAuthorsPage from "./MobileAuthorsPage";
 import type {
   Author,
   AuthorsResponse,
-  MamStatusResponse,
   NavFn,
 } from "../types";
 
@@ -86,19 +86,12 @@ function DesktopAuthorsPage({ onNav }: { onNav: NavFn }) {
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [clearing, setClearing] = useState(false);
   const [scanning, setScanning] = useState(false);
-  const [mamOn, setMamOn] = useState(false);
+  const mamOn = useMamEnabled();
   const [linking, setLinking] = useState(false);
   // v2.17.0 — generic busy flag for bulk Hide / Delete cascades
   // (distinct from `scanning` / `clearing` so the UI can show the
   // right spinner per action class).
   const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    api
-      .get<MamStatusResponse>("/discovery/mam/status")
-      .then((r) => setMamOn(!!r.enabled))
-      .catch(() => {});
-  }, []);
 
   useEffect(() => {
     const c = new AbortController();

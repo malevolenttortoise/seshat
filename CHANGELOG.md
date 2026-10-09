@@ -240,7 +240,8 @@ frontend test suite.
   (`useAuthorDetail`) and pen names (`usePenNames`); the multi-select of
   the author and Tentative pages (`useBulkSelection`); the Review queue
   (`useReviewQueue`); the book sidebar's open / close and the "is MAM on"
-  check of the author, MAM and Books pages (`useBookSidebar`,
+  check of the author, MAM and Books pages, and later of Series detail,
+  Hidden, Authors and Settings' discovery-data section (`useBookSidebar`,
   `useMamEnabled`); the Filters page's settings draft (`useFilterSettings`);
   the Discovery → MAM page's sections, list and scan (`useMamSection`); the
   Logs page's feed (`useLogFeed`); the Import page's preview and add

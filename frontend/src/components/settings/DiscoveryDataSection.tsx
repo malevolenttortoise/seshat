@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../../api";
 import { useTheme } from "../../theme";
+import { useMamEnabled } from "../../hooks/useMamEnabled";
 import type { Author, AuthorsResponse } from "../../types";
 import { Btn } from "../Btn";
 import { SF } from "./fields";
@@ -16,18 +17,12 @@ import { SF } from "./fields";
 //   POST /discovery/mam/reset                — wipe all MAM data
 export function DiscoveryDataSection() {
   const t = useTheme();
-  const [mamOn, setMamOn] = useState(false);
+  const mamOn = useMamEnabled();
   const [q, setQ] = useState("");
   const [results, setResults] = useState<Author[]>([]);
   const [picked, setPicked] = useState<Array<{ id: number; name: string }>>([]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
-
-  useEffect(() => {
-    api.get<{ enabled: boolean }>("/discovery/mam/status")
-      .then((r) => setMamOn(!!r.enabled))
-      .catch(() => {});
-  }, []);
 
   // Debounced author search — 300ms idle window so we don't fire on
   // every keystroke. Below 2 chars we clear results to avoid the

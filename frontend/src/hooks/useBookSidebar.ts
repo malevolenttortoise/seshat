@@ -1,9 +1,10 @@
 // Which book's sidebar is open, and its 200ms closing animation.
 //
 // The author-detail, Discovery MAM and Books pages (desktop + phone)
-// each carried this verbatim (wave 5b S7). The phone pages open a book
-// with a bare `setSb(b)`, the desktop ones with `toggleSb` (a second
-// click on the same book closes it); both stay as they were.
+// each carried this verbatim (wave 5b S7), as did Series detail and
+// Hidden (S18). The phone pages open a book with a bare `setSb(b)`, the
+// desktop ones with `toggleSb` (a second click on the same book closes
+// it) or `openSb` (Series detail); each stays as it was.
 import { useState } from "react";
 import type { Book } from "../types";
 
