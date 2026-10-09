@@ -34,6 +34,7 @@ import { SourceBreakdownPanel } from "../components/SourceBreakdownPanel";
 import { AuthorCacheStatusBadge } from "../components/AuthorCacheStatusBadge";
 import { GoodreadsAuthorCacheStatusBadge } from "../components/GoodreadsAuthorCacheStatusBadge";
 import { useViewport } from "../hooks/useViewport";
+import { useScanPolling } from "../hooks/useScanPolling";
 import { useMobileCodepath } from "../components/mobile";
 import MobileAuthorDetailPage from "./MobileAuthorDetailPage";
 import type {
@@ -44,7 +45,6 @@ import type {
   NavFn,
   PenNameLink,
   PenNamesResponse,
-  ScanStatusResponse,
   Series,
 } from "../types";
 
@@ -819,43 +819,20 @@ function DesktopAuthorDetailPage({
   // is on the Dashboard.
   //
   // Fix: poll `/discovery/scan-status` directly while on this page
-  // (3s cadence, mirrors `DiscBooksPage`'s MAM-scan poller). On a
-  // running→idle transition for `lookup` or `mam`, clear the
-  // corresponding local spinner state, call `loadA()` to refresh the
-  // author + book data, and bump `rk` so child series components
-  // re-mount with fresh keys.
-  useEffect(() => {
-    let active = true;
-    let prevLookup = false;
-    let prevMam = false;
-    const tick = async () => {
-      try {
-        const r = await api.get<ScanStatusResponse>("/discovery/scan-status");
-        if (!active) return;
-        const scans = r.scans || [];
-        const lookupRunning = scans.some((s) => s.kind === "lookup" && s.running);
-        const mamRunning = scans.some((s) => s.kind === "mam" && s.running);
-        const lookupDone = prevLookup && !lookupRunning;
-        const mamDone = prevMam && !mamRunning;
-        if (lookupDone || mamDone) {
-          if (lookupDone) setRef(false);
-          if (mamDone) setMamRef(false);
-          loadA();
-          setRk((k) => k + 1);
-        }
-        prevLookup = lookupRunning;
-        prevMam = mamRunning;
-      } catch {
-        /* ignore — scan-status is non-critical */
-      }
-    };
-    tick();
-    const id = window.setInterval(tick, 3000);
-    return () => {
-      active = false;
-      window.clearInterval(id);
-    };
-  }, [loadA]);
+  // (useScanPolling, shared with the mobile twin). On a running→idle
+  // transition for `lookup` or `mam`, clear the corresponding local
+  // spinner state, call `loadA()` to refresh the author + book data,
+  // and bump `rk` so child series components re-mount with fresh keys.
+  useScanPolling({
+    kinds: ["lookup", "mam"],
+    restartKey: loadA,
+    onComplete: (finished) => {
+      if (finished.includes("lookup")) setRef(false);
+      if (finished.includes("mam")) setMamRef(false);
+      loadA();
+      setRk((k) => k + 1);
+    },
+  });
 
   const onAction = async (act: BookAction, id: number, slug?: string) => {
     const scrollY = window.scrollY;

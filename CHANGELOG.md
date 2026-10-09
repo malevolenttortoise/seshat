@@ -232,6 +232,11 @@ frontend test suite.
   Node 26 (was 22). Same chunks as before (plus a 0.6 KB Rolldown runtime), the
   same service-worker caching rules, and every page renders as it did
   (the render snapshots above were taken on Vite 6 and pass unchanged).
+- **Desktop and phone pages share their logic** (wave 5b, issue 22): the
+  logic each pair of pages carried twice now lives in one hook both use,
+  with unit tests; the pages render and request exactly as before (their
+  render snapshots are unchanged). So far: the author page's
+  scan-finished poll (`useScanPolling`).
 
 ### Removed
 

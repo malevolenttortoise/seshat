@@ -21,6 +21,7 @@ import { SourceBreakdownPanel } from "../components/SourceBreakdownPanel";
 import { useAuthorWalk } from "../hooks/useAuthorWalk";
 import { AuthorCacheStatusBadge } from "../components/AuthorCacheStatusBadge";
 import { GoodreadsAuthorCacheStatusBadge } from "../components/GoodreadsAuthorCacheStatusBadge";
+import { useScanPolling } from "../hooks/useScanPolling";
 import {
   MobileBtn,
   MobileChip,
@@ -37,7 +38,6 @@ import type {
   NavFn,
   PenNameLink,
   PenNamesResponse,
-  ScanStatusResponse,
   Series,
 } from "../types";
 
@@ -340,42 +340,20 @@ export default function MobileAuthorDetailPage({
       .catch(() => {});
   }, []);
 
-  // v2.14.0 — page-local scan-completion poll. Mirrors the desktop
-  // DiscAuthorDetailPage poll: on a running→idle transition for
-  // `lookup` or `mam`, clear the corresponding local spinner state
-  // and call `loadA()` so the user sees the new state without a
-  // manual reload. See the desktop poll for full context.
-  useEffect(() => {
-    let active = true;
-    let prevLookup = false;
-    let prevMam = false;
-    const tick = async () => {
-      try {
-        const r = await api.get<ScanStatusResponse>("/discovery/scan-status");
-        if (!active) return;
-        const scans = r.scans || [];
-        const lookupRunning = scans.some((s) => s.kind === "lookup" && s.running);
-        const mamRunning = scans.some((s) => s.kind === "mam" && s.running);
-        const lookupDone = prevLookup && !lookupRunning;
-        const mamDone = prevMam && !mamRunning;
-        if (lookupDone || mamDone) {
-          if (lookupDone) setRef(false);
-          if (mamDone) setMamRef(false);
-          loadA();
-        }
-        prevLookup = lookupRunning;
-        prevMam = mamRunning;
-      } catch {
-        /* ignore — scan-status is non-critical */
-      }
-    };
-    tick();
-    const id = window.setInterval(tick, 3000);
-    return () => {
-      active = false;
-      window.clearInterval(id);
-    };
-  }, [loadA]);
+  // v2.14.0 — page-local scan-completion poll (useScanPolling, shared
+  // with the desktop DiscAuthorDetailPage): on a running→idle transition
+  // for `lookup` or `mam`, clear the corresponding local spinner state
+  // and call `loadA()` so the user sees the new state without a manual
+  // reload. See the desktop poll for full context.
+  useScanPolling({
+    kinds: ["lookup", "mam"],
+    restartKey: loadA,
+    onComplete: (finished) => {
+      if (finished.includes("lookup")) setRef(false);
+      if (finished.includes("mam")) setMamRef(false);
+      loadA();
+    },
+  });
 
   useEffect(() => {
     if (!authorIdNum) return;
