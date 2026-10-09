@@ -72,6 +72,27 @@ describe.each<Viewport>(["desktop", "phone"])("Author detail S17 states (%s)", (
   });
 });
 
+// G160: a started scan keeps its button busy until the scan finishes
+// (the scan-finished poll clears it), so a second tap starts nothing.
+describe.each<Viewport>(["desktop", "phone"])("Author detail scan buttons (%s)", (viewport) => {
+  it("a second tap while the scan runs sends nothing", async () => {
+    const r = await renderPage(<AuthorDetailPage authorId="calibre-library:11" onNav={vi.fn()} />, {
+      viewport,
+      routes: authorDetailScanStartRoutes,
+    });
+    const scan = viewport === "desktop" ? "Re-sync" : "Re-scan sources";
+    await press(r, buttonsNamed(r, scan)[0]);
+    await press(r, buttonsNamed(r, "Scan MAM")[0]);
+    for (const b of r.getAllByRole("button")) {
+      const text = (b.textContent ?? "").trim();
+      if (/^(Re-sync|Syncing…|Re-scan sources|Scan MAM|MAM scanning…)$/.test(text)) await press(r, b);
+    }
+    expect(r.unmatched).toEqual([]);
+    expect(r.requests.filter((q) => q.startsWith("POST /discovery/authors/11/lookup"))).toHaveLength(1);
+    expect(r.requests.filter((q) => q.startsWith("POST /discovery/mam/scan-author/11"))).toHaveLength(1);
+  });
+});
+
 describe.each<Viewport>(["desktop", "phone"])("Author detail pen-name unlink (%s)", (viewport) => {
   it("deletes the link by the route the backend has, then reloads the list", async () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);

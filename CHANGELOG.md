@@ -303,6 +303,10 @@ frontend test suite.
   failed request on both the desktop and phone Dashboard (the button just
   stopped spinning). Each now shows an error toast with the reason, e.g.
   "Couldn't start the MAM scan: …", "Couldn't cancel Data Hygiene: …".
+- **The phone's author page keeps a started scan's button busy** (wave 5b):
+  "Re-scan sources" and "Scan MAM" turned back on as soon as the start
+  request returned, so a second tap started another scan. They now show
+  "Syncing…" / "MAM scanning…" until the scan finishes, as on desktop.
 - Reingest from disk now honours the ebook format priority (Settings →
   Format Priorities) when a torrent holds several formats (wave 5a): it
   read a settings key nothing writes, so it never had one.

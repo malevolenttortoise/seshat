@@ -453,10 +453,11 @@ export default function MobileAuthorDetailPage({
       );
       toast.info(`Source scan started for ${r.author || "author"}`);
       window.dispatchEvent(new CustomEvent("seshat:scan-started"));
+      // Busy until the scan-finished poll clears it, as on desktop.
     } catch (e) {
       toast.error((e as Error).message || "Scan failed to start");
+      setRef(false);
     }
-    setRef(false);
   };
 
   const triggerMam = async () => {
@@ -468,14 +469,15 @@ export default function MobileAuthorDetailPage({
       );
       if (r.status === "complete") {
         toast.info(r.message || "No un-scanned books for this author");
+        setMamRef(false);
       } else {
         toast.info(`MAM scan started — ${r.total || 0} books`);
         window.dispatchEvent(new CustomEvent("seshat:scan-started"));
       }
     } catch (e) {
       toast.error((e as Error).message || "MAM scan failed to start");
+      setMamRef(false);
     }
-    setMamRef(false);
   };
 
   const linkPen = async (aliasPersonId: number, linkType = "pen_name") => {

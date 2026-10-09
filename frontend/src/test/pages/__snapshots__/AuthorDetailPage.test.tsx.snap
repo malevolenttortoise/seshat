@@ -5816,17 +5816,19 @@ exports[`Author detail S17 states (phone) > right after starting a source scan a
       style="display: flex; gap: 8px; flex-wrap: wrap;"
     >
       <button
+        disabled=""
         style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 44px; padding: 0px 16px; cursor: pointer;"
       >
         <span>
-          Re-scan sources
+          Syncing…
         </span>
       </button>
       <button
+        disabled=""
         style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 44px; padding: 0px 16px; cursor: pointer;"
       >
         <span>
-          Scan MAM
+          MAM scanning…
         </span>
       </button>
       <button
