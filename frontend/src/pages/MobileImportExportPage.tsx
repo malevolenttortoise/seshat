@@ -3,49 +3,16 @@
 // flow opens the existing ExportModal (Phase 5 will mobile-ify the
 // modal itself).
 import { useState } from "react";
-import { api } from "../api";
 import { useTheme } from "../theme";
 import { ExportModal } from "../components/ExportModal";
-import { MamLinkHint, isMamLine } from "../components/manualGrab/MamLinkHint";
+import { MamLinkHint } from "../components/manualGrab/MamLinkHint";
+import { useImportPreview, type ImportStatus } from "../hooks/useImportPreview";
 import {
   MobileBtn,
   MobileBadge,
   MobileSection,
   MobileBackButton,
 } from "../components/mobile";
-
-type ImportStatus = "new" | "owned" | "tracked" | "error" | "added";
-
-interface SeriesOption {
-  name: string;
-  position?: string | number | null;
-}
-
-interface ImportBook {
-  title?: string;
-  author_name?: string;
-  series_name?: string;
-  series_index?: string | number;
-  pub_date?: string;
-  cover_url?: string;
-  series_options?: SeriesOption[];
-}
-
-interface ImportPreviewRow {
-  status: ImportStatus;
-  book?: ImportBook;
-  error?: string;
-}
-
-interface ImportPreviewResponse {
-  results?: ImportPreviewRow[];
-}
-
-interface ImportAddResponse {
-  added: number;
-  updated: number;
-  error?: boolean;
-}
 
 const STATUS_TONE: Record<
   ImportStatus,
@@ -61,59 +28,17 @@ const STATUS_TONE: Record<
 export default function MobileImportExportPage() {
   const t = useTheme();
   const [urls, setUrls] = useState("");
-  const [results, setResults] = useState<ImportPreviewRow[] | null>(null);
-  const [fetching, setFetching] = useState(false);
-  const [progress, setProgress] = useState("");
-  const [adding, setAdding] = useState(false);
-  const [addResult, setAddResult] = useState<ImportAddResponse | null>(null);
+  const { results, fetching, progress, adding, addResult, fetchPreview: fetchRows, newRows, addBooks: addRows } =
+    useImportPreview();
   const [showExp, setShowExp] = useState(false);
 
-  const fetchPreview = async () => {
-    const lines = urls
-      .split("\n")
-      .map((u) => u.trim())
-      .filter((u) => u.startsWith("http") && !isMamLine(u));
-    if (!lines.length) return;
-    setFetching(true);
-    setResults(null);
-    setAddResult(null);
-    setProgress(`Fetching ${lines.length} book(s)…`);
-    try {
-      const d = await api.post<ImportPreviewResponse>(
-        "/discovery/books/import-preview",
-        { urls: lines },
-      );
-      setResults(d.results || []);
-      setProgress("");
-    } catch {
-      setProgress("Error fetching books");
-    }
-    setFetching(false);
-  };
+  const fetchPreview = () => fetchRows(urls, (n) => `Fetching ${n} book(s)…`);
 
   const addBooks = async () => {
     if (!results) return;
-    const newBooks = results
-      .filter((r) => r.status === "new" && r.book)
-      .map((r) => r.book!);
+    const newBooks = newRows.map((r) => r.book!);
     if (!newBooks.length) return;
-    setAdding(true);
-    setAddResult(null);
-    try {
-      const d = await api.post<ImportAddResponse>(
-        "/discovery/books/import-add",
-        { books: newBooks },
-      );
-      setAddResult(d);
-      setResults((prev) =>
-        (prev || []).map((r) =>
-          r.status === "new" ? { ...r, status: "added" as ImportStatus } : r,
-        ),
-      );
-    } catch {
-      setAddResult({ added: 0, updated: 0, error: true });
-    }
-    setAdding(false);
+    await addRows(newBooks);
   };
 
   const newCount = (results || []).filter((r) => r.status === "new").length;

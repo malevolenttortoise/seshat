@@ -12,50 +12,14 @@
 //     just opens it.
 import { useState } from "react";
 import { useTheme } from "../theme";
-import { api } from "../api";
 import { Btn } from "../components/Btn";
 import { Spin } from "../components/Spin";
 import { ExportModal } from "../components/ExportModal";
-import { MamLinkHint, isMamLine } from "../components/manualGrab/MamLinkHint";
+import { MamLinkHint } from "../components/manualGrab/MamLinkHint";
+import { useImportPreview, type ImportBook, type ImportStatus } from "../hooks/useImportPreview";
 import { useViewport } from "../hooks/useViewport";
 import { useMobileCodepath } from "../components/mobile";
 import MobileImportExportPage from "./MobileImportExportPage";
-
-// Preview-row status set emitted by /discovery/books/import-preview
-// plus "added" — applied client-side after a successful add so the
-// row flips badge without a refetch.
-type ImportStatus = "new" | "owned" | "tracked" | "error" | "added";
-
-interface SeriesOption {
-  name: string;
-  position?: string | number | null;
-}
-
-interface ImportBook {
-  title?: string;
-  author_name?: string;
-  series_name?: string;
-  series_index?: string | number;
-  pub_date?: string;
-  cover_url?: string;
-  series_options?: SeriesOption[];
-}
-
-interface ImportPreviewRow {
-  status: ImportStatus;
-  book?: ImportBook;
-  error?: string;
-}
-
-interface ImportPreviewResponse {
-  results?: ImportPreviewRow[];
-}
-
-interface ImportAddResponse {
-  added: number;
-  updated: number;
-  error?: boolean;
-}
 
 export default function ImportExportPage() {
   const vp = useViewport();
@@ -66,67 +30,11 @@ export default function ImportExportPage() {
 function DesktopImportExportPage() {
   const t = useTheme();
   const [urls, setUrls] = useState("");
-  const [results, setResults] = useState<ImportPreviewRow[] | null>(null);
-  const [fetching, setFetching] = useState(false);
-  const [progress, setProgress] = useState("");
-  const [adding, setAdding] = useState(false);
-  const [addResult, setAddResult] = useState<ImportAddResponse | null>(null);
+  const { results, fetching, progress, adding, addResult, fetchPreview: fetchRows, newRows: newBooks, addBooks, pickSeries } =
+    useImportPreview();
   const [showExp, setShowExp] = useState(false);
 
-  const fetchPreview = async () => {
-    const lines = urls
-      .split("\n")
-      .map((u) => u.trim())
-      .filter((u) => u.startsWith("http") && !isMamLine(u));
-    if (!lines.length) return;
-    setFetching(true);
-    setResults(null);
-    setAddResult(null);
-    setProgress(`Fetching ${lines.length} book(s)...`);
-    try {
-      const d = await api.post<ImportPreviewResponse>(
-        "/discovery/books/import-preview",
-        { urls: lines },
-      );
-      setResults(d.results || []);
-      setProgress("");
-    } catch {
-      setProgress("Error fetching books");
-    }
-    setFetching(false);
-  };
-
-  const addBooks = async (books: ImportBook[]) => {
-    setAdding(true);
-    setAddResult(null);
-    try {
-      const d = await api.post<ImportAddResponse>(
-        "/discovery/books/import-add",
-        { books },
-      );
-      setAddResult(d);
-      // Re-check: mark added ones in results.
-      if (results) {
-        setResults((prev) =>
-          (prev || []).map((r) => {
-            if (
-              r.status === "new" &&
-              books.some((b) => b.title === r.book?.title)
-            )
-              return { ...r, status: "added" };
-            return r;
-          }),
-        );
-      }
-    } catch {
-      setAddResult({ added: 0, updated: 0, error: true });
-    }
-    setAdding(false);
-  };
-
-  const newBooks: ImportPreviewRow[] = results
-    ? results.filter((r) => r.status === "new" && r.book)
-    : [];
+  const fetchPreview = () => fetchRows(urls, (n) => `Fetching ${n} book(s)...`);
   const statusColors: Record<ImportStatus, string> = {
     new: t.grnt,
     owned: t.cyant,
@@ -280,20 +188,7 @@ function DesktopImportExportPage() {
                           value={r.book.series_name || ""}
                           onChange={(e) => {
                             const picked = r.book!.series_options!.find((o) => o.name === e.target.value);
-                            setResults((prev) =>
-                              (prev || []).map((p, j) =>
-                                j === i
-                                  ? {
-                                      ...p,
-                                      book: {
-                                        ...(p.book as ImportBook),
-                                        series_name: picked?.name || "",
-                                        series_index: picked?.position || "",
-                                      },
-                                    }
-                                  : p,
-                              ),
-                            );
+                            pickSeries(i, picked);
                           }}
                           style={{
                             padding: "1px 4px",
