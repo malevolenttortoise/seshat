@@ -168,6 +168,13 @@ background worker instead of during scans.
 
 ### Fixed
 
+- Ebooks delivered to Calibre-Web-Automated never reached the library
+  when Seshat had patched their metadata. The patched epub was written
+  root-only (mode 0600); CWA v4.0.8+ ingests as a non-root user, couldn't
+  read it, deleted it and imported nothing, while Seshat recorded the
+  delivery. A patched epub now keeps the file's own mode, and every file
+  dropped into the CWA ingest folder is made readable (0644) and, when
+  Seshat runs as root, handed to the ingest folder's owner.
 - Hardcover enrichment stored its cover as the whole image object
   (`{"id": …, "url": …}`) instead of its URL, so a cover only Hardcover
   had could never be fetched for a review (audit G100).

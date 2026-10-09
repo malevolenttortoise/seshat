@@ -72,7 +72,9 @@ def _patch_opf(
     description: Optional[str] = None,
 ) -> bool:
     """Read the epub zip, patch the OPF, write it back."""
+    import os
     import shutil
+    import stat
     import tempfile
 
     opf_path = None
@@ -138,6 +140,10 @@ def _patch_opf(
                 else:
                     zf_out.writestr(item, zf_in.read(item.filename))
 
+        # The temp file is 0600: give it the epub's own mode first, or the
+        # patched copy is unreadable to a sink's non-root user (CWA v4.0.8+
+        # ingests as `abc`; 2026-10-09 it deleted every patched drop).
+        os.chmod(tmp, stat.S_IMODE(epub_path.stat().st_mode))
         # Atomic replace.
         shutil.move(str(tmp), str(epub_path))
         _log.info("patched epub metadata: %s", epub_path.name)

@@ -1,6 +1,7 @@
 """
 Unit tests for the CWA (Calibre-Web-Automated) sink.
 """
+import stat
 from pathlib import Path
 
 import pytest
@@ -49,6 +50,57 @@ class TestCWASink:
         result = await sink.deliver("/nope/book.epub", BookMetadata())
         assert result.success is False
         assert "not found" in result.error
+
+    async def test_dropped_file_is_readable_by_cwa(self, tmp_path):
+        # CWA v4.0.8+ ingests as a non-root user: a 0600 source (a patched
+        # epub) must still land readable, or CWA deletes it unimported.
+        src = tmp_path / "book.epub"
+        src.write_bytes(b"content")
+        src.chmod(0o600)
+        ingest = tmp_path / "cwa-ingest"
+
+        result = await CWASink(str(ingest)).deliver(str(src), BookMetadata())
+
+        assert result.success is True
+        assert stat.S_IMODE((ingest / "book.epub").stat().st_mode) == 0o644
+
+    async def test_dropped_file_goes_to_the_ingest_folders_owner(
+        self, tmp_path, monkeypatch,
+    ):
+        # Running as root, the file is handed to the ingest folder's owner
+        # (CWA's user) before the rename, so CWA can also fix it in place.
+        from app.sinks import cwa as cwa_module
+        chowned = []
+        monkeypatch.setattr(cwa_module.os, "geteuid", lambda: 0)
+        monkeypatch.setattr(
+            cwa_module.os, "chown",
+            lambda p, uid, gid: chowned.append((Path(p).name, uid, gid)),
+        )
+        src = tmp_path / "book.epub"
+        src.write_bytes(b"content")
+        ingest = tmp_path / "cwa-ingest"
+        ingest.mkdir()
+        owner = ingest.stat()
+
+        result = await CWASink(str(ingest)).deliver(str(src), BookMetadata())
+
+        assert result.success is True
+        assert chowned == [(".seshat-tmp-book.epub", owner.st_uid, owner.st_gid)]
+
+    async def test_no_chown_when_not_root(self, tmp_path, monkeypatch):
+        from app.sinks import cwa as cwa_module
+        chowned = []
+        monkeypatch.setattr(cwa_module.os, "geteuid", lambda: 1000)
+        monkeypatch.setattr(
+            cwa_module.os, "chown", lambda *a: chowned.append(a),
+        )
+        src = tmp_path / "book.epub"
+        src.write_bytes(b"content")
+
+        result = await CWASink(str(tmp_path / "in")).deliver(str(src), BookMetadata())
+
+        assert result.success is True
+        assert chowned == []
 
     async def test_creates_ingest_dir(self, tmp_path):
         src = tmp_path / "book.epub"

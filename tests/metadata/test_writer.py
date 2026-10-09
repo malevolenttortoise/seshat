@@ -1,6 +1,7 @@
 """
 Unit tests for the epub metadata writer.
 """
+import stat
 import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
@@ -36,6 +37,19 @@ def _make_epub(path: Path, title: str = "Original Title", author: str = "Origina
 
 
 class TestPatchEpubMetadata:
+    def test_keeps_the_file_mode(self, tmp_path):
+        # The rebuilt zip is a NamedTemporaryFile (0600). Moved over the
+        # epub as is, a root-owned patched copy was unreadable to CWA, which
+        # ingests as a non-root user since v4.0.8 (2026-10-09).
+        epub = tmp_path / "book.epub"
+        _make_epub(epub, title="Bad Title")
+        epub.chmod(0o664)
+
+        assert patch_epub_metadata(epub, title="Good Title") is True
+
+        assert stat.S_IMODE(epub.stat().st_mode) == 0o664
+        assert extract(epub).title == "Good Title"
+
     def test_patches_title(self, tmp_path):
         epub = tmp_path / "book.epub"
         _make_epub(epub, title="Bad Title")
