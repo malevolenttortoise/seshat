@@ -78,6 +78,9 @@ class MetaRecord:
         # Per-source contribution log, attached by the enricher.
         if hasattr(self, "_source_log"):
             d["source_log"] = self._source_log  # type: ignore[attr-defined]
+        # Which source each field came from (2026-10 audit S8, G63).
+        if getattr(self, "_field_sources", None):
+            d["field_sources"] = dict(self._field_sources)  # type: ignore[attr-defined]
         # v2.29.0 — observability flag for the cache-first Amazon path.
         # When True, the source served this record from a local cache
         # row (skipping the live amazon.com/s search). Read by the

@@ -1158,8 +1158,11 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
                     # language, etc.) keeps that hide.
                     # v3.0.0 Phase 9 (ADR-0012): no books.author_id —
                     # authorship is the book_authors set written below.
+                    # `discovered_by` keeps the source that found it
+                    # (2026-10 audit S8, G63): `source` becomes 'calibre'.
                     await db.execute("""
                         UPDATE books SET series_id=?,
+                        discovered_by=COALESCE(discovered_by, source),
                         owned=1, calibre_id=?, source='calibre', hidden=0
                         WHERE id=?
                     """, (our_series_id, book["book_id"], target_id))

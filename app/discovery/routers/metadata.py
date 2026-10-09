@@ -815,7 +815,8 @@ async def queue_apply(qid: int):
         # Update the books row + merge field into user_edited_fields.
         bid = row["book_id"]
         b_row = await (await db.execute(
-            "SELECT user_edited_fields FROM books WHERE id = ?", (bid,),
+            "SELECT user_edited_fields, field_source_map FROM books WHERE id = ?",
+            (bid,),
         )).fetchone()
         if not b_row:
             # Book deleted out from under us — drop the queue row.
@@ -826,9 +827,17 @@ async def queue_apply(qid: int):
             raise HTTPException(404, f"book {bid} not found")
         uef = _parse_user_edited(b_row["user_edited_fields"])
         uef_merged = sorted(set(uef) | {field})
+        # Provenance (2026-10 audit S8): the accepted value came from the
+        # queued row's source.
+        from app.discovery.lookup import _with_field_sources
+        fsm = _with_field_sources(
+            b_row["field_source_map"], row["source"] or "unknown",
+            ["series" if field == "series_id" else field],
+        )
         await db.execute(
-            f"UPDATE books SET {field}=?, user_edited_fields=? WHERE id=?",
-            (new_val, json.dumps(uef_merged), bid),
+            f"UPDATE books SET {field}=?, user_edited_fields=?, "
+            f"field_source_map=? WHERE id=?",
+            (new_val, json.dumps(uef_merged), fsm, bid),
         )
         await db.execute(
             "DELETE FROM metadata_review_queue WHERE id = ?", (qid,),

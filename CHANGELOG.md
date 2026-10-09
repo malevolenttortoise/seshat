@@ -53,6 +53,9 @@ background worker instead of during scans.
 - **Database migration**: the Goodreads cache database
   (`metadata_cache_goodreads.db`) gains four tables (the detail store and
   the candidate worker's progress).
+- **Database migration**: each library database goes to `user_version` 91
+  (a `discovered_by` column on books, filled from `source` for books no
+  library owns).
 
 - **A source's Rate on Metadata Sources is now the minimum gap between
   any two requests to that source, from anything in Seshat** (scans, the
@@ -125,6 +128,14 @@ background worker instead of during scans.
   **Phase 2** (fetch the page of every cached list entry) is built and off:
   a switch on the same card (`PATCH …/goodreads/settings`
   `{"phase2_enabled": true}`).
+- **Provenance** (wave 4b, audit issue 14): a discovered book remembers
+  which source created it after it becomes owned (`books.discovered_by`;
+  Calibre sync used to overwrite `source` with `calibre`, losing it), and
+  which source wrote each of its fields (`books.field_source_map`, JSON
+  field → source: written when a source creates the book, fills a field a
+  later scan finds empty, wins its series, or when you accept a queued
+  change). A grab's review metadata records which source won each field of
+  its enrichment (`enriched.field_sources`). No merge decision changes.
 - Metadata Sources › Goodreads: **Book-page gap** and **Include
   non-fiction from Goodreads** (`metadata_sources.goodreads.book_page_gap`,
   `.include_nonfiction`).

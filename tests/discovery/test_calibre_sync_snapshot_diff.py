@@ -489,6 +489,54 @@ class TestAutoUnhideOnMerge:
         assert row["hidden"] == 0  # ← the new behavior
         assert row["calibre_id"] == 3877
 
+    async def test_merge_keeps_the_discovering_source(
+        self, discovery_db, monkeypatch,
+    ):
+        """2026-10 audit S8 (G63): `source` becomes 'calibre' when a
+        discovered book becomes owned; `discovered_by` keeps who found
+        it."""
+        from app.discovery import calibre_sync
+        from app.discovery.database import get_db
+
+        db = await get_db()
+        try:
+            await db.execute(
+                "INSERT INTO authors (name, sort_name, normalized_name, calibre_id) "
+                "VALUES ('Eric Vall', 'Vall, Eric', 'eric vall', 100)"
+            )
+            for title, discovered_by in (("Found Before", None), ("Found After", "amazon")):
+                cur = await db.execute(
+                    "INSERT INTO books (title, source, owned, discovered_by) "
+                    "VALUES (?, ?, 0, ?)",
+                    (title, discovered_by or "goodreads", discovered_by),
+                )
+                await db.execute(
+                    "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+                    "VALUES (?, 1, 0)", (cur.lastrowid,),
+                )
+            await db.commit()
+        finally:
+            await db.close()
+        monkeypatch.setattr(
+            calibre_sync, "_read_calibre_db",
+            lambda *a, **kw: {"books": [
+                _book(1, "Found Before", "Eric Vall", author_id=100),
+                _book(2, "Found After", "Eric Vall", author_id=100),
+            ]},
+        )
+        await calibre_sync.sync_calibre("x", "y")
+        db = await get_db()
+        try:
+            rows = {r["title"]: (r["source"], r["discovered_by"]) for r in await (await db.execute(
+                "SELECT title, source, discovered_by FROM books"
+            )).fetchall()}
+        finally:
+            await db.close()
+        assert rows == {
+            "Found Before": ("calibre", "goodreads"),
+            "Found After": ("calibre", "amazon"),
+        }
+
     async def test_existing_calibre_row_keeps_user_hide(
         self, discovery_db, monkeypatch,
     ):

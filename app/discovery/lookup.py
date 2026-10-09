@@ -1290,6 +1290,42 @@ async def _propose_owned_author_change(db, book_id: int, bk, source_name: str) -
     )
 
 
+# ── Provenance (2026-10 audit wave 4b, S8 / G63) ─────────────────────
+# `books.field_source_map` records which source wrote each of these fields
+# of a book, as JSON {field: source}: every field a source fills when it
+# creates the book, and each one a later merge fills. (The column existed
+# since v2.3.0 and was written by nothing, so "which source's metadata
+# won" couldn't be measured.)
+_PROVENANCE_FIELDS = (
+    "title", "series", "series_index", "isbn", "cover_url", "pub_date",
+    "expected_date", "description", "page_count", "language",
+)
+
+
+def _with_field_sources(existing: Optional[str], source: str, fields) -> Optional[str]:
+    """`existing` field_source_map JSON with `fields` set to `source`."""
+    try:
+        m = json.loads(existing) if existing else {}
+    except (TypeError, ValueError):
+        m = {}
+    if not isinstance(m, dict):
+        m = {}
+    for f in fields:
+        m[f] = source
+    return json.dumps(m, sort_keys=True) if m else None
+
+
+def _inserted_fields(bk, *, series_id=None, series_index=None) -> list[str]:
+    """The provenance fields a new row gets a value for."""
+    values = {
+        "title": bk.title, "series": series_id, "series_index": series_index,
+        "isbn": bk.isbn, "cover_url": bk.cover_url, "pub_date": bk.pub_date,
+        "expected_date": bk.expected_date, "description": bk.description,
+        "page_count": bk.page_count, "language": bk.language,
+    }
+    return [f for f in _PROVENANCE_FIELDS if values.get(f) not in (None, "")]
+
+
 async def _merge_result(author_id: int, result: AuthorResult, source_name: str, languages: list[str], full_scan: bool = False, owned_only: bool = False, series_collector: dict | None = None, on_new_book=None, exclude_audiobooks: bool = True, linked_author_ids: list[int] = None, link_type_by_id: dict[int, str] | None = None):
     """Merge an AuthorResult, filtering by language. In full_scan mode, updates metadata on existing books.
 
@@ -1441,7 +1477,7 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
             f"SELECT id, title, source_url, series_id, series_index, source, "
             f"pub_date, expected_date, description, isbn, "
             f"(SELECT author_id FROM book_authors WHERE book_id=books.id AND position=0) AS author_id, "
-            f"is_omnibus, hidden, owned, language "
+            f"is_omnibus, hidden, owned, language, field_source_map "
             f"FROM books WHERE id IN "
             f"(SELECT book_id FROM book_authors WHERE author_id IN ({id_ph}))",
             all_author_ids,
@@ -1773,13 +1809,17 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                 sets.append(f"{source_name}_slug=COALESCE({source_name}_slug,?)")
                 vals.append(_slug)
             # Series update: fill if empty, or overwrite if current source has higher priority
+            written: list[str] = []   # provenance (S8)
             if series_id:
                 existing_series = matched_row["series_id"]
                 cur_priority = SOURCE_PRIORITY.get(source_name, 5)
                 existing_priority = SOURCE_PRIORITY.get(existing_source or "", 5)
                 if not existing_series or (cur_priority < existing_priority and existing_series != series_id):
                     sets.append("series_id=?"); vals.append(series_id)
-                    if bk.series_index: sets.append("series_index=?"); vals.append(bk.series_index)
+                    written.append("series")
+                    if bk.series_index:
+                        sets.append("series_index=?"); vals.append(bk.series_index)
+                        written.append("series_index")
                     logger.debug(f"    MERGE SERIES: '{bk.title}' (id={matched_row['id']}) → series_id={series_id} #{bk.series_index} (source={source_name}, was={existing_source})")
             # Omnibus flag promotion (additive only): existing rows that
             # were inserted before _RX_OMNIBUS matched their title — or
@@ -1844,6 +1884,7 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                 if _cur_lang is None or not str(_cur_lang).strip():
                     sets.append("language=?")
                     vals.append(bk.language)
+                    written.append("language")
             if full_scan:
                 REVIEW_FIELDS = (
                     ("description", bk.description),
@@ -1868,6 +1909,7 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                         sets.append(f"{field}=?")
                         vals.append(new_val)
                         fields_updated.append(f"{field}(filled)")
+                        written.append(field)
                     elif existing != new_val:
                         queue_rows.append((
                             matched_row["id"], field, existing, new_val, source_name,
@@ -1896,6 +1938,13 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                     )
             else:
                 logger.debug(f"    MERGE URL: '{bk.title}' (id={matched_row['id']}) ← {source_name}")
+            if written:
+                try:
+                    _cur_map = matched_row["field_source_map"]
+                except (IndexError, KeyError):
+                    _cur_map = None
+                sets.append("field_source_map=?")
+                vals.append(_with_field_sources(_cur_map, source_name, written))
             vals.append(matched_row["id"])
             return f"UPDATE books SET {', '.join(sets)} WHERE id=?", vals, queue_rows
 
@@ -2207,8 +2256,9 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                 # scanned author + co-authors are written to book_authors by
                 # _link_discovered_contributors below (always-links the
                 # scanned author at position 0).
-                _ins_cur = await db.execute(f"INSERT OR IGNORE INTO books (title,series_id,series_index,isbn,cover_url,pub_date,expected_date,is_unreleased,description,page_count,source,source_url,language,owned,is_new,is_omnibus,{source_name}_id,amazon_format_asins{_x_col_sql}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,1,?,?,?{_x_q_sql})",
-                    (bk.title, sid_use, s_idx, bk.isbn, bk.cover_url, bk.pub_date, bk.expected_date, 1 if bk.is_unreleased else 0, bk.description, bk.page_count, source_name, initial_urls, bk.language, 1 if omnibus else 0, bk.external_id, bk.amazon_format_asins, *_xvals))
+                _fsm = _with_field_sources(None, source_name, _inserted_fields(bk, series_id=sid_use, series_index=s_idx))
+                _ins_cur = await db.execute(f"INSERT OR IGNORE INTO books (title,series_id,series_index,isbn,cover_url,pub_date,expected_date,is_unreleased,description,page_count,source,source_url,language,owned,is_new,is_omnibus,{source_name}_id,amazon_format_asins,field_source_map,discovered_by{_x_col_sql}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,1,?,?,?,?,?{_x_q_sql})",
+                    (bk.title, sid_use, s_idx, bk.isbn, bk.cover_url, bk.pub_date, bk.expected_date, 1 if bk.is_unreleased else 0, bk.description, bk.page_count, source_name, initial_urls, bk.language, 1 if omnibus else 0, bk.external_id, bk.amazon_format_asins, _fsm, source_name, *_xvals))
                 if _ins_cur.rowcount and _ins_cur.lastrowid:
                     await _link_discovered_contributors(db, _ins_cur.lastrowid, author_id, bk, source_name, roster=roster, stats=roster_stats)
                 existing.add(norm); new_books += 1
@@ -2359,8 +2409,9 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
             _x_q_sql = ("," + ",".join(["?"] * len(_xcols))) if _xcols else ""
             # v3.0.0 Phase 9 (ADR-0012): no books.author_id — contributors
             # written to book_authors by _link_discovered_contributors below.
-            _ins_cur = await db.execute(f"INSERT OR IGNORE INTO books (title,isbn,cover_url,pub_date,expected_date,is_unreleased,description,page_count,source,source_url,language,owned,is_new,is_omnibus,{source_name}_id,amazon_format_asins{_x_col_sql}) VALUES (?,?,?,?,?,?,?,?,?,?,?,0,1,?,?,?{_x_q_sql})",
-                (bk.title, bk.isbn, bk.cover_url, bk.pub_date, bk.expected_date, 1 if bk.is_unreleased else 0, bk.description, bk.page_count, source_name, initial_urls, bk.language, 1 if omnibus else 0, bk.external_id, bk.amazon_format_asins, *_xvals))
+            _fsm = _with_field_sources(None, source_name, _inserted_fields(bk))
+            _ins_cur = await db.execute(f"INSERT OR IGNORE INTO books (title,isbn,cover_url,pub_date,expected_date,is_unreleased,description,page_count,source,source_url,language,owned,is_new,is_omnibus,{source_name}_id,amazon_format_asins,field_source_map,discovered_by{_x_col_sql}) VALUES (?,?,?,?,?,?,?,?,?,?,?,0,1,?,?,?,?,?{_x_q_sql})",
+                (bk.title, bk.isbn, bk.cover_url, bk.pub_date, bk.expected_date, 1 if bk.is_unreleased else 0, bk.description, bk.page_count, source_name, initial_urls, bk.language, 1 if omnibus else 0, bk.external_id, bk.amazon_format_asins, _fsm, source_name, *_xvals))
             if _ins_cur.rowcount and _ins_cur.lastrowid:
                 await _link_discovered_contributors(db, _ins_cur.lastrowid, author_id, bk, source_name, roster=roster, stats=roster_stats)
             existing.add(norm); new_books += 1

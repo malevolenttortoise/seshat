@@ -585,6 +585,8 @@ class MetadataEnricher:
                 )
                 source_log[-1]["status"] = "below_threshold"
                 continue
+            if not result.source:
+                result.source = src.name
             merged = _merge_records(merged, result)
             if is_exact:
                 have_exact_id = True
@@ -756,9 +758,18 @@ def _merge_records(
 
     Confidence takes the max so the threshold gate above can decide
     when to stop.
+
+    Which source each field came from is kept in `_field_sources`
+    (2026-10 audit wave 4b, S8 / G63), stored with the review metadata as
+    `enriched.field_sources`.
     """
     if into is None:
+        new._field_sources = {  # type: ignore[attr-defined]
+            f: new.source for f in _RECORD_FIELDS
+            if not _empty_value(getattr(new, f, None))
+        }
         return new
+    before = {f: getattr(into, f, None) for f in _RECORD_FIELDS}
 
     def _pick(a, b):
         return a if a not in (None, "", []) else b
@@ -800,4 +811,22 @@ def _merge_records(
     # Confidence is a max over all sources — any strong match boosts
     # our belief that the merged record is correct.
     into.confidence = max(into.confidence, new.confidence)
+    sources = dict(getattr(into, "_field_sources", None) or {})
+    for f in _RECORD_FIELDS:
+        now = getattr(into, f, None)
+        if not _empty_value(now) and now is not before[f] and now == getattr(new, f, None):
+            sources[f] = new.source
+    into._field_sources = sources  # type: ignore[attr-defined]
     return into
+
+
+# The record fields `_merge_records` merges (and keeps the source of).
+_RECORD_FIELDS = (
+    "title", "authors", "series", "series_index", "description", "isbn",
+    "publisher", "pub_date", "page_count", "language", "tags", "cover_url",
+    "narrator", "duration_sec", "asin", "abridged",
+)
+
+
+def _empty_value(v) -> bool:
+    return v is None or v == "" or v == []

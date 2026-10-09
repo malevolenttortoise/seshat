@@ -696,6 +696,14 @@ MIGRATIONS = [
     # book up by `calibre_id` inside its loop; unindexed, 3,696 lookups
     # took 4.07s on a real library (0.014s with the index).
     "CREATE INDEX IF NOT EXISTS idx_books_calibre_id ON books(calibre_id)",
+    # ── 2026-10 audit wave 4b, S8 (G63): provenance ──────────────────────
+    # `discovered_by` keeps the source that created a discovered book after
+    # it becomes owned (Calibre sync sets `source` to 'calibre' then). Rows
+    # discovered before this can only be backfilled while they're unowned:
+    # an owned row's discoverer was already overwritten.
+    "ALTER TABLE books ADD COLUMN discovered_by TEXT",
+    "UPDATE books SET discovered_by = source WHERE discovered_by IS NULL "
+    "AND source IS NOT NULL AND source NOT IN ('calibre', 'audiobookshelf')",
 ]
 
 
@@ -2145,6 +2153,7 @@ async def init_db(slug=None):
             # v2.3.0 metadata source pref + user-edit map.
             ("books", "metadata_source_pref", "TEXT NOT NULL DEFAULT 'seshat'"),
             ("books", "field_source_map", "TEXT"),
+            ("books", "discovered_by", "TEXT"),
             ("books", "user_edited_fields", "TEXT NOT NULL DEFAULT '[]'"),
             ("books", "amazon_format_asins", "TEXT"),
             # v2.12.0 — slug columns for badge URL fallback.
