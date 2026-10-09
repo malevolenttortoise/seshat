@@ -94,3 +94,16 @@ export const reviewPendingOnly = {
 export const reviewWithImportFailure = {
   "GET /v1/review": { items: [importFailed, enrichedPending, plainPending], pending_count: 2 },
 };
+
+// Bulk approve where one of the two fails (wave 5b S6a: the phone shows
+// the partial failure, as desktop does).
+export const reviewBulkPartialRoutes = {
+  ...reviewPendingOnly,
+  "POST /v1/review/bulk/approve": { processed: 1, failed: 1, errors: ["Saltwind: sink unreachable"] },
+};
+
+// Re-drop of the import failure fails (its message must stay on screen).
+export const reviewRedropFailRoutes = {
+  ...reviewWithImportFailure,
+  "POST /v1/review/503/redrop": { ok: false, error: "CWA ingest folder not writable" },
+};

@@ -200,8 +200,9 @@ function DesktopReviewPage() {
     setError(null);
     try {
       const r = await api.post<{ ok: boolean; error?: string | null }>(`/v1/review/${id}/redrop`);
-      if (!r.ok) setError(`Re-drop failed: ${r.error ?? "unknown error"}`);
+      // Refresh first: a successful refresh clears `error`.
       await refresh();
+      if (!r.ok) setError(`Re-drop failed: ${r.error ?? "unknown error"}`);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -214,8 +215,8 @@ function DesktopReviewPage() {
     setError(null);
     try {
       const r = await api.post<{ ok: boolean; error?: string | null }>(`/v1/review/${id}/mark-imported`);
-      if (!r.ok) setError(`Couldn't mark as imported: ${r.error ?? "unknown error"}`);
       await refresh();
+      if (!r.ok) setError(`Couldn't mark as imported: ${r.error ?? "unknown error"}`);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -240,12 +241,13 @@ function DesktopReviewPage() {
       const r = await api.post<{ processed: number; failed: number; errors: string[] }>(
         `/v1/review/bulk/approve`,
       );
+      // Refresh first: a successful refresh clears `error`.
+      await refresh();
       if (r.failed > 0) {
         setError(
           `Approved ${r.processed}, ${r.failed} failed. First errors: ${r.errors.slice(0, 3).join("; ")}`,
         );
       }
-      await refresh();
     } catch (e) {
       setError(String(e));
     } finally {
@@ -263,12 +265,13 @@ function DesktopReviewPage() {
       const r = await api.post<{ processed: number; failed: number; errors: string[] }>(
         `/v1/review/bulk/reject`, { note: "bulk rejected via UI" },
       );
+      // Refresh first: a successful refresh clears `error`.
+      await refresh();
       if (r.failed > 0) {
         setError(
           `Rejected ${r.processed}, ${r.failed} failed. First errors: ${r.errors.slice(0, 3).join("; ")}`,
         );
       }
-      await refresh();
     } catch (e) {
       setError(String(e));
     } finally {

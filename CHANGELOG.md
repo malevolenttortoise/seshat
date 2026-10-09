@@ -273,6 +273,11 @@ frontend test suite.
   called a route the backend doesn't have, so every unlink failed. On
   desktop a failed unlink now says so (it was silent), and both re-read
   the pen-name list after an unlink.
+- **The Review page keeps an action's failure on screen** (wave 5b): a bulk
+  approve / reject that partly failed, a failed Re-drop and a failed Mark
+  as imported each set their message and then refreshed the list, which
+  cleared it at once (the phone didn't show bulk failures at all). The
+  message now shows until the next refresh, like other errors there.
 - Reingest from disk now honours the ebook format priority (Settings →
   Format Priorities) when a torrent holds several formats (wave 5a): it
   read a settings key nothing writes, so it never had one.

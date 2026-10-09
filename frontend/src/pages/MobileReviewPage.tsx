@@ -179,8 +179,9 @@ export default function MobileReviewPage() {
     setError(null);
     try {
       const r = await api.post<{ ok: boolean; error?: string | null }>(`/v1/review/${id}/redrop`);
-      if (!r.ok) setError(`Re-drop failed: ${r.error ?? "unknown error"}`);
+      // Refresh first: a successful refresh clears `error`.
       await refresh();
+      if (!r.ok) setError(`Re-drop failed: ${r.error ?? "unknown error"}`);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -193,8 +194,8 @@ export default function MobileReviewPage() {
     setError(null);
     try {
       const r = await api.post<{ ok: boolean; error?: string | null }>(`/v1/review/${id}/mark-imported`);
-      if (!r.ok) setError(`Couldn't mark as imported: ${r.error ?? "unknown error"}`);
       await refresh();
+      if (!r.ok) setError(`Couldn't mark as imported: ${r.error ?? "unknown error"}`);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -216,9 +217,18 @@ export default function MobileReviewPage() {
     )
       return;
     setBulkBusy(true);
+    setError(null);
     try {
-      await api.post(`/v1/review/bulk/${action}`);
+      const r = await api.post<{ processed: number; failed: number; errors: string[] }>(
+        `/v1/review/bulk/${action}`,
+      );
+      // Refresh first: a successful refresh clears `error`.
       await refresh();
+      if (r.failed > 0) {
+        setError(
+          `${action === "approve" ? "Approved" : "Rejected"} ${r.processed}, ${r.failed} failed. First errors: ${r.errors.slice(0, 3).join("; ")}`,
+        );
+      }
     } catch (e) {
       setError(String(e));
     } finally {
