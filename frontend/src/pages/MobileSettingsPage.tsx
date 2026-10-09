@@ -12,23 +12,16 @@
 //     source reordering: simplified read-only views with a "manage
 //     on desktop" hint — these flows have UX needs (drag-reorder,
 //     multi-step wizards) that don't translate cleanly to a phone.
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { api } from "../api";
 import { useTheme } from "../theme";
+import { useSettingsDraft, type CredItem } from "../hooks/useSettingsDraft";
 import {
   MobileBtn,
   MobileSection,
   MobileBackButton,
   MobileBadge,
 } from "../components/mobile";
-
-type S = Record<string, unknown>;
-
-interface CredItem {
-  key: string;
-  label: string;
-  configured: boolean;
-}
 
 // ─── Reusable mobile field components ───────────────────────────
 
@@ -432,29 +425,9 @@ function MobileCredField({
 
 export default function MobileSettingsPage() {
   const t = useTheme();
-  const [s, setS] = useState<S | null>(null);
-  const [creds, setCreds] = useState<CredItem[]>([]);
-  const [saving, setSaving] = useState(false);
-  const [msg, setMsg] = useState("");
+  const { s, creds, loadCreds, upd, save, saving, msg } = useSettingsDraft();
   const [testNtfyResult, setTestNtfyResult] = useState<string | null>(null);
   const [testQbitResult, setTestQbitResult] = useState<string | null>(null);
-
-  useEffect(() => {
-    api
-      .get<S>("/v1/settings")
-      .then(setS)
-      .catch((e) => setMsg(`Error: ${e}`));
-  }, []);
-
-  const loadCreds = () => {
-    api
-      .get<{ items: CredItem[] }>("/v1/credentials")
-      .then((r) => setCreds(r.items))
-      .catch(() => {});
-  };
-  useEffect(() => {
-    loadCreds();
-  }, []);
 
   if (!s) {
     return (
@@ -463,25 +436,6 @@ export default function MobileSettingsPage() {
       </div>
     );
   }
-
-  const upd = (k: string, v: unknown) =>
-    setS((o) => (o ? { ...o, [k]: v } : o));
-
-  const save = async () => {
-    setSaving(true);
-    setMsg("");
-    try {
-      await api.patch("/v1/settings", s);
-      setMsg("Saved!");
-      const fresh = await api.get<S>("/v1/settings");
-      setS(fresh);
-      setTimeout(() => setMsg(""), 3000);
-    } catch {
-      setMsg("Error saving");
-    } finally {
-      setSaving(false);
-    }
-  };
 
   const testQbit = async () => {
     setTestQbitResult(null);

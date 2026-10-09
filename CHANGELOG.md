@@ -254,7 +254,11 @@ frontend test suite.
   (`components/bookSidebar/`), the sidebar 2,691 → 1,984 lines; the
   desktop and phone Dashboards share one hook for their data load, poll
   and commands (`useDashboard`), and the Amazon / Goodreads cache rails
-  moved to their own file (desktop 2,373 → 1,754 lines, phone 766 → 544).
+  moved to their own file (desktop 2,373 → 1,754 lines, phone 766 → 544);
+  both Settings pages share one hook for the settings draft, its save and
+  the credential list (`useSettingsDraft`), and six of the desktop page's
+  self-contained sections moved to their own files with the field
+  components they use (2,189 → 1,032 lines).
 - **The metadata-cache status is fetched once for every place that shows
   it** (wave 5b, audit L4-03): the navbar cloud icon, the Dashboard's
   Amazon / Goodreads cache rails and the Settings cache cards each polled
