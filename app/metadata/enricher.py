@@ -138,6 +138,36 @@ def _strip_series_decorator(title: str) -> str:
     return result
 
 
+# A trailing bracketed series tail: "(Frontline Zero Book 4)", "(Series #2)",
+# "(Series, Book 2)", "(Book 4)", "[The Fold 8]". MAM torrent names carry
+# it; sources' canonical titles don't.
+_SERIES_TAIL_RX = re.compile(
+    r"\s*(?:"
+    r"\([^()]*?(?:\b(?:book|volume|vol\.?|tome|part|episode)\s+#?|#)\s*\d+(?:\.\d+)?\s*\)"
+    r"|\[[^\[\]]*?\s#?\d+(?:\.\d+)?\s*\]"
+    r")\s*$",
+    re.IGNORECASE,
+)
+
+
+def _retry_title(title: str) -> str:
+    """The title the enricher retries with after a source misses.
+
+    A trailing bracketed series tail goes whole: "No One Dies Today
+    (Frontline Zero Book 4)" → "No One Dies Today". Stripping only its
+    "Book" word ("… (Frontline Zero 4)") missed again on every source and,
+    under Amazon's pacing, cost its second live request (2026-10-09).
+    Without such a tail, the series decorator goes and its number stays
+    (`_strip_series_decorator`). Returns the input when neither applies.
+    """
+    if not title:
+        return title
+    without_tail = _SERIES_TAIL_RX.sub("", title).strip()
+    if without_tail and without_tail != title.strip():
+        return without_tail
+    return _strip_series_decorator(title)
+
+
 def _clean_audiobook_title(title: str) -> str:
     """Normalize an audiobook title for external catalog search.
 
@@ -488,7 +518,7 @@ class MetadataEnricher:
             # when the first whiffed, never pays the fallback cost on
             # already-clean titles.
             if result is None:
-                cleaned = _strip_series_decorator(title)
+                cleaned = _retry_title(title)
                 if cleaned and cleaned != title:
                     elapsed_after = (
                         asyncio.get_event_loop().time() - budget_started_at

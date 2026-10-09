@@ -14,6 +14,7 @@ from app.metadata.enricher import (
     EnrichmentConfig,
     MetadataEnricher,
     _clean_audiobook_title,
+    _retry_title,
     _strip_series_decorator,
 )
 from app.metadata.record import MetaRecord
@@ -238,6 +239,31 @@ class TestEnricher:
         assert source.titles_seen == [
             "Monster's Mercy: Book 2",
             "Monster's Mercy 2",
+        ]
+
+    async def test_bracketed_series_tail_retries_without_it(self):
+        """Wave 5a: "No One Dies Today (Frontline Zero Book 4)" used to retry
+        as "No One Dies Today (Frontline Zero 4)", missing again on every
+        source (and costing Amazon's second live request). The retry drops
+        the whole bracket. Still one retry."""
+        cfg = EnrichmentConfig(enabled=True, accept_confidence=0.6)
+        hit = MetaRecord(
+            title="No One Dies Today", authors=["Maoyi Zhou"], source="amazon",
+        )
+        source = _TitleAwareSource(
+            name="amazon",
+            title_to_result={"No One Dies Today": hit},
+        )
+        enricher = MetadataEnricher(cfg, sources=[source])
+
+        result = await enricher.enrich(
+            title="No One Dies Today (Frontline Zero Book 4)", author="Maoyi Zhou",
+        )
+
+        assert result is not None and result.title == "No One Dies Today"
+        assert source.titles_seen == [
+            "No One Dies Today (Frontline Zero Book 4)",
+            "No One Dies Today",
         ]
 
     async def test_no_fallback_when_raw_title_matches(self):
@@ -563,6 +589,34 @@ class TestStripSeriesDecorator:
         assert _strip_series_decorator(
             "Monster's Mercy: book 2"
         ) == "Monster's Mercy 2"
+
+
+class TestRetryTitle:
+    """`_retry_title`: a trailing bracketed series tail goes whole; without
+    one, the series decorator goes and its number stays."""
+
+    @pytest.mark.parametrize("raw, retry", [
+        ("No One Dies Today (Frontline Zero Book 4)", "No One Dies Today"),
+        ("Lines of Defiance (Frontline Zero, Book 2)", "Lines of Defiance"),
+        ("Griffin Academy 2 (Knights Of War #2)", "Griffin Academy 2"),
+        ("Tumbled Troubles (Book 4)", "Tumbled Troubles"),
+        ("The Triangulum Fold [The Fold 8]", "The Triangulum Fold"),
+        ("Mistborn (Mistborn Vol. 3.5)", "Mistborn"),
+        # no bracket tail: today's decorator strip
+        ("Monster's Mercy: Book 2", "Monster's Mercy 2"),
+        ("Foundation", "Foundation"),
+        # a bracket that isn't a series tail stays
+        ("Leviathan Wakes (Unabridged)", "Leviathan Wakes (Unabridged)"),
+        ("Dune (1965)", "Dune (1965)"),
+        # only a TRAILING tail goes
+        ("Cradle [Wintersteel 8] Omnibus Edition", "Cradle [Wintersteel 8] Omnibus Edition"),
+    ])
+    def test_retry_title(self, raw, retry):
+        assert _retry_title(raw) == retry
+
+    def test_empty_and_none_safe(self):
+        assert _retry_title("") == ""
+        assert _retry_title(None) is None  # type: ignore[arg-type]
 
 
 # ─── F3 — cheap-source short-circuit gate ────────────────────

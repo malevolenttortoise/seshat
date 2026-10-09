@@ -183,6 +183,12 @@ themselves.
 
 ### Fixed
 
+- Enrichment's retry after a source misses drops a trailing bracketed
+  series tail (wave 5a): "No One Dies Today (Frontline Zero Book 4)" now
+  retries as "No One Dies Today", not "No One Dies Today (Frontline Zero
+  4)", which missed again on every source and spent Amazon's second live
+  request for nothing. Titles without such a tail retry as before
+  ("Monster's Mercy: Book 2" → "Monster's Mercy 2").
 - New authors from a Calibre or Audiobookshelf sync are linked to their
   cross-library person right away (wave 5a). Since v2.20.0 the link was
   attempted before the sync had saved the author, failed quietly, and the
