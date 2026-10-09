@@ -10,11 +10,7 @@ import { useTheme } from "../theme";
 import { fmtNum } from "../lib/format";
 import { BookSidebar } from "../components/BookSidebar";
 import { toast } from "../lib/toast";
-import {
-  type AuthorDetail,
-  type PersonHit,
-  type PersonSearchResponse,
-} from "../lib/authorDetail";
+import { type AuthorDetail } from "../lib/authorDetail";
 import { SourceBadgeRow } from "../components/SourceBadgeRow";
 import { SourceBreakdownPanel } from "../components/SourceBreakdownPanel";
 import { useAuthorWalk } from "../hooks/useAuthorWalk";
@@ -23,6 +19,7 @@ import { GoodreadsAuthorCacheStatusBadge } from "../components/GoodreadsAuthorCa
 import { useScanPolling } from "../hooks/useScanPolling";
 import { useAuthorDetail } from "../hooks/useAuthorDetail";
 import { useBulkSelection } from "../hooks/useBulkSelection";
+import { usePenNames } from "../hooks/usePenNames";
 import {
   MobileBtn,
   MobileChip,
@@ -37,8 +34,6 @@ import type {
   BookAction,
   MamStatusResponse,
   NavFn,
-  PenNameLink,
-  PenNamesResponse,
   Series,
 } from "../types";
 
@@ -264,12 +259,7 @@ export default function MobileAuthorDetailPage({
     setSeriesBooks((p) => ({ ...p, [key]: books }));
   }, []);
 
-  // pen-name management
-  const [penLinks, setPenLinks] = useState<PenNameLink[]>([]);
-  const [penQ, setPenQ] = useState("");
-  // v2.20.0 Phase 4 — search now returns person hits.
-  const [penResults, setPenResults] = useState<PersonHit[]>([]);
-  const [penBusy, setPenBusy] = useState(false);
+  // pen-name management (usePenNames, after loadA below)
 
   // Prev/next within the list the user came from. Keyed on the RAW
   // `authorId` because that's the nav-arg form the list snapshotted.
@@ -297,33 +287,11 @@ export default function MobileAuthorDetailPage({
     },
   });
 
-  useEffect(() => {
-    if (!authorIdNum) return;
-    api
-      .get<PenNamesResponse>(`/discovery/authors/${authorIdNum}/pen-names`)
-      .then((r) => setPenLinks(r.links || []))
-      .catch(() => {});
-  }, [authorIdNum]);
-
-  useEffect(() => {
-    if (penQ.length < 2) {
-      setPenResults([]);
-      return;
-    }
-    const tm = setTimeout(() => {
-      api
-        .get<PersonSearchResponse>(
-          `/discovery/persons/search?q=${encodeURIComponent(penQ)}`,
-        )
-        .then((r) =>
-          setPenResults(
-            (r.persons || []).filter((x) => x.person_id !== a?.person_id),
-          ),
-        )
-        .catch(() => {});
-    }, 300);
-    return () => clearTimeout(tm);
-  }, [penQ, a?.person_id]);
+  // v2.20.0 Phase 4 — the search returns person hits.
+  const {
+    penLinks, penQ, setPenQ, penResults, penBusy,
+    link: linkPenName, unlink: unlinkPenName,
+  } = usePenNames({ authorIdNum, personId: a?.person_id, onLinked: loadA });
 
   const closeSb = () => {
     if (!sb) return;
@@ -530,41 +498,22 @@ export default function MobileAuthorDetailPage({
       toast.error("Author not yet linked to a canonical person");
       return;
     }
-    setPenBusy(true);
     try {
-      await api.post("/discovery/persons/link-pen-names", {
-        canonical_person_id: a.person_id,
-        alias_person_id: aliasPersonId,
-        link_type: linkType,
-      });
-      const r = await api.get<PenNamesResponse>(
-        `/discovery/authors/${authorIdNum}/pen-names`,
-      );
-      setPenLinks(r.links || []);
-      await loadA();
-      setPenQ("");
-      setPenResults([]);
+      await linkPenName(aliasPersonId, linkType);
       toast.success("Linked");
     } catch (e) {
       toast.error((e as Error).message || "Link failed");
     }
-    setPenBusy(false);
   };
 
   const unlinkPen = async (linkId: number) => {
     if (!confirm("Remove this pen-name link?")) return;
-    setPenBusy(true);
     try {
-      await api.del(`/discovery/authors/pen-name-link/${linkId}`);
-      const r = await api.get<PenNamesResponse>(
-        `/discovery/authors/${authorIdNum}/pen-names`,
-      );
-      setPenLinks(r.links || []);
+      await unlinkPenName(linkId);
       toast.success("Unlinked");
     } catch (e) {
       toast.error((e as Error).message || "Unlink failed");
     }
-    setPenBusy(false);
   };
 
   if (ld && !a) {

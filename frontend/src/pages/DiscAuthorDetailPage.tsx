@@ -23,11 +23,7 @@ import { Section } from "../components/Section";
 import { BGrid, BList } from "../components/BookViews";
 import { BookSidebar } from "../components/BookSidebar";
 import { toast } from "../lib/toast";
-import {
-  type AuthorDetail,
-  type PersonHit,
-  type PersonSearchResponse,
-} from "../lib/authorDetail";
+import { type AuthorDetail } from "../lib/authorDetail";
 import { SourceBadgeRow } from "../components/SourceBadgeRow";
 import { SourceBreakdownPanel } from "../components/SourceBreakdownPanel";
 import { AuthorCacheStatusBadge } from "../components/AuthorCacheStatusBadge";
@@ -36,6 +32,7 @@ import { useViewport } from "../hooks/useViewport";
 import { useScanPolling } from "../hooks/useScanPolling";
 import { useAuthorDetail } from "../hooks/useAuthorDetail";
 import { useBulkSelection } from "../hooks/useBulkSelection";
+import { usePenNames } from "../hooks/usePenNames";
 import { useMobileCodepath } from "../components/mobile";
 import MobileAuthorDetailPage from "./MobileAuthorDetailPage";
 import type {
@@ -44,8 +41,6 @@ import type {
   BookActionHandler,
   MamStatusResponse,
   NavFn,
-  PenNameLink,
-  PenNamesResponse,
   Series,
 } from "../types";
 
@@ -511,88 +506,36 @@ function DesktopAuthorDetailPage({
   // `authorId` because that's the nav-arg form the list snapshotted.
   const walk = useAuthorWalk(authorId);
 
-  const [penLinks, setPenLinks] = useState<PenNameLink[]>([]);
-  const [penQ, setPenQ] = useState("");
-  // v2.20.0 Phase 4 — search returns person hits (deduped across
-  // libraries) instead of per-library author rows.
-  const [penResults, setPenResults] = useState<PersonHit[]>([]);
-  const [penBusy, setPenBusy] = useState(false);
   const [penType, setPenType] = usePersist<string>("adp_pen_type", "pen_name");
-
-  useEffect(() => {
-    if (!authorIdNum) return;
-    api
-      .get<PenNamesResponse>(`/discovery/authors/${authorIdNum}/pen-names`)
-      .then((r) => setPenLinks(r.links || []))
-      .catch(() => {});
-  }, [authorIdNum]);
-
-  useEffect(() => {
-    if (penQ.length < 2) {
-      setPenResults([]);
-      return;
-    }
-    const tm = setTimeout(() => {
-      api
-        .get<PersonSearchResponse>(
-          `/discovery/persons/search?q=${encodeURIComponent(penQ)}`,
-        )
-        .then((r) =>
-          setPenResults(
-            (r.persons || []).filter((x) => x.person_id !== a?.person_id),
-          ),
-        )
-        .catch(() => {});
-    }, 300);
-    return () => clearTimeout(tm);
-  }, [penQ, a?.person_id]);
+  // v2.20.0 Phase 4 — the search returns person hits (deduped across
+  // libraries) instead of per-library author rows.
+  const {
+    penLinks, penQ, setPenQ, penResults, penBusy, clearSearch,
+    link: linkPenName, unlink: unlinkPenName,
+  } = usePenNames({ authorIdNum, personId: a?.person_id, onLinked: loadA });
 
   const linkPen = async (aliasPersonId: number) => {
     if (!a?.person_id) {
       toast.error("Author not yet linked to a canonical person");
       return;
     }
-    setPenBusy(true);
     try {
-      await api.post("/discovery/persons/link-pen-names", {
-        canonical_person_id: a.person_id,
-        alias_person_id: aliasPersonId,
-        link_type: penType,
-      });
-      // Refresh both the legacy per-library chip list AND the unified
-      // person view (which reads pen_names from v2). Reloading the
-      // page-level state pulls in the fresh person.pen_names too.
-      const r = await api.get<PenNamesResponse>(
-        `/discovery/authors/${authorIdNum}/pen-names`,
-      );
-      setPenLinks(r.links || []);
-      await loadA();
-      setPenQ("");
-      setPenResults([]);
+      await linkPenName(aliasPersonId, penType);
       toast.success(
         penType === "co_author" ? "Co-author linked" : "Pen name linked",
       );
     } catch (e) {
       toast.error((e as Error).message || "Link failed");
     }
-    setPenBusy(false);
   };
 
   const unlinkPen = async (linkId: number) => {
-    setPenBusy(true);
     try {
-      await api.del(`/discovery/authors/pen-name-link/${linkId}`);
-      // Re-read the list rather than dropping the row locally: what the
-      // server holds now (the phone page did this already).
-      const r = await api.get<PenNamesResponse>(
-        `/discovery/authors/${authorIdNum}/pen-names`,
-      );
-      setPenLinks(r.links || []);
+      await unlinkPenName(linkId);
       toast.success("Author unlinked");
     } catch (e) {
       toast.error((e as Error).message || "Unlink failed");
     }
-    setPenBusy(false);
   };
 
   useEffect(() => {
@@ -1619,8 +1562,7 @@ function DesktopAuthorDetailPage({
           </div>
           <button
             onClick={() => {
-              setPenQ("");
-              setPenResults([]);
+              clearSearch();
             }}
             style={{
               background: "none",
