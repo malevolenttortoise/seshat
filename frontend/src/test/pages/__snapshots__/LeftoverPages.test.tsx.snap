@@ -1,0 +1,3696 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Authors (desktop) > two authors, MAM on > markup 1`] = `
+<DocumentFragment>
+  <div
+    style="display: flex; gap: 0px;"
+  >
+    <div
+      class="seshat-alphabet"
+      style="width: 80px; flex-shrink: 0; position: sticky; top: 56px; align-self: flex-start; max-height: calc(100vh - 100px); overflow-y: auto; display: flex; flex-direction: column; align-items: center; padding: 10px 12px; margin-right: 16px; background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 10px;"
+    >
+      <button
+        style="background: rgba(222, 176, 96, 0.16); color: rgb(228, 184, 104); border: medium; border-radius: 6px; width: 52px; padding: 6px 0px; font-size: 13px; font-weight: 700; cursor: pointer; margin-bottom: 6px;"
+      >
+        All
+      </button>
+      <button
+        style="background: transparent; color: rgb(98, 96, 122); border: medium; border-radius: 6px; width: 52px; padding: 4px 0px; font-size: 15px; font-weight: 500; cursor: default; opacity: 0.3;"
+      >
+        A
+        <span
+          style="font-size: 9px; color: rgb(124, 122, 148); display: block;"
+        />
+      </button>
+      <button
+        style="background: transparent; color: rgb(98, 96, 122); border: medium; border-radius: 6px; width: 52px; padding: 4px 0px; font-size: 15px; font-weight: 500; cursor: default; opacity: 0.3;"
+      >
+        B
+        <span
+          style="font-size: 9px; color: rgb(124, 122, 148); display: block;"
+        />
+      </button>
+      <button
+        style="background: transparent; color: rgb(98, 96, 122); border: medium; border-radius: 6px; width: 52px; padding: 4px 0px; font-size: 15px; font-weight: 500; cursor: default; opacity: 0.3;"
+      >
+        C
+        <span
+          style="font-size: 9px; color: rgb(124, 122, 148); display: block;"
+        />
+      </button>
+      <button
+        style="background: transparent; color: rgb(98, 96, 122); border: medium; border-radius: 6px; width: 52px; padding: 4px 0px; font-size: 15px; font-weight: 500; cursor: default; opacity: 0.3;"
+      >
+        D
+        <span
+          style="font-size: 9px; color: rgb(124, 122, 148); display: block;"
+        />
+      </button>
+      <button
+        style="background: transparent; color: rgb(98, 96, 122); border: medium; border-radius: 6px; width: 52px; padding: 4px 0px; font-size: 15px; font-weight: 500; cursor: default; opacity: 0.3;"
+      >
+        E
+        <span
+          style="font-size: 9px; color: rgb(124, 122, 148); display: block;"
+        />
+      </button>
+      <button
+        style="background: transparent; color: rgb(98, 96, 122); border: medium; border-radius: 6px; width: 52px; padding: 4px 0px; font-size: 15px; font-weight: 500; cursor: default; opacity: 0.3;"
+      >
+        F
+        <span
+          style="font-size: 9px; color: rgb(124, 122, 148); display: block;"
+        />
+      </button>
+      <button
+        style="background: transparent; color: rgb(98, 96, 122); border: medium; border-radius: 6px; width: 52px; padding: 4px 0px; font-size: 15px; font-weight: 500; cursor: default; opacity: 0.3;"
+      >
+        G
+        <span
+          style="font-size: 9px; color: rgb(124, 122, 148); display: block;"
+        />
+      </button>
+      <button
+        style="background: transparent; color: rgb(98, 96, 122); border: medium; border-radius: 6px; width: 52px; padding: 4px 0px; font-size: 15px; font-weight: 500; cursor: default; opacity: 0.3;"
+      >
+        H
+        <span
+          style="font-size: 9px; color: rgb(124, 122, 148); display: block;"
+        />
+      </button>
+      <button
+        style="background: transparent; color: rgb(98, 96, 122); border: medium; border-radius: 6px; width: 52px; padding: 4px 0px; font-size: 15px; font-weight: 500; cursor: default; opacity: 0.3;"
+      >
+        I
+        <span
+          style="font-size: 9px; color: rgb(124, 122, 148); display: block;"
+        />
+      </button>
+      <button
+        style="background: transparent; color: rgb(98, 96, 122); border: medium; border-radius: 6px; width: 52px; padding: 4px 0px; font-size: 15px; font-weight: 500; cursor: default; opacity: 0.3;"
+      >
+        J
+        <span
+          style="font-size: 9px; color: rgb(124, 122, 148); display: block;"
+        />
+      </button>
+      <button
+        style="background: transparent; color: rgb(98, 96, 122); border: medium; border-radius: 6px; width: 52px; padding: 4px 0px; font-size: 15px; font-weight: 500; cursor: default; opacity: 0.3;"
+      >
+        K
+        <span
+          style="font-size: 9px; color: rgb(124, 122, 148); display: block;"
+        />
+      </button>
+      <button
+        style="background: transparent; color: rgb(98, 96, 122); border: medium; border-radius: 6px; width: 52px; padding: 4px 0px; font-size: 15px; font-weight: 500; cursor: default; opacity: 0.3;"
+      >
+        L
+        <span
+          style="font-size: 9px; color: rgb(124, 122, 148); display: block;"
+        />
+      </button>
+      <button
+        style="background: transparent; color: rgb(98, 96, 122); border: medium; border-radius: 6px; width: 52px; padding: 4px 0px; font-size: 15px; font-weight: 500; cursor: default; opacity: 0.3;"
+      >
+        M
+        <span
+          style="font-size: 9px; color: rgb(124, 122, 148); display: block;"
+        />
+      </button>
+      <button
+        style="background: transparent; color: rgb(98, 96, 122); border: medium; border-radius: 6px; width: 52px; padding: 4px 0px; font-size: 15px; font-weight: 500; cursor: default; opacity: 0.3;"
+      >
+        N
+        <span
+          style="font-size: 9px; color: rgb(124, 122, 148); display: block;"
+        />
+      </button>
+      <button
+        style="background: transparent; color: rgb(150, 148, 172); border: medium; border-radius: 6px; width: 52px; padding: 4px 0px; font-size: 15px; font-weight: 500; cursor: pointer; opacity: 1;"
+      >
+        O
+        <span
+          style="font-size: 9px; color: rgb(124, 122, 148); display: block;"
+        >
+          1
+        </span>
+      </button>
+      <button
+        style="background: transparent; color: rgb(98, 96, 122); border: medium; border-radius: 6px; width: 52px; padding: 4px 0px; font-size: 15px; font-weight: 500; cursor: default; opacity: 0.3;"
+      >
+        P
+        <span
+          style="font-size: 9px; color: rgb(124, 122, 148); display: block;"
+        />
+      </button>
+      <button
+        style="background: transparent; color: rgb(150, 148, 172); border: medium; border-radius: 6px; width: 52px; padding: 4px 0px; font-size: 15px; font-weight: 500; cursor: pointer; opacity: 1;"
+      >
+        Q
+        <span
+          style="font-size: 9px; color: rgb(124, 122, 148); display: block;"
+        >
+          1
+        </span>
+      </button>
+      <button
+        style="background: transparent; color: rgb(98, 96, 122); border: medium; border-radius: 6px; width: 52px; padding: 4px 0px; font-size: 15px; font-weight: 500; cursor: default; opacity: 0.3;"
+      >
+        R
+        <span
+          style="font-size: 9px; color: rgb(124, 122, 148); display: block;"
+        />
+      </button>
+      <button
+        style="background: transparent; color: rgb(98, 96, 122); border: medium; border-radius: 6px; width: 52px; padding: 4px 0px; font-size: 15px; font-weight: 500; cursor: default; opacity: 0.3;"
+      >
+        S
+        <span
+          style="font-size: 9px; color: rgb(124, 122, 148); display: block;"
+        />
+      </button>
+      <button
+        style="background: transparent; color: rgb(98, 96, 122); border: medium; border-radius: 6px; width: 52px; padding: 4px 0px; font-size: 15px; font-weight: 500; cursor: default; opacity: 0.3;"
+      >
+        T
+        <span
+          style="font-size: 9px; color: rgb(124, 122, 148); display: block;"
+        />
+      </button>
+      <button
+        style="background: transparent; color: rgb(98, 96, 122); border: medium; border-radius: 6px; width: 52px; padding: 4px 0px; font-size: 15px; font-weight: 500; cursor: default; opacity: 0.3;"
+      >
+        U
+        <span
+          style="font-size: 9px; color: rgb(124, 122, 148); display: block;"
+        />
+      </button>
+      <button
+        style="background: transparent; color: rgb(98, 96, 122); border: medium; border-radius: 6px; width: 52px; padding: 4px 0px; font-size: 15px; font-weight: 500; cursor: default; opacity: 0.3;"
+      >
+        V
+        <span
+          style="font-size: 9px; color: rgb(124, 122, 148); display: block;"
+        />
+      </button>
+      <button
+        style="background: transparent; color: rgb(98, 96, 122); border: medium; border-radius: 6px; width: 52px; padding: 4px 0px; font-size: 15px; font-weight: 500; cursor: default; opacity: 0.3;"
+      >
+        W
+        <span
+          style="font-size: 9px; color: rgb(124, 122, 148); display: block;"
+        />
+      </button>
+      <button
+        style="background: transparent; color: rgb(98, 96, 122); border: medium; border-radius: 6px; width: 52px; padding: 4px 0px; font-size: 15px; font-weight: 500; cursor: default; opacity: 0.3;"
+      >
+        X
+        <span
+          style="font-size: 9px; color: rgb(124, 122, 148); display: block;"
+        />
+      </button>
+      <button
+        style="background: transparent; color: rgb(98, 96, 122); border: medium; border-radius: 6px; width: 52px; padding: 4px 0px; font-size: 15px; font-weight: 500; cursor: default; opacity: 0.3;"
+      >
+        Y
+        <span
+          style="font-size: 9px; color: rgb(124, 122, 148); display: block;"
+        />
+      </button>
+      <button
+        style="background: transparent; color: rgb(98, 96, 122); border: medium; border-radius: 6px; width: 52px; padding: 4px 0px; font-size: 15px; font-weight: 500; cursor: default; opacity: 0.3;"
+      >
+        Z
+        <span
+          style="font-size: 9px; color: rgb(124, 122, 148); display: block;"
+        />
+      </button>
+      <button
+        style="background: transparent; color: rgb(98, 96, 122); border: medium; border-radius: 6px; width: 52px; padding: 4px 0px; font-size: 15px; font-weight: 500; cursor: default; opacity: 0.3;"
+      >
+        #
+        <span
+          style="font-size: 9px; color: rgb(124, 122, 148); display: block;"
+        />
+      </button>
+    </div>
+    <div
+      style="flex: 1 1 0%; min-width: 0px; padding-left: 12px;"
+    >
+      <div
+        style="position: sticky; top: 56px; z-index: 20; background: rgba(26, 28, 48, 0.933); backdrop-filter: blur(8px); padding: 8px 0px; margin-bottom: 8px;"
+      >
+        <div
+          style="display: flex; gap: 4px; margin-bottom: 8px;"
+        >
+          <button
+            style="background: rgba(222, 176, 96, 0.16); color: rgb(228, 184, 104); border: 1px solid rgba(222, 176, 96, 0.32); border-radius: 6px; padding: 4px 12px; font-size: 13px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 5px;"
+          >
+            <span>
+              All
+            </span>
+          </button>
+          <button
+            style="background: transparent; color: rgb(180, 178, 196); border: 1px solid transparent; border-radius: 6px; padding: 4px 12px; font-size: 13px; font-weight: 500; cursor: pointer; display: flex; align-items: center; gap: 5px;"
+          >
+            <span>
+              📖
+            </span>
+            <span>
+              Ebooks
+            </span>
+          </button>
+          <button
+            style="background: transparent; color: rgb(180, 178, 196); border: 1px solid transparent; border-radius: 6px; padding: 4px 12px; font-size: 13px; font-weight: 500; cursor: pointer; display: flex; align-items: center; gap: 5px;"
+          >
+            <span>
+              🎧
+            </span>
+            <span>
+              Audiobooks
+            </span>
+          </button>
+          <button
+            style="margin-left: 8px; background: transparent; color: rgb(180, 178, 196); border: 1px solid transparent; border-radius: 6px; padding: 4px 12px; font-size: 13px; font-weight: 500; cursor: pointer; display: flex; align-items: center; gap: 5px;"
+            title="Authors where a source contributed a lot of books that nothing else confirms — worth checking the titles."
+          >
+            <span>
+              ⚠
+            </span>
+            <span>
+              Needs review 1
+            </span>
+          </button>
+        </div>
+        <div
+          class="page-header-row"
+          style="display: flex; align-items: center; justify-content: space-between; gap: 12px;"
+        >
+          <h1
+            style="font-size: 24px; font-weight: 800; color: rgb(228, 184, 104); margin: 0px; flex-shrink: 0;"
+          >
+            Authors 
+            <span
+              style="font-size: 15px; font-weight: 600; color: rgb(150, 148, 172); margin-left: 6px;"
+            >
+              2 total
+            </span>
+          </h1>
+          <div
+            class="page-header-controls"
+            style="display: flex; gap: 8px; align-items: center;"
+          >
+            <div
+              class="seshat-search"
+              style="position: relative; flex: 1 1 0%; max-width: 340px;"
+            >
+              <input
+                placeholder="Search..."
+                style="width: 100%; padding: 8px 32px 8px 34px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 8px; color: rgb(214, 212, 224); font-size: 13px;"
+                value=""
+              />
+              <span
+                style="position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: rgb(98, 96, 122); pointer-events: none;"
+              >
+                <svg
+                  fill="none"
+                  height="16"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2.5"
+                  viewBox="0 0 24 24"
+                  width="16"
+                >
+                  <circle
+                    cx="11"
+                    cy="11"
+                    r="8"
+                  />
+                  <line
+                    x1="21"
+                    x2="16.65"
+                    y1="21"
+                    y2="16.65"
+                  />
+                </svg>
+              </span>
+            </div>
+            <select
+              style="padding: 6px 10px; border-radius: 6px; border: 1px solid rgb(58, 60, 86); background: rgb(34, 36, 56); color: rgb(214, 212, 224); font-size: 12px;"
+            >
+              <option
+                value="name"
+              >
+                Sort: Name
+              </option>
+              <option
+                value="total"
+              >
+                Sort: Books
+              </option>
+              <option
+                value="owned"
+              >
+                Sort: Owned
+              </option>
+              <option
+                value="missing"
+              >
+                Sort: Missing
+              </option>
+            </select>
+            <button
+              style="padding: 6px 10px; border-radius: 6px; border: 1px solid rgb(58, 60, 86); background: rgb(34, 36, 56); color: rgb(214, 212, 224); font-size: 12px; font-weight: 700; cursor: pointer; min-width: 28px;"
+              title="Ascending — click for descending"
+            >
+              ↑
+            </button>
+            <div
+              style="display: flex; border-radius: 6px; border: 1px solid rgb(58, 60, 86); overflow: hidden; height: 34px;"
+            >
+              <button
+                style="padding: 0px 12px; font-size: 12px; font-weight: 500; border: medium; cursor: pointer; background: transparent; color: rgb(98, 96, 122); text-transform: capitalize; height: 100%;"
+              >
+                Grid
+              </button>
+              <button
+                style="padding: 0px 12px; font-size: 12px; font-weight: 500; border: medium; cursor: pointer; background: rgb(42, 44, 66); color: rgb(228, 184, 104); text-transform: capitalize; height: 100%;"
+              >
+                List
+              </button>
+            </div>
+            <button
+              style="background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+            >
+              Select
+            </button>
+          </div>
+        </div>
+      </div>
+      <div
+        class="seshat-author-cols"
+        style="columns: 2; column-gap: 6px;"
+      >
+        <div
+          style="break-inside: avoid; margin-bottom: 4px;"
+        >
+          <div
+            style="display: grid; grid-template-columns: 1fr auto auto auto 90px; align-items: center; gap: 14px; padding: 10px 14px; border-radius: 8px; cursor: pointer; background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); transition: border-color 0.15s;"
+          >
+            <div
+              style="display: flex; align-items: center; gap: 8px; min-width: 0px;"
+            >
+              <div
+                style="width: 36px; height: 36px; border-radius: 50%; background: rgba(228, 184, 104, 0.094); display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 700; color: rgb(228, 184, 104); flex-shrink: 0;"
+              >
+                A
+              </div>
+              <div
+                style="min-width: 0px;"
+              >
+                <div
+                  style="font-size: 15px; font-weight: 600; color: rgb(236, 234, 244); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: center; gap: 6px;"
+                >
+                  Ada Quill
+                  <span
+                    style="font-size: 11px; flex-shrink: 0;"
+                    title="Ebook + audiobook"
+                  >
+                    📖🎧
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div
+              style="text-align: center; min-width: 60px;"
+            >
+              <div
+                style="font-size: 15px; font-weight: 700; color: rgb(58, 148, 104);"
+              >
+                3
+              </div>
+              <div
+                style="font-size: 10px; color: rgb(150, 148, 172);"
+              >
+                owned
+              </div>
+            </div>
+            <div
+              style="text-align: center; min-width: 60px;"
+            >
+              <div
+                style="font-size: 15px; font-weight: 700; color: rgb(200, 168, 72);"
+              >
+                3
+              </div>
+              <div
+                style="font-size: 10px; color: rgb(150, 148, 172);"
+              >
+                missing
+              </div>
+            </div>
+            <div
+              style="text-align: center; min-width: 50px;"
+            >
+              <div
+                style="font-size: 15px; font-weight: 700; color: rgb(136, 112, 180);"
+              >
+                1
+              </div>
+              <div
+                style="font-size: 10px; color: rgb(150, 148, 172);"
+              >
+                series
+              </div>
+            </div>
+            <div
+              style="height: 5px; border-radius: 3px; background: rgb(42, 44, 66); overflow: hidden;"
+            >
+              <div
+                style="width: 50%; height: 100%; border-radius: 3px; background: rgb(224, 96, 96); transition: width 0.3s;"
+              />
+            </div>
+          </div>
+        </div>
+        <div
+          style="break-inside: avoid; margin-bottom: 4px;"
+        >
+          <div
+            style="display: grid; grid-template-columns: 1fr auto auto auto 90px; align-items: center; gap: 14px; padding: 10px 14px; border-radius: 8px; cursor: pointer; background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); transition: border-color 0.15s;"
+          >
+            <div
+              style="display: flex; align-items: center; gap: 8px; min-width: 0px;"
+            >
+              <div
+                style="width: 36px; height: 36px; border-radius: 50%; background: rgba(228, 184, 104, 0.094); display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 700; color: rgb(228, 184, 104); flex-shrink: 0;"
+              >
+                B
+              </div>
+              <div
+                style="min-width: 0px;"
+              >
+                <div
+                  style="font-size: 15px; font-weight: 600; color: rgb(236, 234, 244); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: center; gap: 6px;"
+                >
+                  Bram Okafor
+                  <span
+                    style="font-size: 11px; flex-shrink: 0;"
+                    title="Ebook"
+                  >
+                    📖
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div
+              style="text-align: center; min-width: 60px;"
+            >
+              <div
+                style="font-size: 15px; font-weight: 700; color: rgb(58, 148, 104);"
+              >
+                0
+              </div>
+              <div
+                style="font-size: 10px; color: rgb(150, 148, 172);"
+              >
+                owned
+              </div>
+            </div>
+            <div
+              style="text-align: center; min-width: 60px;"
+            >
+              <div
+                style="font-size: 15px; font-weight: 700; color: rgb(200, 168, 72);"
+              >
+                2
+              </div>
+              <div
+                style="font-size: 10px; color: rgb(150, 148, 172);"
+              >
+                missing
+              </div>
+            </div>
+            <div
+              style="text-align: center; min-width: 50px;"
+            >
+              <div
+                style="font-size: 15px; font-weight: 700; color: rgb(136, 112, 180);"
+              >
+                0
+              </div>
+              <div
+                style="font-size: 10px; color: rgb(150, 148, 172);"
+              >
+                series
+              </div>
+            </div>
+            <div
+              style="height: 5px; border-radius: 3px; background: rgb(42, 44, 66); overflow: hidden;"
+            >
+              <div
+                style="width: 0%; height: 100%; border-radius: 3px; background: rgb(224, 96, 96); transition: width 0.3s;"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Authors (desktop) > two authors, MAM on > requests 1`] = `
+[
+  "GET /discovery/authors/source-review",
+  "GET /discovery/authors?search=&sort=name&sort_dir=asc&content_type=all",
+  "GET /discovery/mam/status",
+]
+`;
+
+exports[`Authors (phone) > two authors, MAM on > markup 1`] = `
+<DocumentFragment>
+  <div
+    style="display: flex; flex-direction: column; gap: 12px;"
+  >
+    <button
+      aria-label="Dashboard"
+      style="display: inline-flex; align-items: center; gap: 6px; height: 44px; padding: 0px 14px 0px 10px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 9999px; font-size: 14px; font-weight: 600; cursor: pointer; align-self: flex-start;"
+    >
+      <span
+        style="font-size: 18px; line-height: 1;"
+      >
+        ‹
+      </span>
+      <span>
+        Dashboard
+      </span>
+    </button>
+    <div
+      style="display: flex; align-items: baseline; justify-content: space-between; gap: 8px;"
+    >
+      <h1
+        style="margin: 0px; font-size: 22px; font-weight: 700; color: rgb(236, 234, 244);"
+      >
+        Authors
+      </h1>
+      <span
+        style="font-size: 13px; color: rgb(150, 148, 172);"
+      >
+        2 total
+      </span>
+    </div>
+    <div
+      style="position: relative; width: 100%;"
+    >
+      <input
+        placeholder="Search author"
+        style="width: 100%; min-height: 44px; padding: 0px 12px 0px 38px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 10px; color: rgb(236, 234, 244); font-size: 16px; outline: none;"
+        value=""
+      />
+      <span
+        style="position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: rgb(98, 96, 122); display: flex; pointer-events: none;"
+      >
+        <svg
+          fill="none"
+          height="16"
+          stroke="currentColor"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2.5"
+          viewBox="0 0 24 24"
+          width="16"
+        >
+          <circle
+            cx="11"
+            cy="11"
+            r="8"
+          />
+          <line
+            x1="21"
+            x2="16.65"
+            y1="21"
+            y2="16.65"
+          />
+        </svg>
+      </span>
+    </div>
+    <div
+      style="display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none;"
+    >
+      <button
+        style="display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; min-height: 36px; background: rgba(222, 176, 96, 0.16); color: rgb(228, 184, 104); border: 1px solid rgba(222, 176, 96, 0.32); border-radius: 9999px; font-size: 13px; font-weight: 700; cursor: pointer; white-space: nowrap;"
+      >
+        All
+      </button>
+      <button
+        style="display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; min-height: 36px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 9999px; font-size: 13px; font-weight: 500; cursor: pointer; white-space: nowrap;"
+      >
+        📖 Ebooks
+      </button>
+      <button
+        style="display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; min-height: 36px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 9999px; font-size: 13px; font-weight: 500; cursor: pointer; white-space: nowrap;"
+      >
+        🎧 Audiobooks
+      </button>
+    </div>
+    <div
+      style="display: flex; gap: 6px;"
+    >
+      <button
+        style="display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; min-height: 36px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 9999px; font-size: 13px; font-weight: 500; cursor: pointer; white-space: nowrap;"
+      >
+        <span
+          style="display: flex;"
+        >
+          ↕
+        </span>
+        Sort: Name (A-Z)
+      </button>
+    </div>
+    <div
+      style="display: flex; flex-direction: column; gap: 6px;"
+    >
+      <button
+        style="display: flex; align-items: center; gap: 12px; padding: 10px; width: 100%; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 12px; cursor: pointer; text-align: left;"
+      >
+        <div
+          style="width: 48px; height: 48px; border-radius: 50%; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); flex-shrink: 0; display: flex; align-items: center; justify-content: center; overflow: hidden;"
+        >
+          <span
+            style="color: rgb(150, 148, 172); font-weight: 700; font-size: 16px;"
+          >
+            AQ
+          </span>
+        </div>
+        <div
+          style="flex: 1 1 0%; min-width: 0px;"
+        >
+          <div
+            style="font-size: 15px; font-weight: 600; color: rgb(236, 234, 244); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+          >
+            Ada Quill
+          </div>
+          <div
+            style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: rgb(150, 148, 172); margin-top: 2px;"
+          >
+            <span>
+              3 / 6 owned
+            </span>
+            <span
+              style="color: rgb(224, 96, 96);"
+            >
+              · 3 missing
+            </span>
+          </div>
+        </div>
+        <div
+          style="display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0;"
+        >
+          <span
+            style="display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; background: rgba(222, 176, 96, 0.16); color: rgb(228, 184, 104); border: 1px solid rgba(222, 176, 96, 0.32); border-radius: 9999px; font-size: 12px; font-weight: 600; line-height: 1.2; white-space: nowrap;"
+          >
+            New
+          </span>
+          <span
+            style="color: rgb(98, 96, 122); font-size: 18px;"
+          >
+            ›
+          </span>
+        </div>
+      </button>
+      <button
+        style="display: flex; align-items: center; gap: 12px; padding: 10px; width: 100%; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 12px; cursor: pointer; text-align: left;"
+      >
+        <div
+          style="width: 48px; height: 48px; border-radius: 50%; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); flex-shrink: 0; display: flex; align-items: center; justify-content: center; overflow: hidden;"
+        >
+          <span
+            style="color: rgb(150, 148, 172); font-weight: 700; font-size: 16px;"
+          >
+            BO
+          </span>
+        </div>
+        <div
+          style="flex: 1 1 0%; min-width: 0px;"
+        >
+          <div
+            style="font-size: 15px; font-weight: 600; color: rgb(236, 234, 244); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+          >
+            Bram Okafor
+          </div>
+          <div
+            style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: rgb(150, 148, 172); margin-top: 2px;"
+          >
+            <span>
+              0 / 2 owned
+            </span>
+            <span
+              style="color: rgb(224, 96, 96);"
+            >
+              · 2 missing
+            </span>
+          </div>
+        </div>
+        <div
+          style="display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0;"
+        >
+          <span
+            style="color: rgb(98, 96, 122); font-size: 18px;"
+          >
+            ›
+          </span>
+        </div>
+      </button>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Authors (phone) > two authors, MAM on > requests 1`] = `
+[
+  "GET /discovery/authors?search=&sort=name&content_type=all",
+  "GET /discovery/mam/status",
+]
+`;
+
+exports[`Hidden (desktop) > two hidden books > markup 1`] = `
+<DocumentFragment>
+  <div
+    style="display: flex; flex-direction: column; gap: 20px;"
+  >
+    <div
+      style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;"
+    >
+      <button
+        style="background: transparent; color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+      >
+        ← Dashboard
+      </button>
+      <h1
+        style="font-size: 22px; font-weight: 700; color: rgb(236, 234, 244); margin: 0px;"
+      >
+        Hidden Books
+      </h1>
+      <span
+        style="font-size: 13px; color: rgb(98, 96, 122);"
+      >
+        (2)
+      </span>
+      <div
+        style="flex: 1 1 0%;"
+      />
+      <button
+        style="background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+      >
+        Select
+      </button>
+    </div>
+    <div
+      style="overflow-x: auto;"
+    >
+      <table
+        style="width: 100%; min-width: 680px; border-collapse: collapse;"
+      >
+        <thead>
+          <tr
+            style="border-bottom: 2px solid rgb(58, 60, 86);"
+          >
+            <th
+              style="padding: 8px 12px; text-align: left; font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+            >
+              Title
+            </th>
+            <th
+              style="padding: 8px 12px; text-align: left; font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+            >
+              Author
+            </th>
+            <th
+              style="padding: 8px 12px; text-align: left; font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+            >
+              Series
+            </th>
+            <th
+              style="padding: 8px 12px; text-align: left; font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+            >
+              Date
+            </th>
+            <th
+              style="padding: 8px 12px; text-align: left; font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+            >
+              Source
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            style="cursor: pointer; border-bottom: 1px solid rgb(46, 48, 72); background: transparent;"
+          >
+            <td
+              style="padding: 8px 12px; font-size: 13px; color: rgb(214, 212, 224);"
+            >
+              The Winter Graft
+            </td>
+            <td
+              style="padding: 8px 12px; font-size: 13px; color: rgb(150, 148, 172);"
+            >
+              <span
+                style="display: inline-flex; min-width: 0px; max-width: 100%; vertical-align: bottom;"
+              >
+                <span
+                  style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0px;"
+                >
+                  <span>
+                    Ada Quill
+                  </span>
+                </span>
+              </span>
+            </td>
+            <td
+              style="padding: 8px 12px; font-size: 13px; color: rgb(150, 148, 172);"
+            >
+              —
+            </td>
+            <td
+              style="padding: 8px 12px; font-size: 13px; color: rgb(150, 148, 172);"
+            >
+              2024-05-14
+            </td>
+            <td
+              style="padding: 8px 12px; font-size: 11px; color: rgb(98, 96, 122);"
+            >
+              —
+            </td>
+          </tr>
+          <tr
+            style="cursor: pointer; border-bottom: 1px solid rgb(46, 48, 72); background: transparent;"
+          >
+            <td
+              style="padding: 8px 12px; font-size: 13px; color: rgb(214, 212, 224);"
+            >
+              A Ledger of Bees
+            </td>
+            <td
+              style="padding: 8px 12px; font-size: 13px; color: rgb(150, 148, 172);"
+            >
+              <span
+                style="display: inline-flex; min-width: 0px; max-width: 100%; vertical-align: bottom;"
+              >
+                <span
+                  style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0px;"
+                >
+                  <span>
+                    Ada Quill
+                  </span>
+                </span>
+              </span>
+            </td>
+            <td
+              style="padding: 8px 12px; font-size: 13px; color: rgb(150, 148, 172);"
+            >
+              —
+            </td>
+            <td
+              style="padding: 8px 12px; font-size: 13px; color: rgb(150, 148, 172);"
+            >
+              2024-05-14
+            </td>
+            <td
+              style="padding: 8px 12px; font-size: 11px; color: rgb(98, 96, 122);"
+            >
+              —
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Hidden (desktop) > two hidden books > requests 1`] = `
+[
+  "GET /discovery/books/hidden",
+]
+`;
+
+exports[`Hidden (desktop) > with a book's sidebar open > markup 1`] = `
+<DocumentFragment>
+  <div
+    style="display: flex; flex-direction: column; gap: 20px;"
+  >
+    <div
+      style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;"
+    >
+      <button
+        style="background: transparent; color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+      >
+        ← Dashboard
+      </button>
+      <h1
+        style="font-size: 22px; font-weight: 700; color: rgb(236, 234, 244); margin: 0px;"
+      >
+        Hidden Books
+      </h1>
+      <span
+        style="font-size: 13px; color: rgb(98, 96, 122);"
+      >
+        (2)
+      </span>
+      <div
+        style="flex: 1 1 0%;"
+      />
+      <button
+        style="background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+      >
+        Select
+      </button>
+    </div>
+    <div
+      style="overflow-x: auto;"
+    >
+      <table
+        style="width: 100%; min-width: 680px; border-collapse: collapse;"
+      >
+        <thead>
+          <tr
+            style="border-bottom: 2px solid rgb(58, 60, 86);"
+          >
+            <th
+              style="padding: 8px 12px; text-align: left; font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+            >
+              Title
+            </th>
+            <th
+              style="padding: 8px 12px; text-align: left; font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+            >
+              Author
+            </th>
+            <th
+              style="padding: 8px 12px; text-align: left; font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+            >
+              Series
+            </th>
+            <th
+              style="padding: 8px 12px; text-align: left; font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+            >
+              Date
+            </th>
+            <th
+              style="padding: 8px 12px; text-align: left; font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+            >
+              Source
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            style="cursor: pointer; border-bottom: 1px solid rgb(46, 48, 72); background: transparent;"
+          >
+            <td
+              style="padding: 8px 12px; font-size: 13px; color: rgb(214, 212, 224);"
+            >
+              The Winter Graft
+            </td>
+            <td
+              style="padding: 8px 12px; font-size: 13px; color: rgb(150, 148, 172);"
+            >
+              <span
+                style="display: inline-flex; min-width: 0px; max-width: 100%; vertical-align: bottom;"
+              >
+                <span
+                  style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0px;"
+                >
+                  <span>
+                    Ada Quill
+                  </span>
+                </span>
+              </span>
+            </td>
+            <td
+              style="padding: 8px 12px; font-size: 13px; color: rgb(150, 148, 172);"
+            >
+              —
+            </td>
+            <td
+              style="padding: 8px 12px; font-size: 13px; color: rgb(150, 148, 172);"
+            >
+              2024-05-14
+            </td>
+            <td
+              style="padding: 8px 12px; font-size: 11px; color: rgb(98, 96, 122);"
+            >
+              —
+            </td>
+          </tr>
+          <tr
+            style="cursor: pointer; border-bottom: 1px solid rgb(46, 48, 72); background: transparent;"
+          >
+            <td
+              style="padding: 8px 12px; font-size: 13px; color: rgb(214, 212, 224);"
+            >
+              A Ledger of Bees
+            </td>
+            <td
+              style="padding: 8px 12px; font-size: 13px; color: rgb(150, 148, 172);"
+            >
+              <span
+                style="display: inline-flex; min-width: 0px; max-width: 100%; vertical-align: bottom;"
+              >
+                <span
+                  style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0px;"
+                >
+                  <span>
+                    Ada Quill
+                  </span>
+                </span>
+              </span>
+            </td>
+            <td
+              style="padding: 8px 12px; font-size: 13px; color: rgb(150, 148, 172);"
+            >
+              —
+            </td>
+            <td
+              style="padding: 8px 12px; font-size: 13px; color: rgb(150, 148, 172);"
+            >
+              2024-05-14
+            </td>
+            <td
+              style="padding: 8px 12px; font-size: 11px; color: rgb(98, 96, 122);"
+            >
+              —
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div
+      style="position: fixed; top: 0px; right: 0px; width: 420px; max-width: 90vw; height: 100vh; background: rgb(34, 36, 56); border-left: 1px solid rgb(58, 60, 86); z-index: 100; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 16px; box-shadow: -4px 0 20px rgba(0,0,0,0.3); transform: translateX(0); transition: transform 0.25s ease-out;"
+    >
+      <div
+        style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;"
+      >
+        <h2
+          style="font-size: 18px; font-weight: 700; color: rgb(236, 234, 244); margin: 0px; flex: 1 1 0%; line-height: 1.3;"
+        >
+          The Winter Graft
+        </h2>
+        <div
+          class="sb-actions"
+          style="display: flex; gap: 8px; flex-shrink: 0;"
+        >
+          <button
+            style="background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 8px; cursor: pointer; color: rgb(98, 96, 122); padding: 8px; min-width: 36px; min-height: 36px; display: flex; align-items: center; justify-content: center;"
+          >
+            <svg
+              fill="none"
+              height="16"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2.5"
+              viewBox="0 0 24 24"
+              width="16"
+            >
+              <path
+                d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"
+              />
+              <path
+                d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z"
+              />
+            </svg>
+          </button>
+          <button
+            style="background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 8px; cursor: pointer; color: rgb(98, 96, 122); padding: 8px 10px; min-height: 36px; font-size: 12px; font-weight: 600;"
+            title="Compare metadata across Seshat / Calibre / ABS"
+          >
+            Compare
+          </button>
+          <button
+            style="background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 8px; cursor: pointer; color: rgb(98, 96, 122); padding: 8px 10px; min-height: 36px; font-size: 12px; font-weight: 600;"
+            title="Merge this book with another (duplicate row resolution)"
+          >
+            Merge
+          </button>
+          <button
+            style="background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 8px; cursor: pointer; color: rgb(98, 96, 122); padding: 8px; min-width: 36px; min-height: 36px; display: flex; align-items: center; justify-content: center;"
+          >
+            <svg
+              fill="none"
+              height="16"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2.5"
+              viewBox="0 0 24 24"
+              width="16"
+            >
+              <line
+                x1="18"
+                x2="6"
+                y1="6"
+                y2="18"
+              />
+              <line
+                x1="6"
+                x2="18"
+                y1="6"
+                y2="18"
+              />
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div
+        style="display: flex; flex-direction: column; gap: 10px;"
+      >
+        <div
+          style="display: flex; justify-content: space-between; align-items: baseline;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+          >
+            Author
+          </span>
+          <span
+            style="font-size: 13px; color: rgb(214, 212, 224); text-align: right;"
+          >
+            <span
+              style="display: inline-flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end;"
+            >
+              <span
+                style="display: inline-flex; align-items: center; gap: 4px; padding: 1px 4px 1px 8px; background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 11px; font-size: 12px; line-height: 1.5;"
+              >
+                Ada Quill
+                <button
+                  aria-label="Remove Ada Quill"
+                  style="display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; padding: 0px; border-radius: 50%; border: medium; background: none; color: rgb(224, 96, 96); cursor: pointer; font-size: 14px; opacity: 0.8;"
+                  title="Remove Ada Quill from this book"
+                >
+                  ×
+                </button>
+              </span>
+            </span>
+          </span>
+        </div>
+        <div
+          style="display: flex; justify-content: space-between; align-items: baseline;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+          >
+            Published
+          </span>
+          <span
+            style="font-size: 13px; color: rgb(214, 212, 224); text-align: right;"
+          >
+            2024-05-14
+          </span>
+        </div>
+        <div
+          style="display: flex; justify-content: space-between; align-items: baseline;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+          >
+            Status
+          </span>
+          <span
+            style="font-size: 13px; color: rgb(200, 168, 72); text-align: right;"
+          >
+            Missing
+          </span>
+        </div>
+        <div
+          style="display: flex; justify-content: space-between; align-items: baseline;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+          >
+            Source
+          </span>
+          <span
+            style="font-size: 13px; color: rgb(98, 96, 122); text-align: right;"
+          >
+            Unowned
+          </span>
+        </div>
+        <div>
+          <div
+            style="display: flex; justify-content: space-between; align-items: center; gap: 4px;"
+          >
+            <span
+              style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+            >
+              MAM
+            </span>
+            <div
+              style="display: flex; align-items: center; gap: 6px;"
+            >
+              <a
+                href="#"
+                rel="noopener noreferrer"
+                style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 5px; font-size: 12px; font-weight: 600; text-decoration: none; background: rgb(58, 26, 26); color: rgb(192, 72, 72); border: 1px solid rgb(136, 42, 42);"
+                target="_blank"
+                title="Search MAM for this title (no match found during last scan)"
+              >
+                Not Found
+                <span
+                  style="font-size: 10px; opacity: 0.7;"
+                >
+                  ↗
+                </span>
+              </a>
+              <button
+                style="background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+                title="Re-scan this book against MAM"
+              >
+                ↻ Re-scan
+              </button>
+            </div>
+          </div>
+        </div>
+        <div
+          style="display: flex; justify-content: space-between; align-items: baseline;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+          >
+            Library
+          </span>
+          <span
+            style="font-size: 13px; color: rgb(214, 212, 224); text-align: right;"
+          >
+            <span
+              style="font-size: 12px; padding: 1px 8px; border-radius: 4px; background: rgba(88, 184, 204, 0.14); color: rgb(72, 152, 176); border: 1px solid rgba(88, 184, 204, 0.2);"
+            >
+              📖 Calibre Library
+            </span>
+          </span>
+        </div>
+      </div>
+      <div
+        class="sb-actions"
+        style="display: flex; gap: 8px; margin-top: auto; padding-top: 12px; border-top: 1px solid rgb(46, 48, 72); flex-wrap: wrap;"
+      >
+        <button
+          style="background: rgb(34, 36, 56); color: rgb(150, 148, 172); border: 1px solid rgb(46, 48, 72); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+          title="Mark this book as Not Applicable so MAM scans skip it (e.g. free-to-read, never on MAM)"
+        >
+           Skip MAM
+        </button>
+      </div>
+      <div
+        class="sb-actions"
+        style="display: flex; gap: 8px; margin-top: auto; padding-top: 12px; border-top: 1px solid rgb(46, 48, 72); flex-wrap: wrap;"
+      >
+        <button
+          style="background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+        >
+          Unhide
+        </button>
+      </div>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Hidden (desktop) > with a book's sidebar open > requests 1`] = `
+[
+  "GET /discovery/books/hidden",
+  "GET /discovery/mam/status",
+  "GET /discovery/pipeline/status",
+  "GET /discovery/series-suggestions/by-book/201",
+  "GET /discovery/settings",
+  "GET /v1/mam/economy/config",
+]
+`;
+
+exports[`Hidden (phone) > two hidden books > markup 1`] = `
+<DocumentFragment>
+  <div
+    style="display: flex; flex-direction: column; gap: 12px;"
+  >
+    <button
+      aria-label="Dashboard"
+      style="display: inline-flex; align-items: center; gap: 6px; height: 44px; padding: 0px 14px 0px 10px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 9999px; font-size: 14px; font-weight: 600; cursor: pointer; align-self: flex-start;"
+    >
+      <span
+        style="font-size: 18px; line-height: 1;"
+      >
+        ‹
+      </span>
+      <span>
+        Dashboard
+      </span>
+    </button>
+    <div
+      style="display: flex; align-items: baseline; justify-content: space-between; gap: 8px;"
+    >
+      <h1
+        style="margin: 0px; font-size: 22px; font-weight: 700; color: rgb(236, 234, 244);"
+      >
+        Hidden Books
+      </h1>
+      <span
+        style="font-size: 13px; color: rgb(150, 148, 172);"
+      >
+        2 hidden
+      </span>
+    </div>
+    <div
+      style="display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr)); gap: 8px;"
+    >
+      <div
+        style="display: flex; gap: 12px; padding: 8px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 12px; cursor: pointer; opacity: 1;"
+      >
+        <div
+          style="width: 64px; height: 96px; flex-shrink: 0; background: rgb(30, 32, 52); border-radius: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center;"
+        >
+          <span
+            style="font-size: 24px; color: rgb(98, 96, 122);"
+          >
+            ?
+          </span>
+        </div>
+        <div
+          style="flex: 1 1 0%; min-width: 0px; display: flex; flex-direction: column; gap: 2px;"
+        >
+          <div
+            style="display: flex; align-items: baseline; gap: 4px; font-size: 15px; font-weight: 600; color: rgb(236, 234, 244); line-height: 1.3;"
+          >
+            <span
+              style="flex: 1 1 0%; min-width: 0px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;"
+            >
+              The Winter Graft
+            </span>
+          </div>
+          <div
+            style="font-size: 13px; color: rgb(150, 148, 172); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+          >
+            Ada Quill
+          </div>
+          <div
+            style="display: flex; align-items: center; gap: 4px; margin-top: 4px; flex-wrap: wrap;"
+          >
+            <span
+              style="display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; background: rgba(224, 96, 96, 0.14); color: rgb(224, 96, 96); border: 1px solid rgb(192, 72, 72); border-radius: 9999px; font-size: 12px; font-weight: 600; line-height: 1.2; white-space: nowrap;"
+            >
+              Missing
+            </span>
+          </div>
+        </div>
+      </div>
+      <div
+        style="display: flex; gap: 12px; padding: 8px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 12px; cursor: pointer; opacity: 1;"
+      >
+        <div
+          style="width: 64px; height: 96px; flex-shrink: 0; background: rgb(30, 32, 52); border-radius: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center;"
+        >
+          <span
+            style="font-size: 24px; color: rgb(98, 96, 122);"
+          >
+            ?
+          </span>
+        </div>
+        <div
+          style="flex: 1 1 0%; min-width: 0px; display: flex; flex-direction: column; gap: 2px;"
+        >
+          <div
+            style="display: flex; align-items: baseline; gap: 4px; font-size: 15px; font-weight: 600; color: rgb(236, 234, 244); line-height: 1.3;"
+          >
+            <span
+              style="flex: 1 1 0%; min-width: 0px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;"
+            >
+              A Ledger of Bees
+            </span>
+          </div>
+          <div
+            style="font-size: 13px; color: rgb(150, 148, 172); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+          >
+            Ada Quill
+          </div>
+          <div
+            style="display: flex; align-items: center; gap: 4px; margin-top: 4px; flex-wrap: wrap;"
+          >
+            <span
+              style="display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; background: rgba(224, 96, 96, 0.14); color: rgb(224, 96, 96); border: 1px solid rgb(192, 72, 72); border-radius: 9999px; font-size: 12px; font-weight: 600; line-height: 1.2; white-space: nowrap;"
+            >
+              Missing
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Hidden (phone) > two hidden books > requests 1`] = `
+[
+  "GET /discovery/books/hidden",
+]
+`;
+
+exports[`Hidden (phone) > with a book's sidebar open > markup 1`] = `
+<DocumentFragment>
+  <div
+    style="display: flex; flex-direction: column; gap: 12px;"
+  >
+    <button
+      aria-label="Dashboard"
+      style="display: inline-flex; align-items: center; gap: 6px; height: 44px; padding: 0px 14px 0px 10px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 9999px; font-size: 14px; font-weight: 600; cursor: pointer; align-self: flex-start;"
+    >
+      <span
+        style="font-size: 18px; line-height: 1;"
+      >
+        ‹
+      </span>
+      <span>
+        Dashboard
+      </span>
+    </button>
+    <div
+      style="display: flex; align-items: baseline; justify-content: space-between; gap: 8px;"
+    >
+      <h1
+        style="margin: 0px; font-size: 22px; font-weight: 700; color: rgb(236, 234, 244);"
+      >
+        Hidden Books
+      </h1>
+      <span
+        style="font-size: 13px; color: rgb(150, 148, 172);"
+      >
+        2 hidden
+      </span>
+    </div>
+    <div
+      style="display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr)); gap: 8px;"
+    >
+      <div
+        style="display: flex; gap: 12px; padding: 8px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 12px; cursor: pointer; opacity: 1;"
+      >
+        <div
+          style="width: 64px; height: 96px; flex-shrink: 0; background: rgb(30, 32, 52); border-radius: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center;"
+        >
+          <span
+            style="font-size: 24px; color: rgb(98, 96, 122);"
+          >
+            ?
+          </span>
+        </div>
+        <div
+          style="flex: 1 1 0%; min-width: 0px; display: flex; flex-direction: column; gap: 2px;"
+        >
+          <div
+            style="display: flex; align-items: baseline; gap: 4px; font-size: 15px; font-weight: 600; color: rgb(236, 234, 244); line-height: 1.3;"
+          >
+            <span
+              style="flex: 1 1 0%; min-width: 0px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;"
+            >
+              The Winter Graft
+            </span>
+          </div>
+          <div
+            style="font-size: 13px; color: rgb(150, 148, 172); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+          >
+            Ada Quill
+          </div>
+          <div
+            style="display: flex; align-items: center; gap: 4px; margin-top: 4px; flex-wrap: wrap;"
+          >
+            <span
+              style="display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; background: rgba(224, 96, 96, 0.14); color: rgb(224, 96, 96); border: 1px solid rgb(192, 72, 72); border-radius: 9999px; font-size: 12px; font-weight: 600; line-height: 1.2; white-space: nowrap;"
+            >
+              Missing
+            </span>
+          </div>
+        </div>
+      </div>
+      <div
+        style="display: flex; gap: 12px; padding: 8px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 12px; cursor: pointer; opacity: 1;"
+      >
+        <div
+          style="width: 64px; height: 96px; flex-shrink: 0; background: rgb(30, 32, 52); border-radius: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center;"
+        >
+          <span
+            style="font-size: 24px; color: rgb(98, 96, 122);"
+          >
+            ?
+          </span>
+        </div>
+        <div
+          style="flex: 1 1 0%; min-width: 0px; display: flex; flex-direction: column; gap: 2px;"
+        >
+          <div
+            style="display: flex; align-items: baseline; gap: 4px; font-size: 15px; font-weight: 600; color: rgb(236, 234, 244); line-height: 1.3;"
+          >
+            <span
+              style="flex: 1 1 0%; min-width: 0px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;"
+            >
+              A Ledger of Bees
+            </span>
+          </div>
+          <div
+            style="font-size: 13px; color: rgb(150, 148, 172); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+          >
+            Ada Quill
+          </div>
+          <div
+            style="display: flex; align-items: center; gap: 4px; margin-top: 4px; flex-wrap: wrap;"
+          >
+            <span
+              style="display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; background: rgba(224, 96, 96, 0.14); color: rgb(224, 96, 96); border: 1px solid rgb(192, 72, 72); border-radius: 9999px; font-size: 12px; font-weight: 600; line-height: 1.2; white-space: nowrap;"
+            >
+              Missing
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div
+      style="position: fixed; top: 0px; right: 0px; width: 100vw; max-width: 100vw; height: 100vh; background: rgb(34, 36, 56); border-left: medium; z-index: 100; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 16px; box-shadow: none; transform: translateX(0); transition: transform 0.25s ease-out;"
+    >
+      <div
+        style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;"
+      >
+        <h2
+          style="font-size: 18px; font-weight: 700; color: rgb(236, 234, 244); margin: 0px; flex: 1 1 0%; line-height: 1.3;"
+        >
+          The Winter Graft
+        </h2>
+        <div
+          class="sb-actions"
+          style="display: flex; gap: 8px; flex-shrink: 0;"
+        >
+          <button
+            style="background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 8px; cursor: pointer; color: rgb(98, 96, 122); padding: 8px; min-width: 36px; min-height: 36px; display: flex; align-items: center; justify-content: center;"
+          >
+            <svg
+              fill="none"
+              height="16"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2.5"
+              viewBox="0 0 24 24"
+              width="16"
+            >
+              <path
+                d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"
+              />
+              <path
+                d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z"
+              />
+            </svg>
+          </button>
+          <button
+            style="background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 8px; cursor: pointer; color: rgb(98, 96, 122); padding: 8px 10px; min-height: 36px; font-size: 12px; font-weight: 600;"
+            title="Compare metadata across Seshat / Calibre / ABS"
+          >
+            Compare
+          </button>
+          <button
+            style="background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 8px; cursor: pointer; color: rgb(98, 96, 122); padding: 8px 10px; min-height: 36px; font-size: 12px; font-weight: 600;"
+            title="Merge this book with another (duplicate row resolution)"
+          >
+            Merge
+          </button>
+          <button
+            style="background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 8px; cursor: pointer; color: rgb(98, 96, 122); padding: 8px; min-width: 36px; min-height: 36px; display: flex; align-items: center; justify-content: center;"
+          >
+            <svg
+              fill="none"
+              height="16"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2.5"
+              viewBox="0 0 24 24"
+              width="16"
+            >
+              <line
+                x1="18"
+                x2="6"
+                y1="6"
+                y2="18"
+              />
+              <line
+                x1="6"
+                x2="18"
+                y1="6"
+                y2="18"
+              />
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div
+        style="display: flex; flex-direction: column; gap: 10px;"
+      >
+        <div
+          style="display: flex; justify-content: space-between; align-items: baseline;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+          >
+            Author
+          </span>
+          <span
+            style="font-size: 13px; color: rgb(214, 212, 224); text-align: right;"
+          >
+            <span
+              style="display: inline-flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end;"
+            >
+              <span
+                style="display: inline-flex; align-items: center; gap: 4px; padding: 1px 4px 1px 8px; background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 11px; font-size: 12px; line-height: 1.5;"
+              >
+                Ada Quill
+                <button
+                  aria-label="Remove Ada Quill"
+                  style="display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; padding: 0px; border-radius: 50%; border: medium; background: none; color: rgb(224, 96, 96); cursor: pointer; font-size: 14px; opacity: 0.8;"
+                  title="Remove Ada Quill from this book"
+                >
+                  ×
+                </button>
+              </span>
+            </span>
+          </span>
+        </div>
+        <div
+          style="display: flex; justify-content: space-between; align-items: baseline;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+          >
+            Published
+          </span>
+          <span
+            style="font-size: 13px; color: rgb(214, 212, 224); text-align: right;"
+          >
+            2024-05-14
+          </span>
+        </div>
+        <div
+          style="display: flex; justify-content: space-between; align-items: baseline;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+          >
+            Status
+          </span>
+          <span
+            style="font-size: 13px; color: rgb(200, 168, 72); text-align: right;"
+          >
+            Missing
+          </span>
+        </div>
+        <div
+          style="display: flex; justify-content: space-between; align-items: baseline;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+          >
+            Source
+          </span>
+          <span
+            style="font-size: 13px; color: rgb(98, 96, 122); text-align: right;"
+          >
+            Unowned
+          </span>
+        </div>
+        <div>
+          <div
+            style="display: flex; justify-content: space-between; align-items: center; gap: 4px;"
+          >
+            <span
+              style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+            >
+              MAM
+            </span>
+            <div
+              style="display: flex; align-items: center; gap: 6px;"
+            >
+              <a
+                href="#"
+                rel="noopener noreferrer"
+                style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 5px; font-size: 12px; font-weight: 600; text-decoration: none; background: rgb(58, 26, 26); color: rgb(192, 72, 72); border: 1px solid rgb(136, 42, 42);"
+                target="_blank"
+                title="Search MAM for this title (no match found during last scan)"
+              >
+                Not Found
+                <span
+                  style="font-size: 10px; opacity: 0.7;"
+                >
+                  ↗
+                </span>
+              </a>
+              <button
+                style="background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+                title="Re-scan this book against MAM"
+              >
+                ↻ Re-scan
+              </button>
+            </div>
+          </div>
+        </div>
+        <div
+          style="display: flex; justify-content: space-between; align-items: baseline;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+          >
+            Library
+          </span>
+          <span
+            style="font-size: 13px; color: rgb(214, 212, 224); text-align: right;"
+          >
+            <span
+              style="font-size: 12px; padding: 1px 8px; border-radius: 4px; background: rgba(88, 184, 204, 0.14); color: rgb(72, 152, 176); border: 1px solid rgba(88, 184, 204, 0.2);"
+            >
+              📖 Calibre Library
+            </span>
+          </span>
+        </div>
+      </div>
+      <div
+        class="sb-actions"
+        style="display: flex; gap: 8px; margin-top: auto; padding-top: 12px; border-top: 1px solid rgb(46, 48, 72); flex-wrap: wrap;"
+      >
+        <button
+          style="background: rgb(34, 36, 56); color: rgb(150, 148, 172); border: 1px solid rgb(46, 48, 72); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+          title="Mark this book as Not Applicable so MAM scans skip it (e.g. free-to-read, never on MAM)"
+        >
+           Skip MAM
+        </button>
+      </div>
+      <div
+        class="sb-actions"
+        style="display: flex; gap: 8px; margin-top: auto; padding-top: 12px; border-top: 1px solid rgb(46, 48, 72); flex-wrap: wrap;"
+      >
+        <button
+          style="background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+        >
+          Unhide
+        </button>
+      </div>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Hidden (phone) > with a book's sidebar open > requests 1`] = `
+[
+  "GET /discovery/books/hidden",
+  "GET /discovery/mam/status",
+  "GET /discovery/pipeline/status",
+  "GET /discovery/series-suggestions/by-book/201",
+  "GET /discovery/settings",
+  "GET /v1/mam/economy/config",
+]
+`;
+
+exports[`Series detail (desktop) > a series with an incidental contributor > markup 1`] = `
+<DocumentFragment>
+  <div
+    style="display: flex; flex-direction: column; gap: 20px;"
+  >
+    <button
+      style="background: rgb(42, 44, 66); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 16px; font-size: 14px; align-self: flex-start;"
+    >
+      ← Back to Series
+    </button>
+    <div
+      style="display: flex; flex-direction: column; gap: 8px;"
+    >
+      <div
+        style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;"
+      >
+        <h1
+          style="font-size: 22px; font-weight: 700; color: rgb(236, 234, 244); margin: 0px;"
+        >
+          Orchard Cycle
+        </h1>
+        <span
+          style="font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 4px; background: rgba(222, 176, 96, 0.16); color: rgb(228, 184, 104); border: 1px solid rgba(222, 176, 96, 0.32); text-transform: uppercase; letter-spacing: 0.04em;"
+        >
+          Co-authored
+        </span>
+      </div>
+      <div
+        style="display: flex; gap: 16px; font-size: 13px;"
+      >
+        <span
+          style="color: rgb(58, 148, 104);"
+        >
+          1 owned
+        </span>
+        <span
+          style="color: rgb(200, 168, 72);"
+        >
+          2 missing
+        </span>
+        <span
+          style="color: rgb(136, 112, 180);"
+        >
+          3 books
+        </span>
+      </div>
+      <div
+        style="max-width: 320px;"
+      >
+        <div
+          style="height: 5px; border-radius: 3px; background: rgb(42, 44, 66); overflow: hidden;"
+        >
+          <div
+            style="width: 33.3%; height: 100%; border-radius: 3px; background: rgb(224, 96, 96); transition: width 0.3s;"
+          />
+        </div>
+      </div>
+    </div>
+    <div
+      style="display: flex; flex-direction: column; gap: 8px;"
+    >
+      <div
+        style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 700; color: rgb(98, 96, 122); text-transform: uppercase; letter-spacing: 0.05em; margin-right: 4px;"
+        >
+          Author
+        </span>
+        <button
+          style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 6px; font-size: 13px; background: rgba(222, 176, 96, 0.16); color: rgb(228, 184, 104); border: 1px solid rgba(222, 176, 96, 0.32); cursor: pointer;"
+          title="3 books in this series"
+        >
+          Ada Quill
+          <span
+            style="font-size: 11px; color: rgb(228, 184, 104);"
+          >
+            · 3
+          </span>
+        </button>
+      </div>
+      <div
+        style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 700; color: rgb(98, 96, 122); text-transform: uppercase; letter-spacing: 0.05em; margin-right: 4px;"
+        >
+          Contributors
+        </span>
+        <button
+          style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 6px; font-size: 13px; background: rgb(34, 36, 56); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); cursor: pointer;"
+          title="1 book in this series"
+        >
+          Bram Okafor
+          <span
+            style="font-size: 11px; color: rgb(98, 96, 122);"
+          >
+            · 1
+          </span>
+        </button>
+      </div>
+    </div>
+    <div
+      class="book-grid"
+      style="display: flex; flex-wrap: wrap; gap: 12px; align-items: start;"
+    >
+      <div
+        class="bcard"
+        style="min-width: 160px; max-width: 200px; flex: 1 1 160px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 10px; overflow: hidden; cursor: pointer; transition: border-color 0.2s, background 0.15s, transform 0.18s ease-out, box-shadow 0.18s ease-out; position: relative;"
+      >
+        <span
+          style="position: absolute; top: 6px; right: 6px; font-size: 9px; font-weight: 600; background: rgb(76, 184, 136); color: rgb(255, 255, 255); padding: 2px 6px; border-radius: 4px; z-index: 2;"
+        >
+          OWNED
+        </span>
+        <div
+          style="height: 200px; background: rgb(30, 32, 52); display: flex; align-items: center; justify-content: center; overflow: hidden; opacity: 1;"
+        >
+          <div
+            style="display: flex; flex-direction: column; align-items: center; gap: 4px; color: rgb(98, 96, 122); font-size: 12px; text-align: center; padding: 12px;"
+          >
+            <span
+              style="font-size: 28px;"
+            >
+              ?
+            </span>
+            <span>
+              The Seed Vault
+            </span>
+          </div>
+        </div>
+        <div
+          style="padding: 8px 10px;"
+        >
+          <div
+            style="font-size: 13px; font-weight: 600; color: rgb(214, 212, 224); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+          >
+            The Seed Vault
+          </div>
+          <div
+            style="font-size: 10px; color: rgb(136, 112, 180); margin-top: 1px;"
+          >
+            #1
+          </div>
+          <div
+            style="font-size: 11px; color: rgb(150, 148, 172); margin-top: 2px; display: flex; overflow: hidden;"
+          >
+            <span
+              style="display: inline-flex; min-width: 0px; max-width: 100%; vertical-align: bottom;"
+            >
+              <span
+                style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0px;"
+              >
+                <span>
+                  <span
+                    style="cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px;"
+                  >
+                    Ada Quill
+                  </span>
+                </span>
+              </span>
+            </span>
+          </div>
+        </div>
+      </div>
+      <div
+        class="bcard"
+        style="min-width: 160px; max-width: 200px; flex: 1 1 160px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 10px; overflow: hidden; cursor: pointer; transition: border-color 0.2s, background 0.15s, transform 0.18s ease-out, box-shadow 0.18s ease-out; position: relative;"
+      >
+        <span
+          style="position: absolute; top: 6px; right: 6px; font-size: 9px; font-weight: 700; background: rgba(0, 0, 0, 0.82); color: rgb(192, 72, 72); padding: 2px 6px; border-radius: 4px; z-index: 2; border: 1px solid rgb(224, 96, 96); letter-spacing: 0.04em;"
+        >
+          MISSING
+        </span>
+        <div
+          style="height: 200px; background: rgb(30, 32, 52); display: flex; align-items: center; justify-content: center; overflow: hidden; opacity: 1;"
+        >
+          <div
+            style="display: flex; flex-direction: column; align-items: center; gap: 4px; color: rgb(98, 96, 122); font-size: 12px; text-align: center; padding: 12px;"
+          >
+            <span
+              style="font-size: 28px;"
+            >
+              ?
+            </span>
+            <span>
+              The Glass Orchard
+            </span>
+          </div>
+        </div>
+        <div
+          style="padding: 8px 10px;"
+        >
+          <div
+            style="font-size: 13px; font-weight: 600; color: rgb(214, 212, 224); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+          >
+            The Glass Orchard
+          </div>
+          <div
+            style="font-size: 10px; color: rgb(136, 112, 180); margin-top: 1px;"
+          >
+            #2
+          </div>
+          <div
+            style="font-size: 11px; color: rgb(150, 148, 172); margin-top: 2px; display: flex; overflow: hidden;"
+          >
+            <span
+              style="display: inline-flex; min-width: 0px; max-width: 100%; vertical-align: bottom;"
+            >
+              <span
+                style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0px;"
+              >
+                <span>
+                  <span
+                    style="cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px;"
+                  >
+                    Ada Quill
+                  </span>
+                </span>
+                <span>
+                  , 
+                  <span
+                    style="cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px;"
+                  >
+                    Bram Okafor
+                  </span>
+                </span>
+              </span>
+            </span>
+          </div>
+        </div>
+      </div>
+      <div
+        class="bcard"
+        style="min-width: 160px; max-width: 200px; flex: 1 1 160px; background: rgb(34, 36, 56); border: 1px solid rgba(88, 184, 204, 0.4); border-radius: 10px; overflow: hidden; cursor: pointer; transition: border-color 0.2s, background 0.15s, transform 0.18s ease-out, box-shadow 0.18s ease-out; position: relative;"
+      >
+        <span
+          style="position: absolute; top: 6px; left: 6px; font-size: 9px; font-weight: 700; background: rgb(88, 184, 204); color: rgb(255, 255, 255); padding: 2px 6px; border-radius: 4px; z-index: 2;"
+        >
+          UPCOMING
+        </span>
+        <div
+          style="height: 200px; background: rgb(30, 32, 52); display: flex; align-items: center; justify-content: center; overflow: hidden; opacity: 0.7;"
+        >
+          <div
+            style="display: flex; flex-direction: column; align-items: center; gap: 4px; color: rgb(98, 96, 122); font-size: 12px; text-align: center; padding: 12px;"
+          >
+            <span
+              style="font-size: 28px;"
+            >
+              ?
+            </span>
+            <span>
+              Rootbound
+            </span>
+          </div>
+        </div>
+        <div
+          style="padding: 8px 10px;"
+        >
+          <div
+            style="font-size: 13px; font-weight: 600; color: rgb(214, 212, 224); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+          >
+            Rootbound
+          </div>
+          <div
+            style="font-size: 10px; color: rgb(136, 112, 180); margin-top: 1px;"
+          >
+            #3
+          </div>
+          <div
+            style="font-size: 11px; color: rgb(150, 148, 172); margin-top: 2px; display: flex; overflow: hidden;"
+          >
+            <span
+              style="display: inline-flex; min-width: 0px; max-width: 100%; vertical-align: bottom;"
+            >
+              <span
+                style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0px;"
+              >
+                <span>
+                  <span
+                    style="cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px;"
+                  >
+                    Ada Quill
+                  </span>
+                </span>
+              </span>
+            </span>
+          </div>
+          <div
+            style="font-size: 11px; color: rgb(72, 152, 176); margin-top: 2px;"
+          >
+            Expected: 2027-02-02
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Series detail (desktop) > a series with an incidental contributor > requests 1`] = `
+[
+  "GET /discovery/series/7?slug=calibre-library",
+]
+`;
+
+exports[`Series detail (desktop) > with a book's sidebar open > markup 1`] = `
+<DocumentFragment>
+  <div
+    style="display: flex; flex-direction: column; gap: 20px;"
+  >
+    <button
+      style="background: rgb(42, 44, 66); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 16px; font-size: 14px; align-self: flex-start;"
+    >
+      ← Back to Series
+    </button>
+    <div
+      style="display: flex; flex-direction: column; gap: 8px;"
+    >
+      <div
+        style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;"
+      >
+        <h1
+          style="font-size: 22px; font-weight: 700; color: rgb(236, 234, 244); margin: 0px;"
+        >
+          Orchard Cycle
+        </h1>
+        <span
+          style="font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 4px; background: rgba(222, 176, 96, 0.16); color: rgb(228, 184, 104); border: 1px solid rgba(222, 176, 96, 0.32); text-transform: uppercase; letter-spacing: 0.04em;"
+        >
+          Co-authored
+        </span>
+      </div>
+      <div
+        style="display: flex; gap: 16px; font-size: 13px;"
+      >
+        <span
+          style="color: rgb(58, 148, 104);"
+        >
+          1 owned
+        </span>
+        <span
+          style="color: rgb(200, 168, 72);"
+        >
+          2 missing
+        </span>
+        <span
+          style="color: rgb(136, 112, 180);"
+        >
+          3 books
+        </span>
+      </div>
+      <div
+        style="max-width: 320px;"
+      >
+        <div
+          style="height: 5px; border-radius: 3px; background: rgb(42, 44, 66); overflow: hidden;"
+        >
+          <div
+            style="width: 33.3%; height: 100%; border-radius: 3px; background: rgb(224, 96, 96); transition: width 0.3s;"
+          />
+        </div>
+      </div>
+    </div>
+    <div
+      style="display: flex; flex-direction: column; gap: 8px;"
+    >
+      <div
+        style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 700; color: rgb(98, 96, 122); text-transform: uppercase; letter-spacing: 0.05em; margin-right: 4px;"
+        >
+          Author
+        </span>
+        <button
+          style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 6px; font-size: 13px; background: rgba(222, 176, 96, 0.16); color: rgb(228, 184, 104); border: 1px solid rgba(222, 176, 96, 0.32); cursor: pointer;"
+          title="3 books in this series"
+        >
+          Ada Quill
+          <span
+            style="font-size: 11px; color: rgb(228, 184, 104);"
+          >
+            · 3
+          </span>
+        </button>
+      </div>
+      <div
+        style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 700; color: rgb(98, 96, 122); text-transform: uppercase; letter-spacing: 0.05em; margin-right: 4px;"
+        >
+          Contributors
+        </span>
+        <button
+          style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 6px; font-size: 13px; background: rgb(34, 36, 56); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); cursor: pointer;"
+          title="1 book in this series"
+        >
+          Bram Okafor
+          <span
+            style="font-size: 11px; color: rgb(98, 96, 122);"
+          >
+            · 1
+          </span>
+        </button>
+      </div>
+    </div>
+    <div
+      class="book-grid"
+      style="display: flex; flex-wrap: wrap; gap: 12px; align-items: start;"
+    >
+      <div
+        class="bcard"
+        style="min-width: 160px; max-width: 200px; flex: 1 1 160px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 10px; overflow: hidden; cursor: pointer; transition: border-color 0.2s, background 0.15s, transform 0.18s ease-out, box-shadow 0.18s ease-out; position: relative;"
+      >
+        <span
+          style="position: absolute; top: 6px; right: 6px; font-size: 9px; font-weight: 600; background: rgb(76, 184, 136); color: rgb(255, 255, 255); padding: 2px 6px; border-radius: 4px; z-index: 2;"
+        >
+          OWNED
+        </span>
+        <div
+          style="height: 200px; background: rgb(30, 32, 52); display: flex; align-items: center; justify-content: center; overflow: hidden; opacity: 1;"
+        >
+          <div
+            style="display: flex; flex-direction: column; align-items: center; gap: 4px; color: rgb(98, 96, 122); font-size: 12px; text-align: center; padding: 12px;"
+          >
+            <span
+              style="font-size: 28px;"
+            >
+              ?
+            </span>
+            <span>
+              The Seed Vault
+            </span>
+          </div>
+        </div>
+        <div
+          style="padding: 8px 10px;"
+        >
+          <div
+            style="font-size: 13px; font-weight: 600; color: rgb(214, 212, 224); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+          >
+            The Seed Vault
+          </div>
+          <div
+            style="font-size: 10px; color: rgb(136, 112, 180); margin-top: 1px;"
+          >
+            #1
+          </div>
+          <div
+            style="font-size: 11px; color: rgb(150, 148, 172); margin-top: 2px; display: flex; overflow: hidden;"
+          >
+            <span
+              style="display: inline-flex; min-width: 0px; max-width: 100%; vertical-align: bottom;"
+            >
+              <span
+                style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0px;"
+              >
+                <span>
+                  <span
+                    style="cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px;"
+                  >
+                    Ada Quill
+                  </span>
+                </span>
+              </span>
+            </span>
+          </div>
+        </div>
+      </div>
+      <div
+        class="bcard"
+        style="min-width: 160px; max-width: 200px; flex: 1 1 160px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 10px; overflow: hidden; cursor: pointer; transition: border-color 0.2s, background 0.15s, transform 0.18s ease-out, box-shadow 0.18s ease-out; position: relative;"
+      >
+        <span
+          style="position: absolute; top: 6px; right: 6px; font-size: 9px; font-weight: 700; background: rgba(0, 0, 0, 0.82); color: rgb(192, 72, 72); padding: 2px 6px; border-radius: 4px; z-index: 2; border: 1px solid rgb(224, 96, 96); letter-spacing: 0.04em;"
+        >
+          MISSING
+        </span>
+        <div
+          style="height: 200px; background: rgb(30, 32, 52); display: flex; align-items: center; justify-content: center; overflow: hidden; opacity: 1;"
+        >
+          <div
+            style="display: flex; flex-direction: column; align-items: center; gap: 4px; color: rgb(98, 96, 122); font-size: 12px; text-align: center; padding: 12px;"
+          >
+            <span
+              style="font-size: 28px;"
+            >
+              ?
+            </span>
+            <span>
+              The Glass Orchard
+            </span>
+          </div>
+        </div>
+        <div
+          style="padding: 8px 10px;"
+        >
+          <div
+            style="font-size: 13px; font-weight: 600; color: rgb(214, 212, 224); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+          >
+            The Glass Orchard
+          </div>
+          <div
+            style="font-size: 10px; color: rgb(136, 112, 180); margin-top: 1px;"
+          >
+            #2
+          </div>
+          <div
+            style="font-size: 11px; color: rgb(150, 148, 172); margin-top: 2px; display: flex; overflow: hidden;"
+          >
+            <span
+              style="display: inline-flex; min-width: 0px; max-width: 100%; vertical-align: bottom;"
+            >
+              <span
+                style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0px;"
+              >
+                <span>
+                  <span
+                    style="cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px;"
+                  >
+                    Ada Quill
+                  </span>
+                </span>
+                <span>
+                  , 
+                  <span
+                    style="cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px;"
+                  >
+                    Bram Okafor
+                  </span>
+                </span>
+              </span>
+            </span>
+          </div>
+        </div>
+      </div>
+      <div
+        class="bcard"
+        style="min-width: 160px; max-width: 200px; flex: 1 1 160px; background: rgb(34, 36, 56); border: 1px solid rgba(88, 184, 204, 0.4); border-radius: 10px; overflow: hidden; cursor: pointer; transition: border-color 0.2s, background 0.15s, transform 0.18s ease-out, box-shadow 0.18s ease-out; position: relative;"
+      >
+        <span
+          style="position: absolute; top: 6px; left: 6px; font-size: 9px; font-weight: 700; background: rgb(88, 184, 204); color: rgb(255, 255, 255); padding: 2px 6px; border-radius: 4px; z-index: 2;"
+        >
+          UPCOMING
+        </span>
+        <div
+          style="height: 200px; background: rgb(30, 32, 52); display: flex; align-items: center; justify-content: center; overflow: hidden; opacity: 0.7;"
+        >
+          <div
+            style="display: flex; flex-direction: column; align-items: center; gap: 4px; color: rgb(98, 96, 122); font-size: 12px; text-align: center; padding: 12px;"
+          >
+            <span
+              style="font-size: 28px;"
+            >
+              ?
+            </span>
+            <span>
+              Rootbound
+            </span>
+          </div>
+        </div>
+        <div
+          style="padding: 8px 10px;"
+        >
+          <div
+            style="font-size: 13px; font-weight: 600; color: rgb(214, 212, 224); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+          >
+            Rootbound
+          </div>
+          <div
+            style="font-size: 10px; color: rgb(136, 112, 180); margin-top: 1px;"
+          >
+            #3
+          </div>
+          <div
+            style="font-size: 11px; color: rgb(150, 148, 172); margin-top: 2px; display: flex; overflow: hidden;"
+          >
+            <span
+              style="display: inline-flex; min-width: 0px; max-width: 100%; vertical-align: bottom;"
+            >
+              <span
+                style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0px;"
+              >
+                <span>
+                  <span
+                    style="cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px;"
+                  >
+                    Ada Quill
+                  </span>
+                </span>
+              </span>
+            </span>
+          </div>
+          <div
+            style="font-size: 11px; color: rgb(72, 152, 176); margin-top: 2px;"
+          >
+            Expected: 2027-02-02
+          </div>
+        </div>
+      </div>
+    </div>
+    <div
+      style="position: fixed; top: 0px; right: 0px; width: 420px; max-width: 90vw; height: 100vh; background: rgb(34, 36, 56); border-left: 1px solid rgb(58, 60, 86); z-index: 100; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 16px; box-shadow: -4px 0 20px rgba(0,0,0,0.3); transform: translateX(0); transition: transform 0.25s ease-out;"
+    >
+      <div
+        style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;"
+      >
+        <h2
+          style="font-size: 18px; font-weight: 700; color: rgb(236, 234, 244); margin: 0px; flex: 1 1 0%; line-height: 1.3;"
+        >
+          The Glass Orchard
+        </h2>
+        <div
+          class="sb-actions"
+          style="display: flex; gap: 8px; flex-shrink: 0;"
+        >
+          <button
+            style="background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 8px; cursor: pointer; color: rgb(98, 96, 122); padding: 8px; min-width: 36px; min-height: 36px; display: flex; align-items: center; justify-content: center;"
+          >
+            <svg
+              fill="none"
+              height="16"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2.5"
+              viewBox="0 0 24 24"
+              width="16"
+            >
+              <path
+                d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"
+              />
+              <path
+                d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z"
+              />
+            </svg>
+          </button>
+          <button
+            style="background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 8px; cursor: pointer; color: rgb(98, 96, 122); padding: 8px 10px; min-height: 36px; font-size: 12px; font-weight: 600;"
+            title="Compare metadata across Seshat / Calibre / ABS"
+          >
+            Compare
+          </button>
+          <button
+            style="background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 8px; cursor: pointer; color: rgb(98, 96, 122); padding: 8px 10px; min-height: 36px; font-size: 12px; font-weight: 600;"
+            title="Merge this book with another (duplicate row resolution)"
+          >
+            Merge
+          </button>
+          <button
+            style="background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 8px; cursor: pointer; color: rgb(98, 96, 122); padding: 8px; min-width: 36px; min-height: 36px; display: flex; align-items: center; justify-content: center;"
+          >
+            <svg
+              fill="none"
+              height="16"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2.5"
+              viewBox="0 0 24 24"
+              width="16"
+            >
+              <line
+                x1="18"
+                x2="6"
+                y1="6"
+                y2="18"
+              />
+              <line
+                x1="6"
+                x2="18"
+                y1="6"
+                y2="18"
+              />
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div
+        style="display: flex; flex-direction: column; gap: 10px;"
+      >
+        <div
+          style="display: flex; justify-content: space-between; align-items: baseline;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+          >
+            Authors
+          </span>
+          <span
+            style="font-size: 13px; color: rgb(214, 212, 224); text-align: right;"
+          >
+            <span
+              style="display: inline-flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end;"
+            >
+              <span
+                style="display: inline-flex; align-items: center; gap: 4px; padding: 1px 4px 1px 8px; background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 11px; font-size: 12px; line-height: 1.5;"
+              >
+                Ada Quill
+                <button
+                  aria-label="Remove Ada Quill"
+                  style="display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; padding: 0px; border-radius: 50%; border: medium; background: none; color: rgb(224, 96, 96); cursor: pointer; font-size: 14px; opacity: 0.8;"
+                  title="Remove Ada Quill from this book"
+                >
+                  ×
+                </button>
+              </span>
+              <span
+                style="display: inline-flex; align-items: center; gap: 4px; padding: 1px 4px 1px 8px; background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 11px; font-size: 12px; line-height: 1.5;"
+              >
+                Bram Okafor
+                <button
+                  aria-label="Remove Bram Okafor"
+                  style="display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; padding: 0px; border-radius: 50%; border: medium; background: none; color: rgb(224, 96, 96); cursor: pointer; font-size: 14px; opacity: 0.8;"
+                  title="Remove Bram Okafor from this book"
+                >
+                  ×
+                </button>
+              </span>
+            </span>
+          </span>
+        </div>
+        <div
+          style="display: flex; justify-content: space-between; align-items: baseline;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+          >
+            Series
+          </span>
+          <span
+            style="font-size: 13px; color: rgb(136, 112, 180); text-align: right;"
+          >
+            Orchard Cycle
+            <span
+              style="color: rgb(150, 148, 172);"
+            >
+               (#2)
+            </span>
+          </span>
+        </div>
+        <div
+          style="display: flex; justify-content: space-between; align-items: baseline;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+          >
+            Published
+          </span>
+          <span
+            style="font-size: 13px; color: rgb(214, 212, 224); text-align: right;"
+          >
+            2024-05-14
+          </span>
+        </div>
+        <div
+          style="display: flex; justify-content: space-between; align-items: baseline;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+          >
+            Status
+          </span>
+          <span
+            style="font-size: 13px; color: rgb(200, 168, 72); text-align: right;"
+          >
+            Missing
+          </span>
+        </div>
+        <div
+          style="display: flex; justify-content: space-between; align-items: baseline;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+          >
+            Source
+          </span>
+          <span
+            style="font-size: 13px; color: rgb(98, 96, 122); text-align: right;"
+          >
+            Unowned
+          </span>
+        </div>
+        <div>
+          <div
+            style="display: flex; justify-content: space-between; align-items: center; gap: 4px;"
+          >
+            <span
+              style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+            >
+              MAM
+            </span>
+            <div
+              style="display: flex; align-items: center; gap: 6px;"
+            >
+              <a
+                href="https://example.invalid/t/900002"
+                rel="noopener noreferrer"
+                style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 5px; font-size: 12px; font-weight: 600; text-decoration: none; background: rgb(26, 58, 26); color: rgb(58, 148, 104); border: 1px solid rgb(42, 136, 42);"
+                target="_blank"
+              >
+                Found
+                <span
+                  style="font-size: 10px; opacity: 0.7;"
+                >
+                  ↗
+                </span>
+              </a>
+              <button
+                style="background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+                title="Re-scan this book against MAM"
+              >
+                ↻ Re-scan
+              </button>
+              <button
+                style="background: rgba(228, 184, 104, 0.133); color: rgb(228, 184, 104); border: 1px solid rgba(228, 184, 104, 0.267); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+              >
+                ⬇ Send to pipeline
+              </button>
+            </div>
+          </div>
+          <div
+            style="display: flex; justify-content: flex-end; gap: 14px; margin-top: 4px; font-size: 11px; color: rgb(98, 96, 122); flex-wrap: wrap;"
+          >
+            <label
+              style="display: flex; gap: 4px; align-items: center; cursor: pointer;"
+            >
+              <input
+                type="checkbox"
+              />
+              Use wedge
+            </label>
+          </div>
+          <div
+            style="display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 3px; flex-wrap: wrap;"
+          >
+            <span
+              style="font-size: 11px; color: rgb(150, 148, 172); font-weight: 500; text-transform: uppercase; letter-spacing: 0.03em;"
+            >
+              epub mobi
+            </span>
+          </div>
+        </div>
+        <div
+          style="display: flex; justify-content: space-between; align-items: baseline;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+          >
+            Library
+          </span>
+          <span
+            style="font-size: 13px; color: rgb(214, 212, 224); text-align: right;"
+          >
+            <span
+              style="font-size: 12px; padding: 1px 8px; border-radius: 4px; background: rgba(88, 184, 204, 0.14); color: rgb(72, 152, 176); border: 1px solid rgba(88, 184, 204, 0.2);"
+            >
+              📖 Calibre Library
+            </span>
+          </span>
+        </div>
+      </div>
+      <div
+        class="sb-actions"
+        style="display: flex; gap: 8px; margin-top: auto; padding-top: 12px; border-top: 1px solid rgb(46, 48, 72); flex-wrap: wrap;"
+      >
+        <button
+          style="background: rgba(224, 96, 96, 0.133); color: rgb(192, 72, 72); border: 1px solid rgba(224, 96, 96, 0.267); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+          title="Discard this match and mark the book as Not Found on MAM"
+        >
+           Remove MAM
+        </button>
+        <button
+          style="background: rgb(34, 36, 56); color: rgb(150, 148, 172); border: 1px solid rgb(46, 48, 72); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+          title="Mark this book as Not Applicable so MAM scans skip it (e.g. free-to-read, never on MAM)"
+        >
+           Skip MAM
+        </button>
+      </div>
+      <div
+        class="sb-actions"
+        style="display: flex; gap: 8px; margin-top: auto; padding-top: 12px; border-top: 1px solid rgb(46, 48, 72); flex-wrap: wrap;"
+      >
+        <button
+          style="background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+        >
+          Dismiss
+        </button>
+        <button
+          style="background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+        >
+          <svg
+            fill="none"
+            height="16"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2.5"
+            viewBox="0 0 24 24"
+            width="16"
+          >
+            <path
+              d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94"
+            />
+            <path
+              d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19"
+            />
+            <line
+              x1="1"
+              x2="23"
+              y1="1"
+              y2="23"
+            />
+          </svg>
+           Hide
+        </button>
+        <button
+          style="background: rgb(107, 32, 32); color: rgb(255, 144, 144); border: 1px rgb(139, 48, 48); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+        >
+          Delete
+        </button>
+      </div>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Series detail (desktop) > with a book's sidebar open > requests 1`] = `
+[
+  "GET /discovery/mam/status",
+  "GET /discovery/pipeline/status",
+  "GET /discovery/series-suggestions/by-book/102",
+  "GET /discovery/series/7?slug=calibre-library",
+  "GET /discovery/settings",
+  "GET /v1/mam/economy/config",
+]
+`;
+
+exports[`Series detail (phone) > a series with an incidental contributor > markup 1`] = `
+<DocumentFragment>
+  <div
+    style="display: flex; flex-direction: column; gap: 20px;"
+  >
+    <button
+      style="background: rgb(42, 44, 66); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 16px; font-size: 14px; align-self: flex-start;"
+    >
+      ← Back to Series
+    </button>
+    <div
+      style="display: flex; flex-direction: column; gap: 8px;"
+    >
+      <div
+        style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;"
+      >
+        <h1
+          style="font-size: 22px; font-weight: 700; color: rgb(236, 234, 244); margin: 0px;"
+        >
+          Orchard Cycle
+        </h1>
+        <span
+          style="font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 4px; background: rgba(222, 176, 96, 0.16); color: rgb(228, 184, 104); border: 1px solid rgba(222, 176, 96, 0.32); text-transform: uppercase; letter-spacing: 0.04em;"
+        >
+          Co-authored
+        </span>
+      </div>
+      <div
+        style="display: flex; gap: 16px; font-size: 13px;"
+      >
+        <span
+          style="color: rgb(58, 148, 104);"
+        >
+          1 owned
+        </span>
+        <span
+          style="color: rgb(200, 168, 72);"
+        >
+          2 missing
+        </span>
+        <span
+          style="color: rgb(136, 112, 180);"
+        >
+          3 books
+        </span>
+      </div>
+      <div
+        style="max-width: 320px;"
+      >
+        <div
+          style="height: 5px; border-radius: 3px; background: rgb(42, 44, 66); overflow: hidden;"
+        >
+          <div
+            style="width: 33.3%; height: 100%; border-radius: 3px; background: rgb(224, 96, 96); transition: width 0.3s;"
+          />
+        </div>
+      </div>
+    </div>
+    <div
+      style="display: flex; flex-direction: column; gap: 8px;"
+    >
+      <div
+        style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 700; color: rgb(98, 96, 122); text-transform: uppercase; letter-spacing: 0.05em; margin-right: 4px;"
+        >
+          Author
+        </span>
+        <button
+          style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 6px; font-size: 13px; background: rgba(222, 176, 96, 0.16); color: rgb(228, 184, 104); border: 1px solid rgba(222, 176, 96, 0.32); cursor: pointer;"
+          title="3 books in this series"
+        >
+          Ada Quill
+          <span
+            style="font-size: 11px; color: rgb(228, 184, 104);"
+          >
+            · 3
+          </span>
+        </button>
+      </div>
+      <div
+        style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 700; color: rgb(98, 96, 122); text-transform: uppercase; letter-spacing: 0.05em; margin-right: 4px;"
+        >
+          Contributors
+        </span>
+        <button
+          style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 6px; font-size: 13px; background: rgb(34, 36, 56); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); cursor: pointer;"
+          title="1 book in this series"
+        >
+          Bram Okafor
+          <span
+            style="font-size: 11px; color: rgb(98, 96, 122);"
+          >
+            · 1
+          </span>
+        </button>
+      </div>
+    </div>
+    <div
+      class="book-grid"
+      style="display: flex; flex-wrap: wrap; gap: 12px; align-items: start;"
+    >
+      <div
+        class="bcard"
+        style="min-width: 160px; max-width: 200px; flex: 1 1 160px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 10px; overflow: hidden; cursor: pointer; transition: border-color 0.2s, background 0.15s, transform 0.18s ease-out, box-shadow 0.18s ease-out; position: relative;"
+      >
+        <span
+          style="position: absolute; top: 6px; right: 6px; font-size: 9px; font-weight: 600; background: rgb(76, 184, 136); color: rgb(255, 255, 255); padding: 2px 6px; border-radius: 4px; z-index: 2;"
+        >
+          OWNED
+        </span>
+        <div
+          style="height: 200px; background: rgb(30, 32, 52); display: flex; align-items: center; justify-content: center; overflow: hidden; opacity: 1;"
+        >
+          <div
+            style="display: flex; flex-direction: column; align-items: center; gap: 4px; color: rgb(98, 96, 122); font-size: 12px; text-align: center; padding: 12px;"
+          >
+            <span
+              style="font-size: 28px;"
+            >
+              ?
+            </span>
+            <span>
+              The Seed Vault
+            </span>
+          </div>
+        </div>
+        <div
+          style="padding: 8px 10px;"
+        >
+          <div
+            style="font-size: 13px; font-weight: 600; color: rgb(214, 212, 224); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+          >
+            The Seed Vault
+          </div>
+          <div
+            style="font-size: 10px; color: rgb(136, 112, 180); margin-top: 1px;"
+          >
+            #1
+          </div>
+          <div
+            style="font-size: 11px; color: rgb(150, 148, 172); margin-top: 2px; display: flex; overflow: hidden;"
+          >
+            <span
+              style="display: inline-flex; min-width: 0px; max-width: 100%; vertical-align: bottom;"
+            >
+              <span
+                style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0px;"
+              >
+                <span>
+                  <span
+                    style="cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px;"
+                  >
+                    Ada Quill
+                  </span>
+                </span>
+              </span>
+            </span>
+          </div>
+        </div>
+      </div>
+      <div
+        class="bcard"
+        style="min-width: 160px; max-width: 200px; flex: 1 1 160px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 10px; overflow: hidden; cursor: pointer; transition: border-color 0.2s, background 0.15s, transform 0.18s ease-out, box-shadow 0.18s ease-out; position: relative;"
+      >
+        <span
+          style="position: absolute; top: 6px; right: 6px; font-size: 9px; font-weight: 700; background: rgba(0, 0, 0, 0.82); color: rgb(192, 72, 72); padding: 2px 6px; border-radius: 4px; z-index: 2; border: 1px solid rgb(224, 96, 96); letter-spacing: 0.04em;"
+        >
+          MISSING
+        </span>
+        <div
+          style="height: 200px; background: rgb(30, 32, 52); display: flex; align-items: center; justify-content: center; overflow: hidden; opacity: 1;"
+        >
+          <div
+            style="display: flex; flex-direction: column; align-items: center; gap: 4px; color: rgb(98, 96, 122); font-size: 12px; text-align: center; padding: 12px;"
+          >
+            <span
+              style="font-size: 28px;"
+            >
+              ?
+            </span>
+            <span>
+              The Glass Orchard
+            </span>
+          </div>
+        </div>
+        <div
+          style="padding: 8px 10px;"
+        >
+          <div
+            style="font-size: 13px; font-weight: 600; color: rgb(214, 212, 224); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+          >
+            The Glass Orchard
+          </div>
+          <div
+            style="font-size: 10px; color: rgb(136, 112, 180); margin-top: 1px;"
+          >
+            #2
+          </div>
+          <div
+            style="font-size: 11px; color: rgb(150, 148, 172); margin-top: 2px; display: flex; overflow: hidden;"
+          >
+            <span
+              style="display: inline-flex; min-width: 0px; max-width: 100%; vertical-align: bottom;"
+            >
+              <span
+                style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0px;"
+              >
+                <span>
+                  <span
+                    style="cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px;"
+                  >
+                    Ada Quill
+                  </span>
+                </span>
+                <span>
+                  , 
+                  <span
+                    style="cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px;"
+                  >
+                    Bram Okafor
+                  </span>
+                </span>
+              </span>
+            </span>
+          </div>
+        </div>
+      </div>
+      <div
+        class="bcard"
+        style="min-width: 160px; max-width: 200px; flex: 1 1 160px; background: rgb(34, 36, 56); border: 1px solid rgba(88, 184, 204, 0.4); border-radius: 10px; overflow: hidden; cursor: pointer; transition: border-color 0.2s, background 0.15s, transform 0.18s ease-out, box-shadow 0.18s ease-out; position: relative;"
+      >
+        <span
+          style="position: absolute; top: 6px; left: 6px; font-size: 9px; font-weight: 700; background: rgb(88, 184, 204); color: rgb(255, 255, 255); padding: 2px 6px; border-radius: 4px; z-index: 2;"
+        >
+          UPCOMING
+        </span>
+        <div
+          style="height: 200px; background: rgb(30, 32, 52); display: flex; align-items: center; justify-content: center; overflow: hidden; opacity: 0.7;"
+        >
+          <div
+            style="display: flex; flex-direction: column; align-items: center; gap: 4px; color: rgb(98, 96, 122); font-size: 12px; text-align: center; padding: 12px;"
+          >
+            <span
+              style="font-size: 28px;"
+            >
+              ?
+            </span>
+            <span>
+              Rootbound
+            </span>
+          </div>
+        </div>
+        <div
+          style="padding: 8px 10px;"
+        >
+          <div
+            style="font-size: 13px; font-weight: 600; color: rgb(214, 212, 224); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+          >
+            Rootbound
+          </div>
+          <div
+            style="font-size: 10px; color: rgb(136, 112, 180); margin-top: 1px;"
+          >
+            #3
+          </div>
+          <div
+            style="font-size: 11px; color: rgb(150, 148, 172); margin-top: 2px; display: flex; overflow: hidden;"
+          >
+            <span
+              style="display: inline-flex; min-width: 0px; max-width: 100%; vertical-align: bottom;"
+            >
+              <span
+                style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0px;"
+              >
+                <span>
+                  <span
+                    style="cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px;"
+                  >
+                    Ada Quill
+                  </span>
+                </span>
+              </span>
+            </span>
+          </div>
+          <div
+            style="font-size: 11px; color: rgb(72, 152, 176); margin-top: 2px;"
+          >
+            Expected: 2027-02-02
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Series detail (phone) > a series with an incidental contributor > requests 1`] = `
+[
+  "GET /discovery/series/7?slug=calibre-library",
+]
+`;
+
+exports[`Series detail (phone) > with a book's sidebar open > markup 1`] = `
+<DocumentFragment>
+  <div
+    style="display: flex; flex-direction: column; gap: 20px;"
+  >
+    <button
+      style="background: rgb(42, 44, 66); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 16px; font-size: 14px; align-self: flex-start;"
+    >
+      ← Back to Series
+    </button>
+    <div
+      style="display: flex; flex-direction: column; gap: 8px;"
+    >
+      <div
+        style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;"
+      >
+        <h1
+          style="font-size: 22px; font-weight: 700; color: rgb(236, 234, 244); margin: 0px;"
+        >
+          Orchard Cycle
+        </h1>
+        <span
+          style="font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 4px; background: rgba(222, 176, 96, 0.16); color: rgb(228, 184, 104); border: 1px solid rgba(222, 176, 96, 0.32); text-transform: uppercase; letter-spacing: 0.04em;"
+        >
+          Co-authored
+        </span>
+      </div>
+      <div
+        style="display: flex; gap: 16px; font-size: 13px;"
+      >
+        <span
+          style="color: rgb(58, 148, 104);"
+        >
+          1 owned
+        </span>
+        <span
+          style="color: rgb(200, 168, 72);"
+        >
+          2 missing
+        </span>
+        <span
+          style="color: rgb(136, 112, 180);"
+        >
+          3 books
+        </span>
+      </div>
+      <div
+        style="max-width: 320px;"
+      >
+        <div
+          style="height: 5px; border-radius: 3px; background: rgb(42, 44, 66); overflow: hidden;"
+        >
+          <div
+            style="width: 33.3%; height: 100%; border-radius: 3px; background: rgb(224, 96, 96); transition: width 0.3s;"
+          />
+        </div>
+      </div>
+    </div>
+    <div
+      style="display: flex; flex-direction: column; gap: 8px;"
+    >
+      <div
+        style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 700; color: rgb(98, 96, 122); text-transform: uppercase; letter-spacing: 0.05em; margin-right: 4px;"
+        >
+          Author
+        </span>
+        <button
+          style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 6px; font-size: 13px; background: rgba(222, 176, 96, 0.16); color: rgb(228, 184, 104); border: 1px solid rgba(222, 176, 96, 0.32); cursor: pointer;"
+          title="3 books in this series"
+        >
+          Ada Quill
+          <span
+            style="font-size: 11px; color: rgb(228, 184, 104);"
+          >
+            · 3
+          </span>
+        </button>
+      </div>
+      <div
+        style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;"
+      >
+        <span
+          style="font-size: 11px; font-weight: 700; color: rgb(98, 96, 122); text-transform: uppercase; letter-spacing: 0.05em; margin-right: 4px;"
+        >
+          Contributors
+        </span>
+        <button
+          style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 6px; font-size: 13px; background: rgb(34, 36, 56); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); cursor: pointer;"
+          title="1 book in this series"
+        >
+          Bram Okafor
+          <span
+            style="font-size: 11px; color: rgb(98, 96, 122);"
+          >
+            · 1
+          </span>
+        </button>
+      </div>
+    </div>
+    <div
+      class="book-grid"
+      style="display: flex; flex-wrap: wrap; gap: 12px; align-items: start;"
+    >
+      <div
+        class="bcard"
+        style="min-width: 160px; max-width: 200px; flex: 1 1 160px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 10px; overflow: hidden; cursor: pointer; transition: border-color 0.2s, background 0.15s, transform 0.18s ease-out, box-shadow 0.18s ease-out; position: relative;"
+      >
+        <span
+          style="position: absolute; top: 6px; right: 6px; font-size: 9px; font-weight: 600; background: rgb(76, 184, 136); color: rgb(255, 255, 255); padding: 2px 6px; border-radius: 4px; z-index: 2;"
+        >
+          OWNED
+        </span>
+        <div
+          style="height: 200px; background: rgb(30, 32, 52); display: flex; align-items: center; justify-content: center; overflow: hidden; opacity: 1;"
+        >
+          <div
+            style="display: flex; flex-direction: column; align-items: center; gap: 4px; color: rgb(98, 96, 122); font-size: 12px; text-align: center; padding: 12px;"
+          >
+            <span
+              style="font-size: 28px;"
+            >
+              ?
+            </span>
+            <span>
+              The Seed Vault
+            </span>
+          </div>
+        </div>
+        <div
+          style="padding: 8px 10px;"
+        >
+          <div
+            style="font-size: 13px; font-weight: 600; color: rgb(214, 212, 224); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+          >
+            The Seed Vault
+          </div>
+          <div
+            style="font-size: 10px; color: rgb(136, 112, 180); margin-top: 1px;"
+          >
+            #1
+          </div>
+          <div
+            style="font-size: 11px; color: rgb(150, 148, 172); margin-top: 2px; display: flex; overflow: hidden;"
+          >
+            <span
+              style="display: inline-flex; min-width: 0px; max-width: 100%; vertical-align: bottom;"
+            >
+              <span
+                style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0px;"
+              >
+                <span>
+                  <span
+                    style="cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px;"
+                  >
+                    Ada Quill
+                  </span>
+                </span>
+              </span>
+            </span>
+          </div>
+        </div>
+      </div>
+      <div
+        class="bcard"
+        style="min-width: 160px; max-width: 200px; flex: 1 1 160px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 10px; overflow: hidden; cursor: pointer; transition: border-color 0.2s, background 0.15s, transform 0.18s ease-out, box-shadow 0.18s ease-out; position: relative;"
+      >
+        <span
+          style="position: absolute; top: 6px; right: 6px; font-size: 9px; font-weight: 700; background: rgba(0, 0, 0, 0.82); color: rgb(192, 72, 72); padding: 2px 6px; border-radius: 4px; z-index: 2; border: 1px solid rgb(224, 96, 96); letter-spacing: 0.04em;"
+        >
+          MISSING
+        </span>
+        <div
+          style="height: 200px; background: rgb(30, 32, 52); display: flex; align-items: center; justify-content: center; overflow: hidden; opacity: 1;"
+        >
+          <div
+            style="display: flex; flex-direction: column; align-items: center; gap: 4px; color: rgb(98, 96, 122); font-size: 12px; text-align: center; padding: 12px;"
+          >
+            <span
+              style="font-size: 28px;"
+            >
+              ?
+            </span>
+            <span>
+              The Glass Orchard
+            </span>
+          </div>
+        </div>
+        <div
+          style="padding: 8px 10px;"
+        >
+          <div
+            style="font-size: 13px; font-weight: 600; color: rgb(214, 212, 224); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+          >
+            The Glass Orchard
+          </div>
+          <div
+            style="font-size: 10px; color: rgb(136, 112, 180); margin-top: 1px;"
+          >
+            #2
+          </div>
+          <div
+            style="font-size: 11px; color: rgb(150, 148, 172); margin-top: 2px; display: flex; overflow: hidden;"
+          >
+            <span
+              style="display: inline-flex; min-width: 0px; max-width: 100%; vertical-align: bottom;"
+            >
+              <span
+                style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0px;"
+              >
+                <span>
+                  <span
+                    style="cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px;"
+                  >
+                    Ada Quill
+                  </span>
+                </span>
+                <span>
+                  , 
+                  <span
+                    style="cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px;"
+                  >
+                    Bram Okafor
+                  </span>
+                </span>
+              </span>
+            </span>
+          </div>
+        </div>
+      </div>
+      <div
+        class="bcard"
+        style="min-width: 160px; max-width: 200px; flex: 1 1 160px; background: rgb(34, 36, 56); border: 1px solid rgba(88, 184, 204, 0.4); border-radius: 10px; overflow: hidden; cursor: pointer; transition: border-color 0.2s, background 0.15s, transform 0.18s ease-out, box-shadow 0.18s ease-out; position: relative;"
+      >
+        <span
+          style="position: absolute; top: 6px; left: 6px; font-size: 9px; font-weight: 700; background: rgb(88, 184, 204); color: rgb(255, 255, 255); padding: 2px 6px; border-radius: 4px; z-index: 2;"
+        >
+          UPCOMING
+        </span>
+        <div
+          style="height: 200px; background: rgb(30, 32, 52); display: flex; align-items: center; justify-content: center; overflow: hidden; opacity: 0.7;"
+        >
+          <div
+            style="display: flex; flex-direction: column; align-items: center; gap: 4px; color: rgb(98, 96, 122); font-size: 12px; text-align: center; padding: 12px;"
+          >
+            <span
+              style="font-size: 28px;"
+            >
+              ?
+            </span>
+            <span>
+              Rootbound
+            </span>
+          </div>
+        </div>
+        <div
+          style="padding: 8px 10px;"
+        >
+          <div
+            style="font-size: 13px; font-weight: 600; color: rgb(214, 212, 224); line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+          >
+            Rootbound
+          </div>
+          <div
+            style="font-size: 10px; color: rgb(136, 112, 180); margin-top: 1px;"
+          >
+            #3
+          </div>
+          <div
+            style="font-size: 11px; color: rgb(150, 148, 172); margin-top: 2px; display: flex; overflow: hidden;"
+          >
+            <span
+              style="display: inline-flex; min-width: 0px; max-width: 100%; vertical-align: bottom;"
+            >
+              <span
+                style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0px;"
+              >
+                <span>
+                  <span
+                    style="cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px;"
+                  >
+                    Ada Quill
+                  </span>
+                </span>
+              </span>
+            </span>
+          </div>
+          <div
+            style="font-size: 11px; color: rgb(72, 152, 176); margin-top: 2px;"
+          >
+            Expected: 2027-02-02
+          </div>
+        </div>
+      </div>
+    </div>
+    <div
+      style="position: fixed; top: 0px; right: 0px; width: 100vw; max-width: 100vw; height: 100vh; background: rgb(34, 36, 56); border-left: medium; z-index: 100; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 16px; box-shadow: none; transform: translateX(0); transition: transform 0.25s ease-out;"
+    >
+      <div
+        style="display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;"
+      >
+        <h2
+          style="font-size: 18px; font-weight: 700; color: rgb(236, 234, 244); margin: 0px; flex: 1 1 0%; line-height: 1.3;"
+        >
+          The Glass Orchard
+        </h2>
+        <div
+          class="sb-actions"
+          style="display: flex; gap: 8px; flex-shrink: 0;"
+        >
+          <button
+            style="background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 8px; cursor: pointer; color: rgb(98, 96, 122); padding: 8px; min-width: 36px; min-height: 36px; display: flex; align-items: center; justify-content: center;"
+          >
+            <svg
+              fill="none"
+              height="16"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2.5"
+              viewBox="0 0 24 24"
+              width="16"
+            >
+              <path
+                d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"
+              />
+              <path
+                d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z"
+              />
+            </svg>
+          </button>
+          <button
+            style="background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 8px; cursor: pointer; color: rgb(98, 96, 122); padding: 8px 10px; min-height: 36px; font-size: 12px; font-weight: 600;"
+            title="Compare metadata across Seshat / Calibre / ABS"
+          >
+            Compare
+          </button>
+          <button
+            style="background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 8px; cursor: pointer; color: rgb(98, 96, 122); padding: 8px 10px; min-height: 36px; font-size: 12px; font-weight: 600;"
+            title="Merge this book with another (duplicate row resolution)"
+          >
+            Merge
+          </button>
+          <button
+            style="background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 8px; cursor: pointer; color: rgb(98, 96, 122); padding: 8px; min-width: 36px; min-height: 36px; display: flex; align-items: center; justify-content: center;"
+          >
+            <svg
+              fill="none"
+              height="16"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2.5"
+              viewBox="0 0 24 24"
+              width="16"
+            >
+              <line
+                x1="18"
+                x2="6"
+                y1="6"
+                y2="18"
+              />
+              <line
+                x1="6"
+                x2="18"
+                y1="6"
+                y2="18"
+              />
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div
+        style="display: flex; flex-direction: column; gap: 10px;"
+      >
+        <div
+          style="display: flex; justify-content: space-between; align-items: baseline;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+          >
+            Authors
+          </span>
+          <span
+            style="font-size: 13px; color: rgb(214, 212, 224); text-align: right;"
+          >
+            <span
+              style="display: inline-flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end;"
+            >
+              <span
+                style="display: inline-flex; align-items: center; gap: 4px; padding: 1px 4px 1px 8px; background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 11px; font-size: 12px; line-height: 1.5;"
+              >
+                Ada Quill
+                <button
+                  aria-label="Remove Ada Quill"
+                  style="display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; padding: 0px; border-radius: 50%; border: medium; background: none; color: rgb(224, 96, 96); cursor: pointer; font-size: 14px; opacity: 0.8;"
+                  title="Remove Ada Quill from this book"
+                >
+                  ×
+                </button>
+              </span>
+              <span
+                style="display: inline-flex; align-items: center; gap: 4px; padding: 1px 4px 1px 8px; background: rgb(42, 44, 66); border: 1px solid rgb(58, 60, 86); border-radius: 11px; font-size: 12px; line-height: 1.5;"
+              >
+                Bram Okafor
+                <button
+                  aria-label="Remove Bram Okafor"
+                  style="display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; padding: 0px; border-radius: 50%; border: medium; background: none; color: rgb(224, 96, 96); cursor: pointer; font-size: 14px; opacity: 0.8;"
+                  title="Remove Bram Okafor from this book"
+                >
+                  ×
+                </button>
+              </span>
+            </span>
+          </span>
+        </div>
+        <div
+          style="display: flex; justify-content: space-between; align-items: baseline;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+          >
+            Series
+          </span>
+          <span
+            style="font-size: 13px; color: rgb(136, 112, 180); text-align: right;"
+          >
+            Orchard Cycle
+            <span
+              style="color: rgb(150, 148, 172);"
+            >
+               (#2)
+            </span>
+          </span>
+        </div>
+        <div
+          style="display: flex; justify-content: space-between; align-items: baseline;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+          >
+            Published
+          </span>
+          <span
+            style="font-size: 13px; color: rgb(214, 212, 224); text-align: right;"
+          >
+            2024-05-14
+          </span>
+        </div>
+        <div
+          style="display: flex; justify-content: space-between; align-items: baseline;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+          >
+            Status
+          </span>
+          <span
+            style="font-size: 13px; color: rgb(200, 168, 72); text-align: right;"
+          >
+            Missing
+          </span>
+        </div>
+        <div
+          style="display: flex; justify-content: space-between; align-items: baseline;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+          >
+            Source
+          </span>
+          <span
+            style="font-size: 13px; color: rgb(98, 96, 122); text-align: right;"
+          >
+            Unowned
+          </span>
+        </div>
+        <div>
+          <div
+            style="display: flex; justify-content: space-between; align-items: center; gap: 4px;"
+          >
+            <span
+              style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+            >
+              MAM
+            </span>
+            <div
+              style="display: flex; align-items: center; gap: 6px;"
+            >
+              <a
+                href="https://example.invalid/t/900002"
+                rel="noopener noreferrer"
+                style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 5px; font-size: 12px; font-weight: 600; text-decoration: none; background: rgb(26, 58, 26); color: rgb(58, 148, 104); border: 1px solid rgb(42, 136, 42);"
+                target="_blank"
+              >
+                Found
+                <span
+                  style="font-size: 10px; opacity: 0.7;"
+                >
+                  ↗
+                </span>
+              </a>
+              <button
+                style="background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+                title="Re-scan this book against MAM"
+              >
+                ↻ Re-scan
+              </button>
+              <button
+                style="background: rgba(228, 184, 104, 0.133); color: rgb(228, 184, 104); border: 1px solid rgba(228, 184, 104, 0.267); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+              >
+                ⬇ Send to pipeline
+              </button>
+            </div>
+          </div>
+          <div
+            style="display: flex; justify-content: flex-end; gap: 14px; margin-top: 4px; font-size: 11px; color: rgb(98, 96, 122); flex-wrap: wrap;"
+          >
+            <label
+              style="display: flex; gap: 4px; align-items: center; cursor: pointer;"
+            >
+              <input
+                type="checkbox"
+              />
+              Use wedge
+            </label>
+          </div>
+          <div
+            style="display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 3px; flex-wrap: wrap;"
+          >
+            <span
+              style="font-size: 11px; color: rgb(150, 148, 172); font-weight: 500; text-transform: uppercase; letter-spacing: 0.03em;"
+            >
+              epub mobi
+            </span>
+          </div>
+        </div>
+        <div
+          style="display: flex; justify-content: space-between; align-items: baseline;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 600; color: rgb(98, 96, 122); text-transform: uppercase;"
+          >
+            Library
+          </span>
+          <span
+            style="font-size: 13px; color: rgb(214, 212, 224); text-align: right;"
+          >
+            <span
+              style="font-size: 12px; padding: 1px 8px; border-radius: 4px; background: rgba(88, 184, 204, 0.14); color: rgb(72, 152, 176); border: 1px solid rgba(88, 184, 204, 0.2);"
+            >
+              📖 Calibre Library
+            </span>
+          </span>
+        </div>
+      </div>
+      <div
+        class="sb-actions"
+        style="display: flex; gap: 8px; margin-top: auto; padding-top: 12px; border-top: 1px solid rgb(46, 48, 72); flex-wrap: wrap;"
+      >
+        <button
+          style="background: rgba(224, 96, 96, 0.133); color: rgb(192, 72, 72); border: 1px solid rgba(224, 96, 96, 0.267); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+          title="Discard this match and mark the book as Not Found on MAM"
+        >
+           Remove MAM
+        </button>
+        <button
+          style="background: rgb(34, 36, 56); color: rgb(150, 148, 172); border: 1px solid rgb(46, 48, 72); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+          title="Mark this book as Not Applicable so MAM scans skip it (e.g. free-to-read, never on MAM)"
+        >
+           Skip MAM
+        </button>
+      </div>
+      <div
+        class="sb-actions"
+        style="display: flex; gap: 8px; margin-top: auto; padding-top: 12px; border-top: 1px solid rgb(46, 48, 72); flex-wrap: wrap;"
+      >
+        <button
+          style="background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+        >
+          Dismiss
+        </button>
+        <button
+          style="background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+        >
+          <svg
+            fill="none"
+            height="16"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2.5"
+            viewBox="0 0 24 24"
+            width="16"
+          >
+            <path
+              d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94"
+            />
+            <path
+              d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19"
+            />
+            <line
+              x1="1"
+              x2="23"
+              y1="1"
+              y2="23"
+            />
+          </svg>
+           Hide
+        </button>
+        <button
+          style="background: rgb(107, 32, 32); color: rgb(255, 144, 144); border: 1px rgb(139, 48, 48); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+        >
+          Delete
+        </button>
+      </div>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Series detail (phone) > with a book's sidebar open > requests 1`] = `
+[
+  "GET /discovery/mam/status",
+  "GET /discovery/pipeline/status",
+  "GET /discovery/series-suggestions/by-book/102",
+  "GET /discovery/series/7?slug=calibre-library",
+  "GET /discovery/settings",
+  "GET /v1/mam/economy/config",
+]
+`;

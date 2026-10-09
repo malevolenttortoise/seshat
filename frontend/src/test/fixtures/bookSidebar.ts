@@ -16,7 +16,8 @@ export const ownedWithSuggestion = book(104, "Ninefold Tide", {
   source: "hardcover",
 });
 
-const common = {
+// What any open sidebar loads, whatever the book.
+export const sidebarCommonRoutes = {
   "GET /discovery/settings": { calibre_web_url: "https://books.example.invalid", abs_web_url: "https://abs.example.invalid" },
   "GET /discovery/pipeline/status": { configured: true, reachable: true },
   "GET /v1/mam/economy/config": economyConfig,
@@ -24,12 +25,12 @@ const common = {
 };
 
 export const sidebarMissingRoutes = {
-  ...common,
+  ...sidebarCommonRoutes,
   "GET /discovery/series-suggestions/by-book/102": { suggestion: null },
 };
 
 export const sidebarOwnedRoutes = {
-  ...common,
+  ...sidebarCommonRoutes,
   "GET /discovery/series-suggestions/by-book/104": {
     suggestion: {
       id: 12,
@@ -65,7 +66,7 @@ const candidate = (path: string, files: string[], size: number) => ({
 });
 
 export const sidebarSnatchedRoutes = {
-  ...common,
+  ...sidebarCommonRoutes,
   "GET /discovery/series-suggestions/by-book/106": { suggestion: null },
 };
 
@@ -118,7 +119,7 @@ export const coauthored = book(107, "Two Hands Make Rope", {
 });
 
 export const sidebarCoauthoredRoutes = {
-  ...common,
+  ...sidebarCommonRoutes,
   "GET /discovery/series-suggestions/by-book/107": { suggestion: null },
 };
 
