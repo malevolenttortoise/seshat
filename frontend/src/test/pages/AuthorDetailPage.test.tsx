@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent } from "@testing-library/react";
 import AuthorDetailPage from "../../pages/DiscAuthorDetailPage";
-import { expectRendered, renderPage, resetPageEnv, type Viewport } from "../render";
+import { expectRendered, renderPage, resetPageEnv, type PageRender, type Viewport } from "../render";
 import {
   authorDetailFailedRoutes,
   authorDetailRoutes,
+  authorDetailScanStartRoutes,
   authorDetailScanningRoutes,
   authorDetailUnlinkRoutes,
 } from "../fixtures/authorDetail";
@@ -34,6 +35,40 @@ describe.each<Viewport>(["desktop", "phone"])("Author detail (%s)", (viewport) =
       routes: authorDetailFailedRoutes,
     });
     expectRendered(r, "Couldn't load this author: database is locked");
+  });
+});
+
+const buttonsNamed = (r: PageRender, name: string) =>
+  r.getAllByRole("button").filter((b) => (b.textContent ?? "").trim() === name);
+
+async function press(r: PageRender, el: Element) {
+  act(() => { fireEvent.click(el); });
+  await r.settle();
+}
+
+// Wave 5b S17 baselines: the states the bulk actions and the scan
+// buttons decide, on the code before they move into hooks.
+describe.each<Viewport>(["desktop", "phone"])("Author detail S17 states (%s)", (viewport) => {
+  it("select mode with the standalones of both libraries picked", async () => {
+    const r = await renderPage(<AuthorDetailPage authorId="calibre-library:11" onNav={vi.fn()} />, {
+      viewport,
+      routes: authorDetailRoutes,
+    });
+    await press(r, buttonsNamed(r, "Select")[0]);
+    const picks = buttonsNamed(r, viewport === "desktop" ? "Select standalone" : "Select");
+    expect(picks.length).toBeGreaterThan(1);
+    for (const b of picks) await press(r, b);
+    expectRendered(r, "Ada Quill", "Skip MAM");
+  });
+
+  it("right after starting a source scan and a MAM scan", async () => {
+    const r = await renderPage(<AuthorDetailPage authorId="calibre-library:11" onNav={vi.fn()} />, {
+      viewport,
+      routes: authorDetailScanStartRoutes,
+    });
+    await press(r, buttonsNamed(r, viewport === "desktop" ? "Re-sync" : "Re-scan sources")[0]);
+    await press(r, buttonsNamed(r, "Scan MAM")[0]);
+    expectRendered(r, "Ada Quill");
   });
 });
 

@@ -134,3 +134,20 @@ export const authorDetailUnlinkRoutes = {
   "GET /discovery/scan-status": idleScans,
   "DELETE /discovery/authors/pen-name-link/3": { ok: true },
 };
+
+// Starting a source scan and a MAM scan from the page's buttons: both
+// start (the scan-finished poll still sees nothing running).
+export const authorDetailScanStartRoutes = {
+  ...authorDetailRoutes,
+  "POST /discovery/authors/11/lookup": { status: "started", author: "Ada Quill" },
+  "POST /discovery/mam/scan-author/11": { status: "started", total: 3 },
+};
+
+// Bulk actions across both libraries: one request per library.
+export const authorDetailBulkRoutes = {
+  ...authorDetailRoutes,
+  [`POST /discovery/books/bulk-hide?slug=${EBOOK_SLUG}`]: { status: "ok", count: 2 },
+  [`POST /discovery/books/bulk-hide?slug=${AUDIO_SLUG}`]: { status: "ok", count: 1 },
+  [`POST /discovery/books/bulk-delete?slug=${EBOOK_SLUG}`]: { status: "ok", deleted: 1, skipped: 1 },
+  [`POST /discovery/books/bulk-delete?slug=${AUDIO_SLUG}`]: reply(500, { detail: "database is locked" }),
+};
