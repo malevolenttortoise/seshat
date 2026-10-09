@@ -247,15 +247,17 @@ def _no_source_gate_waits(monkeypatch):
     gate itself install a fake clock (`tests/metadata/test_source_gate.py`)."""
     import asyncio
 
-    from app.metadata import source_gate
+    from app.metadata import kobo_session, source_gate
 
     async def _no_wait(_seconds: float) -> None:
         await asyncio.sleep(0)
 
     source_gate.reset()
+    kobo_session.reset_for_tests()
     monkeypatch.setattr(source_gate, "_sleep", _no_wait)
     yield
     source_gate.reset()
+    kobo_session.reset_for_tests()
 
 
 @pytest.fixture(autouse=True)

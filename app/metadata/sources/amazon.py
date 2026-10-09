@@ -9,7 +9,8 @@ Two-pass flow:
   2. Detail: amazon.com/dp/{ASIN} for rich metadata
 
 Based on analysis of CWA's proven Amazon scraper, this implementation:
-  - Uses plain requests.Session (NOT cloudscraper — less fingerprint)
+  - Uses plain requests.Session for search / product pages (wave 4b moves
+    them to curl_cffi)
   - Includes Accept-Encoding header (critical for bot detection)
   - Uses explicit search params (unfiltered, sort, search-alias)
   - Extracts high-res covers from script JSON, not img elements

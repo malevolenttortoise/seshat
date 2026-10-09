@@ -2,11 +2,11 @@
 Kobo source — third in the priority chain after Goodreads and Hardcover.
 
 Kobo has no public API, so this module scrapes the storefront pages.
-Cloudflare sits in front of kobo.com, so the HTTP layer uses
-`cloudscraper` (synchronous) instead of httpx — the only source in
-this codebase that doesn't use the async base-class machinery. The
-sync calls are wrapped in `asyncio.to_thread` so they don't block the
-event loop.
+Cloudflare sits in front of kobo.com; requests go through
+`app.metadata.kobo_session` (curl_cffi with Chrome's TLS profile, shared
+with the enrichment source). A Cloudflare challenge is never solved
+(ADR-0025): it is counted as a block and Kobo backs off. Until the
+2026-10 audit this used `cloudscraper`, a challenge solver.
 
 Two passes per author, mirroring the goodreads pattern:
 
@@ -32,12 +32,12 @@ Optimizations that keep scan times bounded:
 Per-book progress hook: `self._on_book(title)` is called for DETAIL
 fetches and URL-backfill emits, but NOT for filter-noise skips.
 """
-import logging, asyncio, time, re
+import logging, asyncio, re
 from datetime import datetime
 from typing import Optional
 from lxml import html
 from app.discovery.sources.base import BaseSource, AuthorResult, BookResult, SeriesResult
-from app.metadata import source_gate
+from app.metadata import kobo_session
 
 logger = logging.getLogger("seshat.discovery.kobo")
 BASE = "https://www.kobo.com"
@@ -111,69 +111,24 @@ def _kobo_author_matches(
     return False
 
 
-def _create_scraper():
-    try:
-        import cloudscraper
-        return cloudscraper.create_scraper(
-            browser={"custom": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0"},
-        )
-    except ImportError:
-        logger.warning("cloudscraper not installed — Kobo will be limited")
-        return None
-
-
 class KoboSource(BaseSource):
-    """Kobo uses cloudscraper (sync) instead of httpx, so it doesn't use the
-    base class's _get/_get_client machinery. It still inherits from BaseSource
-    for interface consistency and shared logger/rate_limit."""
+    """Kobo fetches through `kobo_session` (curl_cffi) instead of the base
+    class's httpx client. It still inherits from BaseSource for interface
+    consistency and the shared logger/rate_limit."""
     name = "kobo"
 
     def __init__(self, rate_limit: float = 3.0, concurrency: int = 4):
         super().__init__(rate_limit=rate_limit)
-        self._session = None
         # v2.11.0: per-book detail fetches run with bounded concurrency
-        # via an asyncio.Semaphore. Each worker still respects
-        # `rate_limit` between requests (inside `_fetch_sync`), so the
-        # effective request rate becomes ~concurrency/rate_limit. At
-        # the defaults (4 / 3.0 = 1.33 req/s) we stay below the
-        # Cloudflare-fronted Kobo's bot-detection threshold while
-        # cutting big-author scan times by ~4×. Raising concurrency
-        # without also raising rate_limit will trigger soft-blocks.
+        # via an asyncio.Semaphore. Since the 2026-10 audit every request
+        # waits Kobo's turn in the source gate, so concurrency only
+        # overlaps parsing; the request rate is one per Rate seconds (G72).
         self.concurrency = concurrency
 
-    def _get_session(self):
-        if self._session is None:
-            self._session = _create_scraper()
-        return self._session
-
-    def _fetch_sync(self, url: str) -> tuple[Optional[int], Optional[str]]:
-        """(status, body on a 200); (None, None) on a transport error."""
-        session = self._get_session()
-        if not session:
-            return None, None
-        try:
-            # 30s read timeout. Cloudflare-fronted Kobo detail pages
-            # can take 15-25s when the challenge resolver does extra
-            # work, especially mid-scan on prolific authors with 80+
-            # books in their catalog. The rate limit governs how
-            # OFTEN we call; this governs how long any single response
-            # is allowed to take.
-            r = session.get(url, timeout=30)
-            if r.status_code == 200:
-                return r.status_code, r.text
-            return r.status_code, None
-        except Exception as e:
-            logger.debug(f"  Kobo fetch error: {e}")
-            return None, None
-
     async def _fetch(self, url: str) -> Optional[str]:
-        # In Kobo's turn (the source gate: the Metadata Sources rate since
-        # the last Kobo request from any caller, so the concurrent book
-        # fetches below no longer multiply the rate, G72).
-        async with source_gate.turn(self.name) as turn:
-            status, text = await asyncio.to_thread(self._fetch_sync, url)
-            turn.status(status)
-        return text
+        # 30s read timeout: Kobo detail pages can be slow mid-scan on
+        # prolific authors. Pacing is the source gate's.
+        return await kobo_session.fetch(url, timeout=30.0)
 
     async def _get_book_details(self, kobo_url: str) -> dict:
         """Fetch a Kobo book detail page and extract structured metadata.
@@ -622,7 +577,7 @@ class KoboSource(BaseSource):
 
             # Pass 2c — parallel detail fetches. Bounded by
             # asyncio.Semaphore so we don't fire more than
-            # `self.concurrency` simultaneous cloudscraper sessions.
+            # `self.concurrency` simultaneous fetches.
             # Every fetch waits Kobo's turn in the source gate, so the
             # request rate is one per Metadata Sources rate whatever the
             # concurrency (G72: ~0.33 req/s at 3s; it used to be
@@ -720,10 +675,6 @@ class KoboSource(BaseSource):
             return None
 
     async def close(self):
-        if self._session:
-            try:
-                self._session.close()
-            except Exception:
-                pass
-            self._session = None
+        # The curl_cffi session is shared (`kobo_session`); nothing of its
+        # own to close.
         await super().close()

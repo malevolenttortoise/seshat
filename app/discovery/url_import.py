@@ -575,7 +575,7 @@ async def fetch_kobo_book(slug: str) -> dict:
     """Fetch a Kobo book by storefront slug.
 
     Reuses `KoboSource._get_book_details()` which already knows how
-    to drive cloudscraper + parse Kobo's detail-page selectors.
+    to fetch (through `kobo_session`) + parse Kobo's detail-page selectors.
     """
     slug = slug.strip()
     if not slug:
@@ -583,7 +583,7 @@ async def fetch_kobo_book(slug: str) -> dict:
 
     from app.discovery.sources.kobo import KoboSource
 
-    src = KoboSource(rate_limit=0)  # No need to throttle a one-shot lookup
+    src = KoboSource()  # paced by the source gate like every Kobo request
     try:
         url = f"https://www.kobo.com/us/en/ebook/{slug}"
         details = await src._get_book_details(url)

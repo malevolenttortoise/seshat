@@ -26,6 +26,15 @@ gate that paces and counts it.
   Amazon or Goodreads live. Enrichment goes ahead of scans and workers,
   and the wait no longer counts against its timeouts.
 - Kobo's per-author scan cap goes from 3 to 10 minutes.
+- **Kobo no longer solves Cloudflare challenges.** Both Kobo sources used
+  `cloudscraper`, a challenge solver; they now share one curl_cffi
+  session with Chrome's TLS profile, like Goodreads and Amazon. A
+  challenge is counted as a block, the session is dropped, and Kobo backs
+  off for 2 minutes, then 5, 10, 30 and 60 on repeated challenges (the
+  next success clears it). If kobo.com challenges every plain request,
+  Kobo stops returning results; the Metadata Sources counters show it.
+  `cloudscraper` is removed from the image (`requests` is now pinned
+  directly).
 - **The Amazon and Goodreads cache workers no longer re-scan every author
   in one burst each week.** Each author's next refresh lands 7 days out
   give or take up to a day, and each worker stops routine refreshes for

@@ -29,8 +29,7 @@ mutagen==1.47.0
 
 # Cover image perceptual hashing for MAM URL verification (Part C).
 # imagehash provides pHash (DCT-based); Pillow is its image backend.
-# Pillow is also transitively pulled by cloudscraper/lxml today, but
-# pinning here makes the runtime contract explicit. ~3MB on the slim
+# Pinning Pillow here makes the runtime contract explicit. ~3MB on the slim
 # image. Validated 2026-05-09 against 16 image pairs (right-Possibles
 # cluster at distance 0-6, wrong-matches at 28-36).
 # 12.3.0 clears 13 Dependabot advisories open against 12.2.0 (decoder
@@ -48,15 +47,15 @@ ImageHash==4.3.2
 beautifulsoup4==4.12.3
 lxml==6.1.0
 
-# Cloudflare bypass for Kobo scraping (interactive JS challenge solver)
-cloudscraper==1.2.71
+# Plain HTTP for Amazon enrichment's search / product tiers (wave 4b moves
+# them to curl_cffi). Used to arrive with cloudscraper, which the 2026-10
+# audit removed: it solves Cloudflare's JavaScript challenges (ADR-0025).
+requests==2.34.2
 
 # v2.11.0 — TLS-fingerprint impersonation for sources fronted by
-# Akamai Bot Manager (Amazon's IPv4 path) and (Phase 5.5) Cloudflare's
-# silent-scoring layer (Goodreads). curl_cffi drives libcurl-impersonate
+# Akamai Bot Manager (Amazon), AWS WAF (Goodreads) and Cloudflare (Kobo). curl_cffi drives libcurl-impersonate
 # which exactly replicates Chrome's JA3 fingerprint at the protocol
-# layer — defeats the per-request bot-scoring that cloudscraper alone
-# can't bypass (cloudscraper still uses Python's standard TLS).
+# layer, which Python's standard TLS (httpx, requests) never matches.
 # AmazonSource uses `AsyncSession(impersonate="chrome120")`; Phase 5.5
 # Goodreads source-scan path will use the same lib + `impersonate`.
 curl_cffi>=0.7.0

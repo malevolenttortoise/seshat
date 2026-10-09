@@ -2,8 +2,9 @@
 Kobo metadata source — web scraping.
 
 Kobo has no public API, so we scrape the storefront pages. Cloudflare
-sits in front of kobo.com, so the HTTP layer uses `cloudscraper`
-(synchronous) wrapped in `asyncio.to_thread`.
+sits in front of kobo.com; requests go through `app.metadata.kobo_session`
+(curl_cffi with Chrome's TLS profile, shared with the discovery source).
+A challenge is never solved (ADR-0025); Kobo backs off instead.
 
 Two-pass flow for single-book lookup:
   1. Search page: `kobo.com/us/en/search?query={title+author}&fcmedia=Book`
@@ -17,7 +18,6 @@ fallback (data-testid for new, class-based for old).
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 from datetime import datetime
@@ -25,7 +25,7 @@ from typing import Optional
 
 from lxml import html
 
-from app.metadata import source_gate
+from app.metadata import kobo_session
 from app.metadata.record import MetaRecord
 from app.metadata.sources.base import MetaSource
 from app.metadata.text_clean import description_to_plain_text
@@ -47,58 +47,18 @@ def _parse_kobo_date(text: str) -> Optional[str]:
     return None
 
 
-def _create_scraper():
-    try:
-        import cloudscraper
-        return cloudscraper.create_scraper(
-            browser={
-                "custom": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) "
-                          "Gecko/20100101 Firefox/132.0"
-            },
-        )
-    except ImportError:
-        _log.warning("cloudscraper not installed — Kobo source disabled")
-        return None
-
-
 class KoboSource(MetaSource):
-    """Kobo uses cloudscraper (sync) instead of httpx.
-
-    Overrides search_book to do sync HTTP wrapped in to_thread.
-    """
+    """Kobo fetches through `kobo_session` (curl_cffi) instead of httpx."""
 
     name = "kobo"
     default_timeout = 30.0
 
     def __init__(self, *, rate_limit: float = 3.0):
         super().__init__(rate_limit=rate_limit)
-        self._session = None
-
-    def _get_session(self):
-        if self._session is None:
-            self._session = _create_scraper()
-        return self._session
-
-    def _fetch_sync(self, url: str) -> tuple[Optional[int], Optional[str]]:
-        """(status, body on a 200); (None, None) on a transport error."""
-        session = self._get_session()
-        if not session:
-            return None, None
-        try:
-            r = session.get(url, timeout=self.default_timeout)
-            if r.status_code == 200:
-                return r.status_code, r.text
-            return r.status_code, None
-        except Exception as e:
-            _log.debug("kobo fetch error: %s", e)
-            return None, None
 
     async def _fetch(self, url: str) -> Optional[str]:
         # In Kobo's turn (the source gate's Metadata Sources rate).
-        async with source_gate.turn(self.name) as turn:
-            status, text = await asyncio.to_thread(self._fetch_sync, url)
-            turn.status(status)
-        return text
+        return await kobo_session.fetch(url, timeout=self.default_timeout)
 
     async def search_book(
         self, title: str, author: str, **_,
@@ -261,5 +221,5 @@ class KoboSource(MetaSource):
         return details
 
     async def close(self) -> None:
-        self._session = None
+        # The curl_cffi session is shared (`kobo_session`).
         await super().close()
