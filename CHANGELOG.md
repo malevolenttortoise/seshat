@@ -236,7 +236,8 @@ frontend test suite.
   logic each pair of pages carried twice now lives in one hook both use,
   with unit tests; the pages render and request exactly as before (their
   render snapshots are unchanged). So far: the author page's
-  scan-finished poll (`useScanPolling`).
+  scan-finished poll (`useScanPolling`) and its author load
+  (`useAuthorDetail`).
 
 ### Removed
 

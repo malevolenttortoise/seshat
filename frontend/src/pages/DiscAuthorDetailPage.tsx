@@ -24,7 +24,6 @@ import { BGrid, BList } from "../components/BookViews";
 import { BookSidebar } from "../components/BookSidebar";
 import { toast } from "../lib/toast";
 import {
-  loadAuthorDetailViaPerson,
   type AuthorDetail,
   type PersonHit,
   type PersonSearchResponse,
@@ -35,6 +34,7 @@ import { AuthorCacheStatusBadge } from "../components/AuthorCacheStatusBadge";
 import { GoodreadsAuthorCacheStatusBadge } from "../components/GoodreadsAuthorCacheStatusBadge";
 import { useViewport } from "../hooks/useViewport";
 import { useScanPolling } from "../hooks/useScanPolling";
+import { useAuthorDetail } from "../hooks/useAuthorDetail";
 import { useMobileCodepath } from "../components/mobile";
 import MobileAuthorDetailPage from "./MobileAuthorDetailPage";
 import type {
@@ -479,10 +479,7 @@ function DesktopAuthorDetailPage({
   onNav,
 }: AuthorDetailPageProps) {
   const t = useTheme();
-  const [a, setA] = useState<AuthorDetail | null>(null);
-  const [ld, setLd] = useState(true);
-  // Why the author couldn't be loaded (null while it loads or loaded).
-  const [loadErr, setLoadErr] = useState<string | null>(null);
+  const { a, ld, loadErr, loadA, authorIdNum, authorSlug } = useAuthorDetail(authorId);
   const [ref, setRef] = useState(false);
   const [mamRef, setMamRef] = useState(false);
   const [clearing, setClearing] = useState(false);
@@ -529,25 +526,6 @@ function DesktopAuthorDetailPage({
   const onBooksLoaded = useCallback((key: string, books: Book[]) => {
     setSeriesBooks((p) => ({ ...p, [key]: books }));
   }, []);
-
-  // Nav arg may arrive as "slug:id" when the click came from a cross-
-  // library merged row — the id alone is ambiguous because ABS's
-  // author 5 and Calibre's author 5 are different people. Split here
-  // so the detail fetch + pen-name links + scan triggers all use the
-  // right per-library IDs.
-  const parsed = (() => {
-    const s = String(authorId);
-    if (s.includes(":")) {
-      const [slug, id] = s.split(":");
-      return { slug, id: parseInt(id) || 0 };
-    }
-    return {
-      slug: null as string | null,
-      id: parseInt(s) || (typeof authorId === "number" ? authorId : 0),
-    };
-  })();
-  const authorIdNum = parsed.id;
-  const authorSlug = parsed.slug;
 
   // Prev/next within the list the user came from. Keyed on the RAW
   // `authorId` because that's the nav-arg form the list snapshotted.
@@ -652,43 +630,6 @@ function DesktopAuthorDetailPage({
       setSb(b);
     }
   };
-
-  const loadA = useCallback(
-    (signal?: AbortSignal) => {
-      setLd(true);
-      // v2.20.0 — `loadAuthorDetailViaPerson` resolves the author's
-      // canonical person_id and fetches /discovery/persons/{person_id}
-      // for the unified cross-library view, adapting the response to
-      // the existing AuthorDetail shape. Falls back to the legacy
-      // /authors/{aid} response when the row isn't yet linked.
-      return loadAuthorDetailViaPerson(authorIdNum, authorSlug, signal)
-        .then((d) => {
-          setA(d);
-          setLoadErr(null);
-          setLd(false);
-        })
-        .catch((e) => {
-          if (api.isAbort(e)) return;
-          // A failed load used to leave the spinner up for good.
-          console.error(e);
-          setLoadErr((e as Error).message || String(e));
-          setLd(false);
-        });
-    },
-    [authorIdNum, authorSlug],
-  );
-
-  useEffect(() => {
-    // An id that doesn't parse (0) has nothing to load.
-    if (!authorIdNum) {
-      setLoadErr("no author id");
-      setLd(false);
-      return;
-    }
-    const c = new AbortController();
-    loadA(c.signal);
-    return () => c.abort();
-  }, [loadA, authorIdNum]);
 
   // Author scans run as background tasks on the server. The flow:
   //   1. Dispatch `seshat:scan-started` so the Dashboard widget

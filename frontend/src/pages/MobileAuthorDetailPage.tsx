@@ -11,7 +11,6 @@ import { fmtNum } from "../lib/format";
 import { BookSidebar } from "../components/BookSidebar";
 import { toast } from "../lib/toast";
 import {
-  loadAuthorDetailViaPerson,
   type AuthorDetail,
   type PersonHit,
   type PersonSearchResponse,
@@ -22,6 +21,7 @@ import { useAuthorWalk } from "../hooks/useAuthorWalk";
 import { AuthorCacheStatusBadge } from "../components/AuthorCacheStatusBadge";
 import { GoodreadsAuthorCacheStatusBadge } from "../components/GoodreadsAuthorCacheStatusBadge";
 import { useScanPolling } from "../hooks/useScanPolling";
+import { useAuthorDetail } from "../hooks/useAuthorDetail";
 import {
   MobileBtn,
   MobileChip,
@@ -241,10 +241,7 @@ export default function MobileAuthorDetailPage({
   onNav,
 }: MobileAuthorDetailPageProps) {
   const t = useTheme();
-  const [a, setA] = useState<AuthorDetail | null>(null);
-  const [ld, setLd] = useState(true);
-  // Why the author couldn't be loaded (null while it loads or loaded).
-  const [loadErr, setLoadErr] = useState<string | null>(null);
+  const { a, ld, loadErr, loadA, authorIdNum, authorSlug } = useAuthorDetail(authorId);
   const [ref, setRef] = useState(false);
   const [mamRef, setMamRef] = useState(false);
   const [sb, setSb] = useState<Book | null>(null);
@@ -294,58 +291,9 @@ export default function MobileAuthorDetailPage({
   const [penResults, setPenResults] = useState<PersonHit[]>([]);
   const [penBusy, setPenBusy] = useState(false);
 
-  // Parse "slug:id" arg shape for cross-library nav.
-  const parsed = (() => {
-    const s = String(authorId);
-    if (s.includes(":")) {
-      const [slug, id] = s.split(":");
-      return { slug, id: parseInt(id) || 0 };
-    }
-    return {
-      slug: null as string | null,
-      id: parseInt(s) || (typeof authorId === "number" ? authorId : 0),
-    };
-  })();
-  const authorIdNum = parsed.id;
-  const authorSlug = parsed.slug;
-
   // Prev/next within the list the user came from. Keyed on the RAW
   // `authorId` because that's the nav-arg form the list snapshotted.
   const walk = useAuthorWalk(authorId);
-
-  const loadA = useCallback(
-    (signal?: AbortSignal) => {
-      setLd(true);
-      // v2.20.0 — shared loader resolves the canonical person and
-      // adapts the unified /persons/{person_id} view to AuthorDetail.
-      return loadAuthorDetailViaPerson(authorIdNum, authorSlug, signal)
-        .then((d) => {
-          setA(d);
-          setLoadErr(null);
-          setLd(false);
-        })
-        .catch((e) => {
-          if (api.isAbort(e)) return;
-          // A failed load used to leave a blank page.
-          console.error(e);
-          setLoadErr((e as Error).message || String(e));
-          setLd(false);
-        });
-    },
-    [authorIdNum, authorSlug],
-  );
-
-  useEffect(() => {
-    // An id that doesn't parse (0) has nothing to load.
-    if (!authorIdNum) {
-      setLoadErr("no author id");
-      setLd(false);
-      return;
-    }
-    const c = new AbortController();
-    loadA(c.signal);
-    return () => c.abort();
-  }, [loadA, authorIdNum]);
 
   useEffect(() => {
     api
