@@ -6,12 +6,11 @@
 //   - View toggle (always card list)
 //   - Bulk-select mode (admin-y; revisit in Phase 6)
 // Send-to-pipeline is still available per-card via MobileBookCard.
-import { useCallback, useEffect, useState } from "react";
-import { api, slugQuery } from "../api";
+import { useState } from "react";
 import { runBatchJob } from "../lib/batchJob";
 import { useTheme } from "../theme";
-import { usePersist } from "../hooks/usePersist";
 import { useBookSidebar } from "../hooks/useBookSidebar";
+import { useMamSection } from "../hooks/useMamSection";
 import { BookSidebar } from "../components/BookSidebar";
 import { Ic } from "../icons";
 import {
@@ -26,48 +25,14 @@ import {
   MobileBackButton,
 } from "../components/mobile";
 import type {
-  Book,
-  BookAction,
-  MamStatusResponse,
   NavFn,
   SendToPipelineFn,
 } from "../types";
 
-interface MamScanStatus {
-  running?: boolean;
-  scanned?: number;
-  total?: number;
-  found?: number;
-  possible?: number;
-  not_found?: number;
-  errors?: number;
-  status?: string;
-  type?: string;
-  progress_pct?: number;
-}
 
-interface ScanStatusRow {
-  kind?: string;
-  slug?: string;
-  content_type?: string;
-  label?: string;
-}
 
-interface LibraryOption {
-  slug: string;
-  content_type: string;
-  label: string;
-}
 
-interface MamBooksResponse {
-  books?: Book[];
-  total?: number;
-}
 
-interface PipelineStatusResponse {
-  configured?: boolean;
-  reachable?: boolean;
-}
 
 interface SendToPipelineResponse {
   sent?: number;
@@ -75,10 +40,6 @@ interface SendToPipelineResponse {
   message?: string;
 }
 
-interface StartScanResponse {
-  error?: string;
-  total?: number;
-}
 
 const TAB_OPTIONS: { value: string; label: string; icon: string }[] = [
   { value: "upload", label: "Upload", icon: "↑" },
@@ -97,172 +58,20 @@ export default function MobileMAMPage({ onNav }: { onNav: NavFn }) {
   const t = useTheme();
   void onNav;
 
-  const [tab, setTab] = usePersist<string>("mam_tab", "upload");
-  const [libSlug, setLibSlug] = usePersist<string | null>("mam_slug", null);
-  const [libs, setLibs] = useState<LibraryOption[]>([]);
-  const [books, setBooks] = useState<Book[]>([]);
-  const [total, setTotal] = useState(0);
-  const [pg, setPg] = useState(1);
-  const [q, setQ] = useState("");
-  const [sort, setSort] = usePersist("mam_sort", "title");
-  const [ld, setLd] = useState(true);
-  const [counts, setCounts] = useState({
-    upload: 0,
-    download: 0,
-    missing: 0,
-    unscanned: 0,
-  });
+  const {
+    tab, switchTab, libSlug, setLibSlug, libs, books, total, totalPages, pg, q, setQ, sort, setSort,
+    ld, counts, load, scanStarting, mamScan, startScan: startMamScan, cancelScan, pipelineReady, onAction,
+  } = useMamSection();
   const [scanLimit, setScanLimit] = useState<number>(100);
-  const [scanStarting, setScanStarting] = useState(false);
-  const [mamScan, setMamScan] = useState<MamScanStatus | null>(null);
   const { sb, setSb, sbClosing, closeSb } = useBookSidebar();
   const [sortSheet, setSortSheet] = useState(false);
-  const [pipelineReady, setPipelineReady] = useState(false);
-
-  const perPage = 50;
-
-  const refreshCounts = () =>
-    api
-      .get<MamStatusResponse>("/discovery/mam/status")
-      .then((r) => {
-        if (r.stats)
-          setCounts({
-            upload: r.stats.upload_candidates || 0,
-            download: r.stats.available_to_download || 0,
-            missing: r.stats.missing_everywhere || 0,
-            unscanned: r.stats.total_unscanned || 0,
-          });
-      })
-      .catch(() => {});
-
-  useEffect(() => {
-    refreshCounts();
-    api
-      .get<MamScanStatus>("/discovery/mam/scan/status")
-      .then((r) => {
-        if (r.running) setMamScan(r);
-      })
-      .catch(() => {});
-    api
-      .get<{ scans?: ScanStatusRow[] }>("/discovery/scan-status")
-      .then((r) => {
-        const rows = (r?.scans || []).filter((s) => s.kind === "library");
-        setLibs(
-          rows.map((s) => ({
-            slug: s.slug || "",
-            content_type: s.content_type || "ebook",
-            label: s.label?.replace(/\s*Sync$/, "") || s.slug || "",
-          })),
-        );
-      })
-      .catch(() => {});
-    api
-      .get<PipelineStatusResponse>("/discovery/pipeline/status")
-      .then((r) => setPipelineReady(!!r.configured && !!r.reachable))
-      .catch(() => {});
-  }, []);
-
-  const load = useCallback(
-    (page: number = 1, signal?: AbortSignal) => {
-      setLd(true);
-      const p = new URLSearchParams({
-        section: tab,
-        search: q,
-        sort,
-        page: String(page),
-        per_page: String(perPage),
-      });
-      if (libSlug) p.set("slug", libSlug);
-      return api
-        .get<MamBooksResponse>(`/discovery/mam/books?${p}`, signal)
-        .then((d) => {
-          setBooks(d.books || []);
-          setTotal(d.total || 0);
-          setPg(page);
-          setLd(false);
-        })
-        .catch((e) => {
-          if (!api.isAbort(e)) setLd(false);
-        });
-    },
-    [tab, q, sort, libSlug],
-  );
-
-  useEffect(() => {
-    const c = new AbortController();
-    load(1, c.signal);
-    return () => c.abort();
-  }, [load]);
-
-  // Poll while a scan is running.
-  useEffect(() => {
-    if (!mamScan?.running) return;
-    const iv = setInterval(() => {
-      api
-        .get<MamScanStatus>("/discovery/mam/scan/status")
-        .then((r) => {
-          setMamScan(r);
-          if (!r.running) {
-            clearInterval(iv);
-            refreshCounts();
-            load(1);
-          }
-        })
-        .catch(() => {});
-    }, 5000);
-    return () => clearInterval(iv);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mamScan?.running]);
-
-  const totalPages = Math.max(1, Math.ceil(total / perPage));
-
-  const switchTab = (tb: string) => {
-    setTab(tb);
-    setQ("");
-    setSort("title");
-    setPg(1);
-  };
 
   const startScan = async () => {
-    setScanStarting(true);
-    try {
-      const r = await api.post<StartScanResponse>(
-        `/discovery/mam/scan?limit=${scanLimit}`,
-      );
-      if (r.error) {
-        alert(r.error);
-        setScanStarting(false);
-        return;
-      }
-      setMamScan({
-        running: true,
-        scanned: 0,
-        total: r.total || scanLimit,
-        found: 0,
-        possible: 0,
-        not_found: 0,
-        errors: 0,
-        status: "scanning",
-        type: "manual",
-      });
-    } catch {
-      alert("Failed to start scan");
-    }
-    setScanStarting(false);
-  };
-
-  const cancelScan = async () => {
-    try {
-      await api.post("/discovery/mam/scan/cancel");
-    } catch { /* ignore */ }
+    const err = await startMamScan(scanLimit);
+    if (err) alert(err);
   };
 
 
-  const onAction = async (act: BookAction, id: number, slug?: string) => {
-    if (act === "hide") await api.post(`/discovery/books/${id}/hide${slugQuery(slug)}`);
-    if (act === "dismiss") await api.post(`/discovery/books/${id}/dismiss${slugQuery(slug)}`);
-    await load(pg);
-  };
 
   const sendToPipeline: SendToPipelineFn = async (bookIds) => {
     if (!bookIds || !bookIds.length) return;

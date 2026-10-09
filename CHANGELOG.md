@@ -241,7 +241,8 @@ frontend test suite.
   the author and Tentative pages (`useBulkSelection`); the Review queue
   (`useReviewQueue`); the book sidebar's open / close and the "is MAM on"
   check of the author, MAM and Books pages (`useBookSidebar`,
-  `useMamEnabled`); the Filters page's settings draft (`useFilterSettings`).
+  `useMamEnabled`); the Filters page's settings draft (`useFilterSettings`);
+  the Discovery → MAM page's sections, list and scan (`useMamSection`).
 - **The metadata-cache status is fetched once for every place that shows
   it** (wave 5b, audit L4-03): the navbar cloud icon, the Dashboard's
   Amazon / Goodreads cache rails and the Settings cache cards each polled
