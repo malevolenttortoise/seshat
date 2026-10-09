@@ -57,6 +57,7 @@ from app.orchestrator.dispatch import DispatcherDeps, handle_announce
 from app.orchestrator.review_timeout import run_loop as review_timeout_loop
 from app.orchestrator.scheduler import (
     register_digest_jobs,
+    register_goodreads_author_backfill,
     register_goodreads_canary,
     register_metadata_cache_health,
 )
@@ -808,6 +809,9 @@ async def lifespan(app: FastAPI):
     # `notify_on_goodreads_canary_failed` (default True).
     register_goodreads_canary(scheduler)
     _log.info("Goodreads canary registered (Mon 03:00)")
+    # 2026-10 audit wave 4b (G84): the Goodreads author-ID job, weekly.
+    register_goodreads_author_backfill(scheduler)
+    _log.info("Goodreads author-ID job registered (Sun 11:00)")
 
     # v2.21.0 Phase G — metadata-cache worker health + daily summary.
     # Stall watchdog runs every 2 min and fires a Tier-1 ntfy if the

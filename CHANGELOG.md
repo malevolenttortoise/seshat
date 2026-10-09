@@ -104,8 +104,19 @@ background worker instead of during scans.
   or translation check); it is tried again on a later scan. Known books
   still take their list-page series and cover.
 - **The Goodreads author-ID backfill no longer runs after every Calibre and
-  Audiobookshelf sync**, only from Hygiene, and doesn't retry an author it
-  already tried until the next restart.
+  Audiobookshelf sync.** It runs from Hygiene (each author once until a
+  restart, as before) and, since wave 4b, **weekly on its own** (Sundays
+  11:00, G84): it first copies an ID from the same person's author in
+  another library (audiobook-library authors are mostly twins of ebook
+  authors; no request), then resolves the ebook libraries' authors that
+  have books, retrying the ones it missed every week. Bookless co-authors
+  and pen names stay with Hygiene.
+- **The author-ID lookup asks Goodreads' autocomplete first** (G90): one
+  autocomplete for a book with an ISBN, ASIN or Goodreads ID (one more with
+  the author's name added if that finds nothing), and a book page only when
+  the book's first author is someone else. Every lookup used to cost a book
+  page. A source scan no longer looks the ID up at all (it fetched a book
+  page per author without one); the weekly job does.
 - Log lines renamed: `Cloudflare soft-block on …` is now `AWS WAF
   soft-block on …`, the resolver's `soft-blocked … session state flipped`
   lines now say `blocked by AWS WAF … backing off`, and the canary's

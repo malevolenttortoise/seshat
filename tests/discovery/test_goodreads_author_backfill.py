@@ -290,23 +290,37 @@ class TestPersist:
 
 
 class TestResolveAuthorGoodreadsId:
-    """End-to-end with a stubbed `goodreads_session.get_session()`."""
+    """End-to-end with a stubbed `goodreads_session.get_session()`.
 
-    async def _stub_session(self, monkeypatch, *, html: str, status: int = 200):
-        """Patch goodreads_session.get_session to return a stub that
-        delivers canned responses without real HTTP."""
+    Autocomplete first (2026-10 audit wave 4b, G90): a hit naming our
+    author is enough; the book page only for a co-authored book."""
+
+    async def _stub_session(self, monkeypatch, *, html: str = "", status: int = 200,
+                            hits: dict | None = None):
+        """Patch goodreads_session.get_session to return a stub: an
+        autocomplete answers `hits[query]` (JSON), a book page `html`."""
+        import json as _json
+        from urllib.parse import parse_qs, unquote, urlparse
         from app.metadata import goodreads_session as gs
+        hits = hits or {}
 
         class StubSession:
             calls: list[str] = []
 
             async def get(self, url, **kwargs):
                 self.__class__.calls.append(url)
-                body = html.encode("utf-8")
+                if "/book/auto_complete" in url:
+                    q = unquote(parse_qs(urlparse(url).query)["q"][0])
+                    body = _json.dumps(hits.get(q, []))
+                    return SimpleNamespace(
+                        status_code=status, content=body.encode(), text=body,
+                        json=lambda body=body: _json.loads(body),
+                    )
                 return SimpleNamespace(
-                    status_code=status, content=body,
-                    text=html,
+                    status_code=status, content=html.encode("utf-8"), text=html,
                 )
+
+        StubSession.calls = []
 
         async def _get_session(rate_limit=None):
             return StubSession()
@@ -314,101 +328,85 @@ class TestResolveAuthorGoodreadsId:
         monkeypatch.setattr(gs, "get_session", _get_session)
         return StubSession
 
-    async def test_direct_goodreads_id_path(self, discovery_db, monkeypatch):
-        """Book has stored goodreads_id → /book/show fetched directly,
-        author parsed, persisted. v3.6.2: JSON-LD author name must
-        match the queried author by normalized name before stamping.
-        """
-        from app.discovery.goodreads_author_backfill import (
-            resolve_author_goodreads_id,
-        )
-        html = """
-        <script type="application/ld+json">
-        {"author":{"@type":"Person", "name": "Test",
-                   "url":"https://www.goodreads.com/author/show/55555"}}
-        </script>
-        """
-        stub = await self._stub_session(monkeypatch, html=html)
+    @staticmethod
+    def _hit(book_id, author_id, name):
+        return {"bookId": str(book_id), "title": "x",
+                "author": {"id": int(author_id), "name": name}}
 
+    async def test_autocomplete_by_title_finds_the_author_without_a_page(
+        self, discovery_db, monkeypatch,
+    ):
+        """Book with a stored Goodreads ID → autocomplete its title, match
+        the hit on that book ID, read the author off the hit."""
+        from app.discovery.goodreads_author_backfill import resolve_author_goodreads_id
+        stub = await self._stub_session(monkeypatch, hits={
+            "Seed": [self._hit(9, 1, "Someone Else"), self._hit(42, 55555, "Test")],
+        })
         author_id = await _insert_author("Test")
         await _insert_book("Seed", author_id, goodreads_id="42")
 
-        resolved = await resolve_author_goodreads_id(author_id)
+        assert await resolve_author_goodreads_id(author_id) == "55555"
+        assert len(stub.calls) == 1 and "/book/auto_complete" in stub.calls[0]
 
-        assert resolved == "55555"
-        # Verify exactly ONE /book/show fetch happened, with book_id=42.
-        assert len(stub.calls) == 1
-        assert "/book/show/42" in stub.calls[0]
-
-    async def test_isbn_resolver_path(self, discovery_db, monkeypatch):
-        """Book has only ISBN → resolver chain converts to goodreads_book_id
-        → /book/show fetched → author parsed.
-
-        v3.6.2 also requires the JSON-LD author's name to match.
-        """
-        from app.discovery.goodreads_author_backfill import (
-            resolve_author_goodreads_id,
-        )
-        # Patch the resolver to return a fixed result so we don't make
-        # real HTTP from the resolver itself.
-        import app.discovery.goodreads_author_backfill as backfill_mod
-        from app.metadata.goodreads_id_resolver import ResolveResult
-
-        async def fake_resolve(q):
-            return ResolveResult(
-                goodreads_book_id="777", tier="auto_complete", soft_blocked=False,
-            )
-        monkeypatch.setattr(backfill_mod, "resolve_goodreads_id", fake_resolve)
-
-        html = """
-        <script type="application/ld+json">
-        {"author":{"@type":"Person", "name": "Some Author",
-                   "url":"https://www.goodreads.com/author/show/12321.Some_Author"}}
-        </script>
-        """
-        stub = await self._stub_session(monkeypatch, html=html)
-
+    async def test_autocomplete_by_isbn(self, discovery_db, monkeypatch):
+        from app.discovery.goodreads_author_backfill import resolve_author_goodreads_id
+        stub = await self._stub_session(monkeypatch, hits={
+            "9780000000001": [self._hit(777, 12321, "Some Author")],
+        })
         author_id = await _insert_author("Some Author")
         await _insert_book("Seed", author_id, isbn="9780000000001")
 
-        resolved = await resolve_author_goodreads_id(author_id)
-        assert resolved == "12321"
-        assert "/book/show/777" in stub.calls[0]
+        assert await resolve_author_goodreads_id(author_id) == "12321"
+        assert all("/book/show/" not in u for u in stub.calls)
+
+    async def test_a_miss_retries_with_the_author_then_stops_without_a_page(
+        self, discovery_db, monkeypatch,
+    ):
+        from app.discovery.goodreads_author_backfill import resolve_author_goodreads_id
+        stub = await self._stub_session(monkeypatch, hits={})
+        author_id = await _insert_author("Test")
+        await _insert_book("Seed", author_id, goodreads_id="42")
+
+        assert await resolve_author_goodreads_id(author_id) is None
+        from urllib.parse import parse_qs, unquote, urlparse
+        queries = [unquote(parse_qs(urlparse(u).query)["q"][0]) for u in stub.calls]
+        assert queries == ["Seed", "Seed Test"]
+
+    async def test_the_retry_with_the_author_can_match(self, discovery_db, monkeypatch):
+        from app.discovery.goodreads_author_backfill import resolve_author_goodreads_id
+        await self._stub_session(monkeypatch, hits={
+            "Seed Test": [self._hit(42, 55555, "Test")],
+        })
+        author_id = await _insert_author("Test")
+        await _insert_book("Seed", author_id, goodreads_id="42")
+        assert await resolve_author_goodreads_id(author_id) == "55555"
 
     async def test_coauthored_book_does_not_misstamp(
         self, discovery_db, monkeypatch,
     ):
         """v3.6.2 — regression for the Chohokiteki Kaeru → Roy Colt
-        wrong-merge observed live 2026-06-02.
-
-        Setup: the queried author is "Chohokiteki Kaeru" but the
-        seed book's GR page lists ONLY Roy Colt in JSON-LD (because
-        Seshat's book_authors join attributed a co-authored Roy Colt
-        book to Chohokiteki Kaeru, OR a resolver returned a wrong
-        GR book ID). Pre-v3.6.2 Phase 1 silently stamped Roy Colt's
-        author ID onto Chohokiteki Kaeru. The name-verification
-        guard MUST reject the stamp and return None.
-        """
+        wrong-merge observed live 2026-06-02. The book's hit names Roy
+        Colt, so its page is read (G90's co-author case); the page lists
+        only Roy Colt, so nothing is stamped."""
         from app.discovery.goodreads_author_backfill import (
             resolve_author_goodreads_id,
         )
         from app.discovery.database import get_db
-        # GR page for a Roy Colt book — only Roy Colt is in JSON-LD.
         html = """
         <script type="application/ld+json">
         {"author":{"@type":"Person", "name": "Roy Colt",
                    "url":"https://www.goodreads.com/author/show/56641006"}}
         </script>
         """
-        await self._stub_session(monkeypatch, html=html)
+        stub = await self._stub_session(monkeypatch, html=html, hits={
+            "Borrowed Seed": [self._hit(999, 56641006, "Roy Colt")],
+        })
 
         author_id = await _insert_author("Chohokiteki Kaeru")
         await _insert_book("Borrowed Seed", author_id, goodreads_id="999")
 
-        resolved = await resolve_author_goodreads_id(author_id)
-
-        # No stamp — name mismatch rejected the resolution.
-        assert resolved is None
+        assert await resolve_author_goodreads_id(author_id) is None
+        assert stub.calls[-1].endswith("/book/show/999")
         db = await get_db()
         try:
             row = await (await db.execute(
@@ -422,12 +420,8 @@ class TestResolveAuthorGoodreadsId:
     async def test_multi_author_picks_matching_name(
         self, discovery_db, monkeypatch,
     ):
-        """v3.6.2 — multi-author page with the queried author present
-        stamps the correct ID, not just the first one. JSON-LD lists
-        Dante King FIRST (co-author, primary byline), Matt Waid SECOND.
-        Queried author is Matt Waid — we must skip Dante King and
-        return Matt Waid's ID.
-        """
+        """v3.6.2 — the hit names Dante King (the primary byline), so the
+        page is read; it lists Matt Waid second, and his ID is stamped."""
         from app.discovery.goodreads_author_backfill import (
             resolve_author_goodreads_id,
         )
@@ -441,13 +435,14 @@ class TestResolveAuthorGoodreadsId:
         ]}
         </script>
         """
-        await self._stub_session(monkeypatch, html=html)
+        await self._stub_session(monkeypatch, html=html, hits={
+            "Hero of Another World": [self._hit(888, 19000001, "Dante King")],
+        })
 
         author_id = await _insert_author("Matt Waid")
         await _insert_book("Hero of Another World", author_id, goodreads_id="888")
 
-        resolved = await resolve_author_goodreads_id(author_id)
-        assert resolved == "52279464"
+        assert await resolve_author_goodreads_id(author_id) == "52279464"
 
     async def test_no_resolvable_book_returns_none(self, discovery_db, monkeypatch):
         """Author has only books with no identifiers → graceful None."""
@@ -463,18 +458,17 @@ class TestResolveAuthorGoodreadsId:
         assert stub.calls == []  # no HTTP fired
 
     async def test_soft_block_response_returns_none(self, discovery_db, monkeypatch):
-        """/book/show returns 202 → return None, don't persist."""
+        """Autocomplete returns 202 → None, nothing persisted, no page."""
         from app.discovery.goodreads_author_backfill import (
             resolve_author_goodreads_id,
         )
-        # 202 with empty body → soft-block detection.
-        await self._stub_session(monkeypatch, html="", status=202)
+        stub = await self._stub_session(monkeypatch, html="", status=202)
 
         author_id = await _insert_author("Test")
         await _insert_book("Seed", author_id, goodreads_id="42")
 
-        resolved = await resolve_author_goodreads_id(author_id)
-        assert resolved is None
+        assert await resolve_author_goodreads_id(author_id) is None
+        assert len(stub.calls) == 1          # a block stops it: no retry, no page
 
 
 class TestBackfillSweep:
@@ -680,8 +674,9 @@ class TestBackfillSweep:
         assert tried == [a1]
 
     async def test_aborts_on_soft_block(self, discovery_db, monkeypatch):
-        """Once book pages back off after a block mid-sweep, the rest
-        of the authors are left for the next run."""
+        """Once autocomplete backs off after a block mid-sweep, the rest
+        of the authors are left for the next run (Phase 1 is
+        autocomplete first, G90)."""
         from app.discovery.goodreads_author_backfill import (
             backfill_missing_author_ids,
         )
@@ -696,15 +691,41 @@ class TestBackfillSweep:
         # bail before doing anything.
         import app.discovery.goodreads_author_backfill as backfill_mod
 
+        phase1: list[int] = []
+
         async def fake_resolve(aid):
+            phase1.append(aid)
             if aid == a1:
-                gs._record_block("book_page", 202)
+                gs._record_block("autocomplete", 202)
                 return None
             return "should-not-be-called"
         monkeypatch.setattr(
             backfill_mod, "resolve_author_goodreads_id", fake_resolve,
         )
 
+        async def fake_p2(aid, name):   # Phase 2 (book pages) isn't backing off
+            return None
+        monkeypatch.setattr(backfill_mod, "resolve_author_via_calibre_coauthor", fake_p2)
+
         stats = await backfill_missing_author_ids()
-        assert stats["considered"] == 1
+        assert phase1 == [a1]
         assert stats["skipped_soft_blocked"] >= 1
+
+    async def test_a_book_page_backoff_doesnt_stop_phase1(self, discovery_db, monkeypatch):
+        """Book pages backing off leaves autocomplete free: Phase 1 goes on."""
+        from app.discovery.goodreads_author_backfill import backfill_missing_author_ids
+        from app.metadata import goodreads_session as gs
+        import app.discovery.goodreads_author_backfill as backfill_mod
+        a1 = await _insert_author("A1")
+        await _insert_book("X", a1, goodreads_id="1")
+        a2 = await _insert_author("A2")
+        await _insert_book("Y", a2, goodreads_id="2")
+        gs._record_block("book_page", 202)
+        tried: list[int] = []
+
+        async def fake_resolve(aid):
+            tried.append(aid)
+            return None
+        monkeypatch.setattr(backfill_mod, "resolve_author_goodreads_id", fake_resolve)
+        await backfill_missing_author_ids()
+        assert tried == [a1, a2]

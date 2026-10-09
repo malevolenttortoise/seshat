@@ -190,6 +190,37 @@ def register_goodreads_canary(scheduler: AsyncIOScheduler) -> None:
     )
 
 
+# ─── 2026-10 audit wave 4b (G84): weekly Goodreads author-ID job ──────
+
+
+def register_goodreads_author_backfill(scheduler: AsyncIOScheduler) -> None:
+    """Register the weekly Goodreads author-ID job: Sundays 11:00 local,
+    inside the Goodreads worker's usual 10:00-22:00 window.
+
+    Copies IDs from the same person's author in another library, then
+    resolves the ebook libraries' authors with books (autocomplete first;
+    a book page only for a co-authored book or the Calibre route). A new
+    author gets its Goodreads ID this way without a Hygiene run; until the
+    2026-10 audit scans looked it up themselves, a book page per author.
+    """
+    async def _weekly():
+        from app.discovery.goodreads_author_backfill import weekly_author_id_backfill
+        try:
+            await weekly_author_id_backfill()
+        except Exception:
+            _log.exception("goodreads author-ID weekly job crashed (non-fatal)")
+
+    scheduler.add_job(
+        _weekly,
+        trigger=CronTrigger(day_of_week="sun", hour=11, minute=0),
+        id="goodreads_author_id_backfill",
+        name="Goodreads author-ID backfill (weekly)",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
+
+
 # ─── v2.21.0 Phase G: metadata-cache health watchdog + daily summary ──
 
 
