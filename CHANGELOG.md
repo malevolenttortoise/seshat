@@ -237,7 +237,8 @@ frontend test suite.
   with unit tests; the pages render and request exactly as before (their
   render snapshots are unchanged). So far: the author page's
   scan-finished poll (`useScanPolling`) and its author load
-  (`useAuthorDetail`).
+  (`useAuthorDetail`); the multi-select of the author and Tentative pages
+  (`useBulkSelection`).
 
 ### Removed
 

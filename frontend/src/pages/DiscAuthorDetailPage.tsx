@@ -35,6 +35,7 @@ import { GoodreadsAuthorCacheStatusBadge } from "../components/GoodreadsAuthorCa
 import { useViewport } from "../hooks/useViewport";
 import { useScanPolling } from "../hooks/useScanPolling";
 import { useAuthorDetail } from "../hooks/useAuthorDetail";
+import { useBulkSelection } from "../hooks/useBulkSelection";
 import { useMobileCodepath } from "../components/mobile";
 import MobileAuthorDetailPage from "./MobileAuthorDetailPage";
 import type {
@@ -496,33 +497,12 @@ function DesktopAuthorDetailPage({
   // visible series + standalone (and every cross-library tab — IDs
   // are page-wide). `seriesBooks` is a cache of books loaded by the
   // lazy IS sections so the page-level Select All can include them.
-  const [selMode, setSelMode] = useState(false);
-  const [sel, setSel] = useState<Set<number>>(new Set());
+  const {
+    selMode, setSelMode, sel, toggle: toggleSel, selectMany, deselectMany, clear: clearSel,
+  } = useBulkSelection();
   const [busy, setBusy] = useState(false);
   const [seriesBooks, setSeriesBooks] = useState<Record<string, Book[]>>({});
 
-  const toggleSel = useCallback((id: number) => {
-    setSel((p) => {
-      const n = new Set(p);
-      if (n.has(id)) n.delete(id);
-      else n.add(id);
-      return n;
-    });
-  }, []);
-  const selectMany = useCallback((ids: number[]) => {
-    setSel((p) => {
-      const n = new Set(p);
-      ids.forEach((i) => n.add(i));
-      return n;
-    });
-  }, []);
-  const deselectMany = useCallback((ids: number[]) => {
-    setSel((p) => {
-      const n = new Set(p);
-      ids.forEach((i) => n.delete(i));
-      return n;
-    });
-  }, []);
   const onBooksLoaded = useCallback((key: string, books: Book[]) => {
     setSeriesBooks((p) => ({ ...p, [key]: books }));
   }, []);
@@ -976,7 +956,7 @@ function DesktopAuthorDetailPage({
           toast.success(`${pastLabels[kind]} ${totalCount || ids.length} book(s)`);
         }
       }
-      setSel(new Set());
+      clearSel();
       setSelMode(false);
       // Invalidate the lazy series cache so series sections re-fetch
       // (deleted books should disappear; hidden/dismissed books stay
@@ -1314,7 +1294,7 @@ function DesktopAuthorDetailPage({
               variant={selMode ? "accent" : "default"}
               onClick={() => {
                 setSelMode(!selMode);
-                if (selMode) setSel(new Set());
+                if (selMode) clearSel();
               }}
               style={{ height: 38 }}
             >
@@ -1735,7 +1715,7 @@ function DesktopAuthorDetailPage({
             Select All
           </Btn>
           {sel.size > 0 ? (
-            <Btn size="sm" onClick={() => setSel(new Set())} disabled={busy}>
+            <Btn size="sm" onClick={clearSel} disabled={busy}>
               Deselect All
             </Btn>
           ) : null}
