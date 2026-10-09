@@ -203,7 +203,12 @@ def _book_to_record(book: dict) -> MetaRecord:
     ed = editions[0] if editions else {}
 
     isbn = ed.get("isbn_13") or ""
-    cover_url = ed.get("image") or ""
+    # `image` is Hardcover's `cached_image`, a `{"url": …}` object: until
+    # the 2026-10 audit (G100) the whole object went into `cover_url`, so a
+    # cover only Hardcover had could never be fetched. The discovery
+    # source's helper reads both shapes.
+    from app.discovery.sources.hardcover import _pick_hardcover_cover
+    cover_url = _pick_hardcover_cover(book, ed) or ""
     pub_date = ed.get("release_date") or ""
     pages = ed.get("pages")
     lang = (ed.get("language") or {}).get("code3", "")

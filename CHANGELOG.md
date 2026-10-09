@@ -146,6 +146,9 @@ background worker instead of during scans.
 
 ### Fixed
 
+- Hardcover enrichment stored its cover as the whole image object
+  (`{"id": …, "url": …}`) instead of its URL, so a cover only Hardcover
+  had could never be fetched for a review (audit G100).
 - Enrichment's Google Books sent no API key, so Google billed it to its
   shared anonymous quota (429s). It now uses the stored key.
 - Hardcover's discovery queries ignored the Rate setting (they skipped the
