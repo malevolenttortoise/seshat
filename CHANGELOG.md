@@ -183,6 +183,14 @@ themselves.
 
 ### Fixed
 
+- A source scan of an author whose only owned book is a box set or
+  omnibus no longer rejects every source (wave 5a). Calibre keeps
+  "Cyberratum Trilogy Box Set" while sources list Artifex, Annulus and
+  Axiom, so the wrong-author check found no shared title. When no title
+  matches, an owned box set's series ("Cyberratum") or title stem now
+  passes the check if the source lists that series or title (exact match
+  after normalising). The box set's books then show as missing, as they
+  already did for authors who own an omnibus and other books.
 - Enrichment's retry after a source misses drops a trailing bracketed
   series tail (wave 5a): "No One Dies Today (Frontline Zero Book 4)" now
   retries as "No One Dies Today", not "No One Dies Today (Frontline Zero

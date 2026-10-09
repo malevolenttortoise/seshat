@@ -990,8 +990,18 @@ async def _retract_source_books(
         await db.close()
 
 
-async def _validate_author(author_name: str, our_titles: list[str], result: AuthorResult) -> bool:
-    """Validate found author by checking if ANY of our books fuzzy-match their catalog."""
+async def _validate_author(
+    author_name: str, our_titles: list[str], result: AuthorResult,
+    owned_box_sets: Optional[list[tuple[str, Optional[str]]]] = None,
+) -> bool:
+    """Validate found author by checking if ANY of our books fuzzy-match their catalog.
+
+    An owned box set rarely matches by title: Calibre keeps "Cyberratum
+    Trilogy Box Set" while sources list Artifex, Annulus and Axiom. So when
+    no title matches, an owned box set / omnibus (`owned_box_sets`: its
+    title and series name) still vouches for the author if its series or
+    title stem names a series or title in the catalogue (wave 5a, G122).
+    """
     if not our_titles: return True
     src_titles = [b.title for b in result.books]
     for sr in result.series:
@@ -1001,8 +1011,63 @@ async def _validate_author(author_name: str, our_titles: list[str], result: Auth
         for theirs in src_titles:
             if _fuzzy_match(ours, theirs):
                 return True
+    shared = _box_set_evidence(owned_box_sets or [], result)
+    if shared:
+        logger.info(
+            f"  Validation passed for '{author_name}' on an owned box set: "
+            f"its series/title '{shared}' is in the source's catalogue"
+        )
+        return True
     logger.info(f"  Validation FAILED for '{author_name}': 0/{len(our_titles)} matched in {len(src_titles)} source books")
     return False
+
+
+# Words that make a title a box set rather than name its series, plus
+# series-shape words ("Trilogy", "Saga") a source may or may not carry.
+_RX_BOX_SET_WORDS = re.compile(
+    r"(?i)\b(?:"
+    r"(?:the\s+)?complete|box(?:ed)?\s*set|omnibus|compilation|collection|anthology|edition"
+    r"|books?\s+\d+\s*[-–&]\s*\d+|\d+[-\s]books?|part\s+\d+|volume\s+\d+"
+    r"|trilogy|duology|series|saga|cycle|chronicles"
+    r")\b"
+)
+
+
+def _box_set_key(text: Optional[str]) -> str:
+    """A series name or box-set title reduced to the series it names:
+    "Cyberratum Trilogy Box Set" / "The Cyberratum Trilogy" → "cyberratum".
+    Only the part before a subtitle counts."""
+    if not text:
+        return ""
+    head = text.split(":")[0]
+    head = _RX_BOX_SET_WORDS.sub(" ", head)
+    head = _RX_LEADING_ARTICLE.sub("", head.lower().strip())
+    return _normalize_light(head)
+
+
+def _box_set_evidence(
+    owned_box_sets: list[tuple[str, Optional[str]]], result: AuthorResult,
+) -> Optional[str]:
+    """The series an owned box set shares with the catalogue, if any.
+    Exact after normalising, never a substring: "Legacy" mustn't match
+    "Legacy of Ash"."""
+    ours: set[str] = set()
+    for title, series in owned_box_sets:
+        for key in (_box_set_key(series), _box_set_key(title)):
+            if len(key) >= 4:
+                ours.add(key)
+    if not ours:
+        return None
+    theirs: set[str] = set()
+    for sr in result.series:
+        theirs.add(_box_set_key(sr.name))
+        for b in sr.books:
+            theirs.add(_box_set_key(b.title))
+    for b in result.books:
+        theirs.add(_box_set_key(b.title))
+        theirs.add(_box_set_key(b.series_name))
+    shared = sorted(ours & theirs)
+    return shared[0] if shared else None
 
 
 def _note_non_roster_skip(stats: dict | None, name: str) -> None:
@@ -3528,7 +3593,7 @@ async def _compute_series_suggestions(author_id, series_collector):
 _AUTHOR_ID_COLUMN_SOURCES = frozenset({"goodreads", "amazon"})
 
 
-async def _try_source(source, author_name, author_id, our_titles, languages, source_name, existing_titles=None, hidden_titles=None, full_scan=False, owned_only=False, series_collector=None, on_new_book=None, exclude_audiobooks=True, linked_author_ids=None, link_type_by_id=None, start_at=0):
+async def _try_source(source, author_name, author_id, our_titles, languages, source_name, existing_titles=None, hidden_titles=None, full_scan=False, owned_only=False, series_collector=None, on_new_book=None, exclude_audiobooks=True, linked_author_ids=None, link_type_by_id=None, start_at=0, owned_box_sets=None):
     """Try a single source with validation and detailed logging.
 
     `start_at` is forwarded to `source.get_author_books()` for the
@@ -3737,7 +3802,7 @@ async def _try_source(source, author_name, author_id, our_titles, languages, sou
         # `_validate_author` returns True when `our_titles` is empty, so
         # discovered-only authors (allow-listed, nothing owned yet) are
         # unaffected — there is simply nothing to validate against.
-        if not await _validate_author(author_name, our_titles, full):
+        if not await _validate_author(author_name, our_titles, full, owned_box_sets):
             logger.info(
                 "  [%s] Author validation FAILED for %r — skipping %d books "
                 "(source's catalogue shares no title with the %d owned book(s) "
@@ -3794,7 +3859,7 @@ async def _merge_unfinished_source(
     source_name: str, partial: dict, *, author_name: str, author_id: int,
     our_titles, languages, full_scan: bool, owned_only: bool,
     series_collector, exclude_audiobooks: bool, linked_author_ids,
-    link_type_by_id,
+    link_type_by_id, owned_box_sets=None,
 ) -> int:
     """Merge the books a timed-out source finished before lookup gave up.
 
@@ -3823,7 +3888,7 @@ async def _merge_unfinished_source(
         AuthorResult(name=author_name, books=[BookResult(title=t) for t in catalogue])
         if catalogue else result
     )
-    if not await _validate_author(author_name, our_titles, check):
+    if not await _validate_author(author_name, our_titles, check, owned_box_sets):
         logger.info(
             "  [%s] not merging the %d book(s) finished for %r: the "
             "catalogue shares no title with the owned books",
@@ -4066,12 +4131,17 @@ async def _lookup_author_inner(author_id: int, author_name: str, full_scan: bool
         # v3.0.0 Phase 9 (ADR-0012): contributor-aware — a co-authored
         # owned/known book counts for each of the linked authors.
         rows = await (await db.execute(
-            f"SELECT title FROM books WHERE id IN "
+            f"SELECT b.title, s.name AS series_name FROM books b "
+            f"LEFT JOIN series s ON s.id = b.series_id WHERE b.id IN "
             f"(SELECT book_id FROM book_authors WHERE author_id IN ({id_placeholders})) "
-            f"AND owned = 1",
+            f"AND b.owned = 1",
             linked_ids,
         )).fetchall()
         our_titles = [r["title"] for r in rows]
+        # Owned box sets vouch for the author by their series (G122).
+        owned_box_sets = [
+            (r["title"], r["series_name"]) for r in rows if _is_omnibus(r["title"])
+        ]
         all_rows = await (await db.execute(
             f"SELECT title, hidden, source_url FROM books WHERE id IN "
             f"(SELECT book_id FROM book_authors WHERE author_id IN ({id_placeholders}))",
@@ -4324,7 +4394,7 @@ async def _lookup_author_inner(author_id: int, author_name: str, full_scan: bool
                     full_scan=full_scan,
                     owned_only=owned_only, series_collector=series_collector,
                     exclude_audiobooks=exclude_audiobooks, linked_author_ids=pen_linked,
-                    link_type_by_id=link_type_by_id,
+                    link_type_by_id=link_type_by_id, owned_box_sets=owned_box_sets,
                 ),
                 timeout=timeout,
             )
@@ -4481,7 +4551,7 @@ async def _lookup_author_inner(author_id: int, author_name: str, full_scan: bool
                         owned_only=owned_only, series_collector=series_collector,
                         exclude_audiobooks=exclude_audiobooks, linked_author_ids=pen_linked,
                         link_type_by_id=link_type_by_id,
-                        start_at=start_at,
+                        start_at=start_at, owned_box_sets=owned_box_sets,
                     ),
                     timeout=retry_timeout,
                 )
@@ -4533,6 +4603,7 @@ async def _lookup_author_inner(author_id: int, author_name: str, full_scan: bool
                 series_collector=series_collector,
                 exclude_audiobooks=exclude_audiobooks,
                 linked_author_ids=pen_linked, link_type_by_id=link_type_by_id,
+                owned_box_sets=owned_box_sets,
             )
             total += n
             visible[0] = total
