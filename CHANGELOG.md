@@ -302,7 +302,9 @@ frontend test suite.
   approve / reject that partly failed, a failed Re-drop and a failed Mark
   as imported each set their message and then refreshed the list, which
   cleared it at once (the phone didn't show bulk failures at all). The
-  message now shows until the next refresh, like other errors there.
+  message now stays until your next action on the page, through the
+  30-second refreshes; a list that fails to refresh still says so until a
+  refresh works.
 - **A Dashboard command that fails says so** (wave 5b): Sync, Scan Ebooks,
   Scan Audiobooks, MAM Scan, Data Hygiene and the Stop buttons ignored a
   failed request on both the desktop and phone Dashboard (the button just

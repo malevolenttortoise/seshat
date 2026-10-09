@@ -63,13 +63,42 @@ describe("useReviewQueue", () => {
     });
   });
 
-  it("puts a failed action in error; the next successful refresh clears it", async () => {
+  // G155: an action's failure stays until the next action starts; a
+  // failed list refresh clears itself on the next good one.
+  it("a failed action's message survives refreshes and clears when the next action starts", async () => {
     const { result } = await mounted();
-    mockPost.mockRejectedValue(new Error("500"));
+    mockPost.mockRejectedValueOnce(new Error("500"));
     await act(async () => { await result.current.saveEdits(1, {}); });
     expect(result.current.error).toBe("Error: 500");
     await act(async () => { await result.current.refresh(); });
+    expect(result.current.error).toBe("Error: 500");
+    mockPost.mockResolvedValueOnce({});
+    await act(async () => { await result.current.approve(3); });
     expect(result.current.error).toBeNull();
+  });
+
+  it("a failed list refresh shows until a refresh succeeds", async () => {
+    const { result } = await mounted();
+    mockGet.mockRejectedValueOnce(new Error("database is locked"));
+    await act(async () => { await result.current.refresh(); });
+    expect(result.current.error).toBe("Error: database is locked");
+    await act(async () => { await result.current.refresh(); });
+    expect(result.current.error).toBeNull();
+  });
+
+  it("an action's failure shows over a refresh failure, which shows again once the action's clears", async () => {
+    const { result } = await mounted();
+    mockPost.mockResolvedValueOnce({ ok: false, error: "CWA ingest folder not writable" });
+    await act(async () => { await result.current.redrop(2); });
+    mockGet.mockRejectedValueOnce(new Error("database is locked"));
+    await act(async () => { await result.current.refresh(); });
+    expect(result.current.error).toBe("Re-drop failed: CWA ingest folder not writable");
+    // The next action starts: its own message is gone; the list is still
+    // unreadable (this action's refresh fails too).
+    mockPost.mockResolvedValueOnce({});
+    mockGet.mockRejectedValueOnce(new Error("database is locked"));
+    await act(async () => { await result.current.approve(1); });
+    expect(result.current.error).toBe("Error: database is locked");
   });
 
   it("re-enrich reports success / failure", async () => {

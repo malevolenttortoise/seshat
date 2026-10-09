@@ -4,9 +4,12 @@
 // ReviewPage + MobileReviewPage each carried this (wave 5b, issue 22;
 // S6a first made the two copies agree on failure messages). The shells
 // keep the presentation: confirm prompts and the note each one sends
-// (`claimForOwned(…, note)`, `bulk(action, note)`). Failures land in
-// `error`, as they did; a successful refresh clears it, so an action
-// refreshes before it reports.
+// (`claimForOwned(…, note)`, `bulk(action, note)`).
+//
+// `error` is the page's one message line. An action's failure stays
+// until the next action starts (G155), through the 30s refreshes; a
+// failed list refresh shows until a refresh succeeds. When both are
+// set, the action's shows.
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { useVisibleInterval } from "./useVisibleInterval";
@@ -29,7 +32,8 @@ interface ActionResult {
 
 export function useReviewQueue<T extends { id: number; status: string }>() {
   const [items, setItems] = useState<T[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
 
@@ -37,9 +41,9 @@ export function useReviewQueue<T extends { id: number; status: string }>() {
     try {
       const r = await api.get<ReviewListResponse<T>>("/v1/review");
       setItems(r.items);
-      setError(null);
+      setLoadError(null);
     } catch (e) {
-      setError(String(e));
+      setLoadError(String(e));
     }
   }
 
@@ -49,11 +53,12 @@ export function useReviewQueue<T extends { id: number; status: string }>() {
   /** Run one review's action: busy on that row, refresh after, error on failure. */
   async function onRow(id: number, run: () => Promise<void>) {
     setBusyId(id);
+    setActionError(null);
     try {
       await run();
       await refresh();
     } catch (e) {
-      setError(String(e));
+      setActionError(String(e));
     } finally {
       setBusyId(null);
     }
@@ -71,13 +76,13 @@ export function useReviewQueue<T extends { id: number; status: string }>() {
 
   async function reEnrich(id: number, metadata: Record<string, unknown>): Promise<boolean> {
     setBusyId(id);
-    setError(null);
+    setActionError(null);
     try {
       await api.post(`/v1/review/${id}/re-enrich`, { metadata });
       await refresh();
       return true;
     } catch (e) {
-      setError(String(e));
+      setActionError(String(e));
       return false;
     } finally {
       setBusyId(null);
@@ -97,14 +102,13 @@ export function useReviewQueue<T extends { id: number; status: string }>() {
   /** Re-drop / Mark as imported: the server answers `{ok, error}`. */
   async function importAction(id: number, path: "redrop" | "mark-imported", failure: string) {
     setBusyId(id);
-    setError(null);
+    setActionError(null);
     try {
       const r = await api.post<ActionResult>(`/v1/review/${id}/${path}`);
-      // Refresh first: a successful refresh clears `error`.
       await refresh();
-      if (!r.ok) setError(`${failure}: ${r.error ?? "unknown error"}`);
+      if (!r.ok) setActionError(`${failure}: ${r.error ?? "unknown error"}`);
     } catch (e) {
-      setError(String(e));
+      setActionError(String(e));
     } finally {
       setBusyId(null);
     }
@@ -116,21 +120,20 @@ export function useReviewQueue<T extends { id: number; status: string }>() {
   /** Approve / reject every pending review; `note` is sent when given. */
   async function bulk(action: "approve" | "reject", note?: string) {
     setBulkBusy(true);
-    setError(null);
+    setActionError(null);
     try {
       const r = await api.post<BulkResult>(
         `/v1/review/bulk/${action}`,
         note === undefined ? undefined : { note },
       );
-      // Refresh first: a successful refresh clears `error`.
       await refresh();
       if (r.failed > 0) {
-        setError(
+        setActionError(
           `${action === "approve" ? "Approved" : "Rejected"} ${r.processed}, ${r.failed} failed. First errors: ${r.errors.slice(0, 3).join("; ")}`,
         );
       }
     } catch (e) {
-      setError(String(e));
+      setActionError(String(e));
     } finally {
       setBulkBusy(false);
     }
@@ -140,6 +143,8 @@ export function useReviewQueue<T extends { id: number; status: string }>() {
   // bulk approve / reject only ever touch pending reviews.
   const failed = (items ?? []).filter((i) => i.status === "import_failed");
   const pending = (items ?? []).filter((i) => i.status !== "import_failed");
+
+  const error = actionError ?? loadError;
 
   return {
     items, error, busyId, bulkBusy, failed, pending, refresh,

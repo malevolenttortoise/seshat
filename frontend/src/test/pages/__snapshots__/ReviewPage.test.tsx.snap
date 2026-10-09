@@ -1,5 +1,402 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`Review page (desktop) > a failed Re-drop's message after the list refreshes > markup 1`] = `
+<DocumentFragment>
+  <div>
+    <div
+      style="display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 4px;"
+    >
+      <div>
+        <h1
+          style="font-size: 24px; font-weight: 700; color: rgb(236, 234, 244); margin-bottom: 4px;"
+        >
+          Review Queue
+        </h1>
+        <p
+          style="font-size: 14px; color: rgb(136, 134, 160); margin-bottom: 24px;"
+        >
+          Books waiting on your approval before delivery to Calibre.
+        </p>
+      </div>
+      <div
+        style="display: flex; gap: 8px;"
+      >
+        <button
+          style="background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+        >
+          Approve All (2)
+        </button>
+        <button
+          style="background: rgb(224, 96, 96); color: rgb(26, 28, 48); border: 1px solid rgb(224, 96, 96); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+        >
+          Reject All
+        </button>
+      </div>
+    </div>
+    <div
+      style="background: rgba(224, 96, 96, 0.133); border: 1px solid rgba(224, 96, 96, 0.333); color: rgb(224, 96, 96); padding: 10px 14px; border-radius: 8px; font-size: 13px; margin-bottom: 16px;"
+    >
+      Re-drop failed: CWA ingest folder not writable
+    </div>
+    <div
+      style="display: flex; flex-direction: column; gap: 12px;"
+    >
+      <article
+        style="background: rgba(224, 96, 96, 0.14); border: 1px solid rgb(192, 72, 72); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 8px;"
+      >
+        <div
+          style="font-size: 11px; font-weight: 700; color: rgb(224, 96, 96); letter-spacing: 0.4px; text-transform: uppercase;"
+        >
+          Import failed
+        </div>
+        <div>
+          <div
+            style="font-size: 17px; font-weight: 700; color: rgb(236, 234, 244); word-break: break-word;"
+          >
+            Ninefold Tide
+          </div>
+          <div
+            style="font-size: 13px; color: rgb(214, 212, 224); margin-top: 2px;"
+          >
+            Ada Quill
+          </div>
+        </div>
+        <div
+          style="font-size: 13px; color: rgb(214, 212, 224);"
+        >
+          CWA took the file but no book appeared in Calibre
+        </div>
+        <div
+          style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;"
+        >
+          <button
+            style="background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+          >
+            Re-drop
+          </button>
+          <button
+            style="background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 4px 10px; font-size: 12px;"
+          >
+            Mark as imported
+          </button>
+        </div>
+      </article>
+      <article
+        style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 16px; display: grid; grid-template-columns: 120px 1fr auto; gap: 16px; animation: slide-up 0.2s ease-out; position: relative;"
+      >
+        <div
+          style="display: flex; flex-direction: column; gap: 4px; width: 120px;"
+        >
+          <img
+            alt="Cover"
+            src="/api/v1/covers/review-staging%2Fgrab-9101%2Fcover.jpg"
+            style="width: 120px; height: 180px; object-fit: cover; border-radius: 6px; border: 1px solid rgb(46, 48, 72); background: rgb(30, 32, 52);"
+          />
+        </div>
+        <div
+          style="min-width: 0px;"
+        >
+          <div
+            style="display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;"
+          >
+            <h3
+              style="font-size: 17px; font-weight: 700; color: rgb(236, 234, 244); word-break: break-word;"
+            >
+              The Glass Orchard
+            </h3>
+            <div
+              style="display: flex; gap: 4px; flex-wrap: wrap;"
+            >
+              <span
+                style="font-size: 10px; padding: 2px 7px; border-radius: 99px; background: rgb(42, 44, 66); color: rgb(136, 134, 160); font-weight: 500;"
+              >
+                goodreads —
+              </span>
+              <span
+                style="font-size: 10px; padding: 2px 7px; border-radius: 99px; background: rgb(30, 32, 52); color: rgb(76, 184, 136); font-weight: 500;"
+              >
+                hardcover 94%
+              </span>
+            </div>
+          </div>
+          <div
+            style="font-size: 14px; color: rgb(214, 212, 224); margin-top: 2px;"
+          >
+            Ada Quill
+          </div>
+          <div
+            style="margin-top: 4px;"
+          >
+            <span
+              style="display: inline-flex; gap: 4px; flex-wrap: wrap;"
+            >
+              <span
+                style="font-size: 10px; padding: 1px 7px; border-radius: 99px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(46, 48, 72); white-space: nowrap;"
+              >
+                Fantasy
+              </span>
+              <span
+                style="font-size: 10px; padding: 1px 7px; border-radius: 99px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(46, 48, 72); white-space: nowrap;"
+              >
+                Mystery
+              </span>
+            </span>
+          </div>
+          <div
+            style="font-size: 13px; color: rgb(136, 134, 160); margin-top: 4px;"
+          >
+            Orchard Cycle #2
+          </div>
+          <div
+            style="margin-top: 10px; padding: 8px 10px; border-radius: 8px; background: rgba(228, 184, 104, 0.082); border: 1px solid rgba(228, 184, 104, 0.333); font-size: 12px; color: rgb(214, 212, 224); line-height: 1.5;"
+          >
+            <div
+              style="font-weight: 600; color: rgb(228, 184, 104);"
+            >
+              You already own this book
+            </div>
+            <div
+              style="margin-top: 4px;"
+            >
+              The owned copy has no MAM URL yet. Claiming this torrent for it pins the link without importing a duplicate file.
+            </div>
+            <ul
+              style="margin: 6px 0px 0px 16px; padding: 0px;"
+            >
+              <li>
+                <code
+                  style="font-size: 11px; color: rgb(136, 134, 160);"
+                >
+                  calibre-library
+                </code>
+                <span
+                  style="color: rgb(136, 134, 160);"
+                >
+                   · calibre #1203
+                </span>
+              </li>
+            </ul>
+          </div>
+          <dl
+            style="margin-top: 10px; display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 12px;"
+          >
+            <dt
+              style="color: rgb(136, 134, 160); font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;"
+            >
+              Published
+            </dt>
+            <dd
+              style="color: rgb(214, 212, 224); word-break: break-word;"
+            >
+              2025-03-11
+            </dd>
+            <dt
+              style="color: rgb(136, 134, 160); font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;"
+            >
+              Publisher
+            </dt>
+            <dd
+              style="color: rgb(214, 212, 224); word-break: break-word;"
+            >
+              Lantern House
+            </dd>
+            <dt
+              style="color: rgb(136, 134, 160); font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;"
+            >
+              Pages
+            </dt>
+            <dd
+              style="color: rgb(214, 212, 224); word-break: break-word;"
+            >
+              412
+            </dd>
+            <dt
+              style="color: rgb(136, 134, 160); font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;"
+            >
+              ISBN
+            </dt>
+            <dd
+              style="color: rgb(214, 212, 224); word-break: break-word;"
+            >
+              9780000000002
+            </dd>
+            <dt
+              style="color: rgb(136, 134, 160); font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;"
+            >
+              File
+            </dt>
+            <dd
+              style="color: rgb(214, 212, 224); word-break: break-word;"
+            >
+              The Glass Orchard - Ada Quill.epub
+            </dd>
+            <dt
+              style="color: rgb(136, 134, 160); font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;"
+            >
+              Grab
+            </dt>
+            <dd
+              style="color: rgb(214, 212, 224); word-break: break-word;"
+            >
+              #9101
+            </dd>
+          </dl>
+          <p
+            style="margin-top: 10px; font-size: 13px; color: rgb(214, 212, 224); line-height: 1.5; max-height: 130px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical;"
+          >
+            A botanist inherits a greenhouse that grows memories.
+          </p>
+        </div>
+        <div
+          style="display: flex; flex-direction: column; gap: 8px; align-items: stretch; min-width: 110px;"
+        >
+          <button
+            style="background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+          >
+            Approve
+          </button>
+          <button
+            style="background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+          >
+            Edit
+          </button>
+          <button
+            style="background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+            title="Pin this MAM torrent to the existing owned book and reject this duplicate import"
+          >
+            Claim for owned
+          </button>
+          <button
+            style="background: rgb(224, 96, 96); color: rgb(26, 28, 48); border: 1px solid rgb(224, 96, 96); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+          >
+            Reject
+          </button>
+        </div>
+      </article>
+      <article
+        style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 16px; display: grid; grid-template-columns: 120px 1fr auto; gap: 16px; animation: slide-up 0.2s ease-out; position: relative;"
+      >
+        <div
+          style="width: 120px; height: 180px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 6px; display: flex; align-items: center; justify-content: center; color: rgb(136, 134, 160); font-size: 36px; font-weight: 700;"
+        >
+          S
+        </div>
+        <div
+          style="min-width: 0px;"
+        >
+          <div
+            style="display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;"
+          >
+            <h3
+              style="font-size: 17px; font-weight: 700; color: rgb(236, 234, 244); word-break: break-word;"
+            >
+              Saltwind
+            </h3>
+            <span
+              style="font-size: 10px; font-weight: 700; text-transform: uppercase; padding: 2px 7px; border-radius: 99px; background: rgba(228, 184, 104, 0.133); color: rgb(228, 184, 104); border: 1px solid rgba(228, 184, 104, 0.333); letter-spacing: 0.4px;"
+            >
+              audiobook
+            </span>
+            <span
+              style="font-size: 11px; color: rgb(136, 134, 160); background: rgb(30, 32, 52); padding: 2px 8px; border-radius: 99px;"
+            >
+              via audible · 81%
+            </span>
+          </div>
+          <div
+            style="font-size: 14px; color: rgb(214, 212, 224); margin-top: 2px;"
+          >
+            Bram Okafor
+          </div>
+          <dl
+            style="margin-top: 10px; display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 12px;"
+          >
+            <dt
+              style="color: rgb(136, 134, 160); font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;"
+            >
+              Narrator
+            </dt>
+            <dd
+              style="color: rgb(214, 212, 224); word-break: break-word;"
+            >
+              Rhea Vance
+            </dd>
+            <dt
+              style="color: rgb(136, 134, 160); font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;"
+            >
+              Duration
+            </dt>
+            <dd
+              style="color: rgb(214, 212, 224); word-break: break-word;"
+            >
+              11h 32m
+            </dd>
+            <dt
+              style="color: rgb(136, 134, 160); font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;"
+            >
+              ASIN
+            </dt>
+            <dd
+              style="color: rgb(214, 212, 224); word-break: break-word;"
+            >
+              B000000002
+            </dd>
+            <dt
+              style="color: rgb(136, 134, 160); font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;"
+            >
+              File
+            </dt>
+            <dd
+              style="color: rgb(214, 212, 224); word-break: break-word;"
+            >
+              Saltwind - Bram Okafor.m4b
+            </dd>
+            <dt
+              style="color: rgb(136, 134, 160); font-weight: 600; text-transform: uppercase; letter-spacing: 0.3px;"
+            >
+              Grab
+            </dt>
+            <dd
+              style="color: rgb(214, 212, 224); word-break: break-word;"
+            >
+              #9102
+            </dd>
+          </dl>
+        </div>
+        <div
+          style="display: flex; flex-direction: column; gap: 8px; align-items: stretch; min-width: 110px;"
+        >
+          <button
+            style="background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+          >
+            Approve
+          </button>
+          <button
+            style="background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+          >
+            Edit
+          </button>
+          <button
+            style="background: rgb(224, 96, 96); color: rgb(26, 28, 48); border: 1px solid rgb(224, 96, 96); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+          >
+            Reject
+          </button>
+        </div>
+      </article>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Review page (desktop) > a failed Re-drop's message after the list refreshes > requests 1`] = `
+[
+  "GET /v1/review",
+  "GET /v1/review",
+  "GET /v1/review",
+  "POST /v1/review/503/redrop",
+]
+`;
+
 exports[`Review page (desktop) > pending reviews > markup 1`] = `
 <DocumentFragment>
   <div>
@@ -735,6 +1132,339 @@ exports[`Review page (desktop) > with an import failure > markup 1`] = `
 exports[`Review page (desktop) > with an import failure > requests 1`] = `
 [
   "GET /v1/review",
+]
+`;
+
+exports[`Review page (phone) > a failed Re-drop's message after the list refreshes > markup 1`] = `
+<DocumentFragment>
+  <div
+    style="display: flex; flex-direction: column; gap: 12px;"
+  >
+    <button
+      aria-label="Dashboard"
+      style="display: inline-flex; align-items: center; gap: 6px; height: 44px; padding: 0px 14px 0px 10px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 9999px; font-size: 14px; font-weight: 600; cursor: pointer; align-self: flex-start;"
+    >
+      <span
+        style="font-size: 18px; line-height: 1;"
+      >
+        ‹
+      </span>
+      <span>
+        Dashboard
+      </span>
+    </button>
+    <div>
+      <h1
+        style="margin: 0px; font-size: 22px; font-weight: 700; color: rgb(236, 234, 244);"
+      >
+        Review Queue
+      </h1>
+      <p
+        style="font-size: 13px; color: rgb(150, 148, 172); margin: 4px 0px 0px;"
+      >
+        Pending books waiting to land in your library.
+      </p>
+    </div>
+    <div
+      style="padding: 10px 14px; background: rgba(224, 96, 96, 0.14); border: 1px solid rgb(192, 72, 72); color: rgb(224, 96, 96); border-radius: 10px; font-size: 13px;"
+    >
+      Re-drop failed: CWA ingest folder not writable
+    </div>
+    <div
+      style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;"
+    >
+      <button
+        style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 48px; padding: 0px 16px; width: 100%; cursor: pointer;"
+      >
+        <span>
+          Approve all (2)
+        </span>
+      </button>
+      <button
+        style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(224, 96, 96); color: rgb(26, 28, 48); border: 1px solid rgb(224, 96, 96); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 44px; padding: 0px 16px; width: 100%; cursor: pointer;"
+      >
+        <span>
+          Reject all
+        </span>
+      </button>
+    </div>
+    <article
+      style="background: rgba(224, 96, 96, 0.14); border: 1px solid rgb(192, 72, 72); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 8px;"
+    >
+      <div
+        style="font-size: 11px; font-weight: 700; color: rgb(224, 96, 96); letter-spacing: 0.4px; text-transform: uppercase;"
+      >
+        Import failed
+      </div>
+      <div>
+        <div
+          style="font-size: 15px; font-weight: 700; color: rgb(236, 234, 244); word-break: break-word;"
+        >
+          Ninefold Tide
+        </div>
+        <div
+          style="font-size: 13px; color: rgb(214, 212, 224); margin-top: 2px;"
+        >
+          Ada Quill
+        </div>
+      </div>
+      <div
+        style="font-size: 13px; color: rgb(214, 212, 224);"
+      >
+        CWA took the file but no book appeared in Calibre
+      </div>
+      <div
+        style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;"
+      >
+        <button
+          style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 48px; padding: 0px 16px; cursor: pointer;"
+        >
+          <span>
+            Re-drop
+          </span>
+        </button>
+        <button
+          style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 44px; padding: 0px 16px; cursor: pointer;"
+        >
+          <span>
+            Mark as imported
+          </span>
+        </button>
+      </div>
+    </article>
+    <div
+      style="display: flex; flex-direction: column; gap: 10px; padding: 12px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 12px;"
+    >
+      <div
+        style="display: flex; gap: 12px;"
+      >
+        <div
+          style="width: 80px; height: 120px; flex-shrink: 0; background: rgb(30, 32, 52); border-radius: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center;"
+        >
+          <img
+            alt=""
+            src="https://example.invalid/covers/glass-orchard.jpg"
+            style="width: 100%; height: 100%; object-fit: cover;"
+          />
+        </div>
+        <div
+          style="flex: 1 1 0%; min-width: 0px;"
+        >
+          <div
+            style="font-size: 15px; font-weight: 700; color: rgb(236, 234, 244); line-height: 1.3;"
+          >
+            The Glass Orchard
+          </div>
+          <div
+            style="font-size: 13px; color: rgb(150, 148, 172); margin-top: 2px;"
+          >
+            Ada Quill
+          </div>
+          <div
+            style="margin-top: 4px;"
+          >
+            <span
+              style="display: inline-flex; gap: 4px; flex-wrap: wrap;"
+            >
+              <span
+                style="font-size: 10px; padding: 1px 7px; border-radius: 99px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(46, 48, 72); white-space: nowrap;"
+              >
+                Fantasy
+              </span>
+              <span
+                style="font-size: 10px; padding: 1px 7px; border-radius: 99px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(46, 48, 72); white-space: nowrap;"
+              >
+                Mystery
+              </span>
+            </span>
+          </div>
+          <div
+            style="font-size: 12px; color: rgb(136, 112, 180); margin-top: 2px;"
+          >
+            Orchard Cycle #2
+          </div>
+          <div
+            style="display: flex; gap: 4px; margin-top: 6px; flex-wrap: wrap; font-size: 11px;"
+          >
+            <span
+              style="color: rgb(98, 96, 122);"
+            >
+              Grab #9101
+            </span>
+            <span
+              style="color: rgb(150, 148, 172);"
+            >
+              · epub
+            </span>
+            <span
+              style="color: rgb(72, 152, 176);"
+            >
+              · hardcover 94%
+            </span>
+          </div>
+        </div>
+      </div>
+      <div
+        style="padding: 8px 10px; border-radius: 8px; background: rgba(228, 184, 104, 0.082); border: 1px solid rgba(228, 184, 104, 0.267); font-size: 12px; color: rgb(214, 212, 224); line-height: 1.4;"
+      >
+        <div
+          style="font-weight: 600; color: rgb(228, 184, 104); margin-bottom: 4px;"
+        >
+          You already own this book
+        </div>
+        <div>
+          The owned copy is in 
+          <code
+            style="font-size: 11px;"
+          >
+            calibre-library
+          </code>
+          <span>
+             · calibre #1203
+          </span>
+          . Claim pins the MAM URL to that row and rejects this duplicate.
+        </div>
+      </div>
+      <div
+        style="display: flex; gap: 6px; flex-wrap: wrap;"
+      >
+        <button
+          style="display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; min-height: 36px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 9999px; font-size: 13px; font-weight: 500; cursor: pointer; white-space: nowrap;"
+        >
+          Edit
+        </button>
+        <button
+          style="display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; min-height: 36px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 9999px; font-size: 13px; font-weight: 500; cursor: pointer; white-space: nowrap;"
+        >
+          <span
+            style="display: flex;"
+          >
+            ↻
+          </span>
+          Re-enrich
+        </button>
+        <button
+          style="display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; min-height: 36px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 9999px; font-size: 13px; font-weight: 500; cursor: pointer; white-space: nowrap;"
+        >
+          Claim for owned
+        </button>
+      </div>
+      <div
+        style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;"
+      >
+        <button
+          style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 48px; padding: 0px 16px; width: 100%; cursor: pointer;"
+        >
+          <span>
+            Approve
+          </span>
+        </button>
+        <button
+          style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(224, 96, 96); color: rgb(26, 28, 48); border: 1px solid rgb(224, 96, 96); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 44px; padding: 0px 16px; width: 100%; cursor: pointer;"
+        >
+          <span>
+            Reject
+          </span>
+        </button>
+      </div>
+    </div>
+    <div
+      style="display: flex; flex-direction: column; gap: 10px; padding: 12px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 12px;"
+    >
+      <div
+        style="display: flex; gap: 12px;"
+      >
+        <div
+          style="width: 80px; height: 120px; flex-shrink: 0; background: rgb(30, 32, 52); border-radius: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center;"
+        >
+          <span
+            style="color: rgb(98, 96, 122); font-size: 28px;"
+          >
+            ?
+          </span>
+        </div>
+        <div
+          style="flex: 1 1 0%; min-width: 0px;"
+        >
+          <div
+            style="font-size: 15px; font-weight: 700; color: rgb(236, 234, 244); line-height: 1.3;"
+          >
+            Saltwind
+          </div>
+          <div
+            style="font-size: 13px; color: rgb(150, 148, 172); margin-top: 2px;"
+          >
+            Bram Okafor
+          </div>
+          <div
+            style="display: flex; gap: 4px; margin-top: 6px; flex-wrap: wrap; font-size: 11px;"
+          >
+            <span
+              style="color: rgb(98, 96, 122);"
+            >
+              Grab #9102
+            </span>
+            <span
+              style="color: rgb(150, 148, 172);"
+            >
+              · m4b
+            </span>
+            <span
+              style="color: rgb(72, 152, 176);"
+            >
+              · audible 81%
+            </span>
+          </div>
+        </div>
+      </div>
+      <div
+        style="display: flex; gap: 6px; flex-wrap: wrap;"
+      >
+        <button
+          style="display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; min-height: 36px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 9999px; font-size: 13px; font-weight: 500; cursor: pointer; white-space: nowrap;"
+        >
+          Edit
+        </button>
+        <button
+          style="display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; min-height: 36px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 9999px; font-size: 13px; font-weight: 500; cursor: pointer; white-space: nowrap;"
+        >
+          <span
+            style="display: flex;"
+          >
+            ↻
+          </span>
+          Re-enrich
+        </button>
+      </div>
+      <div
+        style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;"
+      >
+        <button
+          style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 48px; padding: 0px 16px; width: 100%; cursor: pointer;"
+        >
+          <span>
+            Approve
+          </span>
+        </button>
+        <button
+          style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(224, 96, 96); color: rgb(26, 28, 48); border: 1px solid rgb(224, 96, 96); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 44px; padding: 0px 16px; width: 100%; cursor: pointer;"
+        >
+          <span>
+            Reject
+          </span>
+        </button>
+      </div>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Review page (phone) > a failed Re-drop's message after the list refreshes > requests 1`] = `
+[
+  "GET /v1/review",
+  "GET /v1/review",
+  "GET /v1/review",
+  "POST /v1/review/503/redrop",
 ]
 `;
 
