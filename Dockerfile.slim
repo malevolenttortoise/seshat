@@ -14,8 +14,11 @@
 # then a lean python:3.12-slim runtime with just sqlite3 (for DB
 # inspection during ops debugging) and the Python deps.
 
+# Base images come through mirror.gcr.io (Google's Docker Hub cache, same
+# digests): CI's anonymous Docker Hub pulls hit its rate limit (429).
+
 # ─── Stage 1: frontend build ───────────────────────────────────
-FROM node:26-alpine AS frontend-build
+FROM mirror.gcr.io/library/node:26-alpine AS frontend-build
 WORKDIR /build
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
@@ -24,7 +27,7 @@ RUN npm run build
 
 
 # ─── Stage 2: python runtime ───────────────────────────────────
-FROM python:3.12-slim
+FROM mirror.gcr.io/library/python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \

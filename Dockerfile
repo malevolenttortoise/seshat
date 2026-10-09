@@ -22,8 +22,11 @@
 #      app. Stage 1 + 2 caches are discarded so wget/xz/node never
 #      ship in the runtime layer.
 
+# Base images come through mirror.gcr.io (Google's Docker Hub cache, same
+# digests): CI's anonymous Docker Hub pulls hit its rate limit (429).
+
 # ─── Stage 1: frontend build ───────────────────────────────────
-FROM node:26-alpine AS frontend-build
+FROM mirror.gcr.io/library/node:26-alpine AS frontend-build
 WORKDIR /build
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
@@ -41,7 +44,7 @@ RUN npm run build
 #   2. Update the value below
 #   3. Verify the tarball URL responds with 200:
 #      curl -sI https://download.calibre-ebook.com/<version>/calibre-<version>-x86_64.txz
-FROM python:3.12-slim AS calibre-fetch
+FROM mirror.gcr.io/library/python:3.12-slim AS calibre-fetch
 # renovate: datasource=github-releases depName=kovidgoyal/calibre extractVersion=^v(?<version>.+)$
 ARG CALIBRE_VERSION=9.7.0
 RUN DEBIAN_FRONTEND=noninteractive apt-get update \
@@ -57,7 +60,7 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update \
 
 
 # ─── Stage 3: python runtime ───────────────────────────────────
-FROM python:3.12-slim
+FROM mirror.gcr.io/library/python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
