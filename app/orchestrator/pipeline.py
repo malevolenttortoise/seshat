@@ -260,6 +260,17 @@ def _find_torrent_file(parent: Path, torrent_name: str) -> Optional[Path]:
     return None
 
 
+# Pipeline runs `process_completion` is driving in this process right now.
+# The self-heal sweep (`orchestrator.self_heal`) leaves these alone: a run
+# in staged / extracted / metadata_done that ISN'T here was left behind by
+# a restart or a cancelled task, and nothing else will resume it.
+_RUNS_IN_FLIGHT: set[int] = set()
+
+
+def runs_in_flight() -> frozenset[int]:
+    return frozenset(_RUNS_IN_FLIGHT)
+
+
 def _get_mam_token() -> str:
     """Read the current MAM token from the cookie module's in-memory cache."""
     try:
@@ -311,6 +322,7 @@ async def process_completion(
     `_fail()` and end up on the pipeline_run row.
     """
     run_id = event.pipeline_run_id
+    _RUNS_IN_FLIGHT.add(run_id)
 
     try:
         preps = await _prepare_book(
@@ -384,6 +396,8 @@ async def process_completion(
         except Exception:
             pass
         return False
+    finally:
+        _RUNS_IN_FLIGHT.discard(run_id)
 
 
 # ─── Phase halves ───────────────────────────────────────────────

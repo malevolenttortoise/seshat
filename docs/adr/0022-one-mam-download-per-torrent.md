@@ -42,3 +42,8 @@ Every other torrent-info lookup failure fails open: the database guard still cov
 - Any future code that fetches from MAM must go through `_dispatch_with_decision` or take `grab_claim_lock()` and consult `find_blocking_grab` itself. Code that already holds bytes (an upload) goes through `submit_torrent_bytes` after claiming its grab row.
 - Never wait on `grab_claim_lock()` with an open write transaction: the holder needs SQLite's write lock. Each claim site calls `release_write_lock(db)` first (a 30s deadlock in CI taught this).
 - An expired cookie stalls the queue (the liveness check can't run), even though submitting saved bytes would not need it. Accepted: nothing reaches qBit unchecked.
+
+## Amendment (2026-10-09, audit wave 5a)
+
+- A qBit login or network failure saves the bytes and queues the grab in **both** full-budget modes. Drop mode used to keep nothing, which lost 8 grabs on 2026-07-12 for good.
+- The **self-heal sweep** (`orchestrator/self_heal.py`, every budget-watcher tick) re-runs a grab a restart left mid-pipeline, and moves a failed submit whose torrent qBit holds complete back to `submitted`. It works only from what qBit already holds: it never fetches a `.torrent`, never re-adds one to qBit and sends nothing to MAM. It touches nothing older than 7 days and re-runs a grab at most twice.

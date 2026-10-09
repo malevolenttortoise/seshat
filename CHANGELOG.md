@@ -12,9 +12,24 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 Phase 2 of the 2026-10 roadmap, the codebase audit, waves 4a and 4b: the
 **metadata sources**. Every request to a source now goes through one
 gate that paces and counts it, and Goodreads-only books are found by a
-background worker instead of during scans.
+background worker instead of during scans. Wave 5a: **reliability** —
+grabs a restart or a failed qBit submit left stranded now heal
+themselves.
 
 **Behaviour changes to know about:**
+
+- **Stranded grabs heal themselves** (wave 5a). A grab a restart left
+  mid-pipeline (staged / extracted / metadata_done, not moving for 10
+  minutes) is re-run from the files qBit already has, at most twice; one
+  older than 7 days is closed (`failed`, "interrupted by a restart; too old
+  to re-run") instead. A grab whose qBit submit failed (`failed_unknown`,
+  `duplicate_in_qbit`) but whose torrent qBit has complete goes back to
+  `submitted` and through the pipeline, within 7 days. Nothing is fetched
+  from MAM or re-added to qBit.
+- **Drop mode keeps a grab's .torrent when qBit can't be reached** (wave
+  5a): a qBit login or network failure now saves the bytes and queues the
+  grab in both full-budget modes, as queue mode already did. Before, drop
+  mode kept nothing, and MAM never serves the same torrent twice.
 
 - **While the Goodreads cache worker is on, a source scan no longer sends
   Goodreads anything** (wave 4b, ADR-0026). Books discovery already has

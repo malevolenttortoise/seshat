@@ -1659,9 +1659,12 @@ async def _place_torrent(
         # grab so it can be retried when the client comes back.
         # We already hold the .torrent — losing it would waste a
         # snatch, and MAM must never serve it twice. Only permanent
-        # failures (rejected, duplicate) stay as failed.
+        # failures (rejected, duplicate) stay as failed. This holds
+        # in drop mode too (wave 5a, G119): "drop" is about a full
+        # budget, and dropping these bytes lost 8 grabs on 2026-07-12
+        # that can never be fetched again.
         retriable = add_result.failure_kind in ("auth_failed", "network_error")
-        if retriable and deps.queue_mode_enabled:
+        if retriable:
             _log.info(
                 "download client unreachable for grab_id=%d — queued for retry (%s)",
                 grab_id, add_result.failure_kind,

@@ -33,7 +33,7 @@ from typing import Callable, Optional
 
 from app.clients.base import AddResult, TorrentClient
 from app.mam.torrent_meta import BencodeError, info_hash
-from app.orchestrator import torrent_store
+from app.orchestrator import self_heal, torrent_store
 from app.orchestrator.dispatch import DispatcherDeps, add_to_client
 from app.orchestrator.download_folders import translate_path
 from app.orchestrator.download_watcher import (
@@ -117,6 +117,17 @@ def _never_seen_grace_seconds() -> int:
     except (TypeError, ValueError):
         hours = 0.0
     return int(max(0.0, hours) * 3600)
+
+
+def _file_lister(deps: DispatcherDeps):
+    """The client's torrent-file listing, or one that knows nothing."""
+    lister = getattr(deps.qbit, "list_torrent_files", None)
+    if lister is not None:
+        return lister
+
+    async def _none(_hash: str) -> list[str]:
+        return []
+    return _none
 
 
 async def _list_watched(deps: DispatcherDeps):
@@ -222,8 +233,21 @@ async def _tick_inner(deps: DispatcherDeps, db) -> TickResult:
         )
         for t in qbit_torrents if t.hash
     }
+    # Self-heal first (wave 5a, G116–G120): runs a restart left mid-way come
+    # back as fresh completion events, and failed submits whose torrent qBit
+    # has complete go back to `submitted` for `check_for_completions` below.
+    # Works only from what qBit already holds; never fetches.
     try:
-        completions = await check_for_completions(db, dl_snapshot)
+        healed = await self_heal.sweep(
+            db, dl_snapshot,
+            list_files=_file_lister(deps),
+            staging_path=deps.staging_path,
+        )
+    except Exception:
+        _log.exception("self-heal sweep failed (non-fatal)")
+        healed = []
+    try:
+        completions = healed + await check_for_completions(db, dl_snapshot)
         if completions:
             _log.debug(
                 "budget watcher: %d new download completion(s) detected",

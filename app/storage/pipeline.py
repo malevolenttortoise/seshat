@@ -178,24 +178,39 @@ async def delete_run(
     await db.commit()
 
 
-async def find_by_state(
-    db: aiosqlite.Connection, state: str
-) -> list[PipelineRow]:
-    """Find all pipeline runs in a given state."""
+async def find_in_states(
+    db: aiosqlite.Connection, states: tuple[str, ...]
+) -> list[tuple[PipelineRow, str]]:
+    """Every run in one of `states`, oldest first, each with its
+    `state_updated_at` (naive UTC, SQLite's `datetime('now')`)."""
+    marks = ",".join("?" * len(states))
     cursor = await db.execute(
-        """
+        f"""
         SELECT id, grab_id, qbit_hash, source_path, staged_path,
                book_filename, book_format,
                metadata_title, metadata_author, metadata_series,
                metadata_language, sink_name, sink_result,
-               state, started_at, completed_at, error
-        FROM pipeline_runs WHERE state = ?
+               state, started_at, completed_at, error, state_updated_at
+        FROM pipeline_runs WHERE state IN ({marks})
         ORDER BY id ASC
-        """,
-        (state,),
+        """,  # nosec B608 — placeholders only
+        states,
     )
     rows = await cursor.fetchall()
-    return [_row_to_pipeline(r) for r in rows]
+    return [(_row_to_pipeline(r), str(r["state_updated_at"] or "")) for r in rows]
+
+
+async def count_failed_with_error_prefix(
+    db: aiosqlite.Connection, grab_id: int, prefix: str,
+) -> int:
+    """How many of a grab's runs failed with an error starting `prefix`."""
+    cursor = await db.execute(
+        "SELECT COUNT(*) FROM pipeline_runs "
+        "WHERE grab_id = ? AND state = ? AND substr(error, 1, ?) = ?",
+        (grab_id, PIPE_FAILED, len(prefix), prefix),
+    )
+    row = await cursor.fetchone()
+    return int(row[0] or 0)
 
 
 def _row_to_pipeline(row) -> PipelineRow:

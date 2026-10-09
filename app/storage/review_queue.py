@@ -190,6 +190,23 @@ async def set_status(
     await db.commit()
 
 
+async def list_for_run(
+    db: aiosqlite.Connection, pipeline_run_id: int,
+) -> list[ReviewRow]:
+    """Every review row a pipeline run staged (one per bundle group)."""
+    cursor = await db.execute(
+        "SELECT * FROM book_review_queue WHERE pipeline_run_id = ? "
+        "ORDER BY bundle_index",
+        (pipeline_run_id,),
+    )
+    return [_row_to_review(r) for r in await cursor.fetchall()]
+
+
+async def delete_entry(db: aiosqlite.Connection, entry_id: int) -> None:
+    await db.execute("DELETE FROM book_review_queue WHERE id = ?", (entry_id,))
+    await db.commit()
+
+
 async def count_by_status(db: aiosqlite.Connection, status: str) -> int:
     cursor = await db.execute(
         "SELECT COUNT(*) FROM book_review_queue WHERE status = ?", (status,)
