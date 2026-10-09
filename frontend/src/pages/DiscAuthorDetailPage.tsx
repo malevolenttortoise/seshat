@@ -579,13 +579,20 @@ function DesktopAuthorDetailPage({
   };
 
   const unlinkPen = async (linkId: number) => {
+    setPenBusy(true);
     try {
       await api.del(`/discovery/authors/pen-name-link/${linkId}`);
-      setPenLinks(penLinks.filter((l) => l.id !== linkId));
+      // Re-read the list rather than dropping the row locally: what the
+      // server holds now (the phone page did this already).
+      const r = await api.get<PenNamesResponse>(
+        `/discovery/authors/${authorIdNum}/pen-names`,
+      );
+      setPenLinks(r.links || []);
       toast.success("Author unlinked");
-    } catch {
-      /* ignore — user sees no change */
+    } catch (e) {
+      toast.error((e as Error).message || "Unlink failed");
     }
+    setPenBusy(false);
   };
 
   useEffect(() => {

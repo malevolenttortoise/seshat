@@ -260,6 +260,10 @@ frontend test suite.
 - **The author page says when an author can't be loaded** (wave 5b): on
   desktop a failed load left the spinner up for good, on the phone it left
   a blank page. Both now show "Couldn't load this author: <reason>".
+- **Unlinking a pen name works on the phone** (wave 5b): the phone page
+  called a route the backend doesn't have, so every unlink failed. On
+  desktop a failed unlink now says so (it was silent), and both re-read
+  the pen-name list after an unlink.
 - Reingest from disk now honours the ebook format priority (Settings →
   Format Priorities) when a torrent holds several formats (wave 5a): it
   read a settings key nothing writes, so it never had one.

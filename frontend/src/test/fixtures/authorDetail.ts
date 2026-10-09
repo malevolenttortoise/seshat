@@ -126,3 +126,11 @@ export const authorDetailFailedRoutes = {
   ...authorDetailRoutes,
   "GET /discovery/authors/11": reply(500, { detail: "database is locked" }),
 };
+
+// Unlinking the pen name: the DELETE the backend actually routes
+// (`/authors/pen-name-link/{id}`), then the list as it is after.
+export const authorDetailUnlinkRoutes = {
+  ...authorDetailScanningRoutes,
+  "GET /discovery/scan-status": idleScans,
+  "DELETE /discovery/authors/pen-name-link/3": { ok: true },
+};

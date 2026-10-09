@@ -555,7 +555,7 @@ export default function MobileAuthorDetailPage({
     if (!confirm("Remove this pen-name link?")) return;
     setPenBusy(true);
     try {
-      await api.del(`/discovery/authors/pen-name-links/${linkId}`);
+      await api.del(`/discovery/authors/pen-name-link/${linkId}`);
       const r = await api.get<PenNamesResponse>(
         `/discovery/authors/${authorIdNum}/pen-names`,
       );
