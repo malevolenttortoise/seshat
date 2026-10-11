@@ -823,6 +823,21 @@ async def test_the_tick_is_queue_empty_with_nothing_to_do(env, monkeypatch):
     assert env["gr"].urls == []
 
 
+async def test_the_tick_sleeps_the_page_gap_when_only_a_page_is_left(env, monkeypatch):
+    # Live 2026-10-11: once every autocomplete was done, each tick inside the
+    # page gap raised FrozenInstanceError (the idle TickResult was mutated).
+    from app.discovery import metadata_cache_worker as w
+    from app.metadata import source_gate
+    monkeypatch.setattr(w, "_gr_candidates_seeded_at", 0.0)
+    await _awaiting(env)
+    monkeypatch.setattr(source_gate, "kind_wait_seconds", lambda s, k: 30.0)
+    env["gr"].urls.clear()
+    res = await w.tick_goodreads()
+    assert res.outcome == "queue_empty"
+    assert res.next_sleep_s == pytest.approx(30.0)
+    assert env["gr"].urls == []
+
+
 async def test_phase2_skips_a_page_stored_after_its_seed(env):
     """A page a candidate or a grab stored after phase 2 seeded its list
     isn't fetched again."""

@@ -46,7 +46,7 @@ import logging
 import math
 import random
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Optional
 
@@ -2342,7 +2342,9 @@ async def _goodreads_candidate_tick(idle: "TickResult") -> "TickResult":
     if res.outcome == "idle":
         if res.retry_in_s > 0:
             # Candidate work waits for the book-page gap or a backoff.
-            idle.next_sleep_s = min(idle.next_sleep_s, max(1.0, res.retry_in_s))
+            idle = replace(
+                idle, next_sleep_s=min(idle.next_sleep_s, max(1.0, res.retry_in_s)),
+            )
         return idle
     if res.detail:
         _scan_logger(metadata_cache.SOURCE_GOODREADS).info(
