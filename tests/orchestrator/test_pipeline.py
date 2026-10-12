@@ -310,3 +310,84 @@ class TestAudiobookRouting:
             book_format="epub",
         )
         assert isinstance(sink, CalibreSink)
+
+
+class TestAudiobookWithCompanionFile:
+    """2026-10-12: three Stormlight audiobook torrents (m4b + illustrations
+    PDF) had the PDF picked as the primary — the ebook-priority pass ranks
+    every ebook file ahead of every audio file — so the PDF went to CWA and
+    the m4b never reached Audiobookshelf. The grab's MAM category decides
+    which kind leads."""
+
+    async def _run(self, db, tmp_path, category: str):
+        grab_id = await grabs_storage.create_grab(
+            db,
+            announce_id=None,
+            mam_torrent_id="1275961",
+            torrent_name="Rhythm of War",
+            category=category,
+            author_blob="Brandon Sanderson",
+            state=grabs_storage.STATE_DOWNLOADED,
+        )
+        save_path = tmp_path / "downloads"
+        folder = save_path / "Rhythm of War - Brandon Sanderson"
+        folder.mkdir(parents=True)
+        (folder / "Rhythm of War.m4b").write_bytes(b"\x00" * 5000)
+        (folder / "Rhythm of War.pdf").write_bytes(b"%PDF-1.4" + b"\x00" * 100)
+        run_id = await pipe_storage.create_run(
+            db, grab_id=grab_id, qbit_hash="hash_row", source_path=str(save_path),
+        )
+        event = CompletionEvent(
+            grab_id=grab_id, qbit_hash="hash_row", torrent_name="Rhythm of War",
+            save_path=str(save_path), pipeline_run_id=run_id,
+        )
+        library = tmp_path / "library"
+        abs_library = tmp_path / "abs"
+        ok = await process_completion(
+            db, event,
+            staging_path=str(tmp_path / "staging"),
+            default_sink="folder",
+            calibre_library_path="",
+            folder_sink_path=str(library),
+            audiobookshelf_library_path=str(abs_library),
+            category_routing={},
+            ntfy_url="", ntfy_topic="",
+            torrent_files=[
+                "Rhythm of War - Brandon Sanderson/Rhythm of War.m4b",
+                "Rhythm of War - Brandon Sanderson/Rhythm of War.pdf",
+            ],
+            audiobook_format_priority=["m4b", "m4a", "mp3"],
+            ebook_format_priority=["epub", "azw3", "mobi", "pdf"],
+        )
+        assert ok is True
+        run = await pipe_storage.get_run(db, run_id)
+        return run, library, abs_library
+
+    async def test_audiobook_grab_delivers_the_m4b_to_abs(self, temp_db, tmp_path):
+        db = await get_db()
+        try:
+            run, library, abs_library = await self._run(
+                db, tmp_path, "Audiobooks - Fantasy",
+            )
+            assert run.book_format == "m4b"
+            assert run.book_filename == "Rhythm of War.m4b"
+            assert run.sink_name == "audiobookshelf"
+            assert [p.name for p in abs_library.rglob("*.m4b")] == ["Rhythm of War.m4b"]
+            # The PDF goes nowhere (Mark, 2026-10-12): not into ABS, not to
+            # the ebook sink.
+            assert list(abs_library.rglob("*.pdf")) == []
+            assert not library.exists() or list(library.rglob("*")) == []
+        finally:
+            await db.close()
+
+    async def test_ebook_grab_still_leads_with_the_ebook(self, temp_db, tmp_path):
+        db = await get_db()
+        try:
+            run, library, abs_library = await self._run(
+                db, tmp_path, "Ebooks - Fantasy",
+            )
+            assert run.book_format == "pdf"
+            assert run.sink_name == "folder"
+            assert not abs_library.exists() or list(abs_library.rglob("*")) == []
+        finally:
+            await db.close()
