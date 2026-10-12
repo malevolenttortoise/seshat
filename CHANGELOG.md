@@ -291,6 +291,19 @@ frontend test suite.
 
 ### Fixed
 
+- **An audiobook that ships a PDF or epub goes to Audiobookshelf**
+  (2026-10-12 hotfix): when a torrent held both audio and ebook files, the
+  ebook format priority put every ebook file ahead of every audio file, so
+  an audiobook torrent's companion (Sanderson's illustrations PDF) became
+  the book: it went to CWA and the audio never reached Audiobookshelf (5
+  grabs since August). An audiobook grab (by its MAM category) now leads
+  with its audio files; the companion isn't delivered. Ebook grabs and
+  adopted torrents without a MAM category rank as before.
+- **The CWA import check recognises a file CWA titled from its name**
+  (2026-10-12 hotfix): CWA titles a file with no usable metadata after its
+  file name, author "Unknown". The check matched only the dropped title or
+  an author, so it reported **Import failed** for a book CWA had imported.
+  The dropped file's name now counts as a title.
 - **The author page says when an author can't be loaded** (wave 5b): on
   desktop a failed load left the spinner up for good, on the phone it left
   a blank page. Both now show "Couldn't load this author: <reason>".

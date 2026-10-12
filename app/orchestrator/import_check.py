@@ -9,7 +9,9 @@ metadata.db (read-only):
 
   * a record added or modified since the drop (2 min slack) whose title or
     one of whose authors matches what was dropped → confirmed; the review's
-    kept files are removed;
+    kept files are removed. A file with no usable metadata gets its file
+    name as the title in CWA (author "Unknown"), so the dropped file's name
+    counts as a title too;
   * none 15 minutes after the drop (CWA's own ingest timeout) → failed: a
     `pipeline.import_failed` notification, the review → "import failed"
     (Re-drop / Mark as imported on the Review page), the grab back to
@@ -100,15 +102,18 @@ def _calibre_books_since(db_path: str, since: str) -> list[tuple[int, str, list[
 def _match(check: checks_storage.ImportCheck, books, taken: set[int]) -> Optional[int]:
     """The Calibre id whose title or one of whose authors matches (G129).
 
-    A title match wins over an author-only one, and a record that already
-    confirmed another drop can't confirm this one: three books by one
-    author dropped 10s apart each need their own record."""
-    want_title = _title_key(check.title)
+    A title match (the dropped title, or the dropped file's name: CWA's
+    title for a file without metadata) wins over an author-only one, and a
+    record that already confirmed another drop can't confirm this one:
+    three books by one author dropped 10s apart each need their own
+    record."""
+    want_titles = {_title_key(check.title), _title_key(Path(check.drop_path).stem)}
+    want_titles.discard("")
     want_authors = {normalize_author_name(a) for a in check.authors if a}
     want_authors.discard("")
     free = [b for b in books if b[0] not in taken]
     for book_id, title, _authors in free:
-        if want_title and _title_key(title) == want_title:
+        if _title_key(title) in want_titles:
             return book_id
     for book_id, _title, authors in free:
         if want_authors & {normalize_author_name(a) for a in authors}:

@@ -74,7 +74,9 @@ def notified(monkeypatch):
     return sent
 
 
-async def _review(db, tmp_path, *, status=review_storage.STATUS_PENDING, title=TITLE):
+async def _review(db, tmp_path, *, status=review_storage.STATUS_PENDING, title=TITLE,
+                  filename=None):
+    filename = filename or f"{title}.epub"
     grab_id = await grabs_storage.create_grab(
         db, announce_id=None, mam_torrent_id="", torrent_name=title,
         category="Ebooks - Fantasy", author_blob=AUTHOR,
@@ -84,10 +86,10 @@ async def _review(db, tmp_path, *, status=review_storage.STATUS_PENDING, title=T
         db, grab_id=grab_id, qbit_hash="h", state=pipe_storage.PIPE_AWAITING_REVIEW,
     )
     review_dir = tmp_path / "review" / f"grab-{grab_id}"
-    _make_epub(review_dir / f"{title}.epub", title=title, author=AUTHOR)
+    _make_epub(review_dir / filename, title=title, author=AUTHOR)
     review_id = await review_storage.create_entry(
         db, grab_id=grab_id, pipeline_run_id=run_id, staged_path=str(review_dir),
-        book_filename=f"{title}.epub", book_format="epub",
+        book_filename=filename, book_format="epub",
         metadata={"title": title, "author": AUTHOR}, library_slug="books",
     )
     if status != review_storage.STATUS_PENDING:
@@ -205,6 +207,31 @@ class TestCheckLoop:
         _calibre_add(calibre, 9, "Frontline Zero 4", AUTHOR, at=_later(check, 0.2))
 
         assert (await import_check.tick(now=_later(check, 1)))["confirmed"] == 1
+
+    async def test_cwas_filename_title_confirms(self, temp_db, tmp_path, calibre):
+        """A file with no usable metadata: CWA titles the record from the file
+        name and files it under "Unknown" (2026-10-12, the Stormlight PDFs)."""
+        db = await get_db()
+        try:
+            _, _, review_id, _ = await _review(
+                db, tmp_path,
+                filename="No One Dies Today_ Frontline Zero Book 4 [B0DFZ4].epub",
+            )
+            await _deliver(db, review_id, tmp_path / "ingest")
+            check = await _check(db, review_id)
+        finally:
+            await db.close()
+        stem = Path(check.drop_path).stem
+        assert import_check._title_key(stem) != import_check._title_key(TITLE)
+        _calibre_add(calibre, 4840, stem.replace("_", ""), "Unknown", at=_later(check, 0.2))
+
+        assert (await import_check.tick(now=_later(check, 1)))["confirmed"] == 1
+        db = await get_db()
+        try:
+            done = await _check(db, review_id)
+        finally:
+            await db.close()
+        assert done.calibre_book_id == 4840
 
     async def test_one_record_confirms_one_drop(self, temp_db, tmp_path, calibre):
         """Three books by one author dropped seconds apart: a record that
