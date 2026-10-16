@@ -20,6 +20,23 @@ frontend test suite.
 
 **Behaviour changes to know about:**
 
+- **An IRC announce of a book you already own is no longer grabbed**
+  (discovery fix pass S4, ADR-0004 / 0013 amended). Claim-for-owned and
+  format dedup now recognise an owned book by the title identity (below)
+  and any of its contributors: "Dragon Bound" is your "Dragon Bound: A
+  Legacy Building Fantasy", but "Monster's Mercy 3" is not your "Monster's
+  Mercy". An unlinked owned row is still claimed in place; an owned row
+  already linked to MAM, or two or more owned matches, now skip the grab
+  as `owned_same_format` (nothing is written to the owned rows). Before,
+  claim-for-owned ignored linked rows and format dedup let every enabled
+  format through: 77 of 2,002 snatched auto-grabs since April were books
+  already owned (3 wedges in October). It covers IRC announces, incl. a
+  released format-dedup hold and a tentative author's approve; Send to
+  pipeline, the inject API and Manual Grab still grab what you send. A
+  library with active replacement on still grabs owned books (the
+  replacement detector compares editions). A dramatised / full-cast
+  edition is not the plain book. Manual Grab's preview and the Review
+  page's "already owned" banner use the same rule.
 - **Stranded grabs heal themselves** (wave 5a). A grab a restart left
   mid-pipeline (staged / extracted / metadata_done, not moving for 10
   minutes) is re-run from the files qBit already has, at most twice; one
@@ -176,8 +193,8 @@ frontend test suite.
   author's franchise label ("Star Wars Legends") never identifies a book,
   and series position alone decides only when one side has no real title.
   When unsure it says "different". Its case table is
-  `tests/works/test_title_identity.py`. Nothing calls it yet; the grab side
-  and the scan merge move onto it in the next slices. ADR-0028 and ADR-0029
+  `tests/works/test_title_identity.py`. The grab side uses it (above); the
+  scan merge moves onto it next. ADR-0028 and ADR-0029
   (filtered discovery rows, built later), amendments to ADR-0004, 0013 and
   0021, and the new terms in CONTEXT.md.
 - **Every MAM content tag is kept** (wave 5a): an announce carries several

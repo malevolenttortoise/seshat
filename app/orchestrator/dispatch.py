@@ -578,6 +578,7 @@ async def handle_announce(
             skip_filter=False,
             force_fl_wedge=False,
             apply_format_dedup=True,
+            apply_owned_skip=True,
             lookup=lookup,
         )
 
@@ -709,6 +710,7 @@ async def _grab_once_indexed(
                 skip_filter=False,
                 force_fl_wedge=False,
                 apply_format_dedup=True,
+                apply_owned_skip=True,
                 announce_id=announce_id,
                 trust_announce=not indexed,
             )
@@ -870,6 +872,7 @@ async def inject_grab(
     apply_format_dedup: bool = True,
     override_mam_snatched: bool = False,
     apply_claim_for_owned: bool = True,
+    apply_owned_skip: bool = False,
     categories: Sequence[str] = (),
 ) -> DispatchResult:
     """Manually queue a grab by torrent ID.
@@ -906,6 +909,13 @@ async def inject_grab(
     Grab passes it (with `apply_format_dedup=False`): its preview already
     showed the user what they own, so ticking the row is the decision to
     grab anyway (ADR-0023).
+
+    `apply_owned_skip=True` makes an announce of a book already owned
+    in its media type a skip (`owned_same_format`, D7 / ADR-0004
+    amended). Only for grabs that began as an IRC announce: a released
+    format-dedup hold and a tentative author's approve pass it. Grabs
+    the user sends (Send to pipeline, the inject API, Manual Grab) go
+    through.
 
     Live `dry_run` kill-switch (v2.21.2). Unlike the IRC-enabled
     toggle (which doesn't apply here — manual injects are user-
@@ -974,6 +984,7 @@ async def inject_grab(
         apply_format_dedup=apply_format_dedup,
         override_mam_snatched=override_mam_snatched,
         apply_claim_for_owned=apply_claim_for_owned,
+        apply_owned_skip=apply_owned_skip,
     )
 
 
@@ -991,6 +1002,7 @@ async def _dispatch_with_decision(
     apply_format_dedup: bool = True,
     override_mam_snatched: bool = False,
     apply_claim_for_owned: bool = True,
+    apply_owned_skip: bool = False,
     announce_id: Optional[int] = None,
     trust_announce: bool = False,
     lookup: Optional[TorrentLookup] = None,
@@ -1004,8 +1016,10 @@ async def _dispatch_with_decision(
     inject callers can pass False from a UI override checkbox to
     force a grab regardless of in-flight/owned siblings.
 
-    `override_mam_snatched` and `apply_claim_for_owned` — see
-    `inject_grab`.
+    `override_mam_snatched`, `apply_claim_for_owned` and
+    `apply_owned_skip` — see `inject_grab`. The IRC paths
+    (`handle_announce`, a grab held for MAM's index) pass
+    `apply_owned_skip=True`.
 
     `announce_id` and `trust_announce` come from a held grab
     (`_grab_once_indexed`): its announce row already exists, and
@@ -1169,6 +1183,42 @@ async def _dispatch_with_decision(
                 announce_id=announce_id,
             )
 
+        # D7 (ADR-0004 amended): an IRC announce of a book already owned
+        # in this media type is never grabbed. Claim-for-owned took the
+        # one unlinked match above; what's left is an owned row already
+        # linked to MAM, or several owned rows (F24: claim nothing, skip).
+        # Steps aside where active replacement is on: there the grab is
+        # how the replacement detector compares editions.
+        if (
+            apply_owned_skip and claim_result is not None and claim_result.owned
+            and not _replacement_wants_grab(claim_result.owned)
+        ):
+            await grabs_storage.update_announce_decision(
+                db, announce_id=announce_id,
+                action="skip", reason="owned_same_format",
+            )
+            owned = claim_result.owned[0]
+            _log.info(
+                "owned skip: tid=%s %r is already owned (%s book %d %r%s); "
+                "not grabbing",
+                announce.torrent_id, announce.torrent_name[:60],
+                owned.library_slug, owned.book_id, owned.title[:60],
+                f", +{len(claim_result.owned) - 1} more"
+                if len(claim_result.owned) > 1 else "",
+            )
+            _emit(deps, "owned_same_format", {
+                "torrent_id": announce.torrent_id,
+                "library_slug": owned.library_slug,
+                "book_id": owned.book_id,
+                "book_title": owned.title,
+                "owned_matches": len(claim_result.owned),
+            })
+            return DispatchResult(
+                action="skip",
+                reason="owned_same_format",
+                announce_id=announce_id,
+            )
+
         # v2.9.0 — format-priority dedup gate. Runs only when the
         # caller asked us to AND the user has any priority list
         # configured. Three possible outcomes:
@@ -1185,6 +1235,8 @@ async def _dispatch_with_decision(
                 siblings = await lookup_dedup_siblings(
                     dedup_key=dedup_key,
                     media_type=media_type_from_category(announce.category) or "",
+                    title=announce.torrent_name or announce.title or "",
+                    author_blob=announce.author_blob or "",
                 )
             except Exception:
                 _log.exception(
@@ -2558,6 +2610,18 @@ async def _fetch_mam_cover_for_skip(
     except Exception:
         _log.debug("MAM cover fetch failed for tentative tid=%s", torrent_id)
         return None
+
+
+def _replacement_wants_grab(owned) -> bool:
+    """Active replacement is on for a library holding one of the owned
+    matches (read per call, like the kill switches)."""
+    from app.config import load_settings
+    from app.orchestrator.active_replacement import is_replacement_allowed
+
+    settings = load_settings()
+    return any(
+        is_replacement_allowed(m.library_slug, settings) for m in owned
+    )
 
 
 def _emit(deps: DispatcherDeps, event: str, payload: dict) -> None:

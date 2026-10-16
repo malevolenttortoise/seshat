@@ -84,6 +84,8 @@ async def tick(deps: DispatcherDeps) -> int:
             siblings_raw = await lookup_dedup_siblings(
                 dedup_key=hold.dedup_key,
                 media_type=hold.media_type,
+                title=hold.torrent_name or "",
+                author_blob=hold.author_blob or "",
             )
         except Exception:
             _log.exception(
@@ -153,6 +155,9 @@ async def tick(deps: DispatcherDeps) -> int:
                 filetype=hold.book_format,
                 raw_line=f"hold_release:{hold.id}",
                 apply_format_dedup=False,
+                # Still the IRC announce it was: an owned book isn't
+                # grabbed (D7), whatever arrived during the hold.
+                apply_owned_skip=True,
                 categories=await _announce_categories(hold.announce_id),
             )
         except Exception:

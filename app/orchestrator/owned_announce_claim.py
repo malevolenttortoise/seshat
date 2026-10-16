@@ -29,21 +29,25 @@ Match rules — conservative on purpose, bail rather than guess:
     co-author-ordering gap (announce primary differs from the owned
     stored primary). Same normalizer the rest of the codebase trusts
     ("St Arkham" vs "St. Arkham", etc).
-  - Title: canonical `match_key` (apostrophe/diacritic/article
-    folding) from `app.works.normalize` against
-    `normalize_dedup_key(announce.title or torrent_name,
-    author_blob)`. Same key the v2.9.0 format-dedup pass uses, so
-    matches stay consistent across the system.
-  - Owned row gate: `owned=1 AND hidden=0 AND
-    (mam_status IS NULL OR mam_status != 'found')`. Confirmed
-    linkages are never overwritten.
+  - Title: the title identity (`works/title_identity.same_book`,
+    ADR-0028) between the announce title and the owned row's title +
+    series placement, with the author's labels. Format dedup's owned
+    check uses the same lookup (`owned_books_matching`), so the two
+    agree.
+  - Owned row gate: `owned=1 AND hidden=0`. A row already linked to
+    MAM (`mam_status = 'found'`) is never claimed: its linkage is
+    never overwritten.
   - Ambiguity gate: 2+ owned rows match → bail. The user has a
     duplicate library state we shouldn't auto-resolve.
 
-On a positive single match: UPDATE the owned row's
+On a positive single match on an unlinked row: UPDATE the owned row's
 `mam_url`/`mam_torrent_id`/`mam_status='found'`/`mam_category`/
 `source_url`/`mam_last_scanned_at`. Caller emits an event and
 returns a skip from dispatch so no grab row is created.
+
+Anything else that matched (a linked row, 2+ rows, a failed write) is
+returned in `OwnedClaimResult.owned`: for an IRC announce dispatch
+skips it as `owned_same_format` (D7, ADR-0004 amended).
 """
 from __future__ import annotations
 
@@ -57,12 +61,18 @@ _log = logging.getLogger("seshat.orchestrator.owned_announce_claim")
 
 @dataclass
 class OwnedMatch:
-    """A single owned book that could receive a MAM-URL claim."""
+    """An owned book an announce matched by author + title identity."""
     library_slug: str
     book_id: int
     title: str
     mam_status: str
     calibre_id: Optional[int] = None
+    formats: str = ""
+
+    @property
+    def linked(self) -> bool:
+        """Already carries a confirmed MAM linkage (never overwritten)."""
+        return self.mam_status == "found"
 
 
 @dataclass
@@ -70,53 +80,43 @@ class OwnedClaimResult:
     """Outcome of a claim-for-owned attempt.
 
     `claimed=True` ⇒ owned row was updated, caller should return a
-    skip from dispatch. Any other case ⇒ fall through to the normal
-    grab path. `reason` is a short tag for logging / event payload.
+    skip from dispatch. Otherwise `owned` holds the owned rows the
+    announce matched but couldn't claim (already linked, 2+ rows, or
+    the write failed): an IRC announce is skipped for them
+    (`owned_same_format`), a grab the user sent goes ahead. `reason` is
+    a short tag for logging / event payload.
     """
     claimed: bool
     library_slug: str = ""
     book_id: int = 0
     book_title: str = ""
     reason: str = ""
+    owned: tuple[OwnedMatch, ...] = ()
 
 
-async def find_owned_matches(
-    *, title: str, author_blob: str, category: str, libraries=None,
+async def owned_books_matching(
+    *, title: str, author_blob: str, media_type: str, libraries=None,
+    include_linked: bool = True,
 ) -> list[OwnedMatch]:
-    """Return every owned book that could receive a MAM-URL claim.
+    """Every owned book of this media type the announce is (ADR-0028).
 
-    Used by both the announce-time claim hook (which requires
-    exactly-one match) and the review-queue duplicate banner (which
-    surfaces every candidate to the user).
+    Author: the announce's PRIMARY author is any contributor of the
+    owned book (ADR-0013). Title: `same_book` against the owned row's
+    title + series placement, with that author's labels (read from all
+    their books in the library, owned or not). Library scope: only
+    libraries whose `content_type` is `media_type`, so an audiobook is
+    never matched to an ebook row.
 
-    Returns [] when:
-      - title/author missing
-      - the category resolves to an unsupported media type
-      - no library matches the media type
-      - no owned row matches the normalized title+author key
-
-    Library scope is filtered by `content_type` — ebook announces
-    only check ebook libraries, audiobook ↔ audiobook — so we never
-    cross-link an audiobook torrent onto an ebook-only row.
+    `include_linked=False` leaves out rows already linked to MAM (the
+    rows a claim could write to).
     """
     from app import state
     from app.discovery.database import get_db as get_library_db
     from app.metadata.author_names import normalize_author_name
-    from app.orchestrator.format_dedup import (
-        media_type_from_category, normalize_dedup_key,
-    )
+    from app.works.title_identity import TitleRef, author_labels, same_book
 
-    if not title or not author_blob:
+    if not title or not author_blob or media_type not in ("ebook", "audiobook"):
         return []
-
-    media_type = media_type_from_category(category or "")
-    if media_type not in ("ebook", "audiobook"):
-        return []
-
-    dedup_key = normalize_dedup_key(title, author_blob)
-    if not dedup_key:
-        return []
-
     primary_author = author_blob.split(",", 1)[0].strip()
     norm_author = normalize_author_name(primary_author)
     if not norm_author:
@@ -126,9 +126,7 @@ async def find_owned_matches(
         libraries if libraries is not None
         else list(state._discovered_libraries or [])
     )
-    if not libs:
-        return []
-
+    announce = TitleRef(title)
     matches: list[OwnedMatch] = []
     for lib in libs:
         slug = (lib or {}).get("slug")
@@ -141,23 +139,21 @@ async def find_owned_matches(
             _log.debug("owned-match: open %s failed; skipping", slug)
             continue
         try:
-            # v3.0.0 Phase 10 (ADR-0013): contributor-aware — match owned
-            # books where the announce's PRIMARY author is ANY contributor
-            # (book_authors, any position), not just the owned primary. The
-            # title gate below (row_key vs dedup_key, both keyed on the
-            # announce primary) keeps it from over-matching.
+            # Every book the announce primary contributes to (any
+            # position): the owned ones are the candidates, all of them
+            # give the author's labels.
             cur = await db.execute(
                 """
-                SELECT b.id, b.title, b.mam_status, b.calibre_id
+                SELECT b.id, b.title, b.owned, b.hidden, b.mam_status,
+                       b.calibre_id, b.formats, b.series_index,
+                       s.name AS series_name
                 FROM books b
-                WHERE b.owned = 1
-                  AND b.hidden = 0
-                  AND (b.mam_status IS NULL OR b.mam_status != 'found')
-                  AND b.id IN (
-                      SELECT ba.book_id FROM book_authors ba
-                      JOIN authors a ON a.id = ba.author_id
-                      WHERE a.normalized_name = ?
-                  )
+                LEFT JOIN series s ON s.id = b.series_id
+                WHERE b.id IN (
+                    SELECT ba.book_id FROM book_authors ba
+                    JOIN authors a ON a.id = ba.author_id
+                    WHERE a.normalized_name = ?
+                )
                 """,
                 (norm_author,),
             )
@@ -165,25 +161,52 @@ async def find_owned_matches(
         finally:
             await db.close()
 
+        labels = author_labels(r["title"] or "" for r in rows)
         for r in rows:
-            # Recompute the owned-side key against the announce PRIMARY (the
-            # confirmed-contributor), NOT the owned row's stored primary, so
-            # the comparison reduces to a canonical title match once author
-            # membership is established (ADR-0013).
-            row_key = normalize_dedup_key(r["title"] or "", primary_author)
-            if row_key and row_key == dedup_key:
-                matches.append(OwnedMatch(
-                    library_slug=slug,
-                    book_id=int(r["id"]),
-                    title=r["title"] or "",
-                    mam_status=r["mam_status"] or "",
-                    calibre_id=(
-                        int(r["calibre_id"])
-                        if r["calibre_id"] is not None else None
-                    ),
-                ))
-
+            if not r["owned"] or r["hidden"]:
+                continue
+            if not include_linked and r["mam_status"] == "found":
+                continue
+            owned = TitleRef(r["title"] or "", r["series_name"], r["series_index"])
+            if not same_book(announce, owned, labels):
+                continue
+            matches.append(OwnedMatch(
+                library_slug=slug,
+                book_id=int(r["id"]),
+                title=r["title"] or "",
+                mam_status=r["mam_status"] or "",
+                calibre_id=(
+                    int(r["calibre_id"]) if r["calibre_id"] is not None else None
+                ),
+                formats=r["formats"] or "",
+            ))
     return matches
+
+
+async def find_owned_matches(
+    *, title: str, author_blob: str, category: str, libraries=None,
+    include_linked: bool = False,
+) -> list[OwnedMatch]:
+    """Owned books the announce is, by its MAM category's media type.
+
+    Used by the announce-time claim (`include_linked=True`: it needs
+    the linked rows to skip the grab) and the review-queue duplicate
+    banner (the default: only rows a "Claim torrent for owned" could
+    write to).
+
+    Returns [] when title/author is missing, the category isn't an
+    ebook / audiobook one, no library has that media type, or nothing
+    matches.
+    """
+    from app.orchestrator.format_dedup import media_type_from_category
+
+    return await owned_books_matching(
+        title=title,
+        author_blob=author_blob,
+        media_type=media_type_from_category(category or "") or "",
+        libraries=libraries,
+        include_linked=include_linked,
+    )
 
 
 async def write_claim_to_owned(
@@ -249,6 +272,7 @@ async def try_claim_announce_for_owned(
         author_blob=author_blob,
         category=announce.category or "",
         libraries=libraries,
+        include_linked=True,
     )
     if not matches:
         return OwnedClaimResult(claimed=False, reason="no_owned_match")
@@ -259,10 +283,14 @@ async def try_claim_announce_for_owned(
             len(matches), announce.torrent_id, title[:60],
         )
         return OwnedClaimResult(
-            claimed=False, reason="ambiguous_multi_match",
+            claimed=False, reason="ambiguous_multi_match", owned=tuple(matches),
         )
 
     m = matches[0]
+    if m.linked:
+        return OwnedClaimResult(
+            claimed=False, reason="owned_already_linked", owned=(m,),
+        )
     ok = await write_claim_to_owned(
         library_slug=m.library_slug,
         book_id=m.book_id,
@@ -271,7 +299,7 @@ async def try_claim_announce_for_owned(
     )
     if not ok:
         return OwnedClaimResult(
-            claimed=False, reason="write_failed",
+            claimed=False, reason="write_failed", owned=(m,),
         )
     _log.info(
         "claim-for-owned: claimed tid=%s for owned book id=%d slug=%s "
@@ -291,6 +319,7 @@ __all__ = [
     "OwnedMatch",
     "OwnedClaimResult",
     "find_owned_matches",
+    "owned_books_matching",
     "write_claim_to_owned",
     "try_claim_announce_for_owned",
 ]

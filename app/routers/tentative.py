@@ -350,6 +350,9 @@ async def approve(
         author_blob=row.author_blob,
         raw_line=f"tentative_approve:id={tentative_id}",
         override_mam_snatched=override_mam_snatched,
+        # An IRC announce held for the author decision: a book already
+        # owned in its media type isn't grabbed (D7).
+        apply_owned_skip=True,
         categories=row.categories or (),
     )
 
