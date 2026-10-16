@@ -144,6 +144,25 @@ CASES = [
      "Rapport: Friendship, Solidarity, Communion, Empath", None, None, True,
      "a truncated title (fuzzy ≥ 0.92)"),
     ("", None, None, "", None, None, False, "nothing to compare"),
+    # ── A shared half with the other halves disagreeing (build, 2026-10-16) ──
+    ("To Love a Goddess: Spring", None, 1, "To Love a Goddess: Summer", None, 1, False,
+     "two owned books sharing a head"),
+    ("Old Guns: A Military Sci-Fi Adventure", None, 1,
+     "Rogue Guns: A Military Sci-Fi Adventure", "Old Guns", 3, False,
+     "the hyphen in 'Sci-Fi' is not a subtitle separator"),
+    ("In Her Name: The Last War Trilogy", "In Her Name: The Last War", 1,
+     "In Her Name: Redemption Trilogy", "In Her Name: Redemption", 1, False,
+     "two owned omnibuses: 'Trilogy' tails still have to agree"),
+    ("Spider-Man Adventures", None, None, "Spider", None, None, False,
+     "'Spider' + '-Man Adventures' is not a title and a description"),
+    ("The Cruel Prince - Deleted Scenes", None, None,
+     "The Wicked King - Deleted Scenes", None, None, False, "a shared tail"),
+    ("Dean Koontz's Frankenstein, Book One: Prodigal Son", "Dean Koontz's Frankenstein", None,
+     "Frankenstein: Prodigal Son: A Novel", "Frankenstein", 1, True,
+     "a shared tail, one head inside the other"),
+    ("Shadow Voices: 300 years of Irish Genre Fiction, A History in Stories", None, None,
+     "Shadow Voices : 300 Years of Irish Genre Fiction", None, None, True,
+     "a shared head, one tail inside the other"),
 ]
 
 
@@ -173,9 +192,16 @@ class TestLabels:
 
     def test_a_label_never_identifies(self):
         a = TitleRef("Abyss: Star Wars Legends")
-        b = TitleRef("Crucible: Star Wars Legends")
-        assert same_book(a, b) is True          # the shared tail alone
+        b = TitleRef("Star Wars Legends")
+        assert same_book(a, b) is True          # the tail is b's whole title
         assert same_book(a, b, author_labels(self.TITLES)) is False
+
+    def test_a_shared_half_needs_the_other_halves_to_agree(self):
+        """Measured 2026-10-16: of 39 library pairs joined only by a shared
+        head or tail, ~27 were different books."""
+        assert same_book(
+            TitleRef("Abyss: Star Wars Legends"), TitleRef("Crucible: Star Wars Legends"),
+        ) is False
 
 
 class TestParseTitle:

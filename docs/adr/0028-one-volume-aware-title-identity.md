@@ -43,7 +43,9 @@ Calibre-sync absorb (and its ownership flip), claim-for-owned, and format dedup'
 4. **Title keys:** the whole title without parentheticals, generic subtitles (": A … Novel / Adventure / LitRPG"),
    volume words, articles and acronym dots; "Series: Title" → Title and "Title: Series N" → Title when the other part
    is a series name. A title part one author shares across 3+ different titles ("Star Wars Legends") is a label,
-   never identity.
+   never identity. Two "Head: Tail" titles sharing only one half are the same only when their other halves agree
+   (one missing, one inside the other, or near-identical): of 39 library pairs joined by a half alone, ~27 were
+   different books ("To Love a Goddess: Spring" / "… Summer").
 5. **Series position alone decides only when one side has no real title** ("Wild Wastes 3" = "Southern Storm"
    [Wild Wastes #3]). Two different real titles on one position are different books.
 6. ISBN equality still wins outright.
@@ -61,7 +63,9 @@ The same parser reads "(Series Book N)" out of a title at creation (G171) and Ha
 - The rules live in one case table (`tests/works/test_title_identity.py`); a new failure becomes a case before a fix.
   Built 2026-10-16: the module agrees with the design's measured prototype on 24,173 same-author title pairs and on
   2,002 snatched auto-grabs except where the build tuned it (Book 0, same series without an index, "A … Mystery"
-  subtitles, dramatised editions).
+  subtitles, dramatised editions, a shared half needing the other halves to agree, the hyphen in "Sci-Fi" no longer
+  read as a subtitle separator): 20 of the pairs changed (17 to "different", each read), 77 owned re-grabs
+  still caught.
 - Hardcover, OpenLibrary, Kobo, ibdb and Google Books keep no cache, so on 77% of the list's sources the rule is
   measured only by the first re-scan after the build.
 - Not covered yet: the cross-library works matcher (`works/matcher.py`), acquisition link-back and the import check

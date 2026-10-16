@@ -41,6 +41,9 @@ The rules, strongest first:
      "Title: Series N" -> Title when the other part is a series name.
      A title part one author shares across 3+ different titles ("Star
      Wars Legends") is a label (`author_labels`), never an identity.
+     Two "Head: Tail" titles that share only one half are the same only
+     when the other halves agree ("Star Trek Deep Space Nine - The
+     Siege" is not "… - Wrath of the Prophets").
   5. Series position alone decides only when one side has no real title
      ("Wild Wastes 3" = "Southern Storm" [Wild Wastes #3]).
 
@@ -191,9 +194,10 @@ _GENERIC_WORDS = (
     r"collection|edition|harem|progression|apocalypse|opera|odyssey|"
     r"cultivation|isekai|sci-fi|scifi|space\s+opera"
 )
-# ": A Witchlands Novel", " - A LitRPG Adventure" (to the end).
+# ": A Witchlands Novel", " - A LitRPG Adventure" (to the end). Only after
+# a real separator: the hyphen in "Sci-Fi" or "Spider-Man" is not one.
 _RX_GENERIC_SUBTITLE = re.compile(
-    r"(?i)\s*[:\-]\s*(?:(?:a|an|the)\s+)?(?:[\w'&+-]+\s+){0,6}"
+    r"(?i)(?:\s*:\s*|\s+-\s+)(?:(?:a|an|the)\s+)?(?:[\w'&+-]+\s+){0,6}"
     r"(?:" + _GENERIC_WORDS + r")s?\b.*$"
 )
 # A whole segment that is only such a description: "A Witchlands Novel",
@@ -370,6 +374,25 @@ def _parsed(title: str) -> tuple[tuple[Optional[str], bool], ParsedTitle]:
 # ─── Keys ─────────────────────────────────────────────────────
 
 
+@dataclass(frozen=True)
+class _Keys:
+    """How one title may match another.
+
+    `whole`: the whole title without a generic subtitle, and the title
+    with colons as spaces. `head` / `tail`: for a "Head: Tail" title, the
+    two halves on their own when they stand as a title (2+ words, the
+    other half is a series name, or the volumes already agree; never a
+    series name, never an author's label; a tail never a generic
+    description), else "". `head_text` / `tail_text`: the halves as
+    written, for checking that the half not matched agrees.
+    """
+    whole: frozenset
+    head: str
+    tail: str
+    head_text: str
+    tail_text: str
+
+
 @lru_cache(maxsize=65536)
 def _title_keys(
     proper: str,
@@ -378,42 +401,70 @@ def _title_keys(
     labels: frozenset,
     position_agrees: bool,
     other_series: Optional[str],
-) -> frozenset:
-    """Every key a title may match under.
-
-    Always the whole title (without a generic subtitle) and the title
-    with colons as spaces. For a "Head: Tail" title also the head and
-    the tail on their own, when they stand as a title: 2+ words, or the
-    other part is a series name, or the volumes already agree; never a
-    series name, never an author's label.
-    """
+) -> _Keys:
     p = proper.lower()
-    whole = _key_text(_without_description(p))
-    flat = _key_text(p.replace(":", " "))
-    keys = {k for k in (whole, flat) if k and len(k) >= 3}
-    names = {series_key(s) for s in (series, other_series) if s} - {""}
-    parts: set[str] = set()
+    whole = frozenset(
+        k for k in (_key_text(_without_description(p)), _key_text(p.replace(":", " ")))
+        if k and len(k) >= 3
+    )
     segments = [s for s in _RX_SEGMENTS.split(p) if s.strip()]
-    if len(segments) >= 2:
-        head = _key_text(segments[0])
-        rest = [s for s in segments[1:] if not _RX_BARE_VOLUME.match(s)]
-        tail = _key_text(_without_description(rest[0])) if rest else ""
-        tail_is_series = bool(tail and series_key(tail) in names)
-        head_is_series = bool(head and series_key(head) in names)
-        if tail and not _RX_GENERIC_ALONE.match(tail) and (
-            len(tail.split()) >= 2 or head_is_series or position_agrees
-        ):
-            parts.add(tail)
-        if head and (
-            len(head.split()) >= 2 or tail_is_series or same_core or position_agrees
-        ):
-            parts.add(head)
-    parts = {
-        k for k in parts
-        if len(k) >= 3 and k not in labels
-        and (same_core or series_key(k) not in names)
-    }
-    return frozenset(keys | parts)
+    if len(segments) < 2:
+        return _Keys(whole, "", "", "", "")
+    names = {series_key(s) for s in (series, other_series) if s} - {""}
+    head_text = _key_text(segments[0])
+    rest = [s for s in segments[1:] if not _RX_BARE_VOLUME.match(s)]
+    tail_text = _key_text(_without_description(rest[0])) if rest else ""
+    tail_is_series = bool(tail_text and series_key(tail_text) in names)
+    head_is_series = bool(head_text and series_key(head_text) in names)
+
+    def usable(k: str) -> bool:
+        return (
+            len(k) >= 3 and k not in labels
+            and (same_core or series_key(k) not in names)
+        )
+
+    tail = tail_text if tail_text and not _RX_GENERIC_ALONE.match(tail_text) and (
+        len(tail_text.split()) >= 2 or head_is_series or position_agrees
+    ) and usable(tail_text) else ""
+    head = head_text if head_text and (
+        len(head_text.split()) >= 2 or tail_is_series or same_core or position_agrees
+    ) and usable(head_text) else ""
+    return _Keys(whole, head, tail, head_text, tail_text)
+
+
+def _close(x: str, y: str) -> bool:
+    """Equal, or a near-identical spelling ("unauthorized" / "unauthorised",
+    a truncated title)."""
+    return x == y or (
+        min(len(x), len(y)) >= 8 and SequenceMatcher(None, x, y).ratio() >= 0.92
+    )
+
+
+def _halves_agree(x: str, y: str) -> bool:
+    """The halves not matched: either missing, one inside the other, or
+    close. "Star Trek DS9 - The Siege" vs "… - Wrath of the Prophets"
+    share a head but these disagree."""
+    if not x or not y or _close(x, y):
+        return True
+    return f" {x} " in f" {y} " or f" {y} " in f" {x} "
+
+
+def _titles_match(ka: _Keys, kb: _Keys) -> bool:
+    if any(_close(x, y) for x in ka.whole for y in kb.whole):
+        return True
+    # One side's head or tail is the other side's whole title:
+    # "Dragon Bound" = "Dragon Bound: A Legacy Building Fantasy".
+    for halves, whole in (((ka.head, ka.tail), kb.whole), ((kb.head, kb.tail), ka.whole)):
+        if any(_close(h, w) for h in halves if h for w in whole):
+            return True
+    # Half to half, only when the other halves agree.
+    for x, x_other in ((ka.head, ka.tail_text), (ka.tail, ka.head_text)):
+        if not x:
+            continue
+        for y, y_other in ((kb.head, kb.tail_text), (kb.tail, kb.head_text)):
+            if y and _close(x, y) and _halves_agree(x_other, y_other):
+                return True
+    return False
 
 
 def _no_real_title(proper: str, series: Optional[str]) -> bool:
@@ -530,15 +581,10 @@ def same_book(a: TitleRef, b: TitleRef, labels: frozenset = frozenset()) -> bool
     same_core = pa.core is not None and pa.core == pb.core
     ka = _title_keys(pa.proper, a.series, same_core, labels, position_agrees, b.series)
     kb = _title_keys(pb.proper, b.series, same_core, labels, position_agrees, a.series)
-    if ka & kb:
+    if _titles_match(ka, kb):
         return True
-    if position_agrees and (
+    return position_agrees and (
         _no_real_title(pa.proper, a.series) or _no_real_title(pb.proper, b.series)
-    ):
-        return True
-    return any(
-        min(len(x), len(y)) >= 8 and SequenceMatcher(None, x, y).ratio() >= 0.92
-        for x in ka for y in kb
     )
 
 
