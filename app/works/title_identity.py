@@ -403,9 +403,10 @@ def _title_keys(
     other_series: Optional[str],
 ) -> _Keys:
     p = proper.lower()
+    # Any length: "It" is a title. The 3-character floor is for halves.
     whole = frozenset(
         k for k in (_key_text(_without_description(p)), _key_text(p.replace(":", " ")))
-        if k and len(k) >= 3
+        if k
     )
     segments = [s for s in _RX_SEGMENTS.split(p) if s.strip()]
     if len(segments) < 2:

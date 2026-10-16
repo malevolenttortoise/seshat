@@ -144,6 +144,8 @@ CASES = [
      "Rapport: Friendship, Solidarity, Communion, Empath", None, None, True,
      "a truncated title (fuzzy ≥ 0.92)"),
     ("", None, None, "", None, None, False, "nothing to compare"),
+    ("It", None, None, "It", "Stephen King standalone", None, True, "a 2-letter title"),
+    ("It", None, None, "Us", None, None, False, "two 2-letter titles"),
     # ── A shared half with the other halves disagreeing (build, 2026-10-16) ──
     ("To Love a Goddess: Spring", None, 1, "To Love a Goddess: Summer", None, 1, False,
      "two owned books sharing a head"),
