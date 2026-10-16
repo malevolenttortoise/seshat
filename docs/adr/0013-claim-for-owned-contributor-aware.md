@@ -36,3 +36,13 @@ Asymmetric (announce-primary, not the full announce authorlist) is the deliberat
 - [0008](0008-book-authors-authoritative-on-reads.md) — owned for every contributor; this extends that to the claim path.
 - [0009](0009-merge-union-prune-overlap.md) — write-time contributor-set semantics (merge/prune); claim-for-owned is the announce-time companion.
 - [0012](0012-drop-books-author-id-position-0-canonical.md) — position 0 = primary; the owned-side match reads contributors from `book_authors`.
+
+## Amendment (2026-10-12, discovery fix pass)
+
+- **The title gate is the title identity** ([0028](0028-one-volume-aware-title-identity.md)), not `match_key`
+  equality: "Dragon Bound" now matches owned "Dragon Bound: A Legacy Building Fantasy", and different volumes never
+  match. Measured on 1,946 snatched auto-grabs: 0 wrong matches by eye, so the lone-wrong-match risk accepted above
+  does not grow.
+- **An owned row already linked to MAM is no longer a grab:** the announce is skipped as `owned_same_format`
+  ([0004](0004-format-priority-dedup.md), amended) without writing anything; the linkage on file is never overwritten.
+  Two or more owned matches still never claim, and now skip the grab too.

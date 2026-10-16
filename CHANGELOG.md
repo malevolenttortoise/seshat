@@ -167,6 +167,19 @@ frontend test suite.
 
 ### Added
 
+- **One title identity** (discovery fix pass S1, ADR-0028):
+  `app/works/title_identity.same_book` decides whether two titles are the
+  same book: numbers written in either title must agree ("Monster's Mercy"
+  is not "Monster's Mercy 3"), a series index counts only within its own
+  series name, a comic is never the prose book and a dramatised edition
+  never the plain one, a generic subtitle (": A LitRPG Adventure") or an
+  author's franchise label ("Star Wars Legends") never identifies a book,
+  and series position alone decides only when one side has no real title.
+  When unsure it says "different". Its case table is
+  `tests/works/test_title_identity.py`. Nothing calls it yet; the grab side
+  and the scan merge move onto it in the next slices. ADR-0028 and ADR-0029
+  (filtered discovery rows, built later), amendments to ADR-0004, 0013 and
+  0021, and the new terms in CONTEXT.md.
 - **Every MAM content tag is kept** (wave 5a): an announce carries several
   ("Crime, Mystery, Thriller/Suspense"), the filter already read them all,
   but announces, tentative torrents and grabs kept only the first (in

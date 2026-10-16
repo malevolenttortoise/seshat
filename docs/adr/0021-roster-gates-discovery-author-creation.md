@@ -149,3 +149,16 @@ prune-linkage operate on two rows that already exist and mint nothing.
   heal union now admits roster members only.
 - [0015](0015-source-id-aware-author-identity.md) — the
   `resolve_or_create_author` matching ladder the gate sits at the end of.
+
+## Amendment (2026-10-12, discovery fix pass)
+
+- **Scan eligibility is narrower than the roster.** An author is scan-eligible when they own a book in the library,
+  or the operator put them on the allow list (autobrr import, manual, manual move, tentative approve), and their
+  "List missing books" switch is on. An author on the allow list only through grab auto-train (`coauthor_train`, the
+  legacy `auto_train`) still passes the MAM filter and is still linked as a contributor on discovered books (the
+  roster for linking is unchanged), but is not scanned: on the reference install those authors held 1,105 missing
+  books, Rachel Caine 160 of them, none owned.
+- **One gate on every scan path.** Only the scheduled lookup used `scan_eligible_authors`; the author page, the
+  multi-select scan, the book scan and Full Re-Scan scanned anyone with a `book_authors` row (nine non-roster authors
+  were scanned on 2026-09-29). The check now sits inside `lookup_author` and the Goodreads worker's merge, and the UI
+  says why an author was skipped.

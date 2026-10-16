@@ -35,3 +35,18 @@ A 60s hold-release scheduler re-evaluates due holds against fresh state; a hold 
 ## Related
 
 - [0003](0003-bundle-dedup-prefer-duplicates.md) — bundle dedup; deliberately does **not** use this gate.
+
+## Amendment (2026-10-12, discovery fix pass)
+
+- **An IRC announce of a book already owned in that media type is never grabbed**, enabled format or not (Mark,
+  D7). Until now rule (a) "owned sibling blocks" ran only in the disabled branch, so every epub / m4b announce of an
+  owned book went through unless claim-for-owned caught it, and the claim skips rows already linked to MAM: 77 of
+  1,946 snatched auto-grabs were owned books. The new skip (`owned_same_format`) runs in dispatch after claim-for-owned
+  and before this gate; a held announce re-checks it at release.
+- It covers IRC announces only. Send to pipeline, the inject / external-grab API and Manual Grab
+  ([0023](0023-manual-grab-upload-rules-and-user-gates.md)) are the user's choice and go through.
+- It steps aside in a library with active replacement on: there an owned book is still grabbed so the replacement
+  detector can compare editions.
+- Rule (a)'s owned lookup now matches by the title identity ([0028](0028-one-volume-aware-title-identity.md)) and any
+  contributor (as claim-for-owned, [0013](0013-claim-for-owned-contributor-aware.md)), not `match_key` on the primary
+  author.
