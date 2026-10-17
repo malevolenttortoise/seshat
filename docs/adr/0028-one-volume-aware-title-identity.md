@@ -36,16 +36,21 @@ Calibre-sync absorb (and its ownership flip), claim-for-owned, and format dedup'
    Mercy 3", "Splinter Angel: Book 3", "13 ARC"), a series parenthetical ("(The Shadow Saga Book 3)"), a subtitle
    ("Book Two of the Legends of Dune"), Hardcover's "Book 06.0 - " prefix. Both titles carry numbers and share none →
    different. A number other than 0 or 1 on one side only must appear somewhere on the other side, unless the other
-   side's only number is a series index in a differently named series, or the other side names the same series with
-   no index (then the titles decide, as long as the title isn't just the series name).
+   side's only number is a series index in a differently named series. When the other side gives no index at all, the
+   titles decide if this side's numbers are only "(Series Book N)" positions ("Fracture (Galaxy's Edge: Legacies Book
+   10)" = "Fracture"), or if the other side names the same series; never when the title is just a series name. A
+   number in the title proper stays strict ("Monster's Mercy 3" ≠ "Monster's Mercy"). "#2 (of 5)" counts issues.
 3. **A `series_index` is compared only within the same normalised series name.** Hardcover's reading-order
    meta-series ("Enderverse: Publication Order" #7) never blocks an identical title.
-4. **Title keys:** the whole title without parentheticals, generic subtitles (": A … Novel / Adventure / LitRPG"),
-   volume words, articles and acronym dots; "Series: Title" → Title and "Title: Series N" → Title when the other part
-   is a series name. A title part one author shares across 3+ different titles ("Star Wars Legends") is a label,
-   never identity. Two "Head: Tail" titles sharing only one half are the same only when their other halves agree
-   (one missing, one inside the other, or near-identical): of 39 library pairs joined by a half alone, ~27 were
-   different books ("To Love a Goddess: Spring" / "… Summer").
+4. **Title keys:** the whole title without parentheticals, trailing descriptions (": A … Novel / Adventure /
+   LitRPG", "A Tor Original", a "Series, Book N" part after them; only a last part, so "Star Wars: Tales of the Jedi -
+   Redemption" keeps its title), volume words, articles and acronym dots; "Series: Title" → Title and "Title:
+   Series N" → Title when the other part is a series name (so "Tithe: A Modern Faerie Tale" is Tithe, not an omnibus).
+   In a title in parts the title is the last real part ("Star Trek: New Frontier: Blind Man's Bluff"). A title part
+   one author shares across 3+ different titles ("Star Wars Legends") is a label, never identity. Two titles sharing
+   only one part are the same only when their other parts agree (missing, the same, or, one part each, one inside
+   the other): of 39 library pairs joined by a shared half alone, ~27 were different books ("To Love a Goddess:
+   Spring" / "… Summer"), and "Star Trek: New Frontier" is not its book "Blind Man's Bluff".
 5. **Series position alone decides only when one side has no real title** ("Wild Wastes 3" = "Southern Storm"
    [Wild Wastes #3]). Two different real titles on one position are different books.
 6. ISBN equality still wins outright.
@@ -56,16 +61,26 @@ The same parser reads "(Series Book N)" out of a title at creation (G171) and Ha
 
 - **The bias is toward "different".** A wrong "same" loses a missing book (merge side) or a wanted volume (grab
   side), silently; a wrong "different" makes a visible duplicate (merge side) or a wasted snatch that review catches
-  (grab side). Measured on the Amazon replay: ~102 lost books recreated, ~60 wrong merges undone, ~22–35 new
-  duplicates; on the grab history: all 77 owned re-grabs caught, 0 wanted volumes blocked (by eye). The same trade as
+  (grab side). Measured at design on the Amazon replay: ~102 lost books recreated, ~60 wrong merges undone, ~22–35
+  new duplicates; at build (2026-10-16 copies, old merge vs new on 6,257 cached Amazon books): 104 books absent from
+  the library recreated, 179 merges undone and 50 moved to the right row, 147 dropped books merged into their row,
+  ~36 new duplicates; on the Goodreads worker's 188 "existing" merges: 66 created instead (~59 lost books, ~7
+  duplicates of retitled books); on the grab history: all 77 owned re-grabs caught, 0 wanted volumes blocked (by
+  eye). The same trade as
   [ADR-0003](0003-bundle-dedup-prefer-duplicates.md). **Don't loosen a number rule to remove a duplicate** without
   re-running both replays: the duplicates are the price of not losing books.
 - The rules live in one case table (`tests/works/test_title_identity.py`); a new failure becomes a case before a fix.
-  Built 2026-10-16: the module agrees with the design's measured prototype on 24,173 same-author title pairs and on
-  2,002 snatched auto-grabs except where the build tuned it (Book 0, same series without an index, "A … Mystery"
-  subtitles, dramatised editions, a shared half needing the other halves to agree, the hyphen in "Sci-Fi" no longer
-  read as a subtitle separator): 20 of the pairs changed (17 to "different", each read), 77 owned re-grabs
-  still caught.
+  Built 2026-10-16 from the design's measured prototype, then tuned on the build's replays (Book 0, positions vs no
+  index, "A … Mystery" and "A Tor Original" descriptions, dramatised editions, parts that must agree, the last part as
+  the title, descriptions only as a last part, nested parentheses, issue counts). Against the prototype on 24,173
+  same-author title pairs of the reference library: 265 change, 252 of them to "different" (tie-in sub-series and
+  comic issues the prototype joined through a shared first or middle part, ~136 of them "Star Wars: Tales of the
+  Jedi"), each read; the grab history is unchanged (77 owned re-grabs caught, no wanted volume blocked).
+- The scan merge finds candidates through `TitleIndex` (a shared title word, word start or series position) and lets
+  `same_book` decide; on the reference library it finds exactly what checking every title finds, and it made the
+  Amazon replay ~7× faster (Peter David 5.9s → 0.5s). The "BookTitle: SeriesName ⇒ omnibus" merge guard is gone: it
+  contradicted rule 4, and on the Amazon replay all 68 of its calls were single books ("Tithe: A Modern Faerie
+  Tale"), which the old merge then dropped and the new one would have created as fake omnibus rows.
 - Hardcover, OpenLibrary, Kobo, ibdb and Google Books keep no cache, so on 77% of the list's sources the rule is
   measured only by the first re-scan after the build.
 - Not covered yet: the cross-library works matcher (`works/matcher.py`), acquisition link-back and the import check

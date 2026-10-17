@@ -87,12 +87,15 @@ class ParsedTitle:
     Hardcover "Book N - " prefix. `tags` are the (series name, number)
     pairs written in series parentheticals and subtitles; a name of
     None means the number belongs to the title itself ("(Book 2)").
-    `core` is the title's own volume number, or None.
+    `core` is the title's own volume number, or None. `position_only`:
+    every number the title carries sits in a "(Series Book N)"
+    parenthetical, so it says where the book sits, not which book it is.
     """
     proper: str
     tags: tuple[tuple[Optional[str], float], ...]
     core: Optional[float]
     prefix_volume: Optional[float]
+    position_only: bool = False
 
 
 # ─── Numbers ──────────────────────────────────────────────────
@@ -194,22 +197,36 @@ _GENERIC_WORDS = (
     r"collection|edition|harem|progression|apocalypse|opera|odyssey|"
     r"cultivation|isekai|sci-fi|scifi|space\s+opera"
 )
-# ": A Witchlands Novel", " - A LitRPG Adventure" (to the end). Only after
-# a real separator: the hyphen in "Sci-Fi" or "Spider-Man" is not one.
+# ": A Witchlands Novel", " - A LitRPG Adventure": a description that is
+# the title's last part. Only after a real separator (the hyphen in
+# "Sci-Fi" or "Spider-Man" is not one), and never across another one:
+# "Star Wars: Tales of the Jedi - Redemption" keeps its title.
 _RX_GENERIC_SUBTITLE = re.compile(
     r"(?i)(?:\s*:\s*|\s+-\s+)(?:(?:a|an|the)\s+)?(?:[\w'&+-]+\s+){0,6}"
-    r"(?:" + _GENERIC_WORDS + r")s?\b.*$"
+    r"(?:" + _GENERIC_WORDS + r")s?\b(?:(?!\s*:\s|\s+-\s+).)*$"
 )
 # A whole segment that is only such a description: "A Witchlands Novel",
-# "A Magical Papillon Mystery" (two books sharing it are not one book).
+# "A Magical Papillon Mystery" (two books sharing it are not one book),
+# or a publisher's "A Tor Original" / "An Audible Original".
 _RX_GENERIC_ALONE = re.compile(
-    r"(?i)^(?:(?:a|an|the)\s+)?(?:[\w'&+-]+\s+){0,4}"
-    r"(?:" + _GENERIC_WORDS + r"|trilogy)s?$"
+    r"(?i)^(?:(?:(?:a|an|the)\s+)?(?:[\w'&+-]+\s+){0,4}"
+    r"(?:" + _GENERIC_WORDS + r")s?|(?:a|an)\s+(?:[\w'&+-]+\s+){0,3}original)$"
+)
+_RX_PUBLISHER_ORIGINAL = re.compile(
+    r"(?i)(?:\s*:\s*|\s+-\s+)(?:a|an)\s+(?:[\w'&+-]+\s+){0,3}original\s*$"
 )
 # ", Book 3 of the Expanse" / ": Volume Two" at the end.
 _RX_BOOK_OF = re.compile(
     r"(?i)\s*[:\-,]?\s*(?:book|volume|vol\.?|part|episode)\s+(?:\d+|[a-z]+)"
     r"(?:\s+of\s+(?:the\s+)?[\w' -]+)?\s*$"
+)
+# A last part that is a series and its volume, after a title and a
+# description: "…: A LitRPG Adventure: He Who Fights with Monsters, Book
+# 13". Only as a third part or later: in "Dune: House Corrino, Vol. 2"
+# the last part is the title.
+_RX_SERIES_VOLUME_PART = re.compile(
+    r"(?i)(?:\s*:\s*|\s+-\s+)(?:(?!\s*:\s|\s+-\s+).)*?(?:,\s*|\s+)"
+    r"(?:book|volume|vol\.?|part|episode)\s+(?:\d+(?:\.\d+)?|[a-z]+)\s*$"
 )
 _PLACEHOLDER_TITLES = frozenset({
     "untitled", "tba", "tbd", "untitled novel", "title tbd", "book",
@@ -225,6 +242,8 @@ def _clean(title: str) -> str:
     t = t.replace("—", "-").replace("–", "-")
     t = re.sub(r"(?<=\S)--(?=\S)", "-", t)
     t = re.sub(r"(?<=\w)-\s+", " - ", t)            # "Prism Academy- Prophecy"
+    for _ in range(2):                                 # "(Supergirl (1996-2003))"
+        t = re.sub(r"\(([^()]*)\(([^()]*)\)([^()]*)\)", r"(\1 \2 \3)", t)
     t = re.sub(r"\([^)]*$", "", t)                    # unclosed trailing "(..."
     t = re.sub(r"(?i),\s*(the|a|an)\s*$", "", t)     # "Demon King, The"
     t = re.sub(                                        # "T.A.P." -> "TAP"
@@ -245,7 +264,17 @@ def _key_text(t: str) -> str:
 
 
 def _without_description(t: str) -> str:
-    return _RX_BOOK_OF.sub("", _RX_GENERIC_SUBTITLE.sub("", t))
+    """Drop trailing descriptions, one part at a time ("Apocalypse
+    Cultivator: The Complete Series: A Cultivation Novel")."""
+    for _ in range(4):
+        stripped = _RX_GENERIC_SUBTITLE.sub("", _RX_PUBLISHER_ORIGINAL.sub("", t))
+        if len(_RX_SEGMENTS.findall(stripped)) >= 2:
+            stripped = _RX_SERIES_VOLUME_PART.sub("", stripped)
+        stripped = _RX_BOOK_OF.sub("", stripped)
+        if stripped == t:
+            break
+        t = stripped
+    return t
 
 
 # ─── Series names ─────────────────────────────────────────────
@@ -297,8 +326,9 @@ def _parenthetical_tags(text: str) -> list[tuple[Optional[str], float]]:
             if not m:
                 continue
             v = _match_number(m)
-            if v is not None:
-                tags.append((part[:m.start()].strip(" ,:-") or None, v))
+            name = part[:m.start()].strip(" ,:-") or None
+            if v is not None and (name or "").lower() != "of":   # "#2 (of 5)" counts issues
+                tags.append((name, v))
     return tags
 
 
@@ -361,8 +391,15 @@ def parse_title(title: str) -> ParsedTitle:
     proper = re.sub(r"\[[^\]]*\]", " ", proper)
     proper = re.sub(r"\s+", " ", proper).strip()
     core = _core_volume(proper, paren_tags, prefix)
-    tags = tuple(paren_tags) + tuple(_subtitle_tags(proper))
-    return ParsedTitle(proper=proper, tags=tags, core=core, prefix_volume=prefix)
+    sub_tags = _subtitle_tags(proper)
+    return ParsedTitle(
+        proper=proper, tags=tuple(paren_tags) + tuple(sub_tags), core=core,
+        prefix_volume=prefix,
+        position_only=(
+            core is None and not sub_tags and bool(paren_tags)
+            and all(name for name, _ in paren_tags)
+        ),
+    )
 
 
 @lru_cache(maxsize=16384)
@@ -379,18 +416,20 @@ class _Keys:
     """How one title may match another.
 
     `whole`: the whole title without a generic subtitle, and the title
-    with colons as spaces. `head` / `tail`: for a "Head: Tail" title, the
-    two halves on their own when they stand as a title (2+ words, the
-    other half is a series name, or the volumes already agree; never a
-    series name, never an author's label; a tail never a generic
-    description), else "". `head_text` / `tail_text`: the halves as
-    written, for checking that the half not matched agrees.
+    with colons as spaces. For a title in parts ("Head: Middle: Tail",
+    generic descriptions and bare "Book 3" parts dropped) also `head`
+    (the first part) and `tail` (the last: in "Star Trek: New Frontier:
+    Blind Man's Bluff" the title is the last part) on their own, when
+    they stand as a title (2+ words, the rest is a series name, or the
+    volumes already agree; never a series name or an author's label),
+    else "". `head_rest` / `tail_rest`: the other parts, for checking
+    that what isn't matched agrees.
     """
     whole: frozenset
     head: str
     tail: str
-    head_text: str
-    tail_text: str
+    head_rest: tuple
+    tail_rest: tuple
 
 
 @lru_cache(maxsize=65536)
@@ -403,20 +442,25 @@ def _title_keys(
     other_series: Optional[str],
 ) -> _Keys:
     p = proper.lower()
-    # Any length: "It" is a title. The 3-character floor is for halves.
+    # Any length: "It" is a title. The 3-character floor is for parts.
     whole = frozenset(
         k for k in (_key_text(_without_description(p)), _key_text(p.replace(":", " ")))
         if k
     )
-    segments = [s for s in _RX_SEGMENTS.split(p) if s.strip()]
-    if len(segments) < 2:
-        return _Keys(whole, "", "", "", "")
+    parts: list[str] = []
+    for i, segment in enumerate(s for s in _RX_SEGMENTS.split(p) if s.strip()):
+        if i and _RX_BARE_VOLUME.match(segment):
+            continue
+        text = _key_text(_without_description(segment) if i else segment)
+        if text and not (i and _RX_GENERIC_ALONE.match(text)):
+            parts.append(text)
+    if len(parts) < 2:
+        return _Keys(whole, "", "", (), ())
     names = {series_key(s) for s in (series, other_series) if s} - {""}
-    head_text = _key_text(segments[0])
-    rest = [s for s in segments[1:] if not _RX_BARE_VOLUME.match(s)]
-    tail_text = _key_text(_without_description(rest[0])) if rest else ""
-    tail_is_series = bool(tail_text and series_key(tail_text) in names)
-    head_is_series = bool(head_text and series_key(head_text) in names)
+    head_text, tail_text = parts[0], parts[-1]
+    head_rest, tail_rest = tuple(parts[1:]), tuple(parts[:-1])
+    rest_is_series = series_key(" ".join(head_rest)) in names
+    front_is_series = series_key(" ".join(tail_rest)) in names
 
     def usable(k: str) -> bool:
         return (
@@ -424,30 +468,38 @@ def _title_keys(
             and (same_core or series_key(k) not in names)
         )
 
-    tail = tail_text if tail_text and not _RX_GENERIC_ALONE.match(tail_text) and (
-        len(tail_text.split()) >= 2 or head_is_series or position_agrees
+    tail = tail_text if (
+        len(tail_text.split()) >= 2 or front_is_series or position_agrees
     ) and usable(tail_text) else ""
-    head = head_text if head_text and (
-        len(head_text.split()) >= 2 or tail_is_series or same_core or position_agrees
+    head = head_text if (
+        len(head_text.split()) >= 2 or rest_is_series or same_core or position_agrees
     ) and usable(head_text) else ""
-    return _Keys(whole, head, tail, head_text, tail_text)
+    return _Keys(whole, head, tail, head_rest, tail_rest)
 
 
 def _close(x: str, y: str) -> bool:
     """Equal, or a near-identical spelling ("unauthorized" / "unauthorised",
     a truncated title)."""
-    return x == y or (
-        min(len(x), len(y)) >= 8 and SequenceMatcher(None, x, y).ratio() >= 0.92
-    )
-
-
-def _halves_agree(x: str, y: str) -> bool:
-    """The halves not matched: either missing, one inside the other, or
-    close. "Star Trek DS9 - The Siege" vs "… - Wrath of the Prophets"
-    share a head but these disagree."""
-    if not x or not y or _close(x, y):
+    if x == y:
         return True
-    return f" {x} " in f" {y} " or f" {y} " in f" {x} "
+    if min(len(x), len(y)) < 8:
+        return False
+    m = SequenceMatcher(None, x, y)
+    return m.real_quick_ratio() >= 0.92 and m.quick_ratio() >= 0.92 and m.ratio() >= 0.92
+
+
+def _rests_agree(x: tuple, y: tuple) -> bool:
+    """The parts not matched: missing on a side, the same, or — one part
+    each — one inside the other ("Dean Koontz's Frankenstein" /
+    "Frankenstein"). "Star Trek DS9 - The Siege" and "… - Wrath of the
+    Prophets" share a head but these disagree; so do "Star Trek: New
+    Frontier" and "Star Trek: New Frontier: Blind Man's Bluff"."""
+    if not x or not y:
+        return True
+    if len(x) == 1 and len(y) == 1:
+        a, b = x[0], y[0]
+        return _close(a, b) or f" {a} " in f" {b} " or f" {b} " in f" {a} "
+    return len(x) == len(y) and all(_close(a, b) for a, b in zip(x, y))
 
 
 def _titles_match(ka: _Keys, kb: _Keys) -> bool:
@@ -455,15 +507,15 @@ def _titles_match(ka: _Keys, kb: _Keys) -> bool:
         return True
     # One side's head or tail is the other side's whole title:
     # "Dragon Bound" = "Dragon Bound: A Legacy Building Fantasy".
-    for halves, whole in (((ka.head, ka.tail), kb.whole), ((kb.head, kb.tail), ka.whole)):
-        if any(_close(h, w) for h in halves if h for w in whole):
+    for ends, whole in (((ka.head, ka.tail), kb.whole), ((kb.head, kb.tail), ka.whole)):
+        if any(_close(e, w) for e in ends if e for w in whole):
             return True
-    # Half to half, only when the other halves agree.
-    for x, x_other in ((ka.head, ka.tail_text), (ka.tail, ka.head_text)):
+    # Part to part, only when the other parts agree.
+    for x, x_rest in ((ka.head, ka.head_rest), (ka.tail, ka.tail_rest)):
         if not x:
             continue
-        for y, y_other in ((kb.head, kb.tail_text), (kb.tail, kb.head_text)):
-            if y and _close(x, y) and _halves_agree(x_other, y_other):
+        for y, y_rest in ((kb.head, kb.head_rest), (kb.tail, kb.tail_rest)):
+            if y and _close(x, y) and _rests_agree(x_rest, y_rest):
                 return True
     return False
 
@@ -507,26 +559,33 @@ def _series_numbers(
 
 
 def _lone_number_differs(
-    mine: set[float], mine_tags, my_series: Optional[str], my_proper: str,
+    mine: set[float], parsed: ParsedTitle, my_series: Optional[str],
     other_series: Optional[str], other_index: Optional[float],
 ) -> bool:
     """A written number on this side only: does it make them different?
 
     It must appear as the other side's index, unless that index is in a
-    differently named series, or the other side names one of this
-    side's tagged series with no index (the titles decide then).
+    differently named series. When the other side gives no index at all,
+    the titles decide if this side's numbers are only "(Series Book N)"
+    positions, or the other side names one of this side's tagged series
+    — as long as this side's title isn't just a series name.
     """
     big = mine - _UNNUMBERED
     if not big:
         return False
-    my_names = {series_key(s) for s, _ in mine_tags if s}
+    tag_names = [s for s, _ in parsed.tags if s]
+    my_names = {series_key(s) for s in tag_names}
     if my_series:
         my_names.add(series_key(my_series))
     if other_index is None:
-        tagged = {series_key(s) for s, _ in mine_tags if s}
+        if _no_real_title(parsed.proper, None) or any(
+            _no_real_title(parsed.proper, s) for s in [*tag_names, other_series] if s
+        ):
+            return True
+        tagged = {series_key(s) for s in tag_names}
         return not (
-            other_series and series_key(other_series) in tagged
-            and not _no_real_title(my_proper, other_series)
+            parsed.position_only
+            or (other_series and series_key(other_series) in tagged)
         )
     if other_index in big:
         return False
@@ -552,13 +611,9 @@ def same_book(a: TitleRef, b: TitleRef, labels: frozenset = frozenset()) -> bool
     # Numbers written in either title, whatever series they name.
     if na and nb and not (na & nb):
         return False
-    if na and not nb and _lone_number_differs(
-        na, pa.tags, a.series, pa.proper, b.series, b_index,
-    ):
+    if na and not nb and _lone_number_differs(na, pa, a.series, b.series, b_index):
         return False
-    if nb and not na and _lone_number_differs(
-        nb, pb.tags, b.series, pb.proper, a.series, a_index,
-    ):
+    if nb and not na and _lone_number_differs(nb, pb, b.series, a.series, a_index):
         return False
 
     # Volumes within one series name.
