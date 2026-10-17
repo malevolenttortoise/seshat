@@ -16,7 +16,8 @@ import pytest
 
 from app.discovery.lookup import _norm_consensus_series
 from app.works.title_identity import (
-    TitleRef, author_labels, parse_title, same_book, series_key,
+    TitleIndex, TitleRef, author_labels, book_prefix, parse_title, same_book,
+    series_in_title, series_key,
 )
 
 # (title a, series a, index a, title b, series b, index b, same?, why)
@@ -282,3 +283,64 @@ def test_index_may_come_as_text_or_int():
     assert same_book(a, TitleRef("Splashdown", "Pinwheel", "2")) is True
     assert same_book(a, TitleRef("Splashdown", "Pinwheel", 3)) is False
 
+
+class TestSeriesInTitle:
+    """G171 / F14: the series a title names, for a source that gave none."""
+
+    @pytest.mark.parametrize("title,expected", [
+        ("Contracts & Cats (Meow: Magical Emporium of Wares #1)",
+         ("Meow: Magical Emporium of Wares", 1.0)),
+        ("Shadow Puppets (The Shadow Saga Book 3)", ("The Shadow Saga", 3.0)),
+        ("Kingdom's Quest (Kingdom Series, Book 5)", ("Kingdom Series", 5.0)),
+        ("No Quarter (Unification War Trilogy, Book 2) (Black Fleet Saga 8)",
+         ("Black Fleet Saga", 8.0)),
+        ("Splinter Angel: Book 3", ("Splinter Angel", 3.0)),
+        ("Splashdown (Book 2)", None),                  # no series named
+        ("Dragon Bound", None),
+        ("Redemption (1998) #2 (of 5)", None),          # an issue count
+        ("Ghost Fleet (2034)", None),                   # a year
+    ])
+    def test_cases(self, title, expected):
+        assert series_in_title(title) == expected
+
+
+@pytest.mark.parametrize("title,expected", [
+    ("Book 06.0 - Blood Rites", ("Blood Rites", 6.0)),
+    ("Book 19.5 – White Wolf - Demon Accords Series", ("White Wolf - Demon Accords Series", 19.5)),
+    ("Bookworm", ("Bookworm", None)),
+    ("Book 3", ("Book 3", None)),
+])
+def test_book_prefix(title, expected):
+    assert book_prefix(title) == expected
+
+
+class TestTitleIndex:
+    def _index(self):
+        index = TitleIndex()
+        for i, (t, s, n) in enumerate([
+            ("Southern Storm", "Wild Wastes", 3),
+            ("Monster's Mercy", "Monster's Mercy", 1),
+            ("Truthwitch", "The Witchlands", 1),
+            ("Rapport: Friendship, Solidarity, Communion, Empath", None, None),
+        ]):
+            index.add(TitleRef(t, s, n), i)
+        return index
+
+    def test_finds_what_same_book_accepts(self):
+        index = self._index()
+        assert index.find_all(TitleRef("Truthwitch: The Witchlands", "The Witchlands", 1)) == [2]
+        assert index.find_all(TitleRef("Wild Wastes 3", "Wild Wastes", 3)) == [0]     # by position
+        assert index.find_all(
+            TitleRef("Rapport: Friendship, Solidarity, Communion, Empathy")) == [3]   # by spelling
+        assert index.find_all(TitleRef("Monster's Mercy 3", "Monster's Mercy", 3)) == []
+
+    def test_same_answers_as_checking_every_title(self):
+        """The index is only a prefilter: on the case table it finds
+        exactly what `same_book` over every title finds."""
+        refs = [TitleRef(a, sa, ia) for a, sa, ia, *_ in CASES] + \
+               [TitleRef(b, sb, ib) for _, _, _, b, sb, ib, *_ in CASES]
+        index = TitleIndex()
+        for i, r in enumerate(refs):
+            index.add(r, i)
+        for r in refs:
+            assert index.find_all(r) == [i for i, o in enumerate(refs) if same_book(r, o)]

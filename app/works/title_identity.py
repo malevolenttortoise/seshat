@@ -668,11 +668,110 @@ def author_labels(titles: Iterable[str]) -> frozenset:
     return frozenset(k for k, rest in partners.items() if len(rest) >= 3)
 
 
+# ─── Series written in a title (G171) and Hardcover's prefix ──
+
+_RX_RAW_BOOK_PREFIX = re.compile(r"(?i)^\s*book\s+(\d+(?:\.\d+)?)\s*[-\u2013\u2014:]\s*")
+
+
+def book_prefix(title: str) -> tuple[str, Optional[float]]:
+    """Hardcover's "Book 06.0 - Blood Rites" -> ("Blood Rites", 6.0);
+    any other title -> (title, None)."""
+    m = _RX_RAW_BOOK_PREFIX.match(title or "")
+    if not m or not title[m.end():].strip():
+        return title, None
+    return title[m.end():].strip(), float(m.group(1))
+
+
+def series_in_title(title: str) -> Optional[tuple[str, float]]:
+    """The series and number a title names when its source gave none
+    (F14 / G171): "Title (Series Book N)", "(Series #N)", "(Series, Book
+    N)" (the last such parenthetical), or "Series: Book N". A number is
+    required; "(Book 2)" alone names no series."""
+    t = _clean(title)
+    named = [(name, v) for name, v in _parenthetical_tags(t) if name]
+    if named:
+        return named[-1]
+    proper = re.sub(r"\s+", " ", _RX_PAREN.sub(" ", t)).strip()
+    segments = _RX_SEGMENTS.split(proper)
+    if len(segments) == 2 and segments[0].strip():
+        m = _RX_BARE_VOLUME.match(segments[1])
+        if m:
+            v = _match_number(m)
+            if v is not None:
+                return segments[0].strip(), v
+    return None
+
+
+# ─── An index of one author's titles ──────────────────────────
+
+_INDEX_STOPWORDS = frozenset({
+    "the", "a", "an", "of", "and", "in", "to", "on", "for", "with", "at",
+    "by", "from", "or", "is",
+})
+
+
+class TitleIndex:
+    """Titles to look a new title up against, `same_book` deciding.
+
+    `same_book` runs only on candidates: titles sharing a title word (or
+    the first 4 letters of one, for spelling variants) or a series
+    position with the title looked up. Every title `same_book` can call
+    the same shares one of those, so this finds what checking every
+    title would, at a fraction of the cost on a big catalogue.
+    """
+
+    def __init__(self, labels: frozenset = frozenset()):
+        self.labels = labels
+        self._entries: list[tuple[TitleRef, object]] = []
+        self._by_token: dict[str, list[int]] = defaultdict(list)
+
+    @staticmethod
+    def _tokens(ref: TitleRef) -> set[str]:
+        _, parsed = _parsed(ref.title or "")
+        tokens: set[str] = set()
+        for word in _key_text(parsed.proper.lower()).split():
+            if word in _INDEX_STOPWORDS:
+                continue
+            tokens.add(word)
+            if len(word) >= 5:
+                tokens.add("~" + word[:4])
+        numbers = _series_numbers(
+            parsed.tags, ref.series, _as_index(ref.index), parsed.core,
+        )
+        for name, values in numbers.items():
+            for v in values:
+                tokens.add(f"#{name}#{v}")
+        return tokens
+
+    def add(self, ref: TitleRef, item: object = None) -> None:
+        position = len(self._entries)
+        self._entries.append((ref, item))
+        for token in self._tokens(ref):
+            self._by_token[token].append(position)
+
+    def find_all(self, ref: TitleRef) -> list[object]:
+        """Items whose titles are the same book as `ref`, in the order
+        they were added."""
+        seen: set[int] = set()
+        for token in self._tokens(ref):
+            seen.update(self._by_token.get(token, ()))
+        return [
+            self._entries[i][1] for i in sorted(seen)
+            if same_book(ref, self._entries[i][0], self.labels)
+        ]
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+
 __all__ = [
     "ParsedTitle",
+    "TitleIndex",
     "TitleRef",
     "author_labels",
+    "book_prefix",
     "parse_title",
     "same_book",
+    "series_in_title",
     "series_key",
 ]

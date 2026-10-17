@@ -98,6 +98,22 @@ def _norm_series(name: str) -> str:
     return re.sub(r'\s+', ' ', n).strip()
 
 
+# A reading-order meta-series groups another series' books by when to
+# read them ("Enderverse: Publication Order", "The Shadowhunter Chronicles:
+# Publication Order", "Discworld (Chronological)"). Filed under one, a book
+# loses its real series and position, and its index there disagrees with
+# every other source's (the 2026-10 discovery audit: 61 missing rows in 14
+# such series). F9: never picked.
+_RX_READING_ORDER = re.compile(
+    r"(?i)\b(?:reading|publication|chronological|release|recommended)\s+order\b"
+    r"|\bchronolog(?:y|ical)\b"
+)
+
+
+def _is_reading_order(name: str) -> bool:
+    return bool(_RX_READING_ORDER.search(name or ""))
+
+
 def _pick_best_series(candidates: list, owned_norms: set) -> dict:
     """Pick the best series candidate for a Hardcover book.
 
@@ -115,6 +131,7 @@ def _pick_best_series(candidates: list, owned_norms: set) -> dict:
          whose owned-side series isn't known (new authors, missing
          Calibre tags).
     """
+    candidates = [c for c in candidates if not _is_reading_order(c["name"])]
     if not candidates:
         return None
 
@@ -764,8 +781,13 @@ class HardcoverSource(BaseSource):
                     elif pkey == "google" and gb_id is None:
                         gb_id = str(ext_id).strip()
 
+                # "Book 06.0 - Blood Rites": the number is the series
+                # position, not part of the title (F9; all 15 Dresden
+                # Files novels were listed twice this way).
+                from app.works.title_identity import book_prefix
+                title, prefix_index = book_prefix(book.get("title", ""))
                 br = BookResult(
-                    title=book.get("title", ""),
+                    title=title,
                     isbn=edition.get("isbn_13"),
                     cover_url=cover,
                     pub_date=pub_date,
@@ -785,6 +807,7 @@ class HardcoverSource(BaseSource):
                 
                 # Check series info: try book_series relation first, then cached_featured_series
                 sname = None; spos = None
+                only_reading_order = False
                 bs = book.get("book_series")
                 if bs and isinstance(bs, list) and len(bs) > 0:
                     candidates = []
@@ -802,10 +825,14 @@ class HardcoverSource(BaseSource):
                         # candidate matching what Calibre already
                         # has, fall back to the colon/word-count
                         # heuristic when there's no owned-side hint.
+                        # None when every candidate is a reading-order
+                        # meta-series: the book comes in standalone and
+                        # other sources place it.
                         best = _pick_best_series(candidates, owned_norms)
-                        sname = best["name"]
-                        spos = best["position"]
-                        if len(candidates) > 1:
+                        sname = best["name"] if best else None
+                        spos = best["position"] if best else None
+                        only_reading_order = best is None
+                        if best and len(candidates) > 1:
                             hint = " (owned-match)" if owned_norms and any(
                                 _norm_series(sname) == on or _norm_series(sname) in on or on in _norm_series(sname)
                                 for on in owned_norms
@@ -818,18 +845,18 @@ class HardcoverSource(BaseSource):
                             )
                         else:
                             logger.debug(f"  Hardcover: '{book.get('title')}' series from book_series → '{sname}' #{spos}")
-                if not sname:
+                if not sname and not only_reading_order:
                     series = book.get("series")
                     if series and isinstance(series, list) and len(series) > 0:
                         s = series[0]
-                        if isinstance(s, dict) and s.get("name"):
+                        if isinstance(s, dict) and s.get("name") and not _is_reading_order(s["name"]):
                             sname = s["name"]
                             spos = s.get("position")
                             logger.debug(f"  Hardcover: '{book.get('title')}' series from cached → '{sname}' #{spos}")
                 
                 if sname:
                     br.series_name = sname
-                    br.series_index = spos
+                    br.series_index = spos if spos is not None else prefix_index
                     if sname not in series_map:
                         series_map[sname] = SeriesResult(name=sname, books=[])
                     series_map[sname].books.append(br)

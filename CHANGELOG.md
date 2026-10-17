@@ -37,6 +37,37 @@ frontend test suite.
   replacement detector compares editions). A dramatised / full-cast
   edition is not the plain book. Manual Grab's preview and the Review
   page's "already owned" banner use the same rule.
+- **Source scans no longer merge one volume into another or drop books
+  as duplicates** (discovery fix pass S2, G170). The scan merge decides
+  "same book?" with the title identity: different volumes, and two real
+  titles a series numbers the same, stay apart; a book is skipped only
+  when it is a book already listed, never because its title merely
+  normalises like another one ("SKIP (norm dup)" is gone). Replayed on
+  Amazon's cache (6,257 books, 2026-10-16 copies): 104 books missing from
+  the library would now be listed, 179 wrong merges are undone and 50
+  move to the right book (all six Monster Hunter International books
+  had landed on their neighbours), 147 books the old merge dropped merge
+  into their own row, and about 36 come in as visible duplicates. The
+  Goodreads worker's merges replay the same way (66 of 188 "existing"
+  ones are real books it lost). A "Title: Series Name" listing is that
+  book, no longer a separate "omnibus" row. Merges are also much faster
+  for big authors (Peter David's Amazon merge 5.9s → 0.5s).
+- **A standalone book whose title names its series is filed in it**
+  (G171): "Contracts & Cats (Meow: Magical Emporium of Wares #1)" or
+  "Splinter Angel: Book 3" from a source that gives no series now lands
+  in that series with that number (an existing series of the author's
+  first); the title is kept as the source wrote it.
+- **OpenLibrary no longer creates missing books** (D11): it still
+  matches and enriches books other sources list (IDs, covers, language).
+- **Hardcover**: "Book 06.0 - Blood Rites" titles come in as "Blood
+  Rites", #6 (every owned Dresden Files novel was listed a second time),
+  and a reading-order / publication-order / chronological series
+  ("Enderverse: Publication Order") is never picked; a book with only
+  such a series comes in standalone.
+- **The Goodreads worker recognises a book it already has by the title
+  identity** (wave-4 trial item (b)): "The Tower Strive: A
+  Tower-Climbing LitRPG Adventure" is the owned "The Tower Strive", and
+  a later volume is no longer "known" because an earlier one is.
 - **Stranded grabs heal themselves** (wave 5a). A grab a restart left
   mid-pipeline (staged / extracted / metadata_done, not moving for 10
   minutes) is re-run from the files qBit already has, at most twice; one
@@ -193,8 +224,8 @@ frontend test suite.
   author's franchise label ("Star Wars Legends") never identifies a book,
   and series position alone decides only when one side has no real title.
   When unsure it says "different". Its case table is
-  `tests/works/test_title_identity.py`. The grab side uses it (above); the
-  scan merge moves onto it next. ADR-0028 and ADR-0029
+  `tests/works/test_title_identity.py`. The grab side and the scan merge
+  use it (above). ADR-0028 and ADR-0029
   (filtered discovery rows, built later), amendments to ADR-0004, 0013 and
   0021, and the new terms in CONTEXT.md.
 - **Every MAM content tag is kept** (wave 5a): an announce carries several

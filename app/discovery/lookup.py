@@ -1542,21 +1542,12 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
             f"SELECT id, title, source_url, series_id, series_index, source, "
             f"pub_date, expected_date, description, isbn, "
             f"(SELECT author_id FROM book_authors WHERE book_id=books.id AND position=0) AS author_id, "
+            f"(SELECT name FROM series WHERE id=books.series_id) AS series_name, "
             f"is_omnibus, hidden, owned, language, field_source_map "
             f"FROM books WHERE id IN "
             f"(SELECT book_id FROM book_authors WHERE author_id IN ({id_ph}))",
             all_author_ids,
         )).fetchall()
-        existing = {_normalize(r["title"]) for r in rows}
-        # Build an O(1) prefilter: normalized-title → row. The book-merge
-        # loops below used to linearly scan all `rows` for each incoming
-        # source book, which was O(n*m) — 200 owned × 200 source = 40k
-        # fuzzy-match calls per author. Most matches hit on exact
-        # normalized equality (the first check inside _fuzzy_match), so
-        # checking the dict first short-circuits the common case. The
-        # linear loop stays as the fallback for substring and sequence-
-        # matching cases the dict can't catch.
-        rows_by_norm = {_normalize(r["title"]): r for r in rows}
         # ISBN prefilter: ISBN → row for O(1) merge by ISBN. Strongest
         # dedup signal — if a source's book has the same ISBN as an
         # existing row, it's definitely the same book regardless of title.
@@ -1606,23 +1597,9 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                 continue
             cross_isbn_owners.setdefault(isbn, r["author_id"])
 
-        # Same-series-position prefilter: `(series_id, series_index)` →
-        # row. Used to dedup incoming books against existing ones that
-        # share a slot in the same series but carry a different title
-        # convention ("Remnant II" existing, "Remnant Book 2" incoming).
-        # Without this the fuzzy title match fails on the low-similarity
-        # pair and the new row inserts as a duplicate.
-        rows_by_series_pos: dict[tuple[int, float], dict] = {}
-        for r in rows:
-            if r["series_id"] is not None and r["series_index"] is not None:
-                rows_by_series_pos[(r["series_id"], float(r["series_index"]))] = r
-
-        # Incoming series-name → existing series_id lookup. Populated
-        # from the series table for this author + linked authors so
-        # the same-series-position dedup above can resolve `sr.name`
-        # to a numeric id without calling `_ensure_series` (which
-        # would eagerly upsert the series row — wrong in `owned_only`
-        # mode, where we intentionally defer series creation).
+        # Series name (as stored, and normalized) → this author's series
+        # id: G171 files a standalone book whose title names its series
+        # into an existing series first (`_series_for_title`).
         author_series_id_by_name: dict[str, int] = {}
         for sr_row in await (await db.execute(
             f"SELECT id, name FROM series WHERE author_id IN ({id_ph})",
@@ -1636,56 +1613,86 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
             if norm:
                 author_series_id_by_name.setdefault(norm, sr_row["id"])
 
-        # Series names for this author — used by the omnibus guard to
-        # distinguish "BookTitle: SeriesName" (omnibus) from
-        # "BookTitle: Subtitle" (dedup candidate).
-        author_series_rows = await (await db.execute(
-            "SELECT name FROM series WHERE author_id = ?", (author_id,)
-        )).fetchall()
-        author_series_norms = {
-            _normalize(r["name"]): r["name"] for r in author_series_rows if r["name"]
-        }
-
-        def _extract_series_position(title: str) -> tuple[int, float] | None:
-            """Parse "<series> N: <title>" or "<title> (<series> #N)" forms
-            and resolve the prefix/parenthetical against this author's
-            known series. Returns (series_id, series_index) on success
-            or None if nothing parseable resolves to a known series.
-
-            Backstops the cross-format duplicate failure: Goodreads's
-            parenthetical form and Hardcover/Kobo's prefix form
-            normalize to disjoint tokens, but both encode the same
-            series-position pair which we use as the dedup key.
-            """
-            candidates: list[tuple[str, float]] = []
-            mp = _RX_SERIES_PREFIX_TITLE.match(title)
-            if mp:
-                candidates.append((mp.group(1).strip(), float(mp.group(2))))
-            mq = _RX_SERIES_PAREN_TITLE.search(title)
-            if mq:
-                candidates.append((mq.group(1).strip(), float(mq.group(2))))
-            for s_name, s_idx in candidates:
-                sid = (
-                    author_series_id_by_name.get(s_name.lower())
-                    or author_series_id_by_name.get(_norm_consensus_series(s_name))
-                )
-                if sid:
-                    return (sid, s_idx)
-            return None
-
-        # Second pass: index existing rows by title-extracted position
-        # too, so Goodreads-inserted standalone rows like "The Expanse
-        # (Paths of Akashic #5)" — which carry NULL in series_id /
-        # series_index because Goodreads emits them as standalone but
-        # encode the position in the title — can still be matched as
-        # the canonical row when Hardcover/Kobo arrives later in the
-        # same scan with "Paths of Akashic 5: The Expanse".
-        # `setdefault` keeps the explicitly-stored entry winning if
-        # both forms exist for the same row.
+        # ── The title identity (ADR-0028) decides every match ────────
+        # Candidates come from the index (a shared title word or series
+        # position), `same_book` decides; ISBN equality still wins
+        # outright. Rows this merge creates join the index, so a second
+        # copy of a book in one result is skipped, never created twice.
+        # Replaces the exact-normalized dict, SAME-SERIES-POSITION,
+        # the fuzzy loop, SERIES-POSITION MATCH and the "norm dup" skip,
+        # which merged different volumes into each other and dropped
+        # books that existed nowhere else (G170).
+        from app.works.title_identity import TitleIndex, TitleRef, author_labels
+        incoming_titles = [bk.title for sr in result.series for bk in sr.books]
+        incoming_titles += [bk.title for bk in result.books]
+        title_index = TitleIndex(author_labels(
+            [r["title"] or "" for r in rows] + incoming_titles,
+        ))
         for r in rows:
-            extracted = _extract_series_position(r["title"] or "")
-            if extracted is not None:
-                rows_by_series_pos.setdefault(extracted, r)
+            title_index.add(
+                TitleRef(r["title"] or "", r["series_name"], r["series_index"]), r,
+            )
+
+        def _find_existing(bk, series_name):
+            """The row `bk` is (ISBN first, then the title identity), or
+            None. A row created earlier in this merge comes back as its
+            `{"_created": True, ...}` marker."""
+            if bk.isbn:
+                clean_isbn = bk.isbn.strip().replace("-", "")
+                if clean_isbn in rows_by_isbn:
+                    row = rows_by_isbn[clean_isbn]
+                    logger.debug(f"    ISBN MERGE: '{bk.title}' → '{row['title']}' (isbn={clean_isbn})")
+                    return row
+            found = []
+            for row in title_index.find_all(TitleRef(bk.title, series_name, bk.series_index)):
+                # An omnibus is never the single book (v2.2.0 UAT,
+                # "Right of Retribution: Compilation: The Starting Point").
+                if _is_omnibus(bk.title) != _is_omnibus(row["title"]):
+                    logger.debug(
+                        f"    IDENTITY MATCH REJECTED (omnibus_mismatch): "
+                        f"'{bk.title}' vs '{row['title']}'"
+                    )
+                    continue
+                found.append(row)
+            if not found:
+                return None
+            # Existing rows before ones this merge created; among them an
+            # exact normalized title first.
+            norm = _normalize(bk.title)
+            found.sort(key=lambda row: (
+                bool(row.get("_created")) if isinstance(row, dict) else False,
+                _normalize(row["title"] or "") != norm,
+            ))
+            return found[0]
+
+        def _note_created(book_id, bk, series_name, series_index):
+            title_index.add(
+                TitleRef(bk.title, series_name, series_index),
+                {"_created": True, "id": book_id, "title": bk.title},
+            )
+
+        # OpenLibrary matches and enriches but never creates a missing
+        # book (D11: a third of its sampled rows belonged).
+        creates_books = not owned_only and source_name != "openlibrary"
+
+        async def _series_for_title(name: str) -> int:
+            """This author's series called `name` (as stored or
+            normalized), created if none (G171)."""
+            sid = (
+                author_series_id_by_name.get(name.lower())
+                or author_series_id_by_name.get(_norm_consensus_series(name))
+            )
+            if sid is not None:
+                return sid
+            cur = await db.execute(
+                "INSERT INTO series (name, author_id, last_lookup_at) VALUES (?,?,?)",
+                (name, author_id, time.time()),
+            )
+            sid = cur.lastrowid
+            author_series_id_by_name[name.lower()] = sid
+            if _norm_consensus_series(name):
+                author_series_id_by_name.setdefault(_norm_consensus_series(name), sid)
+            return sid
 
         # Source priority: Goodreads can overwrite series from any other source
         SOURCE_PRIORITY = {"mam": 1, "goodreads": 2, "amazon": 3, "hardcover": 4, "kobo": 5, "ibdb": 6, "google_books": 6, "manual": 7, "import": 7, "calibre": 0}
@@ -1890,10 +1897,10 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
             # were inserted before _RX_OMNIBUS matched their title — or
             # imported from Calibre, which never sets the flag — get
             # caught here on the next merge. Only check the EXISTING
-            # title, never the incoming. The upstream
-            # `_fuzzy_match_blocked` guard rejects omnibus/non-omnibus
-            # mismatches before they reach this code, but be defensive
-            # anyway: if a fuzzy match somehow accepted an omnibus
+            # title, never the incoming. `_find_existing` rejects
+            # omnibus/non-omnibus mismatches before they reach this
+            # code, but be defensive anyway: if a match somehow
+            # accepted an omnibus
             # incoming onto a non-omnibus existing row (or vice versa),
             # we should NOT then stamp the existing row with the
             # incoming's classification — that flips the wrong row's
@@ -2103,99 +2110,13 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                 if _is_series_ref_title(bk.title): continue
                 if "English" in languages and _looks_foreign(bk.title): continue
                 if exclude_audiobooks and _is_audiobook(bk.title): continue
-                norm = _normalize(bk.title)
-                matched_row = rows_by_norm.get(norm)
-                # v2.30.1 — volume-conflict guard on the exact-normalized
-                # match path. `_normalize` strips "Book N" / "Volume N"
-                # subtitles via `_RX_GENERIC_SUBTITLE`, so every volume
-                # of a series can collapse to the same key (e.g.
-                # "AnimeCon Harem: Book 1/2/3" all → "animecon harem")
-                # and merge into the lowest-numbered existing row. The
-                # fuzzy path already ran this check; mirror it here so
-                # both paths reject series-sibling collisions
-                # symmetrically. Caught 2026-05-25 on the Fortysixtyfour
-                # scan where Books 2 and 3 from 5 sources merged into
-                # Mark's owned Book 1.
-                if matched_row is not None:
-                    reason = _fuzzy_match_blocked(bk, matched_row)
-                    if reason:
-                        logger.debug(
-                            f"    EXACT MATCH REJECTED ({reason}): "
-                            f"'{bk.title}' vs '{matched_row['title']}'"
-                        )
-                        matched_row = None
-                # ISBN merge: strongest dedup signal — same ISBN = same book
-                if matched_row is None and bk.isbn:
-                    clean_isbn = bk.isbn.strip().replace("-", "")
-                    if clean_isbn in rows_by_isbn:
-                        matched_row = rows_by_isbn[clean_isbn]
-                        logger.debug(f"    ISBN MERGE: '{bk.title}' → '{matched_row['title']}' (isbn={clean_isbn})")
-                # Same-series-position merge — strong signal that's
-                # independent of title. Two books sharing `(series_id,
-                # series_index)` are the same book; catches
-                # "Remnant II" vs "Remnant Book 2" where fuzzy title
-                # match fails because the conventions differ too much.
-                # Runs BEFORE the fuzzy fallback so the stronger signal
-                # wins before we consult title similarity at all.
-                if matched_row is None and bk.series_index is not None:
-                    existing_sid = (
-                        author_series_id_by_name.get(sr.name.lower())
-                        or author_series_id_by_name.get(
-                            _norm_consensus_series(sr.name)
-                        )
+                matched_row = _find_existing(bk, sr.name)
+                if isinstance(matched_row, dict) and matched_row.get("_created"):
+                    logger.debug(
+                        f"    SKIP (same book as one this result created): "
+                        f"'{bk.title}' ~ '{matched_row['title']}'"
                     )
-                    if existing_sid is not None:
-                        pos_key = (existing_sid, float(bk.series_index))
-                        candidate = rows_by_series_pos.get(pos_key)
-                        if candidate is not None:
-                            matched_row = candidate
-                            logger.debug(
-                                f"    SAME-SERIES-POSITION MERGE: "
-                                f"'{bk.title}' → '{matched_row['title']}' "
-                                f"(series_id={existing_sid}, "
-                                f"index={bk.series_index})"
-                            )
-                if matched_row is None:
-                    for r in rows:
-                        if _fuzzy_match(bk.title, r["title"]):
-                            # Multi-signal reject. Subsumes the old
-                            # series-index-only check and adds (a)
-                            # omnibus/standalone mismatch and (b)
-                            # title-extracted index when a side lacks
-                            # an explicit series_index. See
-                            # `_fuzzy_match_blocked` for the rationale.
-                            reason = _fuzzy_match_blocked(bk, r)
-                            if reason:
-                                logger.debug(
-                                    f"    FUZZY MATCH REJECTED ({reason}): "
-                                    f"'{bk.title}' vs '{r['title']}'"
-                                )
-                                continue
-                            matched_row = r
-                            break
-                # ── Omnibus guard: "BookTitle: SeriesName" detection ──
-                # If the fuzzy match found a candidate via colon-prefix
-                # (the title before ":" matches an existing book) AND the
-                # suffix after ":" matches a known series name for this
-                # author, this is an omnibus — not a dedup merge. Reject
-                # the match so it falls through to the INSERT path with
-                # is_omnibus=1. Example: "Otherlife Dreams: The Selfless
-                # Hero Trilogy" → prefix "Otherlife Dreams" matches owned
-                # book, suffix "The Selfless Hero Trilogy" matches series
-                # → omnibus, don't merge into the owned book.
-                if matched_row and ':' in bk.title:
-                    prefix_norm = _normalize(bk.title.split(':', 1)[0])
-                    suffix_norm = _normalize(bk.title.split(':', 1)[1])
-                    matched_norm = _normalize(matched_row["title"])
-                    if (prefix_norm == matched_norm and
-                            suffix_norm in author_series_norms):
-                        logger.debug(
-                            f"    OMNIBUS GUARD: '{bk.title}' — prefix matches "
-                            f"'{matched_row['title']}' but suffix matches series "
-                            f"'{author_series_norms[suffix_norm]}' → treating as "
-                            f"omnibus, not merge"
-                        )
-                        matched_row = None  # reject the merge
+                    continue
                 if matched_row:
                     # ── Linked-author dedup: matched a linked author's book ──
                     # `linked_author_ids` covers both pen names and
@@ -2274,15 +2195,13 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                     if series_collector is not None:
                         series_collector.setdefault(matched_row["id"], {})[source_name] = (sr.name, bk.series_index)
                     continue
-                if owned_only:
+                if not creates_books:
                     # Library-only scan: don't add discovered series books
                     # that we don't already own. _ensure_series() is NOT
                     # called on this path — if NO matched_row in this
                     # series fired _ensure_series above, no series row
                     # gets created at all (the orphan-row prevention).
-                    continue
-                if norm in existing:
-                    logger.debug(f"    SKIP (norm dup): '{bk.title}'")
+                    # OpenLibrary never creates either (D11).
                     continue
                 # Cross-author owned-ISBN safety net: if this ISBN is
                 # already owned under a different (un-linked) author,
@@ -2304,15 +2223,11 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                 # Insert path: also needs the series row to exist.
                 sid_use = await _ensure_series()
                 initial_urls = json.dumps({source_name: bk.source_url}) if bk.source_url else "{}"
-                # Omnibus detection: regex patterns OR context-aware
-                # "BookTitle: SeriesName" pattern (the omnibus guard above
-                # rejected the merge for this reason).
+                # "BookTitle: SeriesName" is that book with its series as a
+                # subtitle, not an omnibus (the title identity matches it to
+                # the book; the 2026-10 replay found every one of 68 such
+                # "omnibus" calls wrong: "Tithe: A Modern Faerie Tale").
                 omnibus = _is_omnibus(bk.title)
-                if not omnibus and ':' in bk.title:
-                    suffix_norm = _normalize(bk.title.split(':', 1)[1])
-                    prefix_norm = _normalize(bk.title.split(':', 1)[0])
-                    if suffix_norm in author_series_norms and prefix_norm in rows_by_norm:
-                        omnibus = True
                 s_idx = None if omnibus else bk.series_index
                 _xcols, _xvals = _cross_source_id_inserts(bk)
                 _x_col_sql = ("," + ",".join(_xcols)) if _xcols else ""
@@ -2326,7 +2241,8 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                     (bk.title, sid_use, s_idx, bk.isbn, bk.cover_url, bk.pub_date, bk.expected_date, 1 if bk.is_unreleased else 0, bk.description, bk.page_count, source_name, initial_urls, bk.language, 1 if omnibus else 0, bk.external_id, bk.amazon_format_asins, _fsm, source_name, *_xvals))
                 if _ins_cur.rowcount and _ins_cur.lastrowid:
                     await _link_discovered_contributors(db, _ins_cur.lastrowid, author_id, bk, source_name, roster=roster, stats=roster_stats)
-                existing.add(norm); new_books += 1
+                    _note_created(_ins_cur.lastrowid, bk, sr.name, s_idx)
+                new_books += 1
                 if on_new_book:
                     on_new_book()
                 logger.debug(f"    NEW: '{bk.title}' → series '{sr.name}'{' [OMNIBUS]' if omnibus else ''} from {source_name}")
@@ -2337,65 +2253,13 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
             if _is_series_ref_title(bk.title): continue
             if "English" in languages and _looks_foreign(bk.title): continue
             if exclude_audiobooks and _is_audiobook(bk.title): continue
-            norm = _normalize(bk.title)
-            matched_row = rows_by_norm.get(norm)
-            # v2.30.1 — mirror the volume-conflict guard from the series
-            # path above onto this standalone path. Same rationale:
-            # exact-normalized match can falsely match siblings whose
-            # only disambiguator was the stripped "Book N" subtitle.
-            if matched_row is not None:
-                reason = _fuzzy_match_blocked(bk, matched_row)
-                if reason:
-                    logger.debug(
-                        f"    EXACT MATCH REJECTED ({reason}): "
-                        f"'{bk.title}' vs '{matched_row['title']}'"
-                    )
-                    matched_row = None
-            if matched_row is None and bk.isbn:
-                clean_isbn = bk.isbn.strip().replace("-", "")
-                if clean_isbn in rows_by_isbn:
-                    matched_row = rows_by_isbn[clean_isbn]
-                    logger.debug(f"    ISBN MERGE: '{bk.title}' → '{matched_row['title']}' (isbn={clean_isbn})")
-            if matched_row is None:
-                for r in rows:
-                    if _fuzzy_match(bk.title, r["title"]):
-                        # Same multi-signal reject as the series-
-                        # books path above. Critical for the
-                        # standalone path because sources like ibdb
-                        # routinely return series books as
-                        # standalones (no series_index tag) with
-                        # the position encoded in the title — the
-                        # title-extracted-index arm of the check
-                        # is what stops "Super Sales on Super
-                        # Heroes 4" from overwriting an existing
-                        # "Super Sales on Super Heroes 2" row.
-                        reason = _fuzzy_match_blocked(bk, r)
-                        if reason:
-                            logger.debug(
-                                f"    FUZZY MATCH REJECTED ({reason}): "
-                                f"'{bk.title}' vs '{r['title']}'"
-                            )
-                            continue
-                        matched_row = r
-                        break
-            # Series-position fallback for cross-format duplicates.
-            # When a source returns a series book in standalone form
-            # (no series tagging) but encodes the position in the title
-            # — "Paths of Akashic 5: The Expanse" or "The Expanse
-            # (Paths of Akashic #5)" — we extract (series_id,
-            # series_index) from the title and look it up against
-            # existing rows. Mirrors the same-series-position guard
-            # the series path uses; this is the standalone-side
-            # equivalent.
-            if matched_row is None:
-                pos = _extract_series_position(bk.title)
-                if pos is not None and pos in rows_by_series_pos:
-                    matched_row = rows_by_series_pos[pos]
-                    logger.info(
-                        f"    SERIES-POSITION MATCH: '{bk.title}' → "
-                        f"'{matched_row['title']}' via "
-                        f"series_id={pos[0]} #{pos[1]}"
-                    )
+            matched_row = _find_existing(bk, None)
+            if isinstance(matched_row, dict) and matched_row.get("_created"):
+                logger.debug(
+                    f"    SKIP (same book as one this result created): "
+                    f"'{bk.title}' ~ '{matched_row['title']}'"
+                )
+                continue
             if matched_row:
                 # Linked-author dedup (pen names + co-authors).
                 if matched_row["author_id"] != author_id:
@@ -2449,11 +2313,9 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                 if series_collector is not None:
                     series_collector.setdefault(matched_row["id"], {})[source_name] = (None, None)
                 continue
-            if owned_only:
-                # Library-only scan: skip discovered standalone books we don't own.
-                continue
-            if norm in existing:
-                logger.debug(f"    SKIP (norm dup): '{bk.title}'")
+            if not creates_books:
+                # Library-only scan: skip discovered standalone books we
+                # don't own. OpenLibrary never creates either (D11).
                 continue
             # Cross-author owned-ISBN safety net (see series-books path
             # comment above for the full rationale).
@@ -2469,20 +2331,35 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                     continue
             initial_urls = json.dumps({source_name: bk.source_url}) if bk.source_url else "{}"
             omnibus = _is_omnibus(bk.title)
+            # G171 / F14: the source gave no series, but the title names
+            # one ("Title (Series Book 3)", "Series: Book 3"): file the
+            # book there (this author's series first), keep the title.
+            title_sid = title_sidx = title_series = None
+            if not omnibus:
+                from app.works.title_identity import series_in_title
+                named = series_in_title(bk.title)
+                if named is not None:
+                    title_series, title_sidx = named
+                    title_sid = await _series_for_title(title_series)
             _xcols, _xvals = _cross_source_id_inserts(bk)
             _x_col_sql = ("," + ",".join(_xcols)) if _xcols else ""
             _x_q_sql = ("," + ",".join(["?"] * len(_xcols))) if _xcols else ""
             # v3.0.0 Phase 9 (ADR-0012): no books.author_id — contributors
             # written to book_authors by _link_discovered_contributors below.
-            _fsm = _with_field_sources(None, source_name, _inserted_fields(bk))
-            _ins_cur = await db.execute(f"INSERT OR IGNORE INTO books (title,isbn,cover_url,pub_date,expected_date,is_unreleased,description,page_count,source,source_url,language,owned,is_new,is_omnibus,{source_name}_id,amazon_format_asins,field_source_map,discovered_by{_x_col_sql}) VALUES (?,?,?,?,?,?,?,?,?,?,?,0,1,?,?,?,?,?{_x_q_sql})",
-                (bk.title, bk.isbn, bk.cover_url, bk.pub_date, bk.expected_date, 1 if bk.is_unreleased else 0, bk.description, bk.page_count, source_name, initial_urls, bk.language, 1 if omnibus else 0, bk.external_id, bk.amazon_format_asins, _fsm, source_name, *_xvals))
+            _fsm = _with_field_sources(None, source_name, _inserted_fields(bk, series_id=title_sid, series_index=title_sidx))
+            _ins_cur = await db.execute(f"INSERT OR IGNORE INTO books (title,series_id,series_index,isbn,cover_url,pub_date,expected_date,is_unreleased,description,page_count,source,source_url,language,owned,is_new,is_omnibus,{source_name}_id,amazon_format_asins,field_source_map,discovered_by{_x_col_sql}) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,1,?,?,?,?,?{_x_q_sql})",
+                (bk.title, title_sid, title_sidx, bk.isbn, bk.cover_url, bk.pub_date, bk.expected_date, 1 if bk.is_unreleased else 0, bk.description, bk.page_count, source_name, initial_urls, bk.language, 1 if omnibus else 0, bk.external_id, bk.amazon_format_asins, _fsm, source_name, *_xvals))
             if _ins_cur.rowcount and _ins_cur.lastrowid:
                 await _link_discovered_contributors(db, _ins_cur.lastrowid, author_id, bk, source_name, roster=roster, stats=roster_stats)
-            existing.add(norm); new_books += 1
+                _note_created(_ins_cur.lastrowid, bk, title_series, title_sidx)
+            new_books += 1
             if on_new_book:
                 on_new_book()
-            logger.debug(f"    NEW: '{bk.title}' → standalone{' [OMNIBUS]' if omnibus else ''} from {source_name}")
+            logger.debug(
+                f"    NEW: '{bk.title}' → "
+                f"{f'series {title_series!r} #{title_sidx:g} (from its title)' if title_sid else 'standalone'}"
+                f"{' [OMNIBUS]' if omnibus else ''} from {source_name}"
+            )
 
         # ── Orphan series safety net ─────────────────────────────────
         # Defense in depth: even with the lazy upsert above, some other

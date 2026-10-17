@@ -224,12 +224,13 @@ async def test_role_filtered_contributor_dropped_through_merge(discovery_db):
 # ─── link-only sources (resolve existing, never mint) ────────
 
 
-@pytest.mark.parametrize("source", ["openlibrary", "google_books"])
+@pytest.mark.parametrize("source", ["google_books"])
 async def test_link_only_source_does_not_mint_through_merge(discovery_db, source):
     """A link-only source must NOT mint an unmatched co-author (its
     flat, untyped lists can lump illustrators into the author field).
     The unknown is dropped; the scanned author is still linked so the
-    discovered book is never orphaned."""
+    discovered book is never orphaned. (OpenLibrary, the other link-only
+    source, creates no books at all since D11.)"""
     chaney_id = await _insert_author("J.N. Chaney")
 
     await _merge_result(

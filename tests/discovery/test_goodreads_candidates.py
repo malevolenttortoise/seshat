@@ -321,11 +321,31 @@ def test_a_book_few_people_shelved_has_no_genres():
 # ─── Known titles ────────────────────────────────────────────
 
 
+def _known(*books):
+    from app.works.title_identity import TitleIndex, TitleRef, author_labels
+    known = TitleIndex(author_labels(t for t, *_ in books))
+    for t, *placement in books:
+        known.add(TitleRef(t, *placement))
+    return known
+
+
 def test_a_series_prefix_title_is_known_by_its_tail():
-    from app.discovery.sources.goodreads import known_title_keys
-    keys = known_title_keys(["Calamity", "Magic's Toll: Fatebound"])
-    assert gc.title_is_known("Knights of Eternity : Calamity", keys)
-    assert not gc.title_is_known("Magic's Toll: Cursebound", keys)
+    known = _known(("Calamity", "Knights of Eternity", 3), ("Magic's Toll: Fatebound",))
+    assert gc.title_is_known("Knights of Eternity : Calamity", known)
+    assert not gc.title_is_known("Magic's Toll: Cursebound", known)
+
+
+def test_a_descriptive_subtitle_is_known_by_the_title_identity():
+    """Wave-4 trial worker item (b), G94 onto ADR-0028."""
+    known = _known(("The Tower Strive",))
+    assert gc.title_is_known("The Tower Strive: A Tower-Climbing LitRPG Adventure", known)
+
+
+def test_another_volume_is_not_known():
+    """G170 on the worker's side: a later volume isn't the owned one."""
+    known = _known(("Monster's Mercy", "Monster's Mercy", 1))
+    assert not gc.title_is_known("Monster's Mercy 3", known)
+    assert not gc.title_is_known("Monster's Mercy", known, "Monster's Mercy", 3)
 
 
 # ─── Seeding (G86 / G94) ─────────────────────────────────────
@@ -349,7 +369,8 @@ async def test_first_fill_classifies_every_entry(env):
                   books=[("Owned Book", "10"), ("Calamity", None)])
     await _list([
         _rec(10, "Owned Book Retitled"),                 # known by Goodreads ID
-        _rec(11, "Knights of Eternity : Calamity"),      # known by title tail
+        _rec(11, "Knights of Eternity : Calamity",       # known by title tail
+             list_series="Knights of Eternity", list_series_idx=3.0),
         _rec(12, "Box Set Books 1-3"),                   # set title
         _rec(13, "Audio One", is_audio_list=True),       # audio
         _rec(14, "Ein Roman (German Edition)"),          # edition marker

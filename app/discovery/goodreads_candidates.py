@@ -11,8 +11,8 @@ that pass.
 **Candidates** (G86 / G94). For every author a source scan has covered
 (`authors.last_lookup_at` set) whose Goodreads list page is cached, every
 list entry gets a row in `metadata_cache_goodreads_candidates`: `known`
-(discovery has it: its Goodreads ID, or its title, also after a "Series :"
-prefix), `skipped` (audio, a box set, a title filter), `baseline` (an author
+(discovery has it: its Goodreads ID, or the same book by the title identity,
+ADR-0028), `skipped` (audio, a box set, a title filter), `baseline` (an author
 listing more than 100 books: not part of the first fill), or `pending`. A
 later list refresh adds the new entries as `pending` whatever the author's
 size (weekly new IDs, G94).
@@ -117,11 +117,11 @@ async def _discovery_author(slug: str, gr_author_id: str) -> Optional[dict]:
             "last_lookup_at": float(row["last_lookup_at"])}
 
 
-async def _known_index(slug: str, author_id: int) -> tuple[set[str], set[str]]:
-    """(Goodreads book IDs anywhere in the library, title keys of the
+async def _known_index(slug: str, author_id: int):
+    """(Goodreads book IDs anywhere in the library, a `TitleIndex` of the
     author's and linked authors' books — hidden ones included)."""
     from app.discovery.database import get_db
-    from app.discovery.sources.goodreads import known_title_keys
+    from app.works.title_identity import TitleIndex, TitleRef, author_labels
     db = await get_db(slug=slug)
     try:
         cur = await db.execute(
@@ -141,29 +141,39 @@ async def _known_index(slug: str, author_id: int) -> tuple[set[str], set[str]]:
                     linked.append(v)
         ph = ",".join("?" * len(linked))
         cur = await db.execute(
-            f"SELECT title FROM books WHERE id IN "
+            f"SELECT b.title, s.name AS series_name, b.series_index FROM books b "
+            f"LEFT JOIN series s ON s.id = b.series_id WHERE b.id IN "
             f"(SELECT book_id FROM book_authors WHERE author_id IN ({ph}))",
             linked,
         )
-        titles = [r[0] for r in await cur.fetchall()]
+        rows = await cur.fetchall()
     finally:
         await db.close()
-    return gr_ids, known_title_keys(titles)
+    known = TitleIndex(author_labels(r["title"] or "" for r in rows))
+    for r in rows:
+        known.add(TitleRef(r["title"] or "", r["series_name"], r["series_index"]))
+    return gr_ids, known
 
 
-def title_is_known(title: str, keys: set[str]) -> bool:
-    """A Goodreads title discovery already has: whole, or the part after
-    its last colon ("Knights of Eternity : Calamity" is an owned
-    "Calamity"). Never the part before a colon: "Magic's Toll: Cursebound"
-    stays new next to "Magic's Toll: Fatebound"."""
-    from app.discovery.sources.goodreads import _norm_title
-    if _norm_title(title) in keys:
-        return True
-    if ":" in (title or ""):
-        tail = _norm_title(title.rsplit(":", 1)[1])
-        if tail and tail in keys:
-            return True
-    return False
+def title_is_known(
+    title: str, known, series: Optional[str] = None, index: Optional[float] = None,
+) -> bool:
+    """A Goodreads list entry (`title`, and the series its list page gave)
+    is a book discovery already has, by the title identity (ADR-0028):
+    "The Tower Strive: A Tower-Climbing LitRPG Adventure" is an owned "The
+    Tower Strive"; "Magic's Toll: Cursebound" stays new next to "Magic's
+    Toll: Fatebound", and "Monster's Mercy 3" next to "Monster's Mercy"."""
+    from app.works.title_identity import TitleRef
+    return bool(known.find_all(TitleRef(title or "", series, index)))
+
+
+def _list_series(list_json: Optional[str]) -> tuple[Optional[str], Optional[float]]:
+    """The series a stored list entry's page gave, if any."""
+    try:
+        rec = json.loads(list_json or "{}")
+    except (TypeError, ValueError):
+        return None, None
+    return rec.get("list_series"), rec.get("list_series_idx")
 
 
 def _classify(rec: dict, gr_ids: set[str], keys: set[str], *,
@@ -180,7 +190,9 @@ def _classify(rec: dict, gr_ids: set[str], keys: set[str], *,
     )
     if reason:
         return SKIPPED, reason
-    if str(rec.get("book_id")) in gr_ids or title_is_known(title, keys):
+    if str(rec.get("book_id")) in gr_ids or title_is_known(
+        title, keys, rec.get("list_series"), rec.get("list_series_idx"),
+    ):
         return KNOWN, None
     return PENDING, None
 
@@ -228,11 +240,14 @@ async def refresh_author(
         )
         seeded = await cur.fetchone() is not None
         cur = await db.execute(
-            f"SELECT book_id, state, title FROM {_ct()} "
+            f"SELECT book_id, state, title, list_json FROM {_ct()} "
             f"WHERE author_id = ? AND library_slug = ?",
             (str(gr_author_id), slug),
         )
-        existing = {r["book_id"]: (r["state"], r["title"]) for r in await cur.fetchall()}
+        existing = {
+            r["book_id"]: (r["state"], r["title"], _list_series(r["list_json"]))
+            for r in await cur.fetchall()
+        }
         listed = len(records)
         first_fill = listed <= FIRST_FILL_MAX_LISTED
         origin = ORIGIN_WEEKLY if seeded else ORIGIN_FIRST_FILL
@@ -250,12 +265,14 @@ async def refresh_author(
                 (str(gr_author_id), slug, bid, rec.get("title") or "", pos,
                  json.dumps(rec), st, reason, origin, now, now),
             )
-            existing[bid] = (st, rec.get("title") or "")
+            existing[bid] = (
+                st, rec.get("title") or "", (rec.get("list_series"), rec.get("list_series_idx")),
+            )
             counts[st] = counts.get(st, 0) + 1
         # Undecided rows another source has created since.
-        for bid, (st, title) in existing.items():
+        for bid, (st, title, (l_series, l_index)) in existing.items():
             if st in (PENDING, AWAITING_PAGE, BASELINE) and (
-                bid in gr_ids or title_is_known(title or "", keys)
+                bid in gr_ids or title_is_known(title or "", keys, l_series, l_index)
             ):
                 await db.execute(
                     f"UPDATE {_ct()} SET state = ?, updated_at = ? "
@@ -680,7 +697,10 @@ async def _still_unknown(row: dict) -> bool:
     """Re-check just before spending a request: a scan may have created
     the book since the row was written."""
     gr_ids, keys = await _known_index(row["library_slug"], int(row["seshat_author_id"]))
-    if row["book_id"] in gr_ids or title_is_known(row.get("title") or "", keys):
+    l_series, l_index = _list_series(row.get("list_json"))
+    if row["book_id"] in gr_ids or title_is_known(
+        row.get("title") or "", keys, l_series, l_index,
+    ):
         await _set_state(row, KNOWN)
         return False
     return True
