@@ -31,13 +31,21 @@ qBit post-download states (torrent has finished):
   - uploading, forcedUP, pausedUP, stalledUP, checkingUP,
     queuedUP, stoppedUP
 
-We treat any state NOT in the "downloading" set as "download complete".
+A torrent is finished when it's in none of those states, isn't
+checking / errored / missing its files, and — for a client that reports
+progress (qBit) — every piece is there (`is_finished`). Until G173
+(2026-10-14) any state outside the downloading set counted, so a torrent
+added a second earlier (first state `checkingResumeData`) was "complete":
+grab 4744's pipeline ran before its file existed. qBit writes straight to
+the final file name, so a misfire after the first pieces landed would
+have copied a truncated file with no error.
 """
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Optional
 
 import aiosqlite
 
@@ -81,18 +89,39 @@ _DOWNLOADING_STATES = frozenset({
     # qBit v5+ uses "stopped" generically
     "stoppedDL",
 })
+# States in which the files can't be trusted yet, whatever the progress.
+_NOT_READY_STATES = frozenset({
+    "checkingResumeData",   # a fresh add's first state (G173, grab 4744)
+    "checkingUP",
+    "error",
+    "missingFiles",
+    "unknown",
+})
+
+
+def is_finished(snap: Optional["TorrentSnap"]) -> bool:
+    """The torrent's download is complete and its files are usable.
+
+    `progress` is None for a client that doesn't report it (Transmission,
+    Deluge, rTorrent): there the state alone decides, as before.
+    """
+    if snap is None:
+        return False
+    if snap.state in _DOWNLOADING_STATES or snap.state in _NOT_READY_STATES:
+        return False
+    return snap.progress is None or snap.progress >= 1.0
 
 
 # ─── File-race auto-retry state ───────────────────────────────
 #
-# Race: qBit reports `seeding` (file transfer done) before it has
-# finished moving the torrent into `save_path`. The pipeline runs,
-# `_prepare_book` can't locate the expected filename, and
-# `_fail()` marks the pipeline_run as failed with
-# `"torrent files unavailable from client; no file matching ..."`.
-# Seconds later qBit finishes the move, but the failed pipeline_run
-# row is what `check_for_completions` sees — its existence is the
-# gate that prevents reprocessing.
+# Race: qBit lists the torrent as finished before its files are where
+# the pipeline looks (a move into `save_path` on a qBit with a temp
+# path; on one without, G173's misfire, now caught by `is_finished`).
+# `_prepare_book` can't locate the expected filename, and `_fail()`
+# marks the pipeline_run as failed with "no file matching …". Seconds
+# later the files are there, but the failed pipeline_run row is what
+# `check_for_completions` sees — its existence is the gate that
+# prevents reprocessing.
 #
 # Auto-retry: on each watcher tick, scan for pipeline_runs in that
 # exact failure shape and past a short cooldown, delete the old
@@ -106,6 +135,18 @@ _DOWNLOADING_STATES = frozenset({
 _FILE_RACE_RETRY_COOLDOWN_SECONDS = 30
 _FILE_RACE_MAX_RETRIES = 2
 _file_race_retry_counts: dict[int, int] = {}  # grab_id → count, process-local
+# Grabs whose file-race failure was not notified because a retry was
+# still due (G185): sent once the retry can't happen any more.
+_file_race_held_ntfy: dict[int, str] = {}  # grab_id → the held message
+
+
+def file_race_retry_pending(grab_id: int) -> bool:
+    """A file-race failure of this grab will be retried (its ntfy waits)."""
+    return _file_race_retry_counts.get(grab_id, 0) < _FILE_RACE_MAX_RETRIES
+
+
+def hold_file_race_ntfy(grab_id: int, message: str) -> None:
+    _file_race_held_ntfy[grab_id] = message
 
 
 @dataclass(frozen=True)
@@ -285,10 +326,10 @@ async def check_for_completions(
                 )
             continue
 
-        if snap.state in _DOWNLOADING_STATES:
+        if not is_finished(snap):
             _log.debug(
-                "download watcher: grab_id=%d still downloading (state=%s)",
-                grab.id, snap.state,
+                "download watcher: grab_id=%d not finished (state=%s, progress=%s)",
+                grab.id, snap.state, snap.progress,
             )
             continue
 
@@ -319,8 +360,10 @@ async def check_for_completions(
         )
         events.append(event)
         _log.info(
-            "download complete: grab_id=%d %s (hash=%s, path=%s)",
+            "download complete: grab_id=%d %s (hash=%s, path=%s, state=%s, "
+            "progress=%s)",
             grab.id, grab.torrent_name, grab.qbit_hash, snap.save_path,
+            snap.state, snap.progress,
         )
 
     # Second pass: retry pipeline runs stuck on the qBit file-move
@@ -389,10 +432,14 @@ async def _collect_file_race_retries(
 
         # qBit snapshot gate. If qBit doesn't have the torrent any
         # more (deleted, moved, re-adding) there's nothing to retry
-        # against. Also skip if it's somehow back in a downloading
-        # state.
+        # against: the held ntfy goes out now, once. Also skip if it's
+        # somehow not finished again (a recheck); that can pass.
         snap = qbit_snapshot.get(qbit_hash)
-        if snap is None or snap.state in _DOWNLOADING_STATES:
+        if snap is None:
+            _file_race_retry_counts[grab_id] = _FILE_RACE_MAX_RETRIES
+            await _send_held_file_race_ntfy(grab_id, row["torrent_name"])
+            continue
+        if not is_finished(snap):
             continue
 
         # Eligible — bump counter, delete the failed run, emit a
@@ -424,9 +471,28 @@ async def _collect_file_race_retries(
     return events
 
 
+async def _send_held_file_race_ntfy(grab_id: int, torrent_name: str) -> None:
+    message = _file_race_held_ntfy.pop(grab_id, None)
+    if message is None:
+        return
+    try:
+        from app.notifications import bus, events
+        await bus.emit(
+            events.PIPELINE_ERROR,
+            title="Pipeline error",
+            message=f"{torrent_name}\n{message}",
+        )
+    except Exception:
+        _log.exception("pipeline.error bus emit failed (non-fatal)")
+
+
 @dataclass(frozen=True)
 class TorrentSnap:
-    """Minimal snapshot of one qBit torrent for completion detection."""
+    """Minimal snapshot of one qBit torrent for completion detection.
+
+    `progress` (0.0–1.0) is None when the client doesn't report it.
+    """
 
     state: str
     save_path: str
+    progress: Optional[float] = None

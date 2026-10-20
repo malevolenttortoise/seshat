@@ -210,7 +210,9 @@ async def _tick_inner(deps: DispatcherDeps, db) -> TickResult:
     except Exception:
         _log.exception("orphan adoption failed (non-fatal)")
 
-    # Build the richer snapshot that the download watcher needs.
+    # Build the richer snapshot that the download watcher needs. Progress
+    # only from a client that reports it (G173); others keep state-only.
+    reports_progress = bool(getattr(deps.qbit, "reports_progress", False))
     # Translate qBit's save_path from qBit's container namespace
     # to Seshat's container namespace so the pipeline can find files.
     dl_snapshot = {
@@ -219,6 +221,7 @@ async def _tick_inner(deps: DispatcherDeps, db) -> TickResult:
             save_path=translate_path(
                 t.save_path, deps.qbit_path_prefix, deps.local_path_prefix
             ),
+            progress=t.progress if reports_progress else None,
         )
         for t in qbit_torrents if t.hash
     }
