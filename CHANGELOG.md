@@ -187,6 +187,17 @@ frontend test suite.
   on Metadata Sources › Goodreads sets it; the last page's time now
   survives a restart, so a restart no longer lets a page go inside the
   gap.
+- **The Goodreads candidate worker's first fill widens, and phase 2
+  runs** (G177 / G178, wave S, ADR-0026 amended): once no candidate of an
+  author listing ≤ 100 books is left undecided, authors listing ≤ 200
+  join the first fill (their entries become candidates, smallest
+  catalogue first; ~1,100 entries from 23 authors on the reference
+  install). Phase 2, a book page for every cached list entry, is now on
+  unless switched off; it runs only when no candidate waits, and walks
+  authors by the books you own, most first, leaving out books you own,
+  pages already stored, sets, audio and translations. **Database
+  migration**: the Goodreads cache database goes to `user_version` 14
+  (`owned` on the phase-2 table).
 - **The Goodreads worker keeps its pages and traffic apart** (wave S):
   a book page whose turn has come goes before a due list page (the daily
   10:00-13:00 list refresh used to hold every page turn for 2-3 hours); a

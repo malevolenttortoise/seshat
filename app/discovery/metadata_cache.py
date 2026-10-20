@@ -550,6 +550,8 @@ def _build_goodreads_migrations() -> list[str]:
         """,
         f"CREATE INDEX IF NOT EXISTS idx_{phase2}_state "
         f"ON {phase2} (state, listed)",
+        # Wave S (G178): phase 2 walks authors by owned books, most first.
+        f"ALTER TABLE {phase2} ADD COLUMN owned INTEGER NOT NULL DEFAULT 0",
     ]
 
 

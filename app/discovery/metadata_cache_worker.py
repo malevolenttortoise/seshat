@@ -2368,6 +2368,7 @@ async def _seed_goodreads_candidates(now: float) -> None:
     try:
         from app.discovery import goodreads_candidates
         await goodreads_candidates.seed_new_authors(now=now)
+        await goodreads_candidates.widen_first_fill(now=now)
     except Exception:
         logger.exception(
             "metadata_cache_worker[goodreads]: candidate seeding failed (non-fatal)"

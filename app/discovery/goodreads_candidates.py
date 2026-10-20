@@ -58,6 +58,9 @@ _AUTOCOMPLETE = _BASE + "/book/auto_complete?format=json&q="
 
 # G86: the first fill covers authors listing at most this many books.
 FIRST_FILL_MAX_LISTED = 100
+# G177: once that fill has drained, it widens to authors listing at most
+# this many (their `baseline` rows become `pending`, smallest catalogue first).
+WIDENED_MAX_LISTED = 200
 # A scan within this long before an author is first seeded puts it at the
 # front (G86: "newly scanned authors jump the line").
 _RECENT_SCAN_S = 7 * 86400.0
@@ -790,8 +793,78 @@ async def step() -> StepResult:
 
 
 def phase2_enabled() -> bool:
+    """On unless switched off (G178: on for good, owned-first; it only runs
+    while the worker runs and no candidate waits)."""
     mc = (load_settings().get("metadata_cache") or {}).get("goodreads") or {}
-    return bool(mc.get("phase2_enabled", False))
+    return bool(mc.get("phase2_enabled", True))
+
+
+async def widen_first_fill(*, now: Optional[float] = None) -> int:
+    """G177: when no first-fill candidate of an author listing ≤ 100 books
+    is undecided, the `baseline` rows of authors listing ≤ 200 become
+    `pending` (and those authors part of the first fill). Returns how many
+    rows moved; 0 while the ≤ 100 fill still has work."""
+    now = now if now is not None else time.time()
+    db = await metadata_cache.get_db(_SOURCE)
+    try:
+        ph = ",".join("?" * len(UNDECIDED))
+        cur = await db.execute(
+            f"SELECT 1 FROM {_ct()} c JOIN {_at()} a ON a.author_id = c.author_id "
+            f"AND a.library_slug = c.library_slug "
+            f"WHERE c.origin = ? AND c.state IN ({ph}) AND a.listed <= ? LIMIT 1",
+            (ORIGIN_FIRST_FILL, *UNDECIDED, FIRST_FILL_MAX_LISTED),
+        )
+        if await cur.fetchone() is not None:
+            return 0
+        cur = await db.execute(
+            f"UPDATE {_ct()} SET state = ?, updated_at = ? WHERE state = ? AND "
+            f"(author_id, library_slug) IN (SELECT author_id, library_slug FROM {_at()} "
+            f"WHERE listed <= ?)",
+            (PENDING, now, BASELINE, WIDENED_MAX_LISTED),
+        )
+        moved = cur.rowcount or 0
+        if moved:
+            await db.execute(
+                f"UPDATE {_at()} SET first_fill = 1 WHERE listed <= ? AND first_fill = 0",
+                (WIDENED_MAX_LISTED,),
+            )
+        await db.commit()
+    finally:
+        await db.close()
+    if moved:
+        _log.info(
+            "goodreads candidates: the first fill widened to authors listing ≤ %d "
+            "books — %d candidate(s) now pending (G177)", WIDENED_MAX_LISTED, moved,
+        )
+    return moved
+
+
+async def _owned_index(slug: str, gr_author_id: str):
+    """(owned books by the authors holding `gr_author_id` in `slug`, their
+    Goodreads book IDs, a `TitleIndex` of their titles)."""
+    from app.discovery.database import get_db
+    from app.works.title_identity import TitleIndex, TitleRef, author_labels
+    try:
+        db = await get_db(slug=slug)
+    except Exception:
+        return 0, set(), None
+    try:
+        cur = await db.execute(
+            "SELECT b.title, b.goodreads_id, s.name AS series_name, b.series_index "
+            "FROM books b LEFT JOIN series s ON s.id = b.series_id "
+            "WHERE b.owned = 1 AND b.id IN (SELECT ba.book_id FROM book_authors ba "
+            "JOIN authors a ON a.id = ba.author_id WHERE a.goodreads_id = ?)",
+            (str(gr_author_id),),
+        )
+        rows = await cur.fetchall()
+    except Exception:
+        return 0, set(), None
+    finally:
+        await db.close()
+    index = TitleIndex(author_labels(r["title"] or "" for r in rows))
+    for r in rows:
+        index.add(TitleRef(r["title"] or "", r["series_name"], r["series_index"]))
+    return len(rows), {str(r["goodreads_id"]) for r in rows if r["goodreads_id"]}, index
 
 
 _PHASE2_SEED_EVERY_S = 3600.0
@@ -800,7 +873,9 @@ _phase2_seeded_at = 0.0
 
 async def _seed_phase2(now: float) -> None:
     """Add every cached list entry without a stored page (title filters
-    applied) to the phase-2 table, smallest catalogue first."""
+    applied) to the phase-2 table, with its author's owned-book count (G178:
+    most owned first, then smallest catalogue). Books the operator owns are
+    left out (and dropped if seeded before)."""
     global _phase2_seeded_at
     if now - _phase2_seeded_at < _PHASE2_SEED_EVERY_S:
         return
@@ -814,18 +889,25 @@ async def _seed_phase2(now: float) -> None:
     db = await metadata_cache.get_db(_SOURCE)
     try:
         cur = await db.execute(
-            f"SELECT lp.author_id, lp.book_ids_json, MIN(s.book_count) AS listed "
+            f"SELECT lp.author_id, lp.library_slug, lp.book_ids_json, "
+            f"MIN(s.book_count) AS listed "
             f"FROM {lp} lp JOIN {st_table} s ON s.author_id = lp.author_id "
-            f"AND s.library_slug = lp.library_slug GROUP BY lp.author_id, lp.page_num"
+            f"AND s.library_slug = lp.library_slug "
+            f"GROUP BY lp.author_id, lp.library_slug, lp.page_num"
         )
         rows = await cur.fetchall()
         cur = await db.execute(f"SELECT book_id FROM {bt} WHERE page_fetched_at IS NOT NULL")
         have = {r[0] for r in await cur.fetchall()}
+        owned_by: dict[tuple[str, str], tuple] = {}
         for r in rows:
             try:
                 recs = json.loads(r["book_ids_json"]) or []
             except (TypeError, ValueError):
                 continue
+            key = (str(r["author_id"]), r["library_slug"])
+            if key not in owned_by:
+                owned_by[key] = await _owned_index(r["library_slug"], r["author_id"])
+            owned, owned_ids, owned_titles = owned_by[key]
             for rec in recs:
                 if not isinstance(rec, dict):
                     continue
@@ -835,10 +917,19 @@ async def _seed_phase2(now: float) -> None:
                     continue
                 if goodreads_filters.title_skip_reason(title, include_nonfiction=include_nf):
                     continue
+                if bid in owned_ids or (owned_titles is not None and title_is_known(
+                    title, owned_titles, rec.get("list_series"), rec.get("list_series_idx"),
+                )):
+                    await db.execute(
+                        f"UPDATE {p2} SET state = 'owned', updated_at = ? "
+                        f"WHERE book_id = ? AND state = 'pending'", (now, bid),
+                    )
+                    continue
                 await db.execute(
-                    f"INSERT OR IGNORE INTO {p2} (book_id, author_id, title, listed, "
-                    f"state, updated_at) VALUES (?,?,?,?,'pending',?)",
-                    (bid, r["author_id"], title, int(r["listed"] or 0), now),
+                    f"INSERT INTO {p2} (book_id, author_id, title, listed, owned, "
+                    f"state, updated_at) VALUES (?,?,?,?,?,'pending',?) "
+                    f"ON CONFLICT(book_id) DO UPDATE SET owned = MAX(owned, excluded.owned)",
+                    (bid, r["author_id"], title, int(r["listed"] or 0), owned, now),
                 )
         await db.commit()
     finally:
@@ -856,7 +947,7 @@ async def phase2_step(*, now: Optional[float] = None) -> Optional[StepResult]:
     try:
         cur = await db.execute(
             f"SELECT * FROM {p2} WHERE state = 'pending' "
-            f"ORDER BY listed ASC, author_id, book_id LIMIT 1"
+            f"ORDER BY owned DESC, listed ASC, author_id, book_id LIMIT 1"
         )
         row = await cur.fetchone()
     finally:

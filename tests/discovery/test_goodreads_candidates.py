@@ -646,6 +646,7 @@ async def test_the_author_last_worked_on_comes_first(env):
 
 
 async def test_phase2_does_nothing_while_off(env):
+    _phase2(False)
     await _list([_rec(1, "One")])
     assert await gc.phase2_step() is None
     assert env["gr"].urls == []
@@ -942,3 +943,73 @@ async def test_a_page_block_does_not_sleep_the_loop(env, monkeypatch):
     assert res.outcome == "candidate_blocked"
     assert res.next_sleep_s == 1.0
 
+
+class TestWaveSPool:
+    """G177 (the ≤ 200 widening) and G178 (phase 2 on, owned-first)."""
+
+    async def _author_listing(self, gr, n, *, owned=()):
+        await _author(gr=gr, name=f"Author {gr}", scanned_at=time.time() - 30 * 86400,
+                      books=owned)
+        await _list([_rec(f"{gr}{i:03d}", f"Book {gr} {i}") for i in range(n)], gr=gr)
+        await gc.refresh_author(gr, "books-lib")
+
+    async def _states(self, gr):
+        return {r["state"] for r in (await _rows(gr=gr)).values()}
+
+    async def test_the_first_fill_widens_once_the_small_authors_are_done(self, env):
+        await self._author_listing("11", 3)            # ≤ 100: the first fill
+        await self._author_listing("12", 150)          # baseline until it widens
+        await self._author_listing("13", 250)          # stays baseline
+        assert await gc.widen_first_fill() == 0        # the small author still waits
+        assert await self._states("12") == {"baseline"}
+
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_GOODREADS)
+        try:
+            await db.execute(
+                f"UPDATE {metadata_cache.candidates_table('goodreads')} SET state = 'created' "
+                f"WHERE author_id = '11'")
+            await db.commit()
+        finally:
+            await db.close()
+
+        assert await gc.widen_first_fill() == 150
+        assert await self._states("12") == {"pending"}
+        assert await self._states("13") == {"baseline"}
+
+    def test_phase2_is_on_unless_switched_off(self, env):
+        assert gc.phase2_enabled() is True
+        _phase2(False)
+        assert gc.phase2_enabled() is False
+
+    async def test_phase2_walks_the_most_owned_author_first_and_skips_owned_books(self, env):
+        _set(book_page_gap=0)
+        await _list([_rec(1, "Small One")], gr="7")                       # owns nothing
+        await _author(gr="8", name="Author 8", books=(("Big One", "801"), ("Big Two", None)))
+        await _list([_rec(801, "Big One"), _rec(802, "Big Two"), _rec(803, "Big Three"),
+                     _rec(804, "Big Four")], gr="8")                      # owns 2
+        env["gr"].pages["803"] = FakeResp(200, NEUROPATH)
+        res = await gc.phase2_step()
+        assert env["gr"].urls[-1].endswith("/book/show/803")              # owned author first
+        assert res.outcome == "phase2"
+        p2 = metadata_cache.phase2_table("goodreads")
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_GOODREADS)
+        try:
+            ids = {r[0] for r in await (await db.execute(f"SELECT book_id FROM {p2}")).fetchall()}
+        finally:
+            await db.close()
+        assert "801" not in ids and "802" not in ids                      # owned: left out
+
+
+
+async def test_the_worker_widens_the_first_fill_when_it_seeds(env, monkeypatch):
+    """G177 runs from the worker: each candidate-seeding pass checks it."""
+    from app.discovery import metadata_cache_worker as w
+    monkeypatch.setattr(w, "_gr_candidates_seeded_at", 0.0)
+    calls: list = []
+
+    async def _widen(*, now=None):
+        calls.append(now)
+        return 0
+    monkeypatch.setattr(gc, "widen_first_fill", _widen)
+    await w._seed_goodreads_candidates(time.time())
+    assert len(calls) == 1
