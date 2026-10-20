@@ -79,6 +79,26 @@ rate); grey routes (`/book/show/{id}.xml`, Goodreads' internal AppSync API) — 
 - The worker's merge switches the process-wide active library, as scans and Hygiene do, and waits while either, or a
   library sync, is running.
 
+## Amendment (2026-10-16, the wave-4 trial's verdict)
+
+- **§3 — the book-page gap defaults to 400 seconds** (G176, G179). At 2 minutes pages were blocked on 24–54% of
+  requests a day, with hour-long blocks whenever autocomplete ran alongside; at 10 minutes, 2–5% (9 blocks in ~284
+  pages over four days, every one cleared at the next attempt), and enrichment's Goodreads match rate rose from 16 of
+  31 grabs to 56 of 72. 400 seconds was tested next (2026-10-16 → 10-20): 4–8% a day (20 blocks in ~392 pages), the
+  backoff never past its second step (5 minutes), and ~45% more pages a day than at 10 minutes. Most of the extra
+  blocks came with other Goodreads traffic alongside: the weekly author-ID job running during the daily list refresh,
+  and bursts of autocomplete checks; pages with neither nearby were blocked 0.4% of the time. So the weekly job moved
+  out of the list refresh and the worker's autocomplete checks are spaced at least 3 minutes apart (G187). The cost
+  of any gap is pace: grabs enriched back to back take one page turn each.
+- **§2 — the first fill widens to authors listing at most 200 books** (G177), once the ≤ 100 fill has drained and
+  the volume-aware merge (ADR-0028) is live: 22 more authors, ~1,000 entries. Wider is a later call on its results.
+- **§6 — phase 2 runs, owned-first** (G178). Instead of "built and off", it runs whenever no candidate is waiting,
+  walking authors by the number of books the operator owns (most first) and skipping owned books, pages already
+  stored, translations, sets and audio. A grab still takes the next page turn. Of 82 grabs with a Goodreads match
+  in the trial's month, 64 were on a cached author list, half of them by the 41 authors with the most owned books.
+  The limited test G88 planned isn't run: the trial measured pages at the gap for days. A fresh install keeps
+  phase 2 off, as it keeps the worker off.
+
 ## Related
 
 - [0018](0018-metadata-cache-goodreads-list-page.md) — the list-page cache this builds on; its §6 is decided here.

@@ -35,8 +35,15 @@ frontend test suite.
   pipeline, the inject API and Manual Grab still grab what you send. A
   library with active replacement on still grabs owned books (the
   replacement detector compares editions). A dramatised / full-cast
-  edition is not the plain book. Manual Grab's preview and the Review
-  page's "already owned" banner use the same rule.
+  edition is not the plain book, by its title's words or by MAM's
+  "Dramatization/Full Cast" category (wave S: Platform Decay's full-cast
+  upload had been skipped beside the narrated copy). A series position
+  written as a subtitle is where the book sits, not a volume number
+  (wave S): "The Well of Ascension" is your "The Well of Ascension: Book
+  Two of Mistborn", and "Sua Sponte" your "Sua Sponte: Forgotten Ruin,
+  Book 9" stored in Forgotten Ruin; ~60 owned books carried that shape.
+  Manual Grab's preview and the Review page's "already owned" banner use
+  the same rule.
 - **Source scans no longer merge one volume into another or drop books
   as duplicates** (discovery fix pass S2, G170). The scan merge decides
   "same book?" with the title identity: different volumes, and two real

@@ -87,6 +87,27 @@ mobile search was neither lighter nor less defended than the desktop one.
   Mark's ruling.
 - Counts are collected in memory and written once a minute and at shutdown, so a crash loses at most a minute's.
 
+## Amendment (2026-10-16, the wave-4 trial's verdict)
+
+The trial ran 2026-10-09 → 10-16 on the reference install and read every request off the gate's counters.
+
+- **Both fallbacks stay unbuilt and stay noted, under the same triggers** (Mark, G174 / G175). Goodreads book pages
+  were blocked on 54, 25, 4, 3, 3, 2 and 5% of requests on 10-10 → 10-16 (the drop came with the book-page gap going
+  from 2 to 10 minutes, ADR-0026), and autocomplete was never blocked (~2,600 requests): `.xml`'s trigger, "most
+  book pages blocked over a week while autocomplete holds", was not met. Amazon's desktop `/s` returned no captcha
+  to enrichment; Amazon's blocks were HTTP 429 / 503 on the cache worker's author-store pages and a few bot pages on
+  `/dp/`, which mobile search wouldn't touch.
+- **Amazon cools down per request kind** (G181). One shared cooldown let the worker's store-page 429s switch Amazon
+  off for every grab inside the cooldown (about a third of grabs in the trial's last four days). A 429 or 503 on the
+  author-store pages now cools down only those pages; enrichment's search and detail pages carry on. A bot page
+  (Amazon's robot check, its own signal) still stops every kind. Goodreads already backs off per kind.
+- **A source skipped because it was backing off is retried before review** (G182): once the backoff ends, that
+  source alone re-runs for the pending review, merged as if it had never been skipped (normal source priority);
+  nothing re-runs after a decision.
+- **The Amazon cache worker refreshes adaptively** (G183): an author whose refresh found nothing new steps out to 14,
+  then 28 days; one that finds something returns to 7. 65% of the trial's refreshes found nothing, and the worker
+  managed ~55 authors a day against the ~100 a 7-day cycle needs.
+
 ## Related
 
 - [0018](0018-metadata-cache-goodreads-list-page.md) — the Goodreads list-page cache; its §6 (Path C) is decided in

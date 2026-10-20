@@ -314,6 +314,7 @@ async def _fill_local_state(row: PreviewRow, info: TorrentInfo) -> None:
         siblings = await lookup_dedup_siblings(
             dedup_key=dedup_key, media_type=media_type,
             title=info.title or "", author_blob=_author_blob(info),
+            categories=(info.category or "",),
         )
     except Exception:
         _log.exception("manual grab: sibling lookup failed for tid=%s", info.torrent_id)

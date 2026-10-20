@@ -44,7 +44,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Literal, Optional, Sequence
 
 from app.database import get_db
 from app.filter.gate import Announce
@@ -347,6 +347,7 @@ async def lookup_dedup_siblings(
     libraries: Optional[list[dict]] = None,
     title: str = "",
     author_blob: str = "",
+    categories: Sequence[str] = (),
 ) -> list[SiblingMatch]:
     """Fetch every currently-known sibling of an announce.
 
@@ -355,9 +356,10 @@ async def lookup_dedup_siblings(
          same dedup key.
       2. `pending_holds` — rows whose state is 'pending', same dedup key.
       3. Per-library `books` tables — owned books the announce (`title`,
-         `author_blob`) is by the title identity, its primary author
-         any contributor (ADR-0004 amended; the lookup claim-for-owned
-         uses). Without a title or author, no owned siblings.
+         `author_blob`, its MAM `categories` for F28's full-cast check)
+         is by the title identity, its primary author any contributor
+         (ADR-0004 amended; the lookup claim-for-owned uses). Without a
+         title or author, no owned siblings.
 
     Owned-side scope is filtered by media type: an ebook announce only
     cross-checks ebook libraries, an audiobook announce only cross-
@@ -409,7 +411,7 @@ async def lookup_dedup_siblings(
 
     for book in await owned_books_matching(
         title=title, author_blob=author_blob, media_type=media_type,
-        libraries=libraries,
+        libraries=libraries, categories=categories,
     ):
         formats_csv = book.formats.lower()
         matches.append(SiblingMatch(

@@ -1179,6 +1179,10 @@ async def _stage_for_review(
             title=prep.metadata.title or "",
             author_blob=prep.metadata.author or "",
             category=(grab.category if grab else "") or "",
+            categories=(
+                await grabs_storage.announce_categories(db, grab.announce_id)
+                if grab else ()
+            ),
         )
         if owned_matches:
             metadata_dict["duplicate_of_owned"] = [

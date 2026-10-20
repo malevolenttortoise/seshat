@@ -86,6 +86,10 @@ async def tick(deps: DispatcherDeps) -> int:
                 media_type=hold.media_type,
                 title=hold.torrent_name or "",
                 author_blob=hold.author_blob or "",
+                categories=(
+                    hold.category or "",
+                    *await _announce_categories(hold.announce_id),
+                ),
             )
         except Exception:
             _log.exception(

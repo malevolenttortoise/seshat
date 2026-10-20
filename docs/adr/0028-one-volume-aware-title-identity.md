@@ -86,6 +86,23 @@ The same parser reads "(Series Book N)" out of a title at creation (G171) and Ha
 - Not covered yet: the cross-library works matcher (`works/matcher.py`), acquisition link-back and the import check
   keep their own keys.
 
+## Amendment (2026-10-20, wave A's live check)
+
+- **A series position written as a subtitle is a position** (Mark, F29), like a "(Series Book N)" parenthetical
+  (rule 2): when the other side gives no index, the titles decide for "Title: Book Two of Series" and "Title:
+  Book 2 of the Series", and for "Title: Series Book 2" / "Title: Series, Book 2" when the book is stored in that
+  series. The title must be a real part beside the subtitle (not a description, not inside the stored series), and
+  only the word "Book" counts: "Vol. 3", "#5" and a bare trailing number stay volumes ("Apocalypse: Regression,
+  Book 8", stored in "Apocalypse: Regression", is book 8). Found live: "The Well of Ascension" missed the owned "The
+  Well of Ascension: Book Two of Mistborn" (~60 owned books carried the shape: Stormlight, Thrawn, Mistborn…), and
+  scans created "The Anvil of Souls: Book Two of the Forgemaster Cycle" beside "The Anvil of Souls". Replays, old
+  vs new: 3 of 25,097 same-author pairs change (all the same book), 2 Amazon results merge instead of duplicating,
+  the Goodreads worker's merges and the grab history are unchanged (77 owned re-grabs caught, no wanted volume
+  blocked).
+- **MAM's "Dramatization/Full Cast" category marks a dramatised edition** (Mark, F28), the same as the title's
+  words in rule 1: the owned check reads the announce's categories (`TitleRef.dramatised`). A full-cast upload of
+  Platform Decay had been skipped as owned beside Kevin R. Free's narration.
+
 ## Related
 
 - [0003](0003-bundle-dedup-prefer-duplicates.md) — the same duplicates-over-loss stance, for bundles.

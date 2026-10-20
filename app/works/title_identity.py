@@ -11,7 +11,8 @@ bool out, no I/O. Kept dependency-free (like `works/normalize.py`) so
 The rules, strongest first:
 
   1. Format. A manga / graphic novel / comic is never the prose book,
-     and a dramatised / full-cast audio edition is never the plain one.
+     and a dramatised / full-cast audio edition is never the plain one
+     (by its title's words, or `TitleRef.dramatised` from MAM's category).
      "(Light Novel)" words are ignored.
   2. Numbers written in a title are compared strictly, whatever series
      they name. A title carries volume evidence of three kinds:
@@ -29,7 +30,10 @@ The rules, strongest first:
      the other side (as any kind), unless the other side's number is an
      index in a differently named series (Hardcover's reading-order
      meta-series), or the other side names the same series with no
-     index at all; then the titles decide.
+     index at all; then the titles decide. They also decide when the
+     other side gives no index and every number is a series position:
+     "(Series Book N)", or a subtitle beside a real title, "Title: Book
+     Two of Series" / "Title: Series, Book 2" (F29, `_numbers_are_positions`).
   3. Tag and index numbers are compared only within one normalised
      series name: "Faith is Earned (Book 1)" is not the "Faith is
      Earned" row filed as #3 of the same series, but "Shadow Puppets
@@ -73,10 +77,13 @@ class TitleRef:
 
     `series` / `index` are the stored placement (`series.name`,
     `books.series_index`), not anything parsed from the title.
+    `dramatised`: the edition is dramatised / full cast by a signal
+    outside the title (F28: MAM's "Dramatization/Full Cast" category).
     """
     title: str
     series: Optional[str] = None
     index: Optional[float] = None
+    dramatised: bool = False
 
 
 @dataclass(frozen=True)
@@ -90,12 +97,15 @@ class ParsedTitle:
     `core` is the title's own volume number, or None. `position_only`:
     every number the title carries sits in a "(Series Book N)"
     parenthetical, so it says where the book sits, not which book it is.
+    `subtitle_shapes`: for each subtitle tag, (series name, shape, the
+    title parts before it); see `_subtitle_tags`.
     """
     proper: str
     tags: tuple[tuple[Optional[str], float], ...]
     core: Optional[float]
     prefix_volume: Optional[float]
     position_only: bool = False
+    subtitle_shapes: tuple[tuple[str, str, tuple[str, ...]], ...] = ()
 
 
 # ─── Numbers ──────────────────────────────────────────────────
@@ -185,7 +195,13 @@ def _format(title: str) -> tuple[Optional[str], bool]:
     """('manga' / 'graphic' / 'comic' or None, dramatised edition?)."""
     m = _RX_FORMAT.search(title or "")
     visual = m.group(1).lower().split()[0] if m else None
-    return visual, bool(_RX_DRAMATIZED.search(title or ""))
+    return visual, is_dramatised(title)
+
+
+def is_dramatised(text: Optional[str]) -> bool:
+    """A dramatised / full-cast edition named in `text`: a title's words,
+    or a MAM category ("Audiobooks - Dramatization/Full Cast")."""
+    return bool(_RX_DRAMATIZED.search(text or ""))
 
 
 # ─── Title text ───────────────────────────────────────────────
@@ -332,21 +348,38 @@ def _parenthetical_tags(text: str) -> list[tuple[Optional[str], float]]:
     return tags
 
 
-def _subtitle_tags(proper: str) -> list[tuple[str, float]]:
-    """(series name, number) written in a subtitle: "Book Two of the
-    Legends of Dune" -> ("Legends of Dune", 2)."""
-    tags: list[tuple[str, float]] = []
-    for sub in _RX_SEGMENTS.split(proper)[1:]:
+def _subtitle_tags(proper: str) -> list[tuple[str, float, str, tuple[str, ...]]]:
+    """(series name, number, shape, the parts before it) written in a
+    subtitle: "Book Two of the Legends of Dune" -> ("Legends of Dune",
+    2, "of", …).
+
+    The shape says whether the number may be only a series position
+    (F29): "of" for "Book N of [the] Series", "named" for "Series Book
+    N" / "Series, Book N", "" for anything else ("Vol. 3", "#5", a bare
+    trailing number), which always stays a volume.
+    """
+    tags: list[tuple[str, float, str, tuple[str, ...]]] = []
+    segments = _RX_SEGMENTS.split(proper)
+    for i, sub in enumerate(segments[1:], 1):
         if _RX_BARE_VOLUME.match(sub):
             continue
         m = _RX_VOLUME.search(sub) or re.search(r"(?:^|\s)(\d{1,3}(?:\.\d)?)\s*$", sub)
         if not m:
             continue
         v = _match_number(m)
-        after = re.sub(r"(?i)^\s*(?:of|in)\s+(?:the\s+)?", "", sub[m.end():])
-        name = after.strip(" ,") or sub[:m.start()].strip(" ,")
-        if v is not None and name:
-            tags.append((name, v))
+        rest = sub[m.end():]
+        after = re.sub(r"(?i)^\s*(?:of|in)\s+(?:the\s+)?", "", rest)
+        before = sub[:m.start()].strip(" ,")
+        name = after.strip(" ,") or before
+        if v is None or not name:
+            continue
+        shape = ""
+        if m.group(0).lower().startswith("book"):
+            if after.strip(" ,") and after != rest:
+                shape = "of"
+            elif not rest.strip(" ,") and before:
+                shape = "named"
+        tags.append((name, v, shape, tuple(segments[:i])))
     return tags
 
 
@@ -393,12 +426,15 @@ def parse_title(title: str) -> ParsedTitle:
     core = _core_volume(proper, paren_tags, prefix)
     sub_tags = _subtitle_tags(proper)
     return ParsedTitle(
-        proper=proper, tags=tuple(paren_tags) + tuple(sub_tags), core=core,
+        proper=proper,
+        tags=tuple(paren_tags) + tuple((name, v) for name, v, _, _ in sub_tags),
+        core=core,
         prefix_volume=prefix,
         position_only=(
             core is None and not sub_tags and bool(paren_tags)
             and all(name for name, _ in paren_tags)
         ),
+        subtitle_shapes=tuple((name, shape, before) for name, _, shape, before in sub_tags),
     )
 
 
@@ -558,6 +594,40 @@ def _series_numbers(
     return out
 
 
+def _contains_words(inner: str, outer: str) -> bool:
+    return bool(inner and outer) and f" {inner} " in f" {outer} "
+
+
+def _numbers_are_positions(parsed: ParsedTitle, my_series: Optional[str]) -> bool:
+    """Every number this title writes says where the book sits, not which
+    book it is: "(Series Book N)" parentheticals, or (F29) a subtitle
+    naming a series beside a real title. "Book N of [the] Series" always
+    qualifies ("The Well of Ascension: Book Two of Mistborn"); "Series
+    Book N" / "Series, Book N" only when the book is stored in that
+    series ("Sua Sponte: Forgotten Ruin, Book 9" in Forgotten Ruin; in
+    "Apocalypse: Regression, Book 8", stored in "Apocalypse: Regression",
+    it is book 8). The real title is a part before the subtitle that isn't
+    inside the stored series (a title that is only the named series is
+    `_no_real_title`'s case, checked first).
+    """
+    if parsed.position_only:
+        return True
+    if parsed.core is not None or not parsed.subtitle_shapes:
+        return False
+    stored = series_key(my_series)
+    for name, shape, before in parsed.subtitle_shapes:
+        named = series_key(name)
+        if not shape or not named or (shape == "named" and named != stored):
+            return False
+        if not any(
+            len(k) >= 3 and not _RX_GENERIC_ALONE.match(k)
+            and not _contains_words(k, stored)
+            for k in (_key_text(p.lower()) for p in before)
+        ):
+            return False
+    return True
+
+
 def _lone_number_differs(
     mine: set[float], parsed: ParsedTitle, my_series: Optional[str],
     other_series: Optional[str], other_index: Optional[float],
@@ -566,9 +636,10 @@ def _lone_number_differs(
 
     It must appear as the other side's index, unless that index is in a
     differently named series. When the other side gives no index at all,
-    the titles decide if this side's numbers are only "(Series Book N)"
-    positions, or the other side names one of this side's tagged series
-    — as long as this side's title isn't just a series name.
+    the titles decide if this side's numbers are only series positions
+    (`_numbers_are_positions`), or the other side names one of this
+    side's tagged series — as long as this side's title isn't just a
+    series name.
     """
     big = mine - _UNNUMBERED
     if not big:
@@ -584,7 +655,7 @@ def _lone_number_differs(
             return True
         tagged = {series_key(s) for s in tag_names}
         return not (
-            parsed.position_only
+            _numbers_are_positions(parsed, my_series)
             or (other_series and series_key(other_series) in tagged)
         )
     if other_index in big:
@@ -602,6 +673,10 @@ def same_book(a: TitleRef, b: TitleRef, labels: frozenset = frozenset()) -> bool
     """
     fmt_a, pa = _parsed(a.title or "")
     fmt_b, pb = _parsed(b.title or "")
+    if a.dramatised:
+        fmt_a = (fmt_a[0], True)
+    if b.dramatised:
+        fmt_b = (fmt_b[0], True)
     if fmt_a != fmt_b:
         return False
     a_index, b_index = _as_index(a.index), _as_index(b.index)

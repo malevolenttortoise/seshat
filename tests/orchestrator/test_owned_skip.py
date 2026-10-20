@@ -120,19 +120,33 @@ async def _grab_count() -> int:
         await db.close()
 
 
-def _deps():
-    return _make_deps(filter_config=_make_filter_config(allowed=[AUTHOR]))
+CATEGORIES = [
+    "Ebooks - Fantasy", "Audiobooks - Fantasy",
+    "Audiobooks - Dramatization/Full Cast", "Audiobooks - Science Fiction",
+]
+
+
+def _deps(author: str = AUTHOR):
+    return _make_deps(filter_config=_make_filter_config(
+        allowed=[author], categories=CATEGORIES,
+    ))
 
 
 def _announce(title: str, *, tid: str = "1276245", audio: bool = False,
-              author: str = AUTHOR, filetype: str | None = None) -> Announce:
+              author: str = AUTHOR, filetype: str | None = None,
+              categories: tuple[str, ...] = ()) -> Announce:
+    prefix = "Audiobooks" if audio else "Ebooks"
     return Announce(
         torrent_id=tid,
         torrent_name=title,
-        category="Audiobooks - Fantasy" if audio else "Ebooks - Fantasy",
+        category=f"{prefix} - {categories[0] if categories else 'Fantasy'}",
+        categories=categories,
         author_blob=author,
         filetype=filetype or ("m4b" if audio else "epub"),
     )
+
+
+FULL_CAST = ("Dramatization/Full Cast", "Science Fiction")
 
 
 # ─── IRC announces of owned books: never fetched ──────────────
@@ -220,6 +234,35 @@ class TestOwnedAnnounceIsNotGrabbed:
         assert result.reason == "owned_same_format"
         assert deps.fetch_torrent.calls == []
 
+    async def test_a_series_position_written_as_a_subtitle(self, libs):
+        """F29, wave A's live check: owned ABS 1269 'The Well of Ascension:
+        Book Two of Mistborn' — 'Book Two' is where it sits, not a volume
+        the bare announce lacks."""
+        await _owned(AUDIO, "The Well of Ascension: Book Two of Mistborn",
+                     authors=("Brandon Sanderson",), linked_tid="1277325",
+                     series="The Cosmere")
+        deps = _make_deps(filter_config=_make_filter_config(allowed=["Brandon Sanderson"]))
+
+        result = await handle_announce(deps, _announce(
+            "The Well of Ascension", audio=True, author="Brandon Sanderson",
+        ))
+
+        assert result.reason == "owned_same_format"
+        assert deps.fetch_torrent.calls == []
+
+    async def test_a_full_cast_announce_of_an_owned_full_cast_copy(self, libs):
+        """F28: MAM's Full Cast category and the owned copy's title words
+        both say dramatised: one product."""
+        await _owned(AUDIO, "Threshing Day [Dramatized Adaptation]", linked_tid="1272846")
+        deps = _deps()
+
+        result = await handle_announce(deps, _announce(
+            "Threshing Day", audio=True, categories=FULL_CAST,
+        ))
+
+        assert result.reason == "owned_same_format"
+        assert deps.fetch_torrent.calls == []
+
 
 # ─── What still grabs ─────────────────────────────────────────
 
@@ -254,6 +297,56 @@ class TestStillGrabbed:
         result = await handle_announce(
             deps, _announce("Threshing Day [Dramatized Adaptation]", audio=True),
         )
+
+        assert result.action == "submit"
+        assert len(deps.fetch_torrent.calls) == 1
+
+    @pytest.mark.parametrize("categories", [
+        FULL_CAST, ("Science Fiction", "Dramatization/Full Cast"),
+    ], ids=["first category", "second category"])
+    async def test_a_full_cast_category_is_its_own_edition(self, libs, categories):
+        """F28, wave A's live check: Platform Decay (tid 1277549, MAM
+        category Dramatization/Full Cast) was skipped as owned beside ABS
+        91, Kevin R. Free's narration; the title carries no dramatised
+        words."""
+        await _owned(AUDIO, "Platform Decay", authors=("Martha Wells",),
+                     linked_tid="1239623", series="Murderbot Diaries", index=8)
+        deps = _deps("Martha Wells")
+
+        result = await handle_announce(deps, _announce(
+            "Platform Decay", audio=True, author="Martha Wells", categories=categories,
+        ))
+
+        assert result.action == "submit"
+        assert len(deps.fetch_torrent.calls) == 1
+
+    async def test_a_full_cast_category_reaches_format_dedup(self, libs):
+        """F28 on format dedup's owned check: a disabled-format full-cast
+        upload is held like any lone disabled format, not skipped as an
+        owned sibling of the narrated copy."""
+        await _owned(AUDIO, "Platform Decay", authors=("Martha Wells",),
+                     series="Murderbot Diaries", index=8)
+        deps = _deps("Martha Wells")
+        deps.format_priority = {"audiobook": [
+            {"fmt": "m4b", "enabled": True}, {"fmt": "mp3", "enabled": False},
+        ]}
+
+        result = await handle_announce(deps, _announce(
+            "Platform Decay", audio=True, author="Martha Wells", filetype="mp3",
+            categories=FULL_CAST,
+        ))
+
+        assert result.reason == "format_dedup_hold"
+        assert deps.fetch_torrent.calls == []
+
+    async def test_a_series_first_book_beside_its_book_8(self, libs):
+        """F29's limit: in 'Apocalypse: Regression, Book 8', stored in
+        'Apocalypse: Regression', book 8 is a volume, not a position."""
+        await _owned(AUDIO, "Apocalypse: Regression, Book 8", linked_tid="1111",
+                     series="Apocalypse: Regression", index=8)
+        deps = _deps()
+
+        result = await handle_announce(deps, _announce("Apocalypse: Regression", audio=True))
 
         assert result.action == "submit"
         assert len(deps.fetch_torrent.calls) == 1

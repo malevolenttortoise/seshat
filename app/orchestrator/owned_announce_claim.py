@@ -54,7 +54,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from typing import Optional
+from typing import Iterable, Optional
 
 _log = logging.getLogger("seshat.orchestrator.owned_announce_claim")
 
@@ -96,7 +96,7 @@ class OwnedClaimResult:
 
 async def owned_books_matching(
     *, title: str, author_blob: str, media_type: str, libraries=None,
-    include_linked: bool = True,
+    include_linked: bool = True, categories: Iterable[str] = (),
 ) -> list[OwnedMatch]:
     """Every owned book of this media type the announce is (ADR-0028).
 
@@ -105,7 +105,9 @@ async def owned_books_matching(
     title + series placement, with that author's labels (read from all
     their books in the library, owned or not). Library scope: only
     libraries whose `content_type` is `media_type`, so an audiobook is
-    never matched to an ebook row.
+    never matched to an ebook row. `categories`: the announce's MAM
+    categories; one naming a dramatised / full-cast edition makes it a
+    product of its own, never a plain owned copy (F28).
 
     `include_linked=False` leaves out rows already linked to MAM (the
     rows a claim could write to).
@@ -113,7 +115,9 @@ async def owned_books_matching(
     from app import state
     from app.discovery.database import get_db as get_library_db
     from app.metadata.author_names import normalize_author_name
-    from app.works.title_identity import TitleRef, author_labels, same_book
+    from app.works.title_identity import (
+        TitleRef, author_labels, is_dramatised, same_book,
+    )
 
     if not title or not author_blob or media_type not in ("ebook", "audiobook"):
         return []
@@ -126,7 +130,9 @@ async def owned_books_matching(
         libraries if libraries is not None
         else list(state._discovered_libraries or [])
     )
-    announce = TitleRef(title)
+    announce = TitleRef(
+        title, dramatised=any(is_dramatised(c) for c in categories),
+    )
     matches: list[OwnedMatch] = []
     for lib in libs:
         slug = (lib or {}).get("slug")
@@ -185,14 +191,15 @@ async def owned_books_matching(
 
 async def find_owned_matches(
     *, title: str, author_blob: str, category: str, libraries=None,
-    include_linked: bool = False,
+    include_linked: bool = False, categories: Iterable[str] = (),
 ) -> list[OwnedMatch]:
     """Owned books the announce is, by its MAM category's media type.
 
     Used by the announce-time claim (`include_linked=True`: it needs
     the linked rows to skip the grab) and the review-queue duplicate
     banner (the default: only rows a "Claim torrent for owned" could
-    write to).
+    write to). `categories`: the announce's full category list, beside
+    `category` (F28).
 
     Returns [] when title/author is missing, the category isn't an
     ebook / audiobook one, no library has that media type, or nothing
@@ -206,6 +213,7 @@ async def find_owned_matches(
         media_type=media_type_from_category(category or "") or "",
         libraries=libraries,
         include_linked=include_linked,
+        categories=(category or "", *categories),
     )
 
 
@@ -273,6 +281,7 @@ async def try_claim_announce_for_owned(
         category=announce.category or "",
         libraries=libraries,
         include_linked=True,
+        categories=announce.categories or (),
     )
     if not matches:
         return OwnedClaimResult(claimed=False, reason="no_owned_match")

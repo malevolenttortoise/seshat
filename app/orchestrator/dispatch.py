@@ -1237,6 +1237,7 @@ async def _dispatch_with_decision(
                     media_type=media_type_from_category(announce.category) or "",
                     title=announce.torrent_name or announce.title or "",
                     author_blob=announce.author_blob or "",
+                    categories=(announce.category or "", *announce.categories),
                 )
             except Exception:
                 _log.exception(
