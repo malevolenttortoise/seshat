@@ -40,9 +40,9 @@ from typing import Awaitable, Callable, Optional
 import aiosqlite
 
 from app.orchestrator.download_watcher import (
-    _DOWNLOADING_STATES,
     CompletionEvent,
     TorrentSnap,
+    is_finished,
 )
 from app.orchestrator.file_copier import BOOK_EXTENSIONS, _safe_dirname
 from app.rate_limit import ledger as ledger_mod
@@ -139,7 +139,7 @@ async def _rerun_stranded(
             continue
         qbit_hash = run.qbit_hash or grab.qbit_hash or ""
         snap = qbit_snapshot.get(qbit_hash)
-        if snap is None or snap.state in _DOWNLOADING_STATES:
+        if not is_finished(snap):
             await _close(
                 db, run, f"{INTERRUPTED}; its torrent isn't complete in qBit, "
                 f"so it can't be re-run",
@@ -290,7 +290,7 @@ async def _heal_failed_submits(
     )
     for row in await cursor.fetchall():
         snap = qbit_snapshot.get(row["qbit_hash"])
-        if snap is None or snap.state in _DOWNLOADING_STATES:
+        if not is_finished(snap):
             continue
         await grabs_storage.set_state(db, row["id"], grabs_storage.STATE_SUBMITTED)
         await ledger_mod.record_grab(db, row["id"], row["qbit_hash"])

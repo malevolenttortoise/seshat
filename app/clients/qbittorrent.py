@@ -61,6 +61,10 @@ class QbitClient:
         network transport.
     """
 
+    # `TorrentInfo.progress` is real here (the other clients leave it at
+    # 0.0), so the download watcher may require 100% (G173).
+    reports_progress = True
+
     def __init__(
         self,
         base_url: str,

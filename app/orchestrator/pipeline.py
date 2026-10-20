@@ -557,10 +557,19 @@ async def _prepare_book(
         if not fallback_source.exists():
             matched = _find_torrent_file(save_path, event.torrent_name)
             if matched is None:
-                await _fail(db, run_id, event,
-                            f"torrent files unavailable from client; "
-                            f"no file matching {event.torrent_name!r} in {save_path}",
-                            ntfy_url, ntfy_topic)
+                # The watcher retries this shape ("no file matching") a
+                # few times; its ntfy waits until no retry is due (G185).
+                from app.orchestrator import download_watcher
+                error = (
+                    f"no file matching {event.torrent_name!r} in {save_path}: "
+                    f"qBit lists the torrent as finished, but its files "
+                    f"aren't there (yet)"
+                )
+                retry_due = download_watcher.file_race_retry_pending(event.grab_id)
+                if retry_due:
+                    download_watcher.hold_file_race_ntfy(event.grab_id, error)
+                await _fail(db, run_id, event, error, ntfy_url, ntfy_topic,
+                            notify=not retry_due)
                 return []
             fallback_source = matched
         source = fallback_source
@@ -1767,14 +1776,21 @@ async def _fail(
     error: str,
     ntfy_url: str,
     ntfy_topic: str,
+    *,
+    notify: bool = True,
 ) -> None:
+    """Mark the run failed; `notify=False` holds the "Pipeline error"
+    notification (a file-race retry is still due)."""
     _log.warning(
-        "pipeline: failed grab_id=%d %s: %s",
+        "pipeline: failed grab_id=%d %s: %s%s",
         event.grab_id, event.torrent_name, error,
+        "" if notify else " (notification held: a retry is due)",
     )
     await pipe_storage.set_state(
         db, run_id, pipe_storage.PIPE_FAILED, error=error,
     )
+    if not notify:
+        return
     try:
         from app.notifications import bus, events
         await bus.emit(

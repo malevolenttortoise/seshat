@@ -391,3 +391,62 @@ class TestAudiobookWithCompanionFile:
             assert not abs_library.exists() or list(abs_library.rglob("*")) == []
         finally:
             await db.close()
+
+
+class TestFileRaceFailureNotification:
+    """G185: grab 4744 *Ignite* failed "no file matching" and sent a
+    "Pipeline error" ntfy, then the file-race retry recovered it. The
+    ntfy now waits while a retry is due, and goes out on the last try."""
+
+    async def _fail_on_missing_files(self, tmp_path, monkeypatch, retries_used: int):
+        from app.notifications import bus
+        from app.orchestrator import download_watcher
+
+        sent: list[str] = []
+
+        async def record(event, **kw):
+            sent.append(kw.get("message", ""))
+
+        monkeypatch.setattr(bus, "emit", record)
+        download_watcher._file_race_held_ntfy.clear()
+        db = await get_db()
+        try:
+            grab_id = await grabs_storage.create_grab(
+                db, announce_id=None, mam_torrent_id="1277000",
+                torrent_name="Ignite", category="Audiobooks - Fantasy",
+                author_blob="Nobody", state=grabs_storage.STATE_DOWNLOADED,
+            )
+            monkeypatch.setitem(download_watcher._file_race_retry_counts, grab_id, retries_used)
+            downloads = tmp_path / "downloads"
+            downloads.mkdir()
+            run_id = await pipe_storage.create_run(db, grab_id=grab_id, source_path=str(downloads))
+            event = CompletionEvent(
+                grab_id=grab_id, qbit_hash="hash_ignite", torrent_name="Ignite",
+                save_path=str(downloads), pipeline_run_id=run_id,
+            )
+            result = await process_completion(
+                db, event, staging_path="", default_sink="folder",
+                calibre_library_path="", folder_sink_path=str(tmp_path / "lib"),
+                category_routing={}, ntfy_url="", ntfy_topic="",
+            )
+            run = await pipe_storage.get_run(db, run_id)
+        finally:
+            await db.close()
+        assert result is False
+        assert run.state == pipe_storage.PIPE_FAILED
+        assert run.error.startswith("no file matching 'Ignite'")
+        assert "torrent files unavailable from client" not in run.error
+        return sent, download_watcher._file_race_held_ntfy.get(grab_id)
+
+    async def test_held_while_a_retry_is_due(self, temp_db, tmp_path, monkeypatch):
+        sent, held = await self._fail_on_missing_files(tmp_path, monkeypatch, retries_used=0)
+        assert sent == []
+        assert held is not None and held.startswith("no file matching 'Ignite'")
+
+    async def test_sent_on_the_last_try(self, temp_db, tmp_path, monkeypatch):
+        from app.orchestrator import download_watcher
+        sent, held = await self._fail_on_missing_files(
+            tmp_path, monkeypatch, retries_used=download_watcher._FILE_RACE_MAX_RETRIES,
+        )
+        assert len(sent) == 1 and sent[0].startswith("Ignite\nno file matching")
+        assert held is None

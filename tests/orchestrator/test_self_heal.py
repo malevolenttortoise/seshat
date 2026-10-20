@@ -40,10 +40,15 @@ class _Qbit(_FakeQbit):
         return list(self.files.get(torrent_hash, []))
 
 
-def _torrent(hash_: str = HASH, state: str = "uploading") -> TorrentInfo:
+class _ProgressQbit(_Qbit):
+    """A client that reports progress, as qBit does (G173)."""
+    reports_progress = True
+
+
+def _torrent(hash_: str = HASH, state: str = "uploading", progress: float = 0.0) -> TorrentInfo:
     return TorrentInfo(
         hash=hash_, name="The Book", category="mam-complete", state=state,
-        seeding_seconds=60, save_path=SAVE, added_on=1,
+        seeding_seconds=60, save_path=SAVE, added_on=1, progress=progress,
     )
 
 
@@ -275,6 +280,20 @@ class TestStrandedRun:
         assert state == pipe_storage.PIPE_FAILED and "isn't complete in qBit" in error
         assert ran == []
 
+    async def test_a_half_done_torrent_is_not_complete(self, temp_db, tmp_path, ran):
+        """G173: qBit 4's pausedDL was outside the downloading set, so a
+        paused torrent at 60% counted as complete."""
+        gid = await _grab(grabs_storage.STATE_DOWNLOADED)
+        await _run(gid, pipe_storage.PIPE_STAGED)
+
+        await budget_watcher.tick(
+            _deps(_ProgressQbit(torrents=[_torrent(state="pausedDL", progress=0.6)]), tmp_path)
+        )
+
+        [(_, state, error)] = await _runs(gid)
+        assert state == pipe_storage.PIPE_FAILED and "isn't complete in qBit" in error
+        assert ran == []
+
     async def test_an_empty_qbit_list_closes_nothing(self, temp_db, tmp_path, ran):
         gid = await _grab(grabs_storage.STATE_DOWNLOADED)
         run = await _run(gid, pipe_storage.PIPE_STAGED)
@@ -412,6 +431,20 @@ class TestFailedSubmitHeal:
         )
 
         assert await _grab_state(gid) == grabs_storage.STATE_FAILED_UNKNOWN
+
+    async def test_waits_until_every_piece_is_there(self, temp_db, tmp_path, ran):
+        """G173: progress from a client that reports it decides."""
+        gid = await _grab(grabs_storage.STATE_FAILED_UNKNOWN)
+
+        await budget_watcher.tick(_deps(
+            _ProgressQbit(torrents=[_torrent(state="pausedDL", progress=0.6)]), tmp_path,
+        ))
+        assert await _grab_state(gid) == grabs_storage.STATE_FAILED_UNKNOWN
+
+        await budget_watcher.tick(_deps(
+            _ProgressQbit(torrents=[_torrent(state="uploading", progress=1.0)]), tmp_path,
+        ))
+        assert await _grab_state(gid) == grabs_storage.STATE_DOWNLOADED
 
     async def test_left_alone(self, temp_db, tmp_path, ran):
         """Too old, another grab on the hash, already has a run, not in

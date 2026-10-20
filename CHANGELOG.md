@@ -44,6 +44,20 @@ frontend test suite.
   Book 9" stored in Forgotten Ruin; ~60 owned books carried that shape.
   Manual Grab's preview and the Review page's "already owned" banner use
   the same rule.
+- **A download counts as finished only when qBit has every piece**
+  (G173, wave S): the watcher called any state outside its "downloading"
+  list finished, so a torrent added a second earlier (`checkingResumeData`)
+  or paused part-way (qBit 4's `pausedDL`) started the pipeline before its
+  file existed. Grab 4744 failed that way and sent a "Pipeline error"
+  ntfy, then recovered on the retry; since qBit writes straight to the
+  final file name, a later misfire could have copied a truncated file.
+  Now qBit's progress must be 100% and the torrent not checking, errored
+  or missing files; the completion log line names the state and
+  progress. Transmission, Deluge and rTorrent report no progress and keep
+  the state rule. A "no file matching" failure holds its ntfy while a
+  retry is due (sent on the last try, or when the torrent is gone), and
+  its message says what happened: qBit lists the torrent as finished but
+  its files aren't there.
 - **Source scans no longer merge one volume into another or drop books
   as duplicates** (discovery fix pass S2, G170). The scan merge decides
   "same book?" with the title identity: different volumes, and two real

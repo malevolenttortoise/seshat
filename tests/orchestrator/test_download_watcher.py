@@ -6,6 +6,8 @@ and synthetic qBit snapshots.
 """
 from dataclasses import dataclass
 
+import pytest
+
 from app.database import get_db
 from app.orchestrator.download_watcher import (
     TorrentSnap,
@@ -128,9 +130,10 @@ class TestCheckForCompletions:
             await db.close()
 
     async def test_various_post_download_states(self, temp_db):
-        """All non-downloading qBit states should count as complete."""
+        """The seeding states count as complete (a recheck, `checkingUP`,
+        waits: TestFinishedMeansEveryPiece)."""
         post_dl_states = ["uploading", "forcedUP", "pausedUP", "stalledUP",
-                          "checkingUP", "queuedUP", "stoppedUP"]
+                          "queuedUP", "stoppedUP"]
         db = await get_db()
         try:
             for i, state in enumerate(post_dl_states):
@@ -606,3 +609,95 @@ class TestMissingTorrentGiveUp:
             assert grab.state == grabs_storage.STATE_SUBMITTED
         finally:
             await db.close()
+
+
+class TestFinishedMeansEveryPiece:
+    """G173 / G185: grab 4744 *Ignite* was called finished one second after
+    qBit added it (first state outside the downloading set, most likely
+    `checkingResumeData`); its pipeline ran before the file existed. qBit
+    writes straight to the final name, so a later misfire could have
+    copied a truncated file."""
+
+    @staticmethod
+    async def _tick(state: str, progress):
+        db = await get_db()
+        try:
+            grab_id = await _insert_submitted_grab(db, "4744", "hash_ignite")
+            snapshot = {"hash_ignite": TorrentSnap(
+                state=state, save_path="/dl/ignite", progress=progress,
+            )}
+            events = await check_for_completions(db, snapshot)
+            grab = await grabs_storage.get_grab(db, grab_id)
+            run = await pipeline_storage.find_by_grab_id(db, grab_id)
+            return events, grab.state, run
+        finally:
+            await db.close()
+
+    @pytest.mark.parametrize("state,progress", [
+        ("metaDL", 0.0),                  # a fresh add
+        ("checkingResumeData", 0.0),      # grab 4744's first second
+        ("checkingResumeData", 1.0),      # checking: files not trusted yet
+        ("checkingUP", 1.0),              # a recheck after completion
+        ("pausedDL", 0.42),               # qBit 4 pause (not in the old set)
+        ("error", 1.0),
+        ("missingFiles", 1.0),
+        ("unknown", 1.0),
+        ("uploading", 0.999),             # one piece short
+    ])
+    async def test_not_finished(self, temp_db, state, progress):
+        events, grab_state, run = await self._tick(state, progress)
+        assert events == []
+        assert grab_state == grabs_storage.STATE_SUBMITTED
+        assert run is None
+
+    @pytest.mark.parametrize("state", ["uploading", "stalledUP", "pausedUP", "stoppedUP"])
+    async def test_finished(self, temp_db, state):
+        events, grab_state, _ = await self._tick(state, 1.0)
+        assert len(events) == 1
+        assert grab_state == grabs_storage.STATE_DOWNLOADED
+
+    async def test_a_client_without_progress_keeps_the_state_rule(self, temp_db):
+        """Transmission / Deluge / rTorrent report no progress (None)."""
+        events, _, _ = await self._tick("uploading", None)
+        assert len(events) == 1
+
+    async def test_the_completion_line_names_state_and_progress(self, temp_db, caplog):
+        import logging
+        caplog.set_level(logging.INFO, logger="seshat.orchestrator.download_watcher")
+        await self._tick("stalledUP", 1.0)
+        assert any(
+            "download complete" in r.getMessage() and "state=stalledUP" in r.getMessage()
+            and "progress=1.0" in r.getMessage() for r in caplog.records
+        )
+
+
+class TestHeldFileRaceNotification:
+    """G185: a file-race failure's ntfy waits while a retry is due."""
+
+    async def test_sent_once_when_the_torrent_is_gone_before_the_retry(
+        self, temp_db, monkeypatch,
+    ):
+        from app.notifications import bus
+        from app.orchestrator import download_watcher
+
+        download_watcher._file_race_retry_counts.clear()
+        download_watcher._file_race_held_ntfy.clear()
+        sent: list[str] = []
+
+        async def record(event, **kw):
+            sent.append(kw.get("message", ""))
+
+        monkeypatch.setattr(bus, "emit", record)
+        db = await get_db()
+        try:
+            retry = TestFileRaceRetry()
+            grab_id, run_id = await retry._setup_failed_run(db, "777", "hash_gone")
+            await retry._backdate_run(db, run_id, seconds_ago=60)
+            download_watcher.hold_file_race_ntfy(grab_id, "no file matching 'Book 777'")
+
+            await check_for_completions(db, {"other": TorrentSnap("uploading", "/dl/x")})
+            await check_for_completions(db, {"other": TorrentSnap("uploading", "/dl/x")})
+        finally:
+            await db.close()
+
+        assert sent == ["Book 777\nno file matching 'Book 777'"]
