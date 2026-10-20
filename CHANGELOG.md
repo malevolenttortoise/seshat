@@ -58,6 +58,19 @@ frontend test suite.
   retry is due (sent on the last try, or when the torrent is gone), and
   its message says what happened: qBit lists the torrent as finished but
   its files aren't there.
+- **Enrichment never merges another volume or edition of the book**
+  (G189, wave S): a source's fuzzy match could score another volume as
+  the book (Hardcover's "My Dungeon Life: Volume 1" scored 1.00 for "My
+  Dungeon Life Vol 2", grabs 4770 and 4796–4802). The title identity's
+  format and number rules now veto any text-search match (cache-backed
+  ones included; MAM's and Audnexus's exact-ID lookups untouched). The
+  review's source list shows it as `other_volume`.
+- **Kobo can contribute to enrichment again** (G188, wave S): its record
+  never carried an author, so even a perfect title scored under the
+  0.80 bar and Kobo hadn't merged a field. It now reads each search
+  result's authors to pick the result, never picks another volume, and
+  reads the detail page's authors and subtitle ("Heaven Sent: Soul
+  Lessons from the Afterlife" is not "Heaven Sent an Inquisitor…").
 - **Source scans no longer merge one volume into another or drop books
   as duplicates** (discovery fix pass S2, G170). The scan merge decides
   "same book?" with the title identity: different volumes, and two real

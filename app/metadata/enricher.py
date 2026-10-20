@@ -49,6 +49,7 @@ from app.metadata.sources.ibdb import IbdbSource
 from app.metadata.sources.kobo import KoboSource
 from app.metadata.sources.mam_search import MamSearchSource
 from app.metadata.sources.openlibrary import OpenLibrarySource
+from app.works.title_identity import TitleRef, different_edition_or_volume
 
 _log = logging.getLogger("seshat.metadata.enricher")
 
@@ -601,6 +602,21 @@ class MetadataEnricher:
             # searched "Monster's Mercy 2", and its junk description
             # leaked into the review record because the merge fired
             # unconditionally.
+            # G189: another volume or edition of the title never merges,
+            # whatever the score: the score gave Hardcover's "My Dungeon
+            # Life: Volume 1" 1.00 for "My Dungeon Life Vol 2" (grab 4770).
+            # Exact-ID lookups are the right book by definition; a
+            # cache-backed match is checked too (its title is fuzzy).
+            if not is_exact and different_edition_or_volume(
+                TitleRef(title),
+                TitleRef(result.title or "", result.series, result.series_index),
+            ):
+                _log.info(
+                    "enricher: %s → skip merge (another volume or edition: %r)",
+                    src.name, result.title,
+                )
+                source_log[-1]["status"] = "other_volume"
+                continue
             is_cache_backed = getattr(result, "_from_cache", False)
             if (
                 not is_exact

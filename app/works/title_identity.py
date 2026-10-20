@@ -679,34 +679,9 @@ def same_book(a: TitleRef, b: TitleRef, labels: frozenset = frozenset()) -> bool
         fmt_b = (fmt_b[0], True)
     if fmt_a != fmt_b:
         return False
-    a_index, b_index = _as_index(a.index), _as_index(b.index)
-    na = {v for _, v in pa.tags} | ({pa.core} if pa.core is not None else set())
-    nb = {v for _, v in pb.tags} | ({pb.core} if pb.core is not None else set())
-
-    # Numbers written in either title, whatever series they name.
-    if na and nb and not (na & nb):
+    position_agrees = _volumes_agree(a, b, pa, pb)
+    if position_agrees is None:
         return False
-    if na and not nb and _lone_number_differs(na, pa, a.series, b.series, b_index):
-        return False
-    if nb and not na and _lone_number_differs(nb, pb, b.series, a.series, a_index):
-        return False
-
-    # Volumes within one series name.
-    sa = _series_numbers(pa.tags, a.series, a_index, pa.core)
-    sb = _series_numbers(pb.tags, b.series, b_index, pb.core)
-    if pa.core is not None and pb.core is not None and pa.core != pb.core:
-        return False
-    if (pa.core is None) != (pb.core is None):
-        v = pa.core if pa.core is not None else pb.core
-        other = sb if pa.core is not None else sa
-        other_written = nb if pa.core is not None else na
-        anywhere = set().union(*other.values()) if other else set()
-        if v != 1.0 and v not in anywhere and v not in other_written:
-            return False
-    shared = [k for k in sa if k and k in sb]
-    if any(not (sa[k] & sb[k]) for k in shared):
-        return False
-    position_agrees = any(sa[k] & sb[k] for k in shared)
 
     # Titles.
     same_core = pa.core is not None and pa.core == pb.core
@@ -717,6 +692,59 @@ def same_book(a: TitleRef, b: TitleRef, labels: frozenset = frozenset()) -> bool
     return position_agrees and (
         _no_real_title(pa.proper, a.series) or _no_real_title(pb.proper, b.series)
     )
+
+
+def different_edition_or_volume(a: TitleRef, b: TitleRef) -> bool:
+    """`same_book`'s format and number rules alone (rules 1–3): another
+    format (comic, dramatised) or another volume, whatever the titles.
+
+    Enrichment's veto beside its fuzzy title score (G189): the score gave
+    Hardcover's "My Dungeon Life: Volume 1" 1.00 for "My Dungeon Life Vol
+    2". The title rules stay out of it — the score judges titles, and the
+    identity's keys miss a description with no separator ("Aurora Rises A
+    LitRPG Adventure").
+    """
+    fmt_a, pa = _parsed(a.title or "")
+    fmt_b, pb = _parsed(b.title or "")
+    if (fmt_a[0], fmt_a[1] or a.dramatised) != (fmt_b[0], fmt_b[1] or b.dramatised):
+        return True
+    return _volumes_agree(a, b, pa, pb) is None
+
+
+def _volumes_agree(
+    a: TitleRef, b: TitleRef, pa: ParsedTitle, pb: ParsedTitle,
+) -> Optional[bool]:
+    """None when the numbers written in the titles, or their indexes,
+    make them different volumes (rules 2 and 3); else whether a series
+    position is shared."""
+    a_index, b_index = _as_index(a.index), _as_index(b.index)
+    na = {v for _, v in pa.tags} | ({pa.core} if pa.core is not None else set())
+    nb = {v for _, v in pb.tags} | ({pb.core} if pb.core is not None else set())
+
+    # Numbers written in either title, whatever series they name.
+    if na and nb and not (na & nb):
+        return None
+    if na and not nb and _lone_number_differs(na, pa, a.series, b.series, b_index):
+        return None
+    if nb and not na and _lone_number_differs(nb, pb, b.series, a.series, a_index):
+        return None
+
+    # Volumes within one series name.
+    sa = _series_numbers(pa.tags, a.series, a_index, pa.core)
+    sb = _series_numbers(pb.tags, b.series, b_index, pb.core)
+    if pa.core is not None and pb.core is not None and pa.core != pb.core:
+        return None
+    if (pa.core is None) != (pb.core is None):
+        v = pa.core if pa.core is not None else pb.core
+        other = sb if pa.core is not None else sa
+        other_written = nb if pa.core is not None else na
+        anywhere = set().union(*other.values()) if other else set()
+        if v != 1.0 and v not in anywhere and v not in other_written:
+            return None
+    shared = [k for k in sa if k and k in sb]
+    if any(not (sa[k] & sb[k]) for k in shared):
+        return None
+    return any(sa[k] & sb[k] for k in shared)
 
 
 def author_labels(titles: Iterable[str]) -> frozenset:

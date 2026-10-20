@@ -102,6 +102,12 @@ The same parser reads "(Series Book N)" out of a title at creation (G171) and Ha
 - **MAM's "Dramatization/Full Cast" category marks a dramatised edition** (Mark, F28), the same as the title's
   words in rule 1: the owned check reads the announce's categories (`TitleRef.dramatised`). A full-cast upload of
   Platform Decay had been skipped as owned beside Kevin R. Free's narration.
+- **Enrichment vetoes another volume or edition** (Mark, G189): rules 1–3 alone
+  (`different_edition_or_volume`) stop a text-search match from merging, whatever its fuzzy score; exact-ID
+  lookups (MAM by torrent ID, Audnexus by ASIN) are untouched. The score had given Hardcover's "My Dungeon Life:
+  Volume 1" 1.00 for "My Dungeon Life Vol 2". The title rules stay out (the score judges titles, and rule 4's keys
+  miss a description with no separator, "Aurora Rises A LitRPG Adventure"). On the 158 text-search matches merged
+  2026-10-17 → 10-20 it refuses 8, all Hardcover's Volume 1 for volumes 2–9. Kobo's search uses it to pick a result.
 
 ## Related
 

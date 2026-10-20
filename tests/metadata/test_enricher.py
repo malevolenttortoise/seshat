@@ -901,3 +901,63 @@ class TestEnrichmentScope:
         async with enrichment_scope() as scope:
             scope["session"] = c
         assert c.closed
+
+
+class TestAnotherVolumeNeverMerges:
+    """G189: grab 4770 'My Dungeon Life Vol 2' — Hardcover returned 'My
+    Dungeon Life: Volume 1', author matching, and score_match gave it 1.00.
+    The identity's format and number rules veto any text-search match."""
+
+    async def _enrich(self, record: MetaRecord, *, title: str, cache: bool = False):
+        cfg = EnrichmentConfig(enabled=True, accept_confidence=0.8)
+        if cache:
+            record._from_cache = True  # type: ignore[attr-defined]
+        src = _FakeSource(name="hardcover", result=record)
+        result = await MetadataEnricher(cfg, sources=[src]).enrich(
+            title=title, author="Whatsawhizzer",
+        )
+        return result, src
+
+    async def test_another_volume_is_not_merged(self):
+        rec = MetaRecord(title="My Dungeon Life: Volume 1", authors=["Whatsawhizzer"],
+                         description="Volume 1's blurb", source="hardcover")
+        result, _ = await self._enrich(rec, title="My Dungeon Life Vol 2")
+        assert result is None      # nothing merged, nothing else ran
+
+    async def test_logged_as_another_volume(self):
+        exact = MetaRecord(title="My Dungeon Life: Volume 2", authors=["Whatsawhizzer"],
+                           source="mam", confidence=1.0)
+        wrong = MetaRecord(title="My Dungeon Life: Volume 1", authors=["Whatsawhizzer"],
+                           description="Volume 1's blurb", source="hardcover")
+        enricher = MetadataEnricher(
+            EnrichmentConfig(enabled=True, accept_confidence=0.8),
+            sources=[_FakeSource(name="mam", result=exact), _FakeSource(name="hardcover", result=wrong)],
+        )
+        result = await enricher.enrich(title="My Dungeon Life Vol 2", author="Whatsawhizzer")
+        assert result.description is None
+        entry = next(e for e in result._source_log if e["source"] == "hardcover")
+        assert entry["status"] == "other_volume"
+
+    async def test_a_cache_backed_match_is_checked_too(self):
+        rec = MetaRecord(title="My Dungeon Life: Volume 1", authors=["Whatsawhizzer"],
+                         cover_url="https://x/vol1.jpg", source="amazon")
+        result, _ = await self._enrich(rec, title="My Dungeon Life Vol 2", cache=True)
+        assert result is None
+
+    async def test_a_dramatised_edition_is_not_the_plain_book(self):
+        rec = MetaRecord(title="Threshing Day [Dramatized Adaptation]", authors=["Whatsawhizzer"],
+                         source="hardcover")
+        result, _ = await self._enrich(rec, title="Threshing Day")
+        assert result is None
+
+    @pytest.mark.parametrize("record_title", [
+        "My Dungeon Life: Volume 2", "Aurora Rises A LitRPG Adventure",
+    ])
+    async def test_the_same_volume_still_merges(self, record_title):
+        """Positive controls: the right volume, and a title the identity's
+        keys would miss (a description with no separator) — only the format
+        and number rules veto."""
+        search = "My Dungeon Life Vol 2" if "Dungeon" in record_title else "Aurora Rises"
+        rec = MetaRecord(title=record_title, authors=["Whatsawhizzer"], source="hardcover")
+        result, _ = await self._enrich(rec, title=search)
+        assert result is not None
