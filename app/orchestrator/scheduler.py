@@ -221,6 +221,29 @@ def register_goodreads_author_backfill(scheduler: AsyncIOScheduler) -> None:
     )
 
 
+def register_enrich_retry(scheduler: AsyncIOScheduler) -> None:
+    """Every 5 min: re-run, for pending reviews, the enrichment sources
+    that were skipped while backing off, once the backoff is over (G182)."""
+    from apscheduler.triggers.interval import IntervalTrigger
+
+    async def _tick():
+        from app.orchestrator.enrich_retry import retry_skipped_sources
+        try:
+            await retry_skipped_sources()
+        except Exception:
+            _log.exception("enrichment retry crashed (non-fatal)")
+
+    scheduler.add_job(
+        _tick,
+        trigger=IntervalTrigger(minutes=5),
+        id="enrich_retry_skipped_sources",
+        name="Enrichment: retry sources skipped while backing off",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
+
+
 # ─── v2.21.0 Phase G: metadata-cache health watchdog + daily summary ──
 
 

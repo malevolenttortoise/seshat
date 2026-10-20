@@ -120,6 +120,16 @@ _SERIES_DECORATOR_RX = re.compile(
 )
 
 
+def _hook(src, name: str) -> bool:
+    """A source's optional yes/no hook (`MetaSource.backing_off` /
+    `skipped_for_backoff`); False for a source without it."""
+    fn = getattr(src, name, None)
+    try:
+        return bool(fn()) if callable(fn) else False
+    except Exception:
+        return False
+
+
 def _strip_series_decorator(title: str) -> str:
     r"""Strip series-decorator words but keep the number they introduce.
 
@@ -494,6 +504,15 @@ class MetadataEnricher:
                         "status": "soft_blocked",
                     })
                     continue
+            elif _hook(src, "backing_off"):
+                # Any other source refusing requests after a block (Kobo):
+                # skipped, and retried for a pending review once the
+                # backoff ends (G182).
+                _log.debug("enricher: %s skipped (backing off) for %r", src.name, title)
+                source_log.append({
+                    "source": src.name, "confidence": None, "status": "soft_blocked",
+                })
+                continue
             # Pull whatever identifiers prior sources have populated on
             # the in-progress merged record so Goodreads' resolver
             # tiers (T1-T5) can use them. Falls back to the seed
@@ -543,6 +562,17 @@ class MetadataEnricher:
                             library_slug=library_slug,
                         )
             if result is None:
+                if _hook(src, "skipped_for_backoff"):
+                    # Refused by a cooldown, not a miss (Amazon's search /
+                    # product pages): retried before review (G182).
+                    _log.info(
+                        "enricher: %s → skipped, backing off (title=%r)",
+                        src.name, title,
+                    )
+                    source_log.append({
+                        "source": src.name, "confidence": None, "status": "soft_blocked",
+                    })
+                    continue
                 # Emit at INFO so the log stream shows the full chain —
                 # otherwise sources that fail to match for a given book
                 # are invisible and the user can't tell whether they
@@ -648,6 +678,9 @@ class MetadataEnricher:
 
         if merged is not None:
             merged._source_log = source_log  # type: ignore[attr-defined]
+        # The last book's per-source outcomes, also when nothing merged
+        # (G182's retry reads why a source came back empty).
+        self.last_source_log = source_log
         return merged
 
     async def _safe_search(

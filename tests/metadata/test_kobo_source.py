@@ -143,3 +143,14 @@ class TestDetailPage:
         src, _ = _kobo({"x": _detail("The King", authors=authors)})
         d = await src._get_book_details("x")
         assert d["authors"] == list(dict.fromkeys(authors))
+
+
+def test_backing_off_follows_the_kobo_session(monkeypatch):
+    """G182: a Kobo backoff makes the enricher skip it as soft_blocked."""
+    from app.metadata import kobo_session
+
+    monkeypatch.setattr(kobo_session, "backoff_until", lambda: 0.0)
+    assert KoboSource().backing_off() is False
+    monkeypatch.setattr(kobo_session, "backoff_until", lambda: 1e12)
+    assert KoboSource().backing_off() is True
+

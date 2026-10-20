@@ -152,8 +152,15 @@ class AmazonSource(MetaSource):
         )
         if is_amazon_blocked(KIND_CATALOG):
             _log.info("amazon: skipped — soft-block cooldown active")
+            scope = current_enrichment_scope()
+            if scope is not None:
+                scope["amazon_backoff_skip"] = True
             return True
         return False
+
+    def skipped_for_backoff(self) -> bool:
+        """A live request this book needed was refused by the cooldown (G182)."""
+        return bool(self._scope().get("amazon_backoff_skip"))
 
     async def _fetch(self, url: str, params: dict = None) -> Optional[str]:
         """One live GET in Amazon's turn (the source gate): the shared

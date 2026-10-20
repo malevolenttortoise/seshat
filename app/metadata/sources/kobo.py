@@ -85,6 +85,9 @@ class KoboSource(MetaSource):
     def __init__(self, *, rate_limit: float = 3.0):
         super().__init__(rate_limit=rate_limit)
 
+    def backing_off(self) -> bool:
+        return kobo_session.backoff_until() > 0.0
+
     async def _fetch(self, url: str) -> Optional[str]:
         # In Kobo's turn (the source gate's Metadata Sources rate).
         return await kobo_session.fetch(url, timeout=self.default_timeout)

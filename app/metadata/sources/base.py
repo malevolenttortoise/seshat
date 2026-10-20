@@ -210,3 +210,15 @@ class MetaSource:
         run; expensive sources are skipped).
         """
         return False
+
+    def backing_off(self) -> bool:
+        """True while this source refuses requests (a block's backoff):
+        the enricher records the source as skipped, `soft_blocked`, and
+        G182's retry re-runs it for a pending review once it's over."""
+        return False
+
+    def skipped_for_backoff(self) -> bool:
+        """After a None result: was it a backoff refusing the request
+        (this book's enrichment scope), not a real miss? Sources with a
+        partial cooldown (Amazon's page kinds) answer here."""
+        return False

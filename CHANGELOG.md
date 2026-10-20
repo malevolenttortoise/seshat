@@ -75,6 +75,18 @@ frontend test suite.
   stops every kind. The worker's escalation (10 → 30 → 60 min) extends
   the cooldown its scan tripped. Settings gain the runtime key
   `amazon_blocked_until_by_kind`; Reset cooldown clears both.
+- **A source skipped while backing off is retried before you review**
+  (G182, wave S, ADR-0025 amended): when a grab's enrichment skipped
+  Amazon (its search / product pages cooling down), Goodreads (book
+  pages backing off) or Kobo, a job every 5 minutes re-runs that source
+  alone for the still-pending review once the backoff is over, and merges
+  it as if it had never been skipped: a field takes its value where it
+  ranks above the field's current source (description keeps the longer
+  text), a top-level field follows only if it was empty or still the old
+  enriched value (your edits and file values stay), a cover it wins is
+  downloaded. Once per source; nothing re-runs after a decision. The
+  review's source list shows the retry (`retried`). A skip is now
+  recorded as `soft_blocked`, not as "no match".
 - **The Amazon cache worker refreshes quiet authors less often** (G183,
   wave S, ADR-0025 amended): a refresh that finds no book the cache
   didn't have puts the next one 14, then 28 days out; one that finds a

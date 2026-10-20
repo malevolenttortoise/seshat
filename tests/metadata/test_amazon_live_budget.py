@@ -219,3 +219,16 @@ async def test_a_product_page_429_cools_only_search_and_product_pages(amazon):
     assert await AmazonSource().search_book("The Tale", "Author") is None
     assert resolver.is_amazon_blocked(resolver.KIND_CATALOG)
     assert not resolver.is_amazon_blocked(resolver.KIND_STORE)
+
+
+async def test_a_cooldown_skip_is_soft_blocked_for_the_retry(amazon):
+    """G182: a book whose Amazon search was refused by the cooldown is
+    marked skipped (soft_blocked), not 'no match', so it is retried."""
+    from app.metadata.enricher import EnrichmentConfig, MetadataEnricher
+
+    resolver.record_amazon_soft_block("search 429", kind=resolver.KIND_CATALOG)
+    enricher = MetadataEnricher(EnrichmentConfig(enabled=True), sources=[AmazonSource()])
+    assert await enricher.enrich(title="The Tale", author="Author") is None
+    assert enricher.last_source_log[0]["status"] == "soft_blocked"
+    assert _gets() == []
+
