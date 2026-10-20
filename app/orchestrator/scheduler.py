@@ -194,8 +194,10 @@ def register_goodreads_canary(scheduler: AsyncIOScheduler) -> None:
 
 
 def register_goodreads_author_backfill(scheduler: AsyncIOScheduler) -> None:
-    """Register the weekly Goodreads author-ID job: Sundays 11:00 local,
-    inside the Goodreads worker's usual 10:00-22:00 window.
+    """Register the weekly Goodreads author-ID job: Sundays 15:00 local,
+    inside the Goodreads worker's usual 10:00-22:00 window and after its
+    daily 10:00-13:00 list refresh (G187: at 11:00 the two ran together
+    and 6 of 2026-10-18's 8 book-page blocks fell in that window).
 
     Copies IDs from the same person's author in another library, then
     resolves the ebook libraries' authors with books (autocomplete first;
@@ -212,7 +214,7 @@ def register_goodreads_author_backfill(scheduler: AsyncIOScheduler) -> None:
 
     scheduler.add_job(
         _weekly,
-        trigger=CronTrigger(day_of_week="sun", hour=11, minute=0),
+        trigger=CronTrigger(day_of_week="sun", hour=15, minute=0),
         id="goodreads_author_id_backfill",
         name="Goodreads author-ID backfill (weekly)",
         replace_existing=True,

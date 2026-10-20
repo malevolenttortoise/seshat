@@ -252,11 +252,23 @@ def _no_source_gate_waits(monkeypatch):
     async def _no_wait(_seconds: float) -> None:
         await asyncio.sleep(0)
 
+    def _forget_persisted_kind_starts():
+        # A kind's last start survives a restart through settings.json
+        # (trial item (d)); the suite shares one settings file.
+        from app import config
+        s = config.load_settings()
+        if s.get(source_gate._KIND_START_KEY):
+            s = dict(s)
+            s[source_gate._KIND_START_KEY] = {}
+            config.save_settings(s)
+
     source_gate.reset()
+    _forget_persisted_kind_starts()
     kobo_session.reset_for_tests()
     monkeypatch.setattr(source_gate, "_sleep", _no_wait)
     yield
     source_gate.reset()
+    _forget_persisted_kind_starts()
     kobo_session.reset_for_tests()
 
 
@@ -279,6 +291,16 @@ def _no_leaked_goodreads_backoff():
     _clear()
     yield
     _clear()
+
+
+@pytest.fixture(autouse=True)
+def _no_leaked_goodreads_autocomplete_spacing():
+    """The candidate worker's last autocomplete time (G187) is module
+    state: one test's check would hold a later test's for 3 minutes."""
+    from app.discovery import goodreads_candidates
+    goodreads_candidates._last_autocomplete_at = 0.0
+    yield
+    goodreads_candidates._last_autocomplete_at = 0.0
 
 
 @pytest.fixture(autouse=True)

@@ -86,6 +86,7 @@ _RUNTIME_STATE_KEYS: frozenset[str] = frozenset({
     "amazon_block_reason",
     "amazon_blocked_since",
     "amazon_blocked_until_by_kind",
+    "source_gate_kind_last_start",
 })
 
 

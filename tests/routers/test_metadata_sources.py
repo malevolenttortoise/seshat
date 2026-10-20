@@ -372,7 +372,7 @@ class TestGoodreadsExtras:
         async with await _client(_make_app()) as ac:
             resp = await ac.get("/api/v1/metadata-sources")
         gr = resp.json()["state"]["sources"]["goodreads"]
-        assert gr["book_page_gap"] == 120.0
+        assert gr["book_page_gap"] == 400.0             # G176 / G179
         assert gr["include_nonfiction"] is False
         for name, entry in resp.json()["state"]["sources"].items():
             if name != "goodreads":
@@ -401,3 +401,14 @@ class TestGoodreadsExtras:
             state["sources"]["goodreads"]["book_page_gap"] = 7200
             put = await ac.put("/api/v1/metadata-sources", json=state)
         assert put.status_code == 422
+
+
+def test_the_book_page_gap_defaults_to_400s():
+    """G176 / G179: the wave-4 trial settled the default (blocks 4-8% a
+    day at 400s, the backoff never past 5 minutes)."""
+    from app.metadata.source_config import (
+        _DEFAULT_NEW_INSTALL_STATE, get_goodreads_book_page_gap,
+    )
+    assert get_goodreads_book_page_gap({}) == 400.0
+    assert _DEFAULT_NEW_INSTALL_STATE["goodreads"]["book_page_gap"] == 400.0
+

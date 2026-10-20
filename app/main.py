@@ -824,7 +824,7 @@ async def lifespan(app: FastAPI):
     _log.info("Goodreads canary registered (Mon 03:00)")
     # 2026-10 audit wave 4b (G84): the Goodreads author-ID job, weekly.
     register_goodreads_author_backfill(scheduler)
-    _log.info("Goodreads author-ID job registered (Sun 11:00)")
+    _log.info("Goodreads author-ID job registered (Sun 15:00)")
     # Wave S (G182): sources skipped while backing off are retried for
     # pending reviews once the backoff ends.
     register_enrich_retry(scheduler)

@@ -994,7 +994,7 @@ function GoodreadsExtrasRow({
   onChange: (key: keyof SourceEntry, value: number | boolean) => void;
 }) {
   const t = useTheme();
-  const gap = entry.book_page_gap ?? 120;
+  const gap = entry.book_page_gap ?? 400;
   return (
     <div style={{
       display: "flex", flexDirection: "column", gap: 6,

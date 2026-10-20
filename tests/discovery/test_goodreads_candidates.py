@@ -125,6 +125,9 @@ async def env(tmp_path, monkeypatch):
     monkeypatch.setattr(state, "_library_sync_in_progress", False)
     monkeypatch.setattr(state, "_hygiene_task", None)
     monkeypatch.setattr(gc, "_phase2_seeded_at", 0.0)
+    # G187's autocomplete spacing off by default here; TestAutocompleteSpacing pins it.
+    monkeypatch.setattr(gc, "AUTOCOMPLETE_GAP_S", 0.0)
+    monkeypatch.setattr(gc, "_last_autocomplete_at", 0.0)
     await metadata_cache.init_db(metadata_cache.SOURCE_GOODREADS)
     await disco_db.init_db("books-lib")
     await disco_db.init_db("audio-lib")
@@ -869,3 +872,73 @@ async def test_phase2_skips_a_page_stored_after_its_seed(env):
     res = await gc.phase2_step()
     assert env["gr"].urls == []
     assert res.detail.endswith("fetched")
+
+
+class TestAutocompleteSpacing:
+    """G187: in bursts (one a minute, 2026-10-18 12:16-13:10) ~45% of the
+    book pages beside them were blocked; checks now run ≥ 3 min apart."""
+
+    async def test_checks_run_at_most_one_per_three_minutes(self, env, monkeypatch):
+        from app.metadata import source_gate
+        monkeypatch.setattr(gc, "AUTOCOMPLETE_GAP_S", 180.0)
+        clock = {"t": 1_000_000.0}
+        monkeypatch.setattr(gc, "_now", lambda: clock["t"])
+        monkeypatch.setattr(source_gate, "kind_wait_seconds", lambda s, k: 900.0)  # no page turn
+        await _seeded(env, [_rec(100, "Neuropath"), _rec(101, "Second")])
+        env["gr"].autocomplete["Neuropath"] = [_hit(100, "Neuropath")]
+        env["gr"].autocomplete["Second"] = [_hit(101, "Second")]
+
+        await gc.step()                                    # the first check
+        env["gr"].urls.clear()
+        res = await gc.step()                              # straight after: waits
+        assert env["gr"].urls == []
+        assert res.outcome == "idle" and res.retry_in_s == pytest.approx(180.0)
+
+        clock["t"] += 181
+        await gc.step()
+        assert env["gr"].kinds() == ["ac"]
+
+
+async def test_a_page_turn_goes_before_a_due_list_page(env, monkeypatch):
+    """Trial item (f): the daily list refresh (10:00 → ~13:00) held every
+    page turn for 2-3 hours; a ready page now goes first."""
+    from app.discovery import metadata_cache_worker as w
+    monkeypatch.setattr(w, "_gr_candidates_seeded_at", 0.0)
+    await _awaiting(env, page=FakeResp(200, NEUROPATH))
+    db = await metadata_cache.get_db(metadata_cache.SOURCE_GOODREADS)
+    try:
+        await db.execute(
+            f"INSERT OR REPLACE INTO {metadata_cache.queue_table(metadata_cache.SOURCE_GOODREADS)} "
+            f"(author_id, priority, status, next_scan_due_at, consecutive_failures, enqueued_reason) "
+            f"VALUES (?, 100, 'pending', 0, 0, 'test')", (GR_AUTHOR,),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    env["gr"].urls.clear()
+
+    res = await w.tick_goodreads()
+
+    assert res.outcome == "candidate_page"
+    assert all("/book/show/" in u for u in env["gr"].urls)
+    db = await metadata_cache.get_db(metadata_cache.SOURCE_GOODREADS)
+    try:
+        row = await (await db.execute(
+            f"SELECT status FROM {metadata_cache.queue_table(metadata_cache.SOURCE_GOODREADS)} "
+            f"WHERE author_id = ?", (GR_AUTHOR,),
+        )).fetchone()
+    finally:
+        await db.close()
+    assert row[0] == "pending"                  # the list page waits for the next tick
+
+
+async def test_a_page_block_does_not_sleep_the_loop(env, monkeypatch):
+    """Trial item (a) / G108: after a book-page block the loop slept the
+    backoff, holding list pages and autocomplete too."""
+    from app.discovery import metadata_cache_worker as w
+    monkeypatch.setattr(w, "_gr_candidates_seeded_at", 0.0)
+    await _awaiting(env, page=FakeResp(202, "x"))
+    res = await w.tick_goodreads()
+    assert res.outcome == "candidate_blocked"
+    assert res.next_sleep_s == 1.0
+

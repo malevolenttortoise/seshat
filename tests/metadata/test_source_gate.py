@@ -498,3 +498,22 @@ async def test_measured_waits_add_up(clock, rates):
         await _one("goodreads", "enrichment")
         await _one("goodreads", "enrichment")
     assert waits.seconds() == 60.0
+
+
+async def test_a_book_pages_gap_survives_a_restart(clock, page_gap, monkeypatch):
+    """Trial item (d): the gate's memory of the last book page was
+    in-process only, so a restart let a page go inside the gap."""
+    page_gap["gap"] = 400.0
+    stored: dict = {}
+    monkeypatch.setattr(source_gate, "_persist_kind_start",
+                        lambda kkey: stored.update({kkey: source_gate._wall()}))
+    await _one("goodreads", "worker", kind="book_page")
+    clock.now += 100.0
+    clock.wall += 100.0
+
+    source_gate._last_start.clear()                 # the restart
+    settings = source_gate.load_settings()
+    settings[source_gate._KIND_START_KEY] = stored
+    monkeypatch.setattr(source_gate, "load_settings", lambda: settings)
+
+    assert source_gate.kind_wait_seconds("goodreads", "book_page") == pytest.approx(300.0)

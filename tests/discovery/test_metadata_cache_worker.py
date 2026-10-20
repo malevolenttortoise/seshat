@@ -1349,6 +1349,50 @@ class TestPhaseGNewBookDetection:
         assert "Brand New Book" in info[0]["message"]
 
 
+class TestStallThresholdFollowsTheGate:
+    """Trial item (g): 68 false "stalled" warnings while an Amazon author
+    scan waited on a 100s gate (one took 858s); the message said "Amazon
+    worker" for Goodreads too."""
+
+    async def _stale(self, source, age_s):
+        db = await metadata_cache.get_db(source)
+        try:
+            await db.execute(
+                f"UPDATE {metadata_cache.worker_state_table(source)} "
+                f"SET last_heartbeat_at = ? WHERE id = 1", (time.time() - age_s,),
+            )
+            await db.commit()
+        finally:
+            await db.close()
+
+    async def test_a_long_gated_scan_is_no_stall(self, worker_under, monkeypatch):
+        from app.metadata import source_gate
+        monkeypatch.setattr(source_gate, "gap_seconds", lambda source: 100.0)
+        sent: list = []
+
+        async def _ntfy(**kw):
+            sent.append(kw)
+        monkeypatch.setattr(metadata_cache_worker, "_send_ntfy", _ntfy)
+        await self._stale(metadata_cache.SOURCE_AMAZON, 858)
+        assert await metadata_cache_worker.check_stall("amazon") is False
+        await self._stale(metadata_cache.SOURCE_AMAZON, 1300)
+        assert await metadata_cache_worker.check_stall("amazon") is True
+        assert sent and sent[0]["title"] == "Amazon worker — stalled"
+
+
+def test_crash_ntfys_at_most_one_an_hour(monkeypatch):
+    """Trial item (e): 2026-10-11 sent 78 crash ntfys in 45 minutes."""
+    monkeypatch.setattr(metadata_cache_worker, "_crash_ntfy_sent_at", {})
+    clock = {"t": 1_000_000.0}
+    monkeypatch.setattr(metadata_cache_worker.time, "time", lambda: clock["t"])
+    assert metadata_cache_worker._crash_ntfy_due("goodreads") is True
+    clock["t"] += 60
+    assert metadata_cache_worker._crash_ntfy_due("goodreads") is False
+    assert metadata_cache_worker._crash_ntfy_due("amazon") is True
+    clock["t"] += 3600
+    assert metadata_cache_worker._crash_ntfy_due("goodreads") is True
+
+
 class TestPhaseGStallWatchdog:
     async def test_fresh_heartbeat_returns_false(self, worker_under):
         # Stamp a recent heartbeat.

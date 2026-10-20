@@ -178,11 +178,25 @@ frontend test suite.
   and its book page (English, not an audiobook, set or translation)
   before it's created. With the worker off, scans fetch Goodreads live as
   before.
-- **Goodreads book pages wait at least 2 minutes after the previous one**,
-  whoever asks (the candidate worker, a grab's enrichment, a live scan,
-  the probe), on top of the Goodreads rate. Goodreads blocks a run of book
-  pages from one address. "Book-page gap" on Metadata Sources › Goodreads
-  sets it.
+- **Goodreads book pages wait at least 400 seconds after the previous
+  one** (G176 / G179: the wave-4 trial measured 2 minutes, 10 minutes,
+  then 400s; at 400s 4-8% of pages a day were blocked, ~45% more pages
+  than at 10 minutes), whoever asks (the candidate worker, a grab's
+  enrichment, a live scan, the probe), on top of the Goodreads rate.
+  Goodreads blocks a run of book pages from one address. "Book-page gap"
+  on Metadata Sources › Goodreads sets it; the last page's time now
+  survives a restart, so a restart no longer lets a page go inside the
+  gap.
+- **The Goodreads worker keeps its pages and traffic apart** (wave S):
+  a book page whose turn has come goes before a due list page (the daily
+  10:00-13:00 list refresh used to hold every page turn for 2-3 hours); a
+  book-page block no longer puts the whole loop to sleep for the backoff;
+  its autocomplete checks run at least 3 minutes apart (bursts of one a
+  minute went with ~45% of the pages beside them blocked); the weekly
+  Goodreads author-ID job moves to Sunday 15:00, after the list refresh
+  (G187). A "tick crashed" ntfy goes at most once an hour per worker, and
+  the stall warning allows for a scan waiting on its source's gate (12
+  gaps; it named the Amazon worker for Goodreads too).
 - **Goodreads non-fiction isn't added to discovery by default**: a book
   Goodreads files under Nonfiction, Self Help, Sports, Puzzles, Cookbooks,
   Reference or Picture Books, or whose title names a crossword, puzzle,

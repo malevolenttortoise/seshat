@@ -928,6 +928,10 @@ async def check_stall(
         threshold_s = float(
             s.get("metadata_cache_stall_threshold_s", 300)
         )
+        # One tick can wait on the source gate for many turns: an Amazon
+        # author scan under a 100s gate took 858s (trial item (g): 68 false
+        # "stalled" warnings). At least 12 of the source's gaps.
+        threshold_s = max(threshold_s, 12.0 * source_gate.gap_seconds(source_name))
     snapshot = await _read_state_for_summary(source_name)
     heartbeat = snapshot["last_heartbeat_at"]
     if heartbeat is None:
@@ -971,7 +975,7 @@ async def check_stall(
     )
     await _send_ntfy(
         event_key="metadata_cache_error",
-        title="Amazon worker — stalled",
+        title=f"{source_name.title()} worker — stalled",
         message=(
             f"No heartbeat for {age_repr}. Worker may have crashed "
             "or be stuck in a long-running call. Check container "
@@ -2390,8 +2394,10 @@ async def _goodreads_candidate_tick(idle: "TickResult") -> "TickResult":
     return TickResult(
         source_name=metadata_cache.SOURCE_GOODREADS,
         outcome=f"candidate_{res.outcome}",
-        # The source gate paces the requests; a block waits its backoff.
-        next_sleep_s=max(1.0, res.retry_in_s) if res.retry_in_s > 0 else 1.0,
+        # The source gate paces the requests. A book-page block no longer
+        # sleeps the loop through its backoff (G108, trial item (a)): list
+        # pages and autocomplete carry on; the next candidate step waits.
+        next_sleep_s=1.0,
     )
 
 
@@ -2466,6 +2472,15 @@ async def tick_goodreads() -> TickResult:
             source_name=source_name, outcome="cooldown",
             cooldown_remaining_s=remaining,
             next_sleep_s=min(remaining + 1.0, _COOLDOWN_MAX_SLEEP_S),
+        ))
+
+    # A book page whose turn has come goes before a due list page (trial
+    # item (f)): the daily list refresh (150 authors, 10:00 → ~13:00) used
+    # to hold every page turn for 2-3 hours.
+    from app.discovery import goodreads_candidates as _candidates
+    if await _candidates.page_turn_ready():
+        return await _goodreads_candidate_tick(TickResult(
+            source_name=source_name, outcome="page_turn", next_sleep_s=1.0,
         ))
 
     db = await metadata_cache.get_db(source_name)
@@ -2768,6 +2783,20 @@ async def tick_goodreads() -> TickResult:
 # ─── Run loop ──────────────────────────────────────────────────
 
 
+_CRASH_NTFY_EVERY_S = 3600.0
+_crash_ntfy_sent_at: dict[str, float] = {}
+
+
+def _crash_ntfy_due(source_name: str) -> bool:
+    """A "tick crashed" ntfy may go now (at most one an hour per source);
+    taking it starts the hour."""
+    now = time.time()
+    if now - _crash_ntfy_sent_at.get(source_name, 0.0) < _CRASH_NTFY_EVERY_S:
+        return False
+    _crash_ntfy_sent_at[source_name] = now
+    return True
+
+
 async def run_loop(
     *,
     source_name: str = metadata_cache.SOURCE_AMAZON,
@@ -2823,23 +2852,26 @@ async def run_loop(
             )
             # Phase G: surface tick crashes to the operator. We rely
             # on the supervised-task restart to bring the loop back —
-            # this ntfy is purely so the user knows it happened.
-            try:
-                await _send_ntfy(
-                    event_key="metadata_cache_error",
-                    title=f"{source_name.title()} worker — tick crashed",
-                    message=(
-                        f"{type(exc).__name__}: {exc}. "
-                        "Worker loop is recovering automatically; "
-                        "check container logs for traceback."
-                    ),
-                    priority=5,
-                    tags=["rotating_light"],
-                )
-            except Exception:
-                logger.exception(
-                    "metadata_cache_worker: post-crash ntfy emit failed"
-                )
+            # this ntfy is purely so the user knows it happened. At most
+            # one an hour per source (trial item (e): 2026-10-11 sent 78
+            # in 45 minutes, one per failing tick).
+            if _crash_ntfy_due(source_name):
+                try:
+                    await _send_ntfy(
+                        event_key="metadata_cache_error",
+                        title=f"{source_name.title()} worker — tick crashed",
+                        message=(
+                            f"{type(exc).__name__}: {exc}. "
+                            "Worker loop is recovering automatically; "
+                            "check container logs for traceback."
+                        ),
+                        priority=5,
+                        tags=["rotating_light"],
+                    )
+                except Exception:
+                    logger.exception(
+                        "metadata_cache_worker: post-crash ntfy emit failed"
+                    )
             # Belt-and-suspenders: if tick() raised before reaching
             # its own internal queue-row-recovery (the post-scan
             # cache-write try/except), any popped row would stay

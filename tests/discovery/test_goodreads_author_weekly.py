@@ -154,14 +154,16 @@ async def test_the_weekly_job_waits_for_a_running_scan(libs, monkeypatch):
     assert await bf.weekly_author_id_backfill() == {"skipped": "a source scan"}
 
 
-def test_the_weekly_job_is_registered_for_sunday_11():
+def test_the_weekly_job_is_registered_for_sunday_15():
+    """G187: at 11:00 it ran during the 10:00-13:00 list refresh, and 6 of
+    2026-10-18's 8 book-page blocks fell in that window."""
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
     from app.orchestrator.scheduler import register_goodreads_author_backfill
     scheduler = AsyncIOScheduler()
     register_goodreads_author_backfill(scheduler)
     job = scheduler.get_job("goodreads_author_id_backfill")
     fields = {f.name: str(f) for f in job.trigger.fields}
-    assert (fields["day_of_week"], fields["hour"], fields["minute"]) == ("sun", "11", "0")
+    assert (fields["day_of_week"], fields["hour"], fields["minute"]) == ("sun", "15", "0")
 
 
 async def test_a_scan_no_longer_resolves_a_goodreads_author_id(libs, monkeypatch):

@@ -539,6 +539,18 @@ async def _autocomplete_failed(row: dict, status: str) -> StepResult:
     return StepResult("autocomplete", f"{row.get('title')!r}: autocomplete error")
 
 
+# G187: the worker's autocomplete checks run at most one per 3 minutes. In
+# bursts (one a minute, 2026-10-18 12:16-13:10) ~45% of the book pages
+# beside them were blocked; at most 480 a day still outpaces ~100 pages.
+AUTOCOMPLETE_GAP_S = 180.0
+_last_autocomplete_at = 0.0
+_now = time.time                    # seam for tests
+
+
+def _autocomplete_wait() -> float:
+    return max(0.0, _last_autocomplete_at + AUTOCOMPLETE_GAP_S - _now())
+
+
 def _backoff_remaining(kind: str) -> float:
     until = goodreads_session.backoff_until(kind)
     return max(0.0, until - time.time()) if until else 0.0
@@ -706,6 +718,31 @@ async def _still_unknown(row: dict) -> bool:
     return True
 
 
+async def page_turn_ready() -> bool:
+    """A book page may go now and work is waiting for one: a candidate's
+    page, or (no candidate waiting at all) a phase-2 page. The worker runs
+    such a step before a due list page (trial item (f))."""
+    try:
+        if source_gate.kind_wait_seconds("goodreads", source_gate.KIND_BOOK_PAGE) > 0:
+            return False
+        if _backoff_remaining(source_gate.KIND_BOOK_PAGE) > 0 or merge_blocked_by():
+            return False
+        db = await metadata_cache.get_db(_SOURCE)
+        try:
+            if await _next_candidate(db, AWAITING_PAGE) is not None:
+                return True
+            if not phase2_enabled() or await _next_candidate(db, PENDING) is not None:
+                return False
+            p2 = metadata_cache.phase2_table(_SOURCE)
+            cur = await db.execute(f"SELECT 1 FROM {p2} WHERE state = 'pending' LIMIT 1")
+            return await cur.fetchone() is not None
+        finally:
+            await db.close()
+    except Exception:
+        _log.debug("goodreads candidates: page_turn_ready failed", exc_info=True)
+        return False
+
+
 async def step() -> StepResult:
     """Do the next piece of candidate work: a waiting merge, a book page
     (when its gap and backoff allow), an autocomplete, or a phase-2 page.
@@ -727,8 +764,11 @@ async def step() -> StepResult:
                 return await _page_step(awaiting)
             return StepResult("page", f"{awaiting.get('title')!r}: now known")
         ac_backoff = _backoff_remaining(source_gate.KIND_AUTOCOMPLETE)
-        if pending is not None and ac_backoff <= 0:
+        ac_wait = max(ac_backoff, _autocomplete_wait())
+        if pending is not None and ac_wait <= 0:
             if await _still_unknown(pending):
+                global _last_autocomplete_at
+                _last_autocomplete_at = _now()
                 return await _autocomplete_step(pending, await _author_name(pending))
             return StepResult("autocomplete", f"{pending.get('title')!r}: now known")
         if awaiting is None and pending is None and page_wait <= 0 and page_backoff <= 0:
@@ -738,7 +778,7 @@ async def step() -> StepResult:
         waits = [w for w in (
             page_wait if awaiting is not None or phase2_enabled() else 0.0,
             page_backoff if awaiting is not None else 0.0,
-            ac_backoff if pending is not None else 0.0,
+            ac_wait if pending is not None else 0.0,
         ) if w > 0]
         return StepResult("idle", retry_in_s=min(waits) if waits else 0.0)
     except Exception:

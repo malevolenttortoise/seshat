@@ -42,7 +42,7 @@ the time spent waiting for turns added back, and `measure_turn_waits()`
 does the same for a longer budget.
 
 **A kind can have a gap of its own (G89).** Goodreads book pages wait
-`metadata_sources.goodreads.book_page_gap` (default 2 min) between
+`metadata_sources.goodreads.book_page_gap` (default 400s, G176) between
 starts, on top of the 30s source gap, in a queue of their own: AWS WAF
 blocks a cluster of book pages from one IP while list pages and
 autocomplete pass. `kind_wait_seconds()` says how long a page would wait
@@ -294,11 +294,48 @@ def _kind_key(source: str, kind: str) -> str:
     return f"{source}:{kind}"
 
 
+# A kind with a gap of its own keeps its last start in settings.json (wall
+# time), so a restart doesn't let a book page go inside the gap (2026-10
+# trial item (d): the gate's memory was in-process only).
+_KIND_START_KEY = "source_gate_kind_last_start"
+
+
+def _kind_last_start(kkey: str) -> Optional[float]:
+    """The kind's last start on the gate's clock; after a restart, read back
+    from settings."""
+    last = _last_start.get(kkey)
+    if last is not None:
+        return last
+    try:
+        wall = float(((load_settings().get(_KIND_START_KEY) or {}).get(kkey)) or 0.0)
+    except (TypeError, ValueError):
+        wall = 0.0
+    if wall <= 0:
+        return None
+    last = _clock() - max(0.0, _wall() - wall)
+    _last_start[kkey] = last
+    return last
+
+
+def _persist_kind_start(kkey: str) -> None:
+    try:
+        # The real settings file, read and written whole (never a view a
+        # caller narrowed `load_settings` to).
+        from app.config import load_settings as _load_all, save_settings
+        settings = dict(_load_all())
+        starts = dict(settings.get(_KIND_START_KEY) or {})
+        starts[kkey] = _wall()
+        settings[_KIND_START_KEY] = starts
+        save_settings(settings)
+    except Exception:
+        _log.debug("source gate: couldn't persist %s's last start", kkey, exc_info=True)
+
+
 def kind_wait_seconds(source: str, kind: str) -> float:
     """How long a request of `kind` would wait for its kind's gap if it
     asked now (not counting the source's own gap or queue)."""
     gap = kind_gap_seconds(source, kind)
-    last = _last_start.get(_kind_key(source, kind))
+    last = _kind_last_start(_kind_key(source, kind)) if gap > 0 else None
     if gap <= 0 or last is None:
         return 0.0
     return max(0.0, last + gap - _clock())
@@ -345,7 +382,7 @@ async def _wait_turn(source: str, level: int, kind: str = "") -> None:
             await _take_turn(kq, level)
         try:
             if kq is not None:
-                klast = _last_start.get(kkey)
+                klast = _kind_last_start(kkey)
                 if klast is not None:
                     kwait = klast + kgap - _clock()
                     if kwait > 0:
@@ -374,6 +411,7 @@ async def _wait_turn(source: str, level: int, kind: str = "") -> None:
                 _last_start[source] = started
                 if kq is not None:
                     _last_start[kkey] = started
+                    _persist_kind_start(kkey)
             finally:
                 _pass_turn(q)
         finally:

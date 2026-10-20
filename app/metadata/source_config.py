@@ -115,7 +115,7 @@ _DEFAULT_NEW_INSTALL_STATE: dict[str, dict[str, Any]] = {
     # Goodreads — `book_page_gap` (seconds) paces book pages on top of the
     # source rate; `include_nonfiction` lets non-fiction through the
     # candidate worker's page filter (2026-10 audit wave 4b, G89 / G96).
-    "goodreads":   {"ebook_enrich": True,  "ebook_scan": True,  "audiobook_enrich": True,  "audiobook_scan": True,  "mandatory": True, "book_page_gap": 120.0, "include_nonfiction": False},
+    "goodreads":   {"ebook_enrich": True,  "ebook_scan": True,  "audiobook_enrich": True,  "audiobook_scan": True,  "mandatory": True, "book_page_gap": 400.0, "include_nonfiction": False},
     # Amazon — v2.11.0 Stage 5++: Author-Store discovery re-enabled.
     # The pre-Stage-5++ density problem (45 detail GETs per author tripped
     # Akamai after 6-10 requests) is solved by the Author-Store flow:
@@ -553,13 +553,14 @@ def get_source_rate_limit(settings: dict, name: str) -> float:
 # Goodreads book pages wait their own gap in the source gate, on top of
 # the source rate (2026-10 audit wave 4b, G89): AWS WAF blocks a cluster
 # of book pages from one IP while list pages and autocomplete pass.
-GOODREADS_BOOK_PAGE_GAP_DEFAULT_S = 120.0
+GOODREADS_BOOK_PAGE_GAP_DEFAULT_S = 400.0
 GOODREADS_BOOK_PAGE_GAP_MAX_S = 3600.0
 
 
 def get_goodreads_book_page_gap(settings: dict) -> float:
     """Seconds between the starts of two Goodreads book-page requests
-    (`metadata_sources.goodreads.book_page_gap`, default 120s)."""
+    (`metadata_sources.goodreads.book_page_gap`, default 400s: the wave-4
+    trial, G176 / G179)."""
     entry = (settings.get("metadata_sources") or {}).get("goodreads") or {}
     raw = entry.get("book_page_gap")
     if raw is None:
