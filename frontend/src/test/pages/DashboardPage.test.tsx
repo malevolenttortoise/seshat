@@ -6,6 +6,11 @@ import { dashboardRoutes, dashboardScanningRoutes } from "../fixtures/dashboard"
 import { idleScans, scan } from "../fixtures/common";
 import { amazonStatus, goodreadsStatus } from "../fixtures/cacheStatus";
 
+// The poll countdown ticks each second on a real interval, and `settle`
+// holds a render for 350ms+ per step: on a slow CI runner "Data Hygiene
+// asks first" saw 29s, not 30s (2026-10-20). Intervals never fire here.
+vi.mock("../../hooks/useVisibleInterval", () => ({ useVisibleInterval: () => {} }));
+
 afterEach(resetPageEnv);
 
 const railsAlertRoutes = {
