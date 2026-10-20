@@ -41,6 +41,7 @@ from typing import Any, Awaitable, Callable, Optional
 
 from app.filter.gate import Announce
 from app.mam.announce import parse_announce
+from app.config import ui_error
 
 _log = logging.getLogger("seshat.mam.irc")
 # Dedicated announce channel — the Logs page "Announces" tab filters
@@ -300,7 +301,7 @@ class IrcClient:
                 # Seshat — there is no remediation we can do from
                 # inside the loop. Logged at ERROR so it stands out
                 # in the dashboard / log scroll.
-                self.last_error = f"FATAL: {e}"
+                self.last_error = f"FATAL: {ui_error(e)}"
                 _log.error(
                     f"IRC listener stopped permanently — {e}. "
                     f"Fix your settings and restart Seshat to retry."
@@ -308,7 +309,7 @@ class IrcClient:
                 self._reset_status()
                 break
             except Exception as e:
-                self.last_error = f"{type(e).__name__}: {e}"
+                self.last_error = f"{type(e).__name__}: {ui_error(e)}"
                 _log.warning(f"IRC connection error: {self.last_error}")
 
             self._reset_status()

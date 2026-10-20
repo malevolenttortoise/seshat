@@ -30,7 +30,7 @@ import time
 from fastapi import APIRouter, HTTPException
 
 from app.discovery.calibre_sync import sync_calibre
-from app.config import load_settings, save_settings
+from app.config import load_settings, save_settings, ui_error
 from app.discovery.database import get_active_library, get_db, set_active_library
 from app.library_apps import get_app
 from app.discovery.lookup import run_full_lookup, run_full_rescan
@@ -119,7 +119,7 @@ async def trigger_sync(slug: str | None = None):
             save_settings(s)
         except Exception:
             logger.debug("record_failure crashed", exc_info=True)
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, ui_error(e))
     finally:
         state._library_sync_in_progress = False
         if slug and slug != original_active and original_active:
@@ -277,10 +277,10 @@ async def trigger_lookup(content_type: str | None = None):
                 logger.debug("source-scan toast failed", exc_info=True)
         except Exception as e:
             logger.error(f"Author scan error: {e}")
-            state._lookup_progress.update({"running": False, "status": f"error: {e}"})
+            state._lookup_progress.update({"running": False, "status": f"error: {ui_error(e)}"})
             try:
                 from app.orchestrator.sse_publishers import publish_toast
-                await publish_toast("error", f"Source scan failed: {e}")
+                await publish_toast("error", f"Source scan failed: {ui_error(e)}")
             except Exception:
                 logger.debug("source-scan error toast failed", exc_info=True)
         finally:
@@ -593,7 +593,7 @@ async def trigger_full_rescan():
                 logger.debug("full-rescan notify failed", exc_info=True)
         except Exception as e:
             logger.error(f"Full re-scan error: {e}")
-            state._lookup_progress.update({"running": False, "status": f"error: {e}"})
+            state._lookup_progress.update({"running": False, "status": f"error: {ui_error(e)}"})
     state._lookup_task = asyncio.create_task(_do())
     return {"status": "started"}
 

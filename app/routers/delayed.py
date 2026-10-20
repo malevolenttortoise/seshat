@@ -31,7 +31,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app import state
-from app.config import load_settings
+from app.config import load_settings, ui_error
 from app.database import get_db
 from app.orchestrator import torrent_store
 from app.orchestrator.dispatch import (
@@ -45,7 +45,9 @@ _log = logging.getLogger("seshat.routers.delayed")
 
 router = APIRouter(prefix="/api/v1/delayed", tags=["delayed"])
 
-_FILENAME_RX = re.compile(r"^(\d+)_(\d+)\.torrent$")
+# `fullmatch` with ASCII digits only: "$" would let a trailing newline
+# through and "\d" accepts any script's digits.
+_FILENAME_RX = re.compile(r"([0-9]+)_([0-9]+)\.torrent")
 
 
 class DelayedItem(BaseModel):
@@ -87,7 +89,7 @@ def _scan(folder: Path) -> list[DelayedItem]:
     for f in sorted(folder.iterdir()):
         if not f.is_file():
             continue
-        m = _FILENAME_RX.match(f.name)
+        m = _FILENAME_RX.fullmatch(f.name)
         if not m:
             continue
         items.append(
@@ -114,10 +116,17 @@ def _validate_filename(filename: str) -> re.Match[str]:
     folder via traversal segments."""
     if "/" in filename or "\\" in filename or "\x00" in filename:
         raise HTTPException(400, "invalid filename")
-    m = _FILENAME_RX.match(filename)
+    m = _FILENAME_RX.fullmatch(filename)
     if not m:
-        raise HTTPException(400, f"filename {filename} doesn't match expected pattern")
+        raise HTTPException(400, f"filename {filename!r} doesn't match expected pattern")
     return m
+
+
+def _delayed_file(folder: Path, m: re.Match[str]) -> Path:
+    """The delayed file's path, rebuilt from the parsed numbers rather
+    than the request's string, so nothing but `<int>_<int>.torrent` in
+    the delayed folder is ever touched (CodeQL #57 / #58 / #64)."""
+    return folder / f"{int(m.group(1))}_{int(m.group(2))}.torrent"
 
 
 @router.post("/{filename}/reinject", response_model=ReinjectResponse)
@@ -128,7 +137,7 @@ async def reinject(filename: str) -> ReinjectResponse:
 
     m = _validate_filename(filename)
     folder = _get_delayed_path()
-    fpath = folder / filename
+    fpath = _delayed_file(folder, m)
 
     if not fpath.exists():
         raise HTTPException(404, f"{filename} not found in delayed folder")
@@ -138,7 +147,7 @@ async def reinject(filename: str) -> ReinjectResponse:
     try:
         torrent_bytes = fpath.read_bytes()
     except OSError as e:
-        raise HTTPException(500, f"could not read {filename}: {e}")
+        raise HTTPException(500, f"could not read {filename}: {ui_error(e)}")
 
     liveness = await torrent_store.check_still_on_mam(
         mam_id, deps.live_mam_token(),
@@ -229,13 +238,13 @@ def _unlink(fpath: Path) -> None:
 
 @router.delete("/{filename}", response_model=SimpleOk)
 async def delete_delayed(filename: str) -> SimpleOk:
-    _validate_filename(filename)
+    m = _validate_filename(filename)
     folder = _get_delayed_path()
-    fpath = folder / filename
+    fpath = _delayed_file(folder, m)
     if not fpath.exists():
         raise HTTPException(404, f"{filename} not found")
     try:
         fpath.unlink()
         return SimpleOk(ok=True)
     except OSError as e:
-        raise HTTPException(500, f"Failed to delete: {e}")
+        raise HTTPException(500, f"Failed to delete: {ui_error(e)}")

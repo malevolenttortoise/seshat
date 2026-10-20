@@ -2,7 +2,7 @@
 (2026-10 audit L2-08; Mark, G34)."""
 import logging
 
-from app.config import apply_logging, redact_url_secrets
+from app.config import apply_logging, redact_url_secrets, ui_error
 
 
 def test_redaction_rules():
@@ -34,3 +34,12 @@ def test_the_httpx_logger_masks_its_request_lines(caplog):
     assert "AIzaPLACEHOLDER" not in record.getMessage()
     assert "key=***" in record.getMessage()
     assert record.getMessage().startswith("HTTP Request: GET https://www.googleapis.com/")
+
+
+def test_ui_error_masks_and_cuts():
+    """Security triage #53 / F30: what a response carries of an exception."""
+    e = ValueError("GET https://x/v?key=K1&api_key=K2&apikey=K3&token=T&passkey=P&mam_id=M failed")
+    assert ui_error(e) == "GET https://x/v?key=***&api_key=***&apikey=***&token=***&passkey=***&mam_id=*** failed"
+    assert len(ui_error(RuntimeError("x" * 500))) == 200
+    assert ui_error(RuntimeError("y" * 50), limit=10) == "y" * 10
+    assert ui_error("plain text") == "plain text"

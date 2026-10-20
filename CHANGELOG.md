@@ -471,6 +471,28 @@ frontend test suite.
   returns volumes but none by the author counts as no author (it used to
   run the same search twice).
 
+### Security
+
+From the 2026-10-12 triage of the open code-scanning alerts (wave S, S11):
+
+- **Error messages no longer carry secret URL values to the UI.** An
+  httpx error's message holds its request URL, and a Google Books one
+  carries `?key=<your API key>`: the URL-import preview showed it on any
+  error but a 404 / 503. Every router that puts an exception's text in a
+  response (86 sites, incl. a grab's failure reason, job rows, worker
+  and IRC errors) now masks `key` / `token` / `api_key` / `apikey` /
+  `passkey` / `mam_id` values and cuts the text to 200 characters
+  (`config.ui_error`), as the logs already did.
+- **Delayed-torrent reinject and delete touch only an exact
+  `<grab>_<torrent>.torrent`** in the delayed folder: the path is rebuilt
+  from its numbers, and a name with a trailing newline or non-ASCII
+  digits is refused (400). It was already confined to one file name.
+- **Manual Grab's cover cache checks the torrent ID itself** (ASCII
+  digits, read as a number) instead of trusting its callers; the cover
+  route refuses non-ASCII digits.
+- **The Tests workflow runs with a read-only token** (`permissions:
+  contents: read`).
+
 ---
 
 ## [3.13.0] — 2026-10-08

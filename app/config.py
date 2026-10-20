@@ -885,6 +885,19 @@ def redact_url_secrets(text: str) -> str:
     return _SECRET_QUERY_RE.sub(r"\1***", text)
 
 
+def ui_error(e: object, limit: int = 200) -> str:
+    """An exception's message as a response may carry it to the UI:
+    secret query values masked, cut to `limit` characters.
+
+    Every router that puts an exception's text into a response (an
+    HTTPException detail, an `error` field, a job's status or a toast)
+    goes through this (2026-10 security triage #53): an httpx error's
+    message holds its URL, and Google Books' carries `?key=`, which then
+    showed in the import preview and in screenshots posted for support.
+    """
+    return redact_url_secrets(str(e))[:limit]
+
+
 class _RedactUrlSecrets(logging.Filter):
     """Masks secret query values in a record before it's emitted."""
 

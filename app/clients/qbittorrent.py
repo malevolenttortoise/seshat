@@ -32,6 +32,7 @@ from typing import Optional
 import httpx
 
 from app.clients.base import AddResult, TorrentInfo
+from app.config import ui_error
 
 _log = logging.getLogger("seshat.clients.qbittorrent")
 
@@ -238,7 +239,7 @@ class QbitClient:
             return AddResult(
                 success=False,
                 failure_kind="network_error",
-                failure_detail=f"{type(e).__name__}: {e}",
+                failure_detail=f"{type(e).__name__}: {ui_error(e)}",
             )
 
         if resp.status_code == 200:

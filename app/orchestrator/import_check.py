@@ -38,6 +38,7 @@ from app.storage import grabs as grabs_storage
 from app.storage import import_checks as checks_storage
 from app.storage import pipeline as pipe_storage
 from app.storage import review_queue as review_storage
+from app.config import ui_error
 
 _log = logging.getLogger("seshat.orchestrator.import_check")
 
@@ -146,7 +147,7 @@ async def tick(*, now: Optional[datetime] = None) -> dict[str, int]:
                     )
                     found = _match(check, books, taken)
                 except Exception as e:
-                    error = f"couldn't read Calibre's library: {type(e).__name__}: {e}"
+                    error = f"couldn't read Calibre's library: {type(e).__name__}: {ui_error(e)}"
             if found is not None:
                 taken.add(found)
                 await _confirm(db, check, found)

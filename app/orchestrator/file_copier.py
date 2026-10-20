@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from app.config import ui_error
+
 _log = logging.getLogger("seshat.orchestrator.file_copier")
 
 # Recognized book file extensions (lowercase, no dot).
@@ -339,7 +341,7 @@ def copy_to_staging(
         )
     except Exception as e:
         _log.exception("file copy failed: %s → %s", source_dir, staging_dir)
-        return CopyResult(success=False, error=f"{type(e).__name__}: {e}")
+        return CopyResult(success=False, error=f"{type(e).__name__}: {ui_error(e)}")
 
 
 def _safe_dirname(name: str) -> str:

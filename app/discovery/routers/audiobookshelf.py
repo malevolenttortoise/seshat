@@ -18,7 +18,7 @@ import logging
 
 from fastapi import APIRouter
 
-from app.config import load_settings
+from app.config import load_settings, ui_error
 from app.library_apps.audiobookshelf import AudiobookshelfClient
 from app.secrets import get_secret
 
@@ -53,7 +53,7 @@ async def test_connection() -> dict:
         libraries = await client.list_libraries()
     except Exception as e:
         _log.warning("ABS test connection failed: %s", e)
-        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        return {"ok": False, "error": f"{type(e).__name__}: {ui_error(e)}"}
 
     # Filter to book libraries — podcasts are explicitly ignored by
     # Seshat. Surface mediaType so the UI can show what it sees.

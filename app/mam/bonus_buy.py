@@ -44,6 +44,7 @@ from urllib.parse import urlencode
 
 from app.mam.cookie import _do_get
 from app.mam.user_status import update_cache_from_buy
+from app.config import ui_error
 
 _log = logging.getLogger("seshat.mam.bonus_buy")
 
@@ -267,7 +268,7 @@ async def _execute(
         resp = await _do_get(url, token=token, timeout=20)
     except Exception as exc:
         _log.warning("bonus buy %s: network error: %s", log_label, exc)
-        return BuyResult(success=False, message=f"network error: {exc}")
+        return BuyResult(success=False, message=f"network error: {ui_error(exc)}")
 
     if resp.status_code != 200:
         preview = resp.text[:200] if resp.text else "(empty)"

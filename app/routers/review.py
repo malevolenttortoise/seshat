@@ -29,6 +29,7 @@ from app.storage import grabs as grabs_storage
 from app.storage import import_checks as import_checks_storage
 from app.storage import pipeline as pipe_storage
 from app.storage import review_queue as review_storage
+from app.config import ui_error
 
 _log = logging.getLogger("seshat.routers.review")
 
@@ -221,7 +222,7 @@ async def bulk_approve() -> BulkResponse:
                     errors.append(f"review_id={row.id}: sink delivery failed")
             except Exception as e:
                 failed += 1
-                errors.append(f"review_id={row.id}: {type(e).__name__}: {e}")
+                errors.append(f"review_id={row.id}: {type(e).__name__}: {ui_error(e)}")
                 _log.exception(
                     "bulk approve: review_id=%d crashed (non-fatal)", row.id,
                 )
@@ -261,7 +262,7 @@ async def bulk_reject(body: Optional[RejectRequest] = None) -> BulkResponse:
                 processed += 1
             except Exception as e:
                 failed += 1
-                errors.append(f"review_id={row.id}: {type(e).__name__}: {e}")
+                errors.append(f"review_id={row.id}: {type(e).__name__}: {ui_error(e)}")
                 _log.exception(
                     "bulk reject: review_id=%d crashed (non-fatal)", row.id,
                 )

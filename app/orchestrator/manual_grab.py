@@ -51,6 +51,7 @@ from app.orchestrator.format_dedup import (
 )
 from app.policy.engine import evaluate_policy
 from app.storage import grabs as grabs_storage
+from app.config import ui_error
 
 _log = logging.getLogger("seshat.orchestrator.manual_grab")
 
@@ -381,8 +382,18 @@ def cover_dir() -> Path:
     return Path(config.DATA_DIR) / _COVER_DIRNAME
 
 
+def _cover_folder(torrent_id: str) -> Path:
+    """One torrent's cover cache folder. The ID is checked here, at the
+    filesystem, not only by the callers: ASCII digits, rebuilt through
+    `int` (security triage #59). Raises ValueError otherwise."""
+    tid = str(torrent_id)
+    if not (tid.isascii() and tid.isdigit()):
+        raise ValueError(f"not a MAM torrent id: {tid!r}")
+    return cover_dir() / str(int(tid))
+
+
 def cached_cover_path(torrent_id: str) -> Optional[Path]:
-    folder = cover_dir() / str(torrent_id)
+    folder = _cover_folder(torrent_id)
     if not folder.is_dir():
         return None
     for p in folder.iterdir():
@@ -395,7 +406,7 @@ async def cover_url_for(torrent_id: str, token: str) -> Optional[str]:
     """Thumbnail for a preview row: cached on disk, else one paced CDN fetch (D12)."""
     from app.metadata.covers import fetch_mam_cover
 
-    folder = cover_dir() / str(torrent_id)
+    folder = _cover_folder(torrent_id)
     if cached_cover_path(torrent_id) is not None:
         return f"/api/v1/manual-grab/cover/{torrent_id}"
     if (folder / _NO_COVER_MARKER).exists():
@@ -557,7 +568,7 @@ async def _run_job(
             except Exception as e:
                 _log.exception("manual grab: row %d crashed", row.index)
                 row.status = "failed"
-                row.message = f"Unexpected error: {e}"
+                row.message = f"Unexpected error: {ui_error(e)}"
     finally:
         job.done = True
         job.finished_at = time.time()

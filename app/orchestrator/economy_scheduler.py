@@ -53,7 +53,7 @@ import logging
 import time
 from typing import Optional
 
-from app.config import load_settings, save_settings
+from app.config import load_settings, save_settings, ui_error
 from app.database import get_db
 from app.mam.bonus_buy import (
     BuyResult,
@@ -175,7 +175,7 @@ async def vip_tick() -> Optional[str]:
             action=economy_audit.ACTION_VIP,
             outcome=economy_audit.OUTCOME_FAILURE,
             trigger=economy_audit.TRIGGER_SCHEDULED,
-            message=f"user_status fetch failed: {e}",
+            message=f"user_status fetch failed: {ui_error(e)}",
         ))
 
     decision = decide_vip_buy(
@@ -243,7 +243,7 @@ async def upload_tick() -> Optional[str]:
             action=economy_audit.ACTION_UPLOAD,
             outcome=economy_audit.OUTCOME_FAILURE,
             trigger=economy_audit.TRIGGER_SCHEDULED,
-            message=f"user_status fetch failed: {e}",
+            message=f"user_status fetch failed: {ui_error(e)}",
         ))
 
     decision = decide_upload_buy(

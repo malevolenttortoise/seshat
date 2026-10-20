@@ -31,7 +31,7 @@ from bs4 import BeautifulSoup
 from fastapi import APIRouter, Body, HTTPException, Query
 from fastapi.responses import Response
 
-from app.config import load_settings
+from app.config import load_settings, ui_error
 from app.metadata import source_gate
 from app.discovery.database import get_db, HF
 
@@ -138,7 +138,7 @@ async def _fetch_goodreads_book(book_id: str) -> dict:
         with source_gate.caller(source_gate.CALLER_URL_IMPORT):
             r = await session.get(f"https://www.goodreads.com/book/show/{book_id}")
     except goodreads_session.GoodreadsBackingOff as e:
-        raise HTTPException(503, f"{busy} ({e})")
+        raise HTTPException(503, f"{busy} ({ui_error(e)})")
     if goodreads_session.is_soft_block(r):
         logger.info(
             "Goodreads paste-URL import: blocked by AWS WAF "
@@ -340,9 +340,9 @@ async def search_by_url(data: dict = Body(...)):
     except HTTPException:
         raise
     except httpx.HTTPError as e:
-        raise HTTPException(502, f"Failed to fetch: {e}")
+        raise HTTPException(502, f"Failed to fetch: {ui_error(e)}")
     except Exception as e:
-        raise HTTPException(500, f"Error: {e}")
+        raise HTTPException(500, f"Error: {ui_error(e)}")
 
 
 @router.post("/books/import-preview")
@@ -406,7 +406,7 @@ async def import_preview(data: dict = Body(...)):
                 else:
                     entry["status"] = "new"
             except Exception as e:
-                entry["error"] = str(e)[:200]
+                entry["error"] = ui_error(e)
             results.append(entry)
             await asyncio.sleep(0.5)
         return {"results": results}

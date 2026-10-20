@@ -37,7 +37,7 @@ from typing import Any, Optional
 import httpx
 from fastapi import APIRouter
 
-from app.config import load_settings
+from app.config import load_settings, ui_error
 from app.secrets import get_secret
 
 _log = logging.getLogger("seshat.qbittorrent")
@@ -82,14 +82,14 @@ def _classify_httpx_error(exc: BaseException) -> tuple[str, str]:
         # on the port you told us." A "Network is unreachable" or
         # "Host is unreachable" lives in the same bucket from the
         # operator's perspective — "I can't reach the URL you set."
-        return "connect_refused", f"Could not connect to qBit ({exc})"
+        return "connect_refused", f"Could not connect to qBit ({ui_error(exc)})"
 
     # httpx raises this for SSL handshake / protocol mismatch (e.g.
     # plain HTTP on an HTTPS URL or vice versa).
     if "ssl" in name.lower() or "tls" in name.lower() or isinstance(exc, httpx.RemoteProtocolError):
-        return "tls", f"TLS/SSL error reaching qBit ({name}: {exc})"
+        return "tls", f"TLS/SSL error reaching qBit ({name}: {ui_error(exc)})"
 
-    return "unknown", f"Network error reaching qBit ({name}: {exc})"
+    return "unknown", f"Network error reaching qBit ({name}: {ui_error(exc)})"
 
 
 async def _qbit_app_info(

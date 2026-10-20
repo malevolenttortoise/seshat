@@ -26,6 +26,7 @@ import logging
 from fastapi import APIRouter, Body, HTTPException, Query
 
 from app.discovery.database import get_db
+from app.config import ui_error
 
 logger = logging.getLogger("seshat.discovery")
 
@@ -425,9 +426,9 @@ async def book_push(bid: int, payload: dict = Body(...), slug: str | None = Quer
                 except PushUnavailable:
                     result = await push_cwa(db, book_dict, fields)
         except PushUnavailable as e:
-            raise HTTPException(409, str(e))
+            raise HTTPException(409, ui_error(e))
         except PushFailed as e:
-            raise HTTPException(502, str(e))
+            raise HTTPException(502, ui_error(e))
 
         applied = list(result.get("applied") or [])
         failed = list(result.get("failed") or [])
@@ -690,9 +691,9 @@ async def _queue_apply_authors(db, qid: int, qrow: dict) -> dict:
                 )
                 push_succeeded.append("cwa")
         except PushUnavailable as e:
-            push_errors.append(f"calibre: {e}")
+            push_errors.append(f"calibre: {ui_error(e)}")
         except PushFailed as e:
-            push_errors.append(f"calibre: {e}")
+            push_errors.append(f"calibre: {ui_error(e)}")
 
     if book_dict.get("audiobookshelf_id"):
         push_attempted.append("abs")
@@ -700,9 +701,9 @@ async def _queue_apply_authors(db, qid: int, qrow: dict) -> dict:
             await push_abs(db, book_dict, ["authors"], authors=payload)
             push_succeeded.append("abs")
         except PushUnavailable as e:
-            push_errors.append(f"abs: {e}")
+            push_errors.append(f"abs: {ui_error(e)}")
         except PushFailed as e:
-            push_errors.append(f"abs: {e}")
+            push_errors.append(f"abs: {ui_error(e)}")
 
     if not push_attempted:
         raise HTTPException(

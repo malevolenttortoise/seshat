@@ -41,6 +41,7 @@ from app.rate_limit import decide_grab_action
 from app.rate_limit import ledger as ledger_mod
 from app.rate_limit import queue as queue_mod
 from app.storage import grabs as grabs_storage
+from app.config import ui_error
 
 _log = logging.getLogger("seshat.orchestrator.cookie_retry")
 
@@ -79,7 +80,7 @@ async def tick(deps: DispatcherDeps) -> RetryResult:
         _log.exception("cookie retry tick failed")
         return RetryResult(
             found=0, retried=0, succeeded=0, failed_again=0,
-            error=f"{type(e).__name__}: {e}",
+            error=f"{type(e).__name__}: {ui_error(e)}",
         )
     finally:
         await db.close()
@@ -243,7 +244,7 @@ async def _retry_grab(
             db,
             grab.id,
             grabs_storage.STATE_FAILED_QBIT_REJECTED,
-            failed_reason=f"unparseable torrent file: {e}",
+            failed_reason=f"unparseable torrent file: {ui_error(e)}",
         )
         return False
 

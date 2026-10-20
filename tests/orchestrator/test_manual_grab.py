@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 
@@ -297,6 +298,27 @@ class TestPreview:
 
 
 # ─── inject_grab: the two new flags ──────────────────────────
+
+
+class TestCoverCacheIds:
+    """Security triage #59: the cover cache checks the ID itself, at the
+    filesystem, not only through its callers."""
+
+    @pytest.mark.parametrize("bad", ["../1274788", "1274788/..", "١٢٣", "²", "12a", ""])
+    def test_a_non_id_never_reaches_the_filesystem(self, bad, monkeypatch):
+        looked: list[int] = []
+        monkeypatch.setattr(manual_grab, "cover_dir", lambda: looked.append(1) or Path("/nonexistent"))
+
+        with pytest.raises(ValueError):
+            manual_grab.cached_cover_path(bad)
+        assert looked == []
+
+    def test_an_id_is_read_as_its_number(self, tmp_path):
+        folder = tmp_path / "covers" / "1274788"
+        folder.mkdir(parents=True)
+        (folder / "cover-mam.jpg").write_bytes(b"\xff\xd8")
+
+        assert manual_grab.cached_cover_path("01274788") == folder / "cover-mam.jpg"
 
 
 class TestInjectFlags:
