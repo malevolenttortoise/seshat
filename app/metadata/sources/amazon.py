@@ -145,8 +145,12 @@ class AmazonSource(MetaSource):
 
     @staticmethod
     def _blocked_now() -> bool:
-        from app.discovery.amazon_author_id_resolver import is_amazon_blocked
-        if is_amazon_blocked():
+        """Search and product pages cooling down (a store-page 429 no
+        longer stops them, G181)."""
+        from app.discovery.amazon_author_id_resolver import (
+            KIND_CATALOG, is_amazon_blocked,
+        )
+        if is_amazon_blocked(KIND_CATALOG):
             _log.info("amazon: skipped — soft-block cooldown active")
             return True
         return False
@@ -160,7 +164,7 @@ class AmazonSource(MetaSource):
             async with enrichment_scope():          # its session closes after
                 return await self._fetch(url, params)
         from app.discovery.amazon_author_id_resolver import (
-            parse_retry_after, record_amazon_soft_block,
+            KIND_CATALOG, block_kind, parse_retry_after, record_amazon_soft_block,
         )
         if self._blocked_now() or not self._spend_live_request():
             return None
@@ -196,6 +200,7 @@ class AmazonSource(MetaSource):
         if reason:
             record_amazon_soft_block(
                 f"enrichment GET {url}: {reason}", retry_after_s=retry_after,
+                kind=block_kind(KIND_CATALOG, status),
             )
             return None
         if status != 200 or not body:
@@ -742,6 +747,8 @@ class AmazonSource(MetaSource):
                 return await self._fetch_author_store_html(author_id)
         try:
             from app.discovery.amazon_author_id_resolver import (
+                KIND_STORE,
+                block_kind,
                 is_amazon_blocked,
                 parse_retry_after,
                 record_amazon_soft_block,
@@ -753,7 +760,7 @@ class AmazonSource(MetaSource):
             )
             return None
 
-        if is_amazon_blocked():
+        if is_amazon_blocked(KIND_STORE):
             _log.info(
                 "amazon author-store: skipped — soft-block cooldown active",
             )
@@ -799,6 +806,7 @@ class AmazonSource(MetaSource):
                 f"with {len(body)}-byte body"
                 + (" (Akamai sensor challenge)" if status == 202 else ""),
                 retry_after_s=parse_retry_after(raw_ra),
+                kind=block_kind(KIND_STORE, status),
             )
             return None
         if status != 200 or not body:

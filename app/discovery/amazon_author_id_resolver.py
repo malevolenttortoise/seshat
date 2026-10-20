@@ -77,9 +77,26 @@ _BLOCK_COOLDOWN_MAX_S = 3600.0     # never more than 1 hour
 # worker classifier can read the same constant.
 _AMAZON_SOFT_BLOCK_THIN_BODY_BYTES = 50_000
 
-_blocked_until: float = 0.0  # wall-clock epoch seconds; 0.0 = not blocked
+# G181 (2026-10 trial): one cooldown per request kind. A 429 on the
+# cache worker's author-store pages had switched Amazon off for every
+# grab's enrichment inside the cooldown (~22 of 72 grabs skipped it).
+# A 429 / 503 now cools down only its own kind; Akamai's own signals (a
+# bot / robot-check page, the 202 sensor challenge, a thin body) still
+# stop every kind.
+KIND_STORE = "store"      # author store pages: /stores/…, /author/{slug}, allbooks, /juvec
+KIND_CATALOG = "catalog"  # /s search, /dp/ product pages
+_KINDS = (KIND_STORE, KIND_CATALOG)
+
+_blocked_until: float = 0.0  # every kind; wall-clock epoch seconds; 0.0 = not blocked
+_kind_until: dict[str, float] = {}  # one kind only (a 429 / 503 on its pages)
 _block_reason: str = ""
 _block_count: int = 0
+
+
+def block_kind(kind: str, status: Any) -> str | None:
+    """The cooldown a block seen on a `kind` page sets: that kind for a
+    429 / 503, every kind (None) for Akamai's own signals."""
+    return kind if status in (429, 503) else None
 
 
 # Runtime-state keys in settings.json mirror `goodreads_session_state*`.
@@ -88,6 +105,7 @@ _block_count: int = 0
 _SETTINGS_KEY_BLOCKED_UNTIL = "amazon_blocked_until"
 _SETTINGS_KEY_BLOCK_REASON = "amazon_block_reason"
 _SETTINGS_KEY_BLOCKED_SINCE = "amazon_blocked_since"
+_SETTINGS_KEY_KIND_UNTIL = "amazon_blocked_until_by_kind"
 
 
 def _persist_block_state(*, was_already_blocked: bool) -> None:
@@ -103,6 +121,7 @@ def _persist_block_state(*, was_already_blocked: bool) -> None:
         from app.config import load_settings, save_settings
         s = dict(load_settings())
         s[_SETTINGS_KEY_BLOCKED_UNTIL] = _blocked_until
+        s[_SETTINGS_KEY_KIND_UNTIL] = dict(_kind_until)
         s[_SETTINGS_KEY_BLOCK_REASON] = _block_reason
         if not was_already_blocked:
             # Fresh arm — stamp the start time. Extensions preserve the
@@ -132,6 +151,11 @@ def _load_persisted_block_state() -> None:
         s = load_settings()
     except Exception:
         return
+    for kind, until in (s.get(_SETTINGS_KEY_KIND_UNTIL) or {}).items():
+        if kind in _KINDS and isinstance(until, (int, float)) and until > max(
+            time.time(), _kind_until.get(kind, 0.0),
+        ):
+            _kind_until[kind] = float(until)
     persisted_until = s.get(_SETTINGS_KEY_BLOCKED_UNTIL)
     if not isinstance(persisted_until, (int, float)):
         return
@@ -157,23 +181,39 @@ except Exception:
     pass
 
 
-def is_amazon_blocked() -> bool:
-    """True if amazon.com requests are currently in soft-block cooldown."""
+def _until(kind: str | None) -> float:
+    """When `kind`'s requests may go again (every-kind cooldown included);
+    `kind=None`: when every kind may go again."""
+    kinds = _KINDS if kind is None else (kind,)
+    return max([_blocked_until] + [_kind_until.get(k, 0.0) for k in kinds])
+
+
+def is_amazon_blocked(kind: str | None = None) -> bool:
+    """True if `kind`'s amazon.com requests are in soft-block cooldown;
+    with no kind, if any kind is."""
+    return _until(kind) > time.time()
+
+
+def amazon_block_remaining_s(kind: str | None = None) -> float:
+    """Seconds remaining in `kind`'s penalty box (0 if not blocked); with
+    no kind, until every kind is clear."""
+    return max(0.0, _until(kind) - time.time())
+
+
+def every_kind_blocked() -> bool:
+    """An every-kind cooldown (Akamai's own signal) is active."""
     return _blocked_until > time.time()
-
-
-def amazon_block_remaining_s() -> float:
-    """Seconds remaining in the current penalty box (0 if not blocked)."""
-    remaining = _blocked_until - time.time()
-    return max(0.0, remaining)
 
 
 def record_amazon_soft_block(
     reason: str,
     *,
     retry_after_s: float | None = None,
+    kind: str | None = None,
 ) -> None:
-    """Activate the amazon.com soft-block cooldown.
+    """Activate the amazon.com soft-block cooldown, for one request
+    `kind` (a 429 / 503 on its pages, `block_kind`) or every kind (None:
+    Akamai's own signals).
 
     `retry_after_s` honors Amazon's Retry-After header when present
     (clamped to [60, 3600]). Falls back to the 10-min default when
@@ -192,16 +232,21 @@ def record_amazon_soft_block(
     )
     cooldown = max(_BLOCK_COOLDOWN_MIN_S, min(_BLOCK_COOLDOWN_MAX_S, cooldown))
     new_until = time.time() + cooldown
-    was_already_blocked = _blocked_until > time.time()
+    was_already_blocked = is_amazon_blocked()
+    current = _blocked_until if kind is None else _kind_until.get(kind, 0.0)
     # Only extend; never shorten a longer cooldown that's already in flight.
-    if new_until > _blocked_until:
-        _blocked_until = new_until
+    if new_until > current:
+        if kind is None:
+            _blocked_until = new_until
+        else:
+            _kind_until[kind] = new_until
         _block_reason = reason
         _block_count += 1
         logger.warning(
-            "amazon: soft-block cooldown activated (%.0fs) — reason: %s "
+            "amazon: soft-block cooldown activated (%.0fs, %s) — reason: %s "
             "[block #%d this process]",
-            cooldown, reason, _block_count,
+            cooldown, f"{kind} pages" if kind else "every kind", reason,
+            _block_count,
         )
         _persist_block_state(was_already_blocked=was_already_blocked)
 
@@ -308,10 +353,10 @@ async def _tier1_book_pivot(
     error, page parse miss, Akamai soft-block). Caller falls through
     to Tier 2.
     """
-    if is_amazon_blocked():
+    if is_amazon_blocked(KIND_CATALOG):
         logger.info(
             "tier1: SKIP %s — amazon.com is in soft-block cooldown "
-            "(%.0fs remaining)", asin, amazon_block_remaining_s(),
+            "(%.0fs remaining)", asin, amazon_block_remaining_s(KIND_CATALOG),
         )
         return None
     url = _DP_URL_TEMPLATE.format(asin=asin)
@@ -331,6 +376,7 @@ async def _tier1_book_pivot(
         record_amazon_soft_block(
             f"tier1 GET {url} returned HTTP 429",
             retry_after_s=_get_response_retry_after(resp),
+            kind=KIND_CATALOG,
         )
         return None
     # v2.20.3 — HTTP 202 is the Akamai sensor-challenge signature
@@ -407,10 +453,10 @@ async def _tier2_vanity_url(
     Returns the author ID on success, None on 404 / no redirect /
     no extractable ID. Caller falls through to /s search variants.
     """
-    if is_amazon_blocked():
+    if is_amazon_blocked(KIND_STORE):
         logger.info(
             "tier2 vanity: SKIP %r — amazon.com is in soft-block cooldown "
-            "(%.0fs remaining)", author_name, amazon_block_remaining_s(),
+            "(%.0fs remaining)", author_name, amazon_block_remaining_s(KIND_STORE),
         )
         return None
     slug = _normalize_name(author_name)
@@ -432,6 +478,7 @@ async def _tier2_vanity_url(
         record_amazon_soft_block(
             f"tier2 vanity GET {url} returned HTTP 429",
             retry_after_s=_get_response_retry_after(resp),
+            kind=KIND_STORE,
         )
         return None
     # v2.20.3 — HTTP 202 Akamai sensor challenge. The vanity endpoint
@@ -484,10 +531,10 @@ async def _tier2_search(
     Returns the author ID on the first variant that produces an
     anchor match, None if all three are empty.
     """
-    if is_amazon_blocked():
+    if is_amazon_blocked(KIND_CATALOG):
         logger.info(
             "tier2 search: SKIP %r — amazon.com is in soft-block cooldown "
-            "(%.0fs remaining)", author_name, amazon_block_remaining_s(),
+            "(%.0fs remaining)", author_name, amazon_block_remaining_s(KIND_CATALOG),
         )
         return None
     variants = [
@@ -513,6 +560,7 @@ async def _tier2_search(
             record_amazon_soft_block(
                 f"tier2 search GET {url} returned HTTP 429",
                 retry_after_s=_get_response_retry_after(resp),
+                kind=KIND_CATALOG,
             )
             return None
         # v2.20.3 — HTTP 202 Akamai sensor challenge. Bail all variants
@@ -785,8 +833,9 @@ async def resolve_amazon_author_id(
         return None
 
     # v2.19.0 — if amazon.com is in soft-block cooldown, every tier
-    # below would just walk into the same wall. Short-circuit early.
-    if is_amazon_blocked():
+    # below would just walk into the same wall. Short-circuit early;
+    # with one kind cooling down (G181) the tiers of the other still run.
+    if is_amazon_blocked(KIND_STORE) and is_amazon_blocked(KIND_CATALOG):
         logger.info(
             "resolve_amazon_author_id: SKIP %r — amazon.com in soft-block "
             "cooldown (%.0fs remaining)",

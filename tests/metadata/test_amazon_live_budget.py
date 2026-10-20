@@ -201,3 +201,21 @@ async def test_the_budget_holds_across_the_enrichers_retry(amazon):
         assert await src.search_book("The Tale", "Author") is None
     assert len(_gets()) == 2
     assert len(FakeSession.instances) == 1 and FakeSession.instances[0].closed
+
+
+async def test_a_store_page_cooldown_leaves_enrichment_searching(amazon):
+    """G181: the cache worker's store-page 429s no longer switch Amazon
+    off for a grab's enrichment (search and product pages)."""
+    resolver.record_amazon_soft_block("allbooks 429", kind=resolver.KIND_STORE)
+    amazon["answers"][SEARCH] = _search_html(("B000KINDLE", "The Tale"))
+
+    await AmazonSource().search_book("The Tale", "Author")
+
+    assert _gets() and _gets()[0].split("?")[0] == SEARCH.split("?")[0]
+
+
+async def test_a_product_page_429_cools_only_search_and_product_pages(amazon):
+    amazon["answers"][SEARCH] = Resp(429, "", {"Retry-After": "120"})
+    assert await AmazonSource().search_book("The Tale", "Author") is None
+    assert resolver.is_amazon_blocked(resolver.KIND_CATALOG)
+    assert not resolver.is_amazon_blocked(resolver.KIND_STORE)

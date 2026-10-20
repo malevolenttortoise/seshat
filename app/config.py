@@ -966,6 +966,7 @@ RUNTIME_SETTINGS_KEYS: frozenset[str] = frozenset({
     "amazon_blocked_until",            # amazon_author_id_resolver
     "amazon_block_reason",
     "amazon_blocked_since",
+    "amazon_blocked_until_by_kind",    # G181: one cooldown per request kind
     "v2_12_1_dual_row_backfill_done",  # main: one-time backfill sentinel
 })
 # Read with a default, written by nothing: a value set by hand survives.

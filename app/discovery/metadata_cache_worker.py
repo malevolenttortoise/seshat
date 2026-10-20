@@ -57,7 +57,9 @@ from app import state
 from app.metadata import source_gate
 from app.discovery import metadata_cache
 from app.discovery.amazon_author_id_resolver import (
+    KIND_STORE,
     amazon_block_remaining_s,
+    every_kind_blocked,
     is_amazon_blocked,
 )
 from app.config import ui_error
@@ -1831,9 +1833,11 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
 
     # Cooldown gate — shared with the resolver / live AmazonSource. If
     # `record_amazon_soft_block` was triggered by anything in this
-    # process (or persisted across restart in v2.20.3), we honor it.
-    if is_amazon_blocked():
-        remaining = amazon_block_remaining_s()
+    # process (or persisted across restart in v2.20.3), we honor it —
+    # for the store pages the worker reads (G181: a search / product
+    # page 429 in enrichment doesn't stop it).
+    if is_amazon_blocked(KIND_STORE):
+        remaining = amazon_block_remaining_s(KIND_STORE)
         sleep_s = min(remaining + 1.0, _COOLDOWN_MAX_SLEEP_S)
         return TickResult(
             source_name=source_name, outcome="cooldown",
@@ -1922,8 +1926,11 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
 
     # The scan may have tripped the IP-level penalty box via
     # `record_amazon_soft_block`; treat that as a soft-block outcome.
-    if is_amazon_blocked():
-        cooldown_s = amazon_block_remaining_s()
+    # Escalation extends the cooldown the scan tripped: the store pages'
+    # (a 429), or every kind's (a bot page) — G181.
+    if is_amazon_blocked(KIND_STORE):
+        cooldown_s = amazon_block_remaining_s(KIND_STORE)
+        escalate_kind = None if every_kind_blocked() else KIND_STORE
         mode = get_worker_mode(source_name)
         # Filled inside the transaction so the post-commit logging /
         # ntfy / return can branch on whether the breaker tripped.
@@ -1947,6 +1954,7 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
                     f"worker escalation (block #{consecutive} within "
                     f"{_ESCALATION_RESET_WINDOW_S:.0f}s)",
                     retry_after_s=escalated_s,
+                    kind=escalate_kind,
                 )
                 cooldown_s = escalated_s
 

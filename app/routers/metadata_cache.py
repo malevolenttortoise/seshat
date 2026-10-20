@@ -812,12 +812,14 @@ async def reset_cooldown(source: str) -> ResetCooldownResponse:
     previously_blocked = is_amazon_blocked()
     previous_remaining = amazon_block_remaining_s()
     r._blocked_until = 0.0          # type: ignore[attr-defined]
+    r._kind_until.clear()           # type: ignore[attr-defined]
     r._block_reason = ""            # type: ignore[attr-defined]
     # Persist the clear so a container restart doesn't restore the
     # cooldown via v2.20.3's `_load_persisted_block_state`.
     try:
         s = dict(load_settings())
         s["amazon_blocked_until"] = 0.0
+        s["amazon_blocked_until_by_kind"] = {}
         s["amazon_block_reason"] = ""
         s["amazon_blocked_since"] = None
         save_settings(s)

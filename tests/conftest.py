@@ -282,6 +282,28 @@ def _no_leaked_goodreads_backoff():
 
 
 @pytest.fixture(autouse=True)
+def _no_leaked_amazon_kind_cooldown():
+    """Amazon's per-kind cooldown (G181) is module state beside the
+    every-kind `_blocked_until` the older tests reset by hand: a store-
+    page 429 one test records would stop a later test's store requests.
+    Cleared around every test, in memory and in the shared settings."""
+    from app import config
+    from app.discovery import amazon_author_id_resolver as resolver
+
+    def _clear():
+        resolver._kind_until.clear()
+        s = config.load_settings()
+        if s.get("amazon_blocked_until_by_kind"):
+            s = dict(s)
+            s["amazon_blocked_until_by_kind"] = {}
+            config.save_settings(s)
+
+    _clear()
+    yield
+    _clear()
+
+
+@pytest.fixture(autouse=True)
 def _no_real_mam(monkeypatch):
     """The suite never talks to the real MAM.
 

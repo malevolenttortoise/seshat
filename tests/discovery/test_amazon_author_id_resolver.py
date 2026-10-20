@@ -855,6 +855,15 @@ class TestPersistedBlockState:
         assert _fake_settings["amazon_block_reason"] == "extended"
         assert _fake_settings["amazon_blocked_until"] > time.time() + 2900
 
+    def test_a_kind_cooldown_survives_a_restart(self, _fake_settings):
+        """G181: the per-kind cooldown is persisted and restored too."""
+        record_amazon_soft_block("store 429", retry_after_s=600, kind=resolver_module.KIND_STORE)
+        assert _fake_settings["amazon_blocked_until_by_kind"]["store"] > time.time() + 500
+        resolver_module._kind_until.clear()
+        resolver_module._load_persisted_block_state()
+        assert is_amazon_blocked(resolver_module.KIND_STORE)
+        assert not is_amazon_blocked(resolver_module.KIND_CATALOG)
+
     def test_load_restores_in_memory_state(self, _fake_settings):
         # Seed the fake settings with a still-active cooldown.
         future = time.time() + 500
@@ -942,3 +951,57 @@ class TestResolverDDGOptIn:
         # that the result is None with the existing 3 variants tried.
         search_calls = [c for c in session.calls if "/s?" in c]
         assert len(search_calls) == 3  # all 3 variants tried, no DDG bail-in
+
+
+class TestCooldownPerRequestKind:
+    """G181 (2026-10 trial): ~22 of 72 grabs skipped Amazon inside a
+    cooldown the cache worker's store-page 429s started. A 429 / 503 now
+    cools down only its own kind; Akamai's own signals stop every kind."""
+
+    def test_a_store_429_leaves_search_and_product_pages_running(self):
+        record_amazon_soft_block(
+            "allbooks 429", kind=resolver_module.block_kind(resolver_module.KIND_STORE, 429),
+        )
+        assert is_amazon_blocked(resolver_module.KIND_STORE)
+        assert not is_amazon_blocked(resolver_module.KIND_CATALOG)
+        assert is_amazon_blocked()                     # "any kind" for the UI
+
+    @pytest.mark.parametrize("status", [200, 202])
+    def test_a_bot_page_or_sensor_challenge_stops_every_kind(self, status):
+        record_amazon_soft_block(
+            "robot check", kind=resolver_module.block_kind(resolver_module.KIND_STORE, status),
+        )
+        assert is_amazon_blocked(resolver_module.KIND_STORE)
+        assert is_amazon_blocked(resolver_module.KIND_CATALOG)
+
+    def test_a_503_is_scoped_like_a_429(self):
+        assert resolver_module.block_kind(resolver_module.KIND_CATALOG, 503) == "catalog"
+
+    def test_remaining_is_per_kind(self):
+        record_amazon_soft_block("store", retry_after_s=600, kind=resolver_module.KIND_STORE)
+        assert amazon_block_remaining_s(resolver_module.KIND_CATALOG) == 0.0
+        assert amazon_block_remaining_s(resolver_module.KIND_STORE) > 500
+
+    async def test_tier1_product_page_429_cools_catalog_only(self):
+        session = MockSession({"/dp/": MockResponse(429, "blocked")})
+        await resolve_amazon_author_id("X", known_book_asin="B0DEADBEEF", session=session)
+        assert is_amazon_blocked(resolver_module.KIND_CATALOG)
+        assert not is_amazon_blocked(resolver_module.KIND_STORE)
+
+    async def test_vanity_url_429_cools_store_only(self):
+        session = MockSession({"/author/": MockResponse(429, "blocked")})
+        await resolve_amazon_author_id("Anyone", session=session)
+        assert is_amazon_blocked(resolver_module.KIND_STORE)
+        assert not is_amazon_blocked(resolver_module.KIND_CATALOG)
+
+    async def test_a_thin_product_page_stops_every_kind(self):
+        session = MockSession({"/dp/": MockResponse(200, "<html>tiny captcha page</html>")})
+        await resolve_amazon_author_id("X", known_book_asin="B0DEADBEEF", session=session)
+        assert is_amazon_blocked(resolver_module.KIND_STORE)
+
+    async def test_the_resolver_still_reads_product_pages_while_store_pages_cool(self):
+        record_amazon_soft_block("store", kind=resolver_module.KIND_STORE)
+        session = MockSession({"/dp/": MockResponse(429, "blocked")})
+        await resolve_amazon_author_id("X", known_book_asin="B0DEADBEEF", session=session)
+        assert any("/dp/" in u for u in session.calls)
+        assert not any("/author/" in u for u in session.calls)   # store tier skipped

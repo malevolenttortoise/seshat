@@ -492,6 +492,41 @@ class TestSoftBlockPath:
         from app.discovery import amazon_author_id_resolver as r
         assert r.amazon_block_remaining_s() > 1500
 
+    @pytest.mark.parametrize("scan_kind,catalog_escalated", [
+        ("store", False),     # a store-page 429: only store pages wait longer
+        (None, True),         # a bot page: every kind does
+    ])
+    async def test_escalation_extends_the_cooldown_the_scan_tripped(
+        self, worker_under, monkeypatch, scan_kind, catalog_escalated,
+    ):
+        """G181: a worker escalation used to put every kind (a grab's
+        enrichment included) out for up to an hour."""
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+        try:
+            await db.execute(
+                f"UPDATE {metadata_cache.worker_state_table()} "
+                f"SET last_block_at = ?, consecutive_blocks = 1 "
+                f"WHERE id = 1",
+                (time.time(),),
+            )
+            await db.commit()
+        finally:
+            await db.close()
+
+        async def _fake_scan(author_id, session):
+            from app.discovery import amazon_author_id_resolver as r
+            r.record_amazon_soft_block("fake", retry_after_s=600, kind=scan_kind)
+            return None, "HTTP 429 (fake)"
+        monkeypatch.setattr(
+            metadata_cache_worker, "_perform_amazon_scan", _fake_scan,
+        )
+        await _seed_queue_row(author_id="B0SOFTBLK3")
+        await metadata_cache_worker.tick()
+
+        from app.discovery import amazon_author_id_resolver as r
+        assert r.amazon_block_remaining_s(r.KIND_STORE) > 1500
+        assert (r.amazon_block_remaining_s(r.KIND_CATALOG) > 1500) is catalog_escalated
+
 
 # ─── Hard error path ───────────────────────────────────────────
 

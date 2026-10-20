@@ -65,6 +65,16 @@ frontend test suite.
   format and number rules now veto any text-search match (cache-backed
   ones included; MAM's and Audnexus's exact-ID lookups untouched). The
   review's source list shows it as `other_volume`.
+- **Amazon cools down per request kind** (G181, wave S, ADR-0025
+  amended): a 429 on the cache worker's author-store pages switched
+  Amazon off for every grab's enrichment inside the cooldown (~22 of 72
+  grabs in the trial's last days skipped Amazon). A 429 / 503 now cools
+  down only its own kind: store pages (author store, allbooks, /juvec,
+  the vanity-URL redirect) or search and product pages (`/s`, `/dp/`).
+  A bot / robot-check page, the 202 sensor challenge or a thin page still
+  stops every kind. The worker's escalation (10 → 30 → 60 min) extends
+  the cooldown its scan tripped. Settings gain the runtime key
+  `amazon_blocked_until_by_kind`; Reset cooldown clears both.
 - **Kobo can contribute to enrichment again** (G188, wave S): its record
   never carried an author, so even a perfect title scored under the
   0.80 bar and Kobo hadn't merged a field. It now reads each search
