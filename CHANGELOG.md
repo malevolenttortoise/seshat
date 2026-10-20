@@ -75,6 +75,14 @@ frontend test suite.
   stops every kind. The worker's escalation (10 → 30 → 60 min) extends
   the cooldown its scan tripped. Settings gain the runtime key
   `amazon_blocked_until_by_kind`; Reset cooldown clears both.
+- **The Amazon cache worker refreshes quiet authors less often** (G183,
+  wave S, ADR-0025 amended): a refresh that finds no book the cache
+  didn't have puts the next one 14, then 28 days out; one that finds a
+  new book (or a first scan) brings it back to 7. 65% of the trial's
+  refreshes found nothing, and the worker managed ~55 authors a day
+  against ~100 a 7-day cycle needs. The `[scan]` log line shows
+  `next_days`. **Database migration**: the Amazon cache database goes to
+  `user_version` 16 (a `quiet_refreshes` column on the queue).
 - **Kobo can contribute to enrichment again** (G188, wave S): its record
   never carried an author, so even a perfect title scored under the
   0.80 bar and Kobo hadn't merged a field. It now reads each search

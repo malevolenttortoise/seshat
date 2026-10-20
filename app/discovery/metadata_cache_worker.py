@@ -1053,9 +1053,17 @@ def _pick_escalation_cooldown(consecutive_blocks: int) -> float:
 # ─── Queue helpers ─────────────────────────────────────────────
 
 
-def _next_refresh_due(now: float) -> float:
-    """When an author scanned now is next due: 7 days ± up to a day."""
-    return now + _NORMAL_RESCAN_CADENCE_S + random.uniform(
+# G183: an Amazon author whose refreshes keep finding nothing new is
+# refreshed less often: 7, then 14, then 28 days.
+_MAX_QUIET_STEPS = 2
+
+
+def _next_refresh_due(now: float, quiet_refreshes: int = 0) -> float:
+    """When an author scanned now is next due: 7 days ± up to a day,
+    doubled for each refresh in a row that found nothing new (up to 28
+    days, G183)."""
+    steps = max(0, min(int(quiet_refreshes or 0), _MAX_QUIET_STEPS))
+    return now + _NORMAL_RESCAN_CADENCE_S * (2 ** steps) + random.uniform(
         -_REFRESH_SPREAD_S, _REFRESH_SPREAD_S,
     )
 
@@ -1120,8 +1128,9 @@ async def _pop_next_queue_row(
         capped = attempted >= cap
         cur = await db.execute(
             f"SELECT author_id, priority, status, next_scan_due_at, "
-            f"last_attempt_at, consecutive_failures, enqueued_reason "
-            f"FROM {queue} "
+            f"last_attempt_at, consecutive_failures, enqueued_reason"
+            + (", quiet_refreshes " if source_name == metadata_cache.SOURCE_AMAZON else " ")
+            + f"FROM {queue} "
             f"WHERE status = 'pending' AND next_scan_due_at <= ? "
             + ("AND last_attempt_at IS NULL " if capped else "")
             + f"ORDER BY priority DESC, next_scan_due_at ASC "
@@ -1167,6 +1176,7 @@ async def _pop_next_queue_row(
             "last_attempt_at": now,
             "consecutive_failures": row[5],
             "enqueued_reason": row[6],
+            "quiet_refreshes": row[7] if len(row) > 7 else 0,
         }
     except Exception:
         await db.execute("ROLLBACK")
@@ -1178,10 +1188,17 @@ async def _mark_queue_row_pending(
     author_id: str,
     next_scan_due_at: float,
     reset_failures: bool = True,
+    quiet_refreshes: Optional[int] = None,
 ) -> None:
     """Return a popped row to the pending state with a forward due-time.
-    Used after a successful scan or a soft-block deferral."""
+    Used after a successful scan or a soft-block deferral. A scan that
+    read the author's books passes `quiet_refreshes` (G183)."""
     queue = metadata_cache.queue_table(source_name)
+    if quiet_refreshes is not None:
+        await db.execute(
+            f"UPDATE {queue} SET quiet_refreshes = ? WHERE author_id = ?",
+            (quiet_refreshes, author_id),
+        )
     if reset_failures:
         await db.execute(
             f"UPDATE {queue} SET status = 'pending', "
@@ -2170,6 +2187,15 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
         )
         prior_asins = set()
 
+    # G183: a refresh that found no book the cache didn't have steps the
+    # next one out (14, then 28 days); finding one, or a first scan,
+    # brings it back to 7.
+    scanned_asins = {row[2] for _lib, rows in per_library_rows for row in rows}
+    found_new = not prior_asins or bool(scanned_asins - prior_asins)
+    quiet_refreshes = 0 if found_new else min(
+        int(queue_row.get("quiet_refreshes") or 0) + 1, _MAX_QUIET_STEPS,
+    )
+
     # Single try/except for the whole multi-library cache-write so any
     # failure mid-fan-out cleanly unwinds via the failure path.
     try:
@@ -2190,8 +2216,9 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
             await _mark_queue_row_pending(
                 db, source_name,
                 author_id=author_id,
-                next_scan_due_at=_next_refresh_due(now),
+                next_scan_due_at=_next_refresh_due(now, quiet_refreshes),
                 reset_failures=True,
+                quiet_refreshes=quiet_refreshes,
             )
             await _record_scan_completed(db, source_name, now)
             # A successful scan = the IP recovered. Disarm the circuit
@@ -2283,6 +2310,7 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
             author=author_id, outcome=outcome,
             books=total_cache_rows, new=new_count,
             libraries=len(libraries), elapsed_ms=elapsed_ms,
+            next_days=7 * 2 ** quiet_refreshes,
         ),
         per_lib_summary,
     )

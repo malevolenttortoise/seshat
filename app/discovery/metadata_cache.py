@@ -376,6 +376,13 @@ def _build_amazon_migrations() -> list[str]:
         # walled after resting", so the worker escalates from the short
         # stage-1 rest to a rest-until-next-window backoff.
         f"ALTER TABLE {worker} ADD COLUMN circuit_breaker_armed INTEGER NOT NULL DEFAULT 0",
+        # ─── v4: adaptive refresh (G183) ────────────────────────────
+        # Refreshes in a row that found no new book for the author: the
+        # next one comes after 7, 14, then 28 days; one that finds
+        # something resets it. 65% of the trial's refreshes found
+        # nothing, and the worker managed ~55 authors a day against ~100
+        # a 7-day cycle needs.
+        f"ALTER TABLE {queue} ADD COLUMN quiet_refreshes INTEGER NOT NULL DEFAULT 0",
     ]
 
 
