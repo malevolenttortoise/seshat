@@ -28,7 +28,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from app import state
-from app.config import load_settings
+from app.config import load_settings, ui_error
 from app.database import get_db
 from app.orchestrator.active_replacement import (
     EnactmentResult,
@@ -347,7 +347,7 @@ async def enact_replacement_opportunities_bulk(
                     "opportunity_id": opp_id,
                     "enactment_id": None,
                     "detail": f"unhandled exception: {type(e).__name__}",
-                    "error": f"{type(e).__name__}: {e}",
+                    "error": f"{type(e).__name__}: {ui_error(e)}",
                     "opportunity": None,
                 })
                 counts["failed"] = counts.get("failed", 0) + 1

@@ -25,6 +25,7 @@ from app.discovery.cross_library import (
 )
 from app.discovery.source_urls import parse_url
 from app.discovery.routers.series import _recompute_series_author
+from app.config import ui_error
 
 logger = logging.getLogger("seshat.discovery")
 
@@ -1214,7 +1215,7 @@ async def _start_books_mam_scan(
         except Exception as e:
             logger.error(f"Bulk MAM scan failed: {e}", exc_info=True)
             state._mam_scan_progress.update({
-                "running": False, "status": f"error: {e}", "current_book": "",
+                "running": False, "status": f"error: {ui_error(e)}", "current_book": "",
             })
         finally:
             await bdb.close()
@@ -1450,7 +1451,7 @@ async def merge_book(
                 reason="manual",
             )
         except MergeError as exc:
-            raise HTTPException(400, str(exc))
+            raise HTTPException(400, ui_error(exc))
 
         # ADR-0010: the merge unions contributors and drops the loser,
         # so both books' series can change mode.

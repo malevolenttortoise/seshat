@@ -32,6 +32,7 @@ from app.orchestrator.auto_train import train_author
 from app.orchestrator.dispatch import inject_grab
 from app.storage import authors as authors_storage
 from app.storage import tentative as tentative_storage
+from app.config import ui_error
 
 _log = logging.getLogger("seshat.routers.tentative")
 
@@ -185,8 +186,8 @@ async def bulk_approve(body: Optional[BulkRequest] = None) -> dict:
                     errors.append(f"tid={tid}: {result.error or 'unknown failure'}")
             except Exception as e:
                 failed += 1
-                row["ok"], row["error"] = False, f"{type(e).__name__}: {e}"
-                errors.append(f"tid={tid}: {type(e).__name__}: {e}")
+                row["ok"], row["error"] = False, f"{type(e).__name__}: {ui_error(e)}"
+                errors.append(f"tid={tid}: {type(e).__name__}: {ui_error(e)}")
                 _log.exception(
                     "bulk tentative approve: tid=%d crashed (non-fatal)", tid,
                 )
@@ -240,7 +241,7 @@ async def bulk_reject(body: Optional[BulkRequest] = None) -> BulkResponse:
                 errors.append(f"tid={tid}: {result.error or 'unknown failure'}")
         except Exception as e:
             failed += 1
-            errors.append(f"tid={tid}: {type(e).__name__}: {e}")
+            errors.append(f"tid={tid}: {type(e).__name__}: {ui_error(e)}")
             _log.exception(
                 "bulk tentative reject: tid=%d crashed (non-fatal)", tid,
             )
@@ -275,7 +276,7 @@ async def bulk_dismiss(body: Optional[BulkRequest] = None) -> BulkResponse:
                 errors.append(f"tid={tid}: {result.error or 'unknown failure'}")
         except Exception as e:
             failed += 1
-            errors.append(f"tid={tid}: {type(e).__name__}: {e}")
+            errors.append(f"tid={tid}: {type(e).__name__}: {ui_error(e)}")
             _log.exception(
                 "bulk tentative dismiss: tid=%d crashed (non-fatal)", tid,
             )

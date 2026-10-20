@@ -88,6 +88,7 @@ from app.orchestrator.format_dedup import (
     media_type_from_category,
     normalize_dedup_key,
 )
+from app.config import ui_error
 
 _log = logging.getLogger("seshat.orchestrator.dispatch")
 
@@ -1581,14 +1582,14 @@ async def _dispatch_with_decision(
                 db,
                 grab_id,
                 grabs_storage.STATE_FAILED_QBIT_REJECTED,
-                failed_reason=f"unparseable torrent file: {e}",
+                failed_reason=f"unparseable torrent file: {ui_error(e)}",
             )
             return DispatchResult(
                 action=rate_decision.action,
                 reason="bad_torrent_file",
                 announce_id=announce_id,
                 grab_id=grab_id,
-                error=str(e),
+                error=ui_error(e),
             )
 
         return await _place_torrent(
@@ -1827,7 +1828,7 @@ async def _queue_with_bytes(
     try:
         path = torrent_store.save(grab_id, torrent_bytes)
     except OSError as e:
-        detail = f"could not save the .torrent for the queue: {e}"
+        detail = f"could not save the .torrent for the queue: {ui_error(e)}"
         _log.error("grab %d: %s", grab_id, detail)
         await grabs_storage.set_state(
             db, grab_id, grabs_storage.STATE_FAILED_UNKNOWN,
@@ -1890,7 +1891,7 @@ async def submit_torrent_bytes(
     except BencodeError as e:
         return DispatchResult(
             action="skip", reason="bad_torrent_file", announce_id=0,
-            grab_id=grab_id, error=f"unparseable torrent file: {e}",
+            grab_id=grab_id, error=f"unparseable torrent file: {ui_error(e)}",
         )
 
     db = await deps.db_factory()
@@ -1979,7 +1980,7 @@ async def grab_uploaded_torrent(
     except BencodeError as e:
         return DispatchResult(
             action="skip", reason="bad_torrent_file", announce_id=0,
-            error=f"Not a valid .torrent file: {e}",
+            error=f"Not a valid .torrent file: {ui_error(e)}",
         )
     if stamp is None:
         return DispatchResult(
@@ -2014,7 +2015,7 @@ async def grab_uploaded_torrent(
     except TorrentInfoError as e:
         return DispatchResult(
             action="skip", reason="lookup_failed", announce_id=0,
-            error=f"Couldn't reach MAM ({e}); nothing was grabbed. Try again.",
+            error=f"Couldn't reach MAM ({ui_error(e)}); nothing was grabbed. Try again.",
         )
     else:
         removed = False

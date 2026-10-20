@@ -364,6 +364,44 @@ class TestFetchByUrl:
         assert exc.value.status_code == 400
 
 
+class TestImportPreviewErrors:
+    async def test_a_keyed_url_in_an_error_reaches_the_ui_masked(self, tmp_path, monkeypatch):
+        """Security triage #53: a Google Books 403 carries its request
+        URL, `?key=<the operator's API key>`, in the exception message;
+        the preview row showed it."""
+        from app import config as app_config
+        from app.discovery import database as disco_db
+        from app.discovery import url_import
+        from app.discovery.routers import import_export
+
+        monkeypatch.setattr(app_config, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(disco_db, "DATA_DIR", tmp_path)
+        await disco_db.init_db("calibre-library")
+        disco_db.set_active_library("calibre-library")
+        keyed = "https://www.googleapis.com/books/v1/volumes/AbCdEfGhIjK?key=SECRET-API-KEY"
+
+        async def forbidden(url):
+            request = httpx.Request("GET", keyed)
+            raise httpx.HTTPStatusError(
+                f"Client error '403 Forbidden' for url '{keyed}'",
+                request=request, response=httpx.Response(403, request=request),
+            )
+
+        async def no_sleep(_s):
+            return None
+
+        monkeypatch.setattr(url_import, "fetch_by_url", forbidden)
+        monkeypatch.setattr(import_export.asyncio, "sleep", no_sleep)
+
+        out = await import_export.import_preview(
+            {"urls": ["https://books.google.com/books?id=AbCdEfGhIjK"]},
+        )
+
+        error = out["results"][0]["error"]
+        assert "SECRET-API-KEY" not in error
+        assert "key=***" in error and "403 Forbidden" in error
+
+
 # ─── Test helpers ──────────────────────────────────────────────────
 
 

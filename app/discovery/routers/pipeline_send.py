@@ -23,7 +23,7 @@ import logging
 from fastapi import APIRouter, Body, HTTPException
 
 from app import state
-from app.config import load_settings
+from app.config import load_settings, ui_error
 from app.database import get_db as get_pipeline_db
 from app.discovery.database import get_db as get_discovery_db
 from app.mam.torrent_id import extract_torrent_id
@@ -215,7 +215,7 @@ async def send_to_pipeline(data: dict = Body(...)):
                     else:
                         failed += 1
                 except Exception as e:
-                    results.append({"torrent_id": tid, "ok": False, "error": str(e)})
+                    results.append({"torrent_id": tid, "ok": False, "error": ui_error(e)})
                     failed += 1
             finally:
                 outcome = results[-1] if len(results) > reported else {}

@@ -46,6 +46,7 @@ from app.rate_limit import ledger as ledger_mod
 from app.rate_limit import mam_floor
 from app.rate_limit import queue as queue_mod
 from app.storage import grabs as grabs_storage
+from app.config import ui_error
 
 _log = logging.getLogger("seshat.orchestrator.budget_watcher")
 
@@ -97,7 +98,7 @@ async def tick(deps: DispatcherDeps) -> TickResult:
             queue_pops_attempted=0,
             queue_pops_submitted=0,
             queue_pops_failed=0,
-            error=f"{type(e).__name__}: {e}",
+            error=f"{type(e).__name__}: {ui_error(e)}",
             qbit_reachable=False,
         )
     finally:
@@ -407,7 +408,7 @@ async def _resubmit_queued_grab(
             db,
             grab.id,
             grabs_storage.STATE_FAILED_QBIT_REJECTED,
-            failed_reason=f"unparseable torrent file: {e}",
+            failed_reason=f"unparseable torrent file: {ui_error(e)}",
         )
         torrent_store.discard(grab.torrent_file_path)
         return "failed"

@@ -58,6 +58,7 @@ from app.discovery.amazon_author_id_resolver import (
     amazon_block_remaining_s,
     is_amazon_blocked,
 )
+from app.config import ui_error
 logger = logging.getLogger("seshat.discovery.metadata_cache_worker")
 
 # Tracks whether the optional rotated file handler has already been
@@ -2165,7 +2166,7 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
             _format_fields(
                 author=author_id, outcome="cache_write_fail",
                 elapsed_ms=elapsed_ms,
-                error=f"{type(exc).__name__}: {exc}",
+                error=f"{type(exc).__name__}: {ui_error(exc)}",
             ),
         )
         # ntfy Tier 1 (error): DB-write failure is one of the
@@ -2187,7 +2188,7 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
             source_name=source_name, outcome="error",
             author_id=author_id,
             queue_size=queue_size,
-            error=f"cache write failed: {type(exc).__name__}: {exc}",
+            error=f"cache write failed: {type(exc).__name__}: {ui_error(exc)}",
             next_sleep_s=random.uniform(_JITTER_MIN_S, _JITTER_MAX_S),
             elapsed_ms=elapsed_ms,
         )
@@ -2545,7 +2546,7 @@ async def tick_goodreads() -> TickResult:
             _format_fields(
                 author=author_id, outcome="cache_write_fail",
                 elapsed_ms=elapsed_ms,
-                error=f"{type(exc).__name__}: {exc}",
+                error=f"{type(exc).__name__}: {ui_error(exc)}",
             ),
         )
         await _send_ntfy(
@@ -2562,7 +2563,7 @@ async def tick_goodreads() -> TickResult:
             source_name=source_name, outcome="error",
             author_id=author_id,
             queue_size=queue_size,
-            error=f"cache write failed: {type(exc).__name__}: {exc}",
+            error=f"cache write failed: {type(exc).__name__}: {ui_error(exc)}",
             next_sleep_s=random.uniform(_JITTER_MIN_S, _JITTER_MAX_S),
             elapsed_ms=elapsed_ms,
         )

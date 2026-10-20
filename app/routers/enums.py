@@ -17,6 +17,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from app.mam import enums as mam_enums
+from app.config import ui_error
 
 router = APIRouter(prefix="/api/v1/enums", tags=["enums"])
 
@@ -80,4 +81,4 @@ async def refresh_enums() -> RefreshResponse:
         count = await mam_enums.refresh(token=token)
         return RefreshResponse(ok=True, count=count)
     except Exception as e:
-        return RefreshResponse(ok=False, count=0, error=f"{type(e).__name__}: {e}")
+        return RefreshResponse(ok=False, count=0, error=f"{type(e).__name__}: {ui_error(e)}")

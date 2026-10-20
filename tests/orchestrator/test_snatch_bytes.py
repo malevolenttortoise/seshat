@@ -336,6 +336,49 @@ class TestDelayedReinject:
         assert grab.failed_reason == "rotated to delayed folder"
         assert (delayed_dir / name).exists()
 
+    @pytest.mark.parametrize("suffix", ["\n", ""], ids=["trailing newline", "non-ascii digits"])
+    async def test_an_odd_filename_is_refused_before_any_file_or_mam_call(
+        self, temp_db, delayed_dir, mam_liveness, suffix,
+    ):
+        """Security triage #57 / #64: only an exact `<int>_<int>.torrent`
+        reaches the filesystem; the path is rebuilt from its numbers."""
+        from fastapi import HTTPException
+
+        gid, name = await _rotated_grab(delayed_dir)
+        odd = name + suffix if suffix else name.translate(str.maketrans("0123456789", "٠١٢٣٤٥٦٧٨٩"))
+
+        with pytest.raises(HTTPException) as exc:
+            await delayed_router.reinject(odd)
+
+        assert exc.value.status_code == 400
+        assert mam_liveness["asked"] == []
+        assert self.deps.fetch_torrent.calls == []  # type: ignore[attr-defined]
+        assert self.qbit.add_calls == []
+        assert (delayed_dir / name).exists()
+
+
+class TestDelayedDelete:
+    async def test_deletes_the_named_file(self, temp_db, delayed_dir):
+        _, name = await _rotated_grab(delayed_dir)
+
+        assert (await delayed_router.delete_delayed(name)).ok is True
+        assert not (delayed_dir / name).exists()
+
+    @pytest.mark.parametrize("odd", [
+        "12_34.torrent\n", "١٢_٣٤.torrent", "../12_34.torrent", "12_34.torrent.bak",
+    ])
+    async def test_an_odd_filename_touches_nothing(self, temp_db, delayed_dir, odd):
+        """Security triage #58."""
+        from fastapi import HTTPException
+
+        _, name = await _rotated_grab(delayed_dir)
+
+        with pytest.raises(HTTPException) as exc:
+            await delayed_router.delete_delayed(odd)
+
+        assert exc.value.status_code == 400
+        assert (delayed_dir / name).exists()
+
 
 # ─── Startup sweep ───────────────────────────────────────────
 

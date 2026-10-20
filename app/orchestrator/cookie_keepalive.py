@@ -46,6 +46,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from app.mam.cookie import verify_session
+from app.config import ui_error
 
 _log = logging.getLogger("seshat.orchestrator.cookie_keepalive")
 
@@ -93,7 +94,7 @@ async def tick() -> KeepaliveResult:
         _log.exception("cookie keep-alive tick raised")
         return KeepaliveResult(
             success=False,
-            message=f"{type(e).__name__}: {e}",
+            message=f"{type(e).__name__}: {ui_error(e)}",
         )
 
     if result["success"]:

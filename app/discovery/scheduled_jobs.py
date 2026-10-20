@@ -33,7 +33,7 @@ import time
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app import state
-from app.config import SYNC_INTERVAL_MINUTES, load_settings, save_settings
+from app.config import SYNC_INTERVAL_MINUTES, load_settings, save_settings, ui_error
 from app.discovery.calibre_sync import sync_calibre
 from app.discovery.database import (
     get_active_library,
@@ -470,7 +470,7 @@ async def _scheduled_mam_scan(s: dict, mam_token: str) -> bool:
             )
             await ldb.commit()
             if err:
-                last_error = f"{lib_name}: {err}"
+                last_error = f"{lib_name}: {ui_error(err)}"
                 logger.error(f"MAM scheduled scan '{lib_name}' error: {err}")
                 # Continue to other libraries — one failure
                 # shouldn't stall the rest. (IP-registration
@@ -479,7 +479,7 @@ async def _scheduled_mam_scan(s: dict, mam_token: str) -> bool:
                 if "IP registration failed" in str(err):
                     break
         except Exception as e:
-            last_error = f"{lib_name}: {e}"
+            last_error = f"{lib_name}: {ui_error(e)}"
             logger.error(
                 f"MAM scheduled scan '{lib_name}' exception: {e}",
                 exc_info=True,

@@ -31,7 +31,7 @@ from bs4 import BeautifulSoup
 from fastapi import APIRouter, Body, HTTPException, Query
 from fastapi.responses import Response
 
-from app.config import load_settings
+from app.config import load_settings, ui_error
 from app.discovery.database import get_db, HF
 
 logger = logging.getLogger("seshat.discovery")
@@ -329,9 +329,9 @@ async def search_by_url(data: dict = Body(...)):
     except HTTPException:
         raise
     except httpx.HTTPError as e:
-        raise HTTPException(502, f"Failed to fetch: {e}")
+        raise HTTPException(502, f"Failed to fetch: {ui_error(e)}")
     except Exception as e:
-        raise HTTPException(500, f"Error: {e}")
+        raise HTTPException(500, f"Error: {ui_error(e)}")
 
 
 @router.post("/books/import-preview")
@@ -395,7 +395,7 @@ async def import_preview(data: dict = Body(...)):
                 else:
                     entry["status"] = "new"
             except Exception as e:
-                entry["error"] = str(e)[:200]
+                entry["error"] = ui_error(e)
             results.append(entry)
             await asyncio.sleep(0.5)
         return {"results": results}

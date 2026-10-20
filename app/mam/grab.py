@@ -46,6 +46,7 @@ import httpx
 
 from app.mam.announce import build_download_url
 from app.mam.cookie import _do_get
+from app.config import ui_error
 
 _log = logging.getLogger("seshat.mam.grab")
 
@@ -140,7 +141,7 @@ async def fetch_torrent(
         return GrabResult(
             success=False,
             failure_kind="network_error",
-            failure_detail=f"{type(e).__name__}: {e}",
+            failure_detail=f"{type(e).__name__}: {ui_error(e)}",
         )
     except Exception as e:
         # Catch-all for anything httpx didn't classify — e.g. SSL
@@ -151,7 +152,7 @@ async def fetch_torrent(
         return GrabResult(
             success=False,
             failure_kind="network_error",
-            failure_detail=f"{type(e).__name__}: {e}",
+            failure_detail=f"{type(e).__name__}: {ui_error(e)}",
         )
 
     return _classify_response(torrent_id, resp)

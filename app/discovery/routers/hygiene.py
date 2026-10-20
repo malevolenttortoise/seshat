@@ -19,6 +19,7 @@ from fastapi import APIRouter
 
 from app import state
 from app.discovery.hygiene import is_running as _is_running, run_all
+from app.config import ui_error
 
 _log = logging.getLogger("seshat.discovery.hygiene")
 
@@ -45,7 +46,7 @@ async def trigger_hygiene():
         except Exception as e:
             _log.exception("hygiene task crashed")
             state._hygiene_progress.update(
-                {"running": False, "status": f"error: {e}"}
+                {"running": False, "status": f"error: {ui_error(e)}"}
             )
 
     state._hygiene_task = asyncio.create_task(_do(), name="hygiene-chain")

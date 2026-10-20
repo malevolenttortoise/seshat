@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 
 from app.works import matcher, preferences, storage
 from app.works.storage import WorkLink
+from app.config import ui_error
 
 _log = logging.getLogger("seshat.routers.works")
 
@@ -254,7 +255,7 @@ async def set_author_pref(
     try:
         await preferences.set_preference(author_name, req.tracking_mode)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=ui_error(e))
     pref = await preferences.get_preference(author_name)
     # `get_preference` only returns None for empty normalized names —
     # we just wrote a row, so this is effectively an invariant.
