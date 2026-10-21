@@ -162,3 +162,15 @@ prune-linkage operate on two rows that already exist and mint nothing.
   multi-select scan, the book scan and Full Re-Scan scanned anyone with a `book_authors` row (nine non-roster authors
   were scanned on 2026-09-29). The check now sits inside `lookup_author` and the Goodreads worker's merge, and the UI
   says why an author was skipped.
+
+## Amendment (2026-10-21, discovery fix pass S20: when co-authors train)
+
+- **Co-author auto-train runs at delivery, not at grab** (G203). The dispatcher saves MAM's `author_info` list on
+  the grab (`grabs.coauthors_json`; same single cached-or-fetched `torrent_info` call as before) and the pipeline
+  trains it once the book is delivered: an approved review, a timeout, or no review. A rejected review, a grab the
+  policy skips or a failed download trains nobody. Found 2026-10-21: one namesake match ("Chris Harris" on a Kobold
+  Press RPG book) started a chain of 16 RPG grabs that put 56 names on the allow list, publishers among them, some
+  from grabs rejected in review (deleted by hand the same day).
+- **A book credited to more than 3 authors trains none of them** (G204, the anthology line of ADR-0029's F7), for
+  the co-author list and the delivery's announce-author train alike; the matched author is already allowed.
+- Accepted cost: until a book is delivered, its co-authors' own announces still need their own match.

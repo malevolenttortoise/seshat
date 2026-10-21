@@ -15,6 +15,13 @@ The auto-train only adds to the allow list — it never removes or
 modifies existing entries, and it never touches the ignore list.
 Authors added by auto-train get `source = "auto_train"` so the UI
 can distinguish them from manually-curated entries.
+
+Both trainings run when the book is DELIVERED (discovery fix pass S20,
+G203): the announce's authors, and MAM's co-author list the dispatcher
+saved on the grab (`coauthor_train`). A rejected review, a grab the
+policy skipped or a failed download trains nobody. A book credited to
+more than `MAX_TRAINED_AUTHORS` authors trains nobody (G204: anthologies
+and RPG books, where one namesake match once trained 56 names).
 """
 from __future__ import annotations
 
@@ -25,6 +32,27 @@ import aiosqlite
 from app.filter.normalize import normalize_author
 
 _log = logging.getLogger("seshat.orchestrator.auto_train")
+
+# G204: a book with more credited authors than this trains none of them
+# (the matched author is already allowed). F7's anthology line is 4+.
+MAX_TRAINED_AUTHORS = 3
+
+
+async def _train_names(
+    db: aiosqlite.Connection, names: list[str], source: str, what: str,
+) -> int:
+    names = [n for n in names if n and n.strip()]
+    if len(names) > MAX_TRAINED_AUTHORS:
+        _log.info(
+            "auto-train: %s credits %d authors (> %d), none trained: %s",
+            what, len(names), MAX_TRAINED_AUTHORS, ", ".join(names[:6]),
+        )
+        return 0
+    added = 0
+    for name in names:
+        if await train_author(db, name, source):
+            added += 1
+    return added
 
 
 async def train_author(
@@ -103,42 +131,45 @@ async def train_authors_from_blob(
     author_blob: str,
     source: str = "auto_train",
 ) -> int:
-    """Split an author blob and train each author.
+    """Split an author blob and train each author (none when it credits
+    more than `MAX_TRAINED_AUTHORS`).
 
     Returns the count of newly-added authors.
     """
     from app.filter.gate import split_authors
 
-    raw_authors = split_authors(author_blob)
-    added = 0
-    for author in raw_authors:
-        if await train_author(db, author, source):
-            added += 1
-    return added
+    return await _train_names(db, split_authors(author_blob), source, repr(author_blob[:80]))
 
 
-async def train_authors_from_torrent_info(
-    db: aiosqlite.Connection,
+async def train_coauthors(
+    db: aiosqlite.Connection, names: list[str], *, what: str = "the book",
+    source: str = "coauthor_train",
+) -> int:
+    """Train a delivered grab's saved co-author list (G203 / G204)."""
+    return await _train_names(db, list(names), source, what)
+
+
+async def coauthor_names(
     torrent_id,
     *,
     token: str | None,
     fallback_blob: str = "",
-    source: str = "author_info",
     looked_up: bool = False,
     info=None,
-) -> int:
-    """v3.0.0 Phase 10 — train the AUTHORITATIVE MAM authorlist for a grab.
+) -> list[str]:
+    """v3.0.0 Phase 10 — the AUTHORITATIVE MAM authorlist for a grab, to
+    save on it and train at delivery (S20).
 
-    Fetches `torrent_info` (cached, ttl=300) and trains every author in its
-    `author_info` map into the allow list — the complete co-author set,
-    unlike the announce blob which may name only the primary. Falls back to
-    `fallback_blob` (the announce author string, split into authors) when the
-    fetch fails or yields nothing, so a torrent_info outage never loses the
-    baseline announce-derived train.
+    Reads `torrent_info` (cached, ttl=300): every author in its
+    `author_info` map — the complete co-author set, unlike the announce blob
+    which may name only the primary. Falls back to `fallback_blob` (the
+    announce author string, split into authors) when the fetch fails or
+    yields nothing, so a torrent_info outage never loses the baseline
+    announce-derived list.
 
     MAM economy: at most one cached-or-fetched `torrent_info` call per GRAB
     (grabs are rare + deliberate; the snatch dwarfs it). Do NOT call this on
-    the per-announce path. Returns the count of newly-added authors.
+    the per-announce path.
 
     `looked_up=True` means the caller already asked MAM: `info` is its
     result (None = the lookup failed), and nothing is fetched here.
@@ -160,9 +191,4 @@ async def train_authors_from_torrent_info(
     if not names and fallback_blob:
         from app.filter.gate import split_authors
         names = split_authors(fallback_blob)
-
-    added = 0
-    for name in names:
-        if await train_author(db, name, source):
-            added += 1
-    return added
+    return names

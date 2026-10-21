@@ -62,7 +62,7 @@ from app.mam.torrent_info import (
     get_torrent_info,
 )
 from app.mam.user_status import UserStatusError, get_user_status
-from app.orchestrator.auto_train import train_authors_from_torrent_info
+from app.orchestrator.auto_train import coauthor_names
 from app.orchestrator import torrent_store
 from app.orchestrator.delayed import rotate_oldest_to_delayed
 from app.orchestrator.download_folders import (
@@ -1397,32 +1397,31 @@ async def _dispatch_with_decision(
                     message="The uploader is on your excluded-uploaders list.",
                 )
 
-        # Co-author auto-train (v3.0.0 Phase 10, ITEM 1): train the
-        # AUTHORITATIVE MAM authorlist for this grab into the allow list, so
-        # future announces by any co-author of a book we acquired pass the
-        # filter. Fires when the filter allowed because a known author
-        # matched, OR for any programmatic/manual grab (skip_filter — covers
-        # inject / tentative-approve / hold-release / delayed / discovery
+        # Co-authors (v3.0.0 Phase 10, ITEM 1): the AUTHORITATIVE MAM
+        # authorlist for this grab, saved on the grab row and trained into
+        # the allow list when the book is DELIVERED (S20, G203: a rejected
+        # review or a skipped grab trains nobody), so future announces by any
+        # co-author of a book we acquired pass the filter. Kept when the
+        # filter allowed because a known author matched, OR for any
+        # programmatic/manual grab (skip_filter — covers inject /
+        # tentative-approve / hold-release / delayed / discovery
         # send-to-pipeline). One cached-or-fetched torrent_info call per grab
         # (grabs are rare + deliberate); the announce blob is the fail-safe
-        # fallback. Trains `authors_allowed` only — the owned book's
-        # book_authors come from Calibre/ABS sync (Phase 2). Best-effort:
-        # never block the grab.
+        # fallback. Best-effort: never block the grab.
+        coauthors: list[str] = []
         if (
             filter_decision.reason == "allowed_author" or skip_filter
         ) and announce.torrent_id:
             try:
-                await train_authors_from_torrent_info(
-                    db,
+                coauthors = await coauthor_names(
                     announce.torrent_id,
                     token=deps.live_mam_token(),
                     fallback_blob=announce.author_blob or "",
-                    source="coauthor_train",
                     looked_up=lookup is not None,
                     info=lookup.info if lookup is not None else None,
                 )
             except Exception:
-                pass  # best-effort, don't block the grab
+                coauthors = []  # best-effort, don't block the grab
 
         # Filter said allow (or we're injecting). Build the economic
         # context for the policy engine. Start with what we already
@@ -1584,6 +1583,7 @@ async def _dispatch_with_decision(
                     announce.categories
                     or await grabs_storage.announce_categories(db, announce_id)
                 ),
+                coauthors=coauthors,
             )
 
         # A wedge comes from the policy or from `force_fl_wedge` (a user
@@ -2158,13 +2158,11 @@ async def grab_uploaded_torrent(
                 announce_id=announce_id,
             )
 
+        # Saved on the grab, trained at delivery (S20, G203), as in dispatch.
         try:
-            await train_authors_from_torrent_info(
-                db, tid, token=token, fallback_blob=author_blob,
-                source="coauthor_train",
-            )
+            coauthors = await coauthor_names(tid, token=token, fallback_blob=author_blob)
         except Exception:
-            pass  # best-effort, as in dispatch
+            coauthors = []  # best-effort, as in dispatch
 
         eco_ctx = await _build_economic_context(deps, announce)
         policy_decision = evaluate_policy(eco_ctx, deps.policy_config)
@@ -2221,6 +2219,7 @@ async def grab_uploaded_torrent(
                 book_format=book_format,
                 dedup_key=normalize_dedup_key(announce.torrent_name, author_blob),
                 policy_tier=policy_decision.tier,
+                coauthors=coauthors,
             )
     finally:
         await db.close()

@@ -49,7 +49,7 @@ from app.metadata.extract import BookMetadata, extract as extract_metadata
 from app.metadata.enricher import MetadataEnricher
 from app.metadata.record import MetaRecord
 from app.metadata.writer import patch_epub_metadata
-from app.orchestrator.auto_train import train_authors_from_blob
+from app.orchestrator.auto_train import train_authors_from_blob, train_coauthors
 from app.orchestrator.download_watcher import CompletionEvent
 from app.orchestrator.file_copier import copy_to_staging, find_book_files
 from app.sinks.base import SinkResult
@@ -1339,6 +1339,18 @@ async def _deliver_prepared(
                     "pipeline: auto-trained %d author(s) from %s",
                     added, event.torrent_name,
                 )
+    # MAM's co-author list, saved when the dispatcher grabbed: trained now
+    # the book is delivered (S20, G203), not at grab, so a rejected review
+    # or a skipped grab trains nobody; 4+ credited authors train nobody
+    # (G204). Not gated by auto-train, as when it trained at grab.
+    coauthors = await grabs_storage.grab_coauthors(db, event.grab_id)
+    if coauthors:
+        added = await train_coauthors(db, coauthors, what=repr(event.torrent_name))
+        if added:
+            _log.info(
+                "pipeline: trained %d co-author(s) of %r on delivery",
+                added, event.torrent_name,
+            )
 
     await pipe_storage.set_state(db, run_id, pipe_storage.PIPE_COMPLETE)
     await grabs_storage.set_state(

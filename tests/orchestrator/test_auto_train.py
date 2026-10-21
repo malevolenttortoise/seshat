@@ -5,7 +5,8 @@ from app.database import get_db
 from app.orchestrator.auto_train import (
     train_author,
     train_authors_from_blob,
-    train_authors_from_torrent_info,
+    coauthor_names,
+    train_coauthors,
 )
 
 
@@ -158,10 +159,11 @@ class TestTrainAuthorsFromBlob:
             await db.close()
 
 
-class TestTrainAuthorsFromTorrentInfo:
-    """v3.0.0 Phase 10 (ITEM 1) — train the authoritative MAM authorlist."""
+class TestCoauthorNames:
+    """v3.0.0 Phase 10 (ITEM 1) — the authoritative MAM authorlist, saved on
+    the grab (S20) and trained at delivery."""
 
-    async def test_trains_authoritative_authorlist(self, temp_db, monkeypatch):
+    async def test_reads_the_authoritative_authorlist(self, monkeypatch):
         import app.mam.torrent_info as ti
 
         class _FakeInfo:
@@ -171,43 +173,57 @@ class TestTrainAuthorsFromTorrentInfo:
             return _FakeInfo()
 
         monkeypatch.setattr(ti, "get_torrent_info", _fake_get)
-        db = await get_db()
-        try:
-            added = await train_authors_from_torrent_info(
-                db, "12345", token="tok", fallback_blob="Ignored Fallback",
-            )
-            assert added == 2
-            cnt = (await (await db.execute(
-                "SELECT COUNT(*) c FROM authors_allowed"
-            )).fetchone())["c"]
-            assert cnt == 2
-        finally:
-            await db.close()
+        assert await coauthor_names("12345", token="tok", fallback_blob="Ignored Fallback") == [
+            "J.N. Chaney", "Jason Anspach"]
 
-    async def test_falls_back_to_announce_blob_on_fetch_error(
-        self, temp_db, monkeypatch,
-    ):
+    async def test_falls_back_to_announce_blob_on_fetch_error(self, monkeypatch):
         import app.mam.torrent_info as ti
 
         async def _boom(tid, **kw):
             raise ti.TorrentInfoError("unavailable")
 
         monkeypatch.setattr(ti, "get_torrent_info", _boom)
+        assert await coauthor_names("12345", token="tok", fallback_blob="Author A, Author B") == [
+            "Author A", "Author B"]
+
+    async def test_no_token_uses_fallback_blob(self):
+        assert await coauthor_names("12345", token=None, fallback_blob="Solo Author") == ["Solo Author"]
+
+    async def test_a_lookup_already_made_is_not_repeated(self, monkeypatch):
+        import app.mam.torrent_info as ti
+
+        async def _never(tid, **kw):
+            raise AssertionError("fetched again")
+
+        monkeypatch.setattr(ti, "get_torrent_info", _never)
+
+        class _Info:
+            authors = {"1": "Ann One"}
+
+        assert await coauthor_names("1", token="tok", looked_up=True, info=_Info()) == ["Ann One"]
+        assert await coauthor_names("1", token="tok", looked_up=True, info=None,
+                                    fallback_blob="Blob Author") == ["Blob Author"]
+
+
+class TestFourOrMoreAuthorsTrainNobody:
+    """G204: a book credited to 4+ authors trains none of them."""
+
+    async def test_coauthor_list(self, temp_db):
         db = await get_db()
         try:
-            added = await train_authors_from_torrent_info(
-                db, "12345", token="tok", fallback_blob="Author A, Author B",
-            )
-            assert added == 2
+            assert await train_coauthors(db, ["A One", "B Two", "C Three", "D Four"]) == 0
+            assert await train_coauthors(db, ["A One", "B Two", "C Three"]) == 3
+            rows = await (await db.execute(
+                "SELECT source FROM authors_allowed")).fetchall()
+            assert [r["source"] for r in rows] == ["coauthor_train"] * 3
         finally:
             await db.close()
 
-    async def test_no_token_uses_fallback_blob(self, temp_db):
+    async def test_announce_blob(self, temp_db):
         db = await get_db()
         try:
-            added = await train_authors_from_torrent_info(
-                db, "12345", token=None, fallback_blob="Solo Author",
-            )
-            assert added == 1
+            assert await train_authors_from_blob(db, "A One, B Two, C Three, D Four") == 0
+            cnt = (await (await db.execute("SELECT COUNT(*) c FROM authors_allowed")).fetchone())["c"]
+            assert cnt == 0
         finally:
             await db.close()

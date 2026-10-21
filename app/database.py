@@ -113,7 +113,10 @@ CREATE TABLE IF NOT EXISTS grabs (
     -- rows from before the 2026-10 audit (issue 11).
     policy_tier       TEXT,
     -- MAM content tags, JSON list (wave 5a, G124; see announces).
-    categories_json   TEXT
+    categories_json   TEXT,
+    -- MAM's co-author list for the grab, JSON list, trained into the allow
+    -- list when the book is delivered (S20, G203). NULL: nothing to train.
+    coauthors_json    TEXT
 );
 
 CREATE TABLE IF NOT EXISTS snatch_ledger (
@@ -1172,6 +1175,9 @@ MIGRATIONS: list[str] = [
     "ALTER TABLE announces ADD COLUMN categories_json TEXT",
     "ALTER TABLE tentative_torrents ADD COLUMN categories_json TEXT",
     "ALTER TABLE grabs ADD COLUMN categories_json TEXT",
+    # ── 2026-10 discovery fix pass S20, G203: MAM's co-author list, saved
+    # at grab and trained at delivery ──
+    "ALTER TABLE grabs ADD COLUMN coauthors_json TEXT",
 ]
 
 

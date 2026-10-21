@@ -209,6 +209,7 @@ async def create_grab(
     dedup_key: str = "",
     policy_tier: str = "",
     categories: Sequence[str] = (),
+    coauthors: Sequence[str] = (),
 ) -> int:
     """Insert a new row in the `grabs` table.
 
@@ -238,14 +239,17 @@ async def create_grab(
     never went through the policy (adoptions, reingests, older rows).
 
     `categories`: the announce's MAM content tags (wave 5a, G124).
+    `coauthors`: MAM's co-author list, trained when the book is delivered
+    (S20, G203); empty for a grab that trains nobody.
     """
     cursor = await db.execute(
         """
         INSERT INTO grabs
             (announce_id, mam_torrent_id, torrent_name, category,
              author_blob, state, qbit_hash, is_reingest,
-             book_format, dedup_key, policy_tier, categories_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             book_format, dedup_key, policy_tier, categories_json,
+             coauthors_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             announce_id,
@@ -260,10 +264,28 @@ async def create_grab(
             dedup_key or None,
             policy_tier or None,
             categories_json(categories),
+            json.dumps(list(coauthors)) if coauthors else None,
         ),
     )
     await db.commit()
     return cursor.lastrowid or 0
+
+
+async def grab_coauthors(db: aiosqlite.Connection, grab_id: int) -> list[str]:
+    """The co-author list saved on a grab (S20), [] when none."""
+    try:
+        row = await (await db.execute(
+            "SELECT coauthors_json FROM grabs WHERE id = ?", (grab_id,),
+        )).fetchone()
+    except aiosqlite.OperationalError:      # a DB from before the column
+        return []
+    if not row or not row[0]:
+        return []
+    try:
+        names = json.loads(row[0])
+    except (TypeError, ValueError):
+        return []
+    return [str(n) for n in names if isinstance(n, str) and n.strip()] if isinstance(names, list) else []
 
 
 async def set_torrent_name(

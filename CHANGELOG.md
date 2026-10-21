@@ -101,13 +101,30 @@ frontend test suite.
   author page** has a "List missing books" switch in each library's
   block, for that library's author. **Settings → Author Scanning**
   reads "Skip audiobook editions", next to the new "Hide comics and
-  manga" and "Hide box sets and omnibuses". A scan of an author who
+  manga" and "Hide box sets and omnibuses"; on the phone its switches
+  now save the settings the backend reads (until now they did nothing). A scan of an author who
   isn't scan-eligible now says why instead of "scan started", and the
   dashboard's last-scan line counts the authors a bulk scan skipped
   (hover for who and why). API: `hide_short` on `/discovery/missing`
   and `/discovery/books`; `reason` on `/discovery/books/hidden` takes
   several comma-separated reasons; `/discovery/missing` no longer
   passes an unset `slug` through to `/books`.
+- **A grab's co-authors join your allow list only once the book is
+  delivered, and never from a book with 4 or more authors** (discovery
+  fix pass S20, ADR-0021 amended). Until now every co-author MAM lists
+  was added the moment the filter allowed the announce: before the
+  grab policy, the download and your review. One namesake match ("Chris
+  Harris" on a Kobold Press RPG book) set off 16 RPG grabs that added
+  56 names, publishers among them, some from grabs you then rejected.
+  Now the list is saved on the grab and trained when the book is
+  delivered (an approved review, its timeout, or no review). A rejected
+  review, a grab the policy skips or a failed download adds nobody. A
+  book credited to 4 or more authors (anthologies, RPG books) adds none
+  of them, for the co-author list and the announce's own authors alike.
+  The Filters page now says how the categories work: a torrent passes
+  when any of its tags is allowed, and right-click (on the phone, tap
+  until struck through) blocks a tag outright. **Database migration**: the pipeline
+  database goes to `user_version` 67 (`grabs.coauthors_json`).
 - **An IRC announce of a book you already own is no longer grabbed**
   (discovery fix pass S4, ADR-0004 / 0013 amended). Claim-for-owned and
   format dedup now recognise an owned book by the title identity (below)
