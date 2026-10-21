@@ -450,6 +450,58 @@ class TestMetadataCacheNestedSettingsSeed:
         assert json.loads(json.dumps(settings)) == snapshot
 
 
+class TestPhase2SwitchedOnOnce:
+    """G194 (2026-10-21): phase 2 went on by default (G178), but the old
+    default `phase2_enabled: false` sat in every settings.json, so it never
+    ran. A stored false is switched on once; off after that sticks."""
+
+    def _load(self, monkeypatch, tmp_path, payload):
+        monkeypatch.setenv("DATA_DIR", str(tmp_path))
+        import app.config
+        importlib.reload(app.config)
+        if payload is not None:
+            (tmp_path / "settings.json").write_text(json.dumps(payload))
+        return app.config
+
+    def test_a_stored_false_is_switched_on_once(self, monkeypatch, tmp_path):
+        cfg = self._load(monkeypatch, tmp_path, {
+            "metadata_cache": {"goodreads": {"enabled": True, "phase2_enabled": False}},
+        })
+        s = cfg.load_settings()
+        assert s["metadata_cache"]["goodreads"]["phase2_enabled"] is True
+        saved = json.loads((tmp_path / "settings.json").read_text())
+        assert saved["metadata_cache"]["goodreads"]["phase2_enabled"] is True
+        assert saved["goodreads_phase2_on_applied"] is True
+
+        # Switched off afterwards: stays off across loads.
+        saved["metadata_cache"]["goodreads"]["phase2_enabled"] = False
+        cfg.save_settings(saved)
+        assert cfg.load_settings()["metadata_cache"]["goodreads"]["phase2_enabled"] is False
+
+    def test_a_fresh_install_starts_on_and_marked(self, monkeypatch, tmp_path):
+        cfg = self._load(monkeypatch, tmp_path, None)
+        s = cfg.load_settings()
+        assert s["metadata_cache"]["goodreads"]["phase2_enabled"] is True
+        assert s["goodreads_phase2_on_applied"] is True
+        # So switching it off on a new install sticks too.
+        s["metadata_cache"]["goodreads"]["phase2_enabled"] = False
+        cfg.save_settings(s)
+        assert cfg.load_settings()["metadata_cache"]["goodreads"]["phase2_enabled"] is False
+
+    def test_an_install_without_the_key_gets_the_on_default(self, monkeypatch, tmp_path):
+        cfg = self._load(monkeypatch, tmp_path, {
+            "goodreads_phase2_on_applied": True,
+            "metadata_cache": {"goodreads": {"enabled": True}},
+        })
+        assert cfg.load_settings()["metadata_cache"]["goodreads"]["phase2_enabled"] is True
+
+    def test_the_marker_is_runtime_state(self):
+        from app.routers.settings import _RUNTIME_STATE_KEYS
+        import app.config
+        assert "goodreads_phase2_on_applied" in _RUNTIME_STATE_KEYS
+        assert app.config.is_known_settings_key("goodreads_phase2_on_applied")
+
+
 class TestNoSilentlyMissingSeeds:
     """The discipline test: every ENV_* constant defined as a
     first-run seed at the top of config.py must be referenced in

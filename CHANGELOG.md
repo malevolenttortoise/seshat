@@ -200,7 +200,10 @@ frontend test suite.
   join the first fill (their entries become candidates, smallest
   catalogue first; ~1,100 entries from 23 authors on the reference
   install). Phase 2, a book page for every cached list entry, is now on
-  unless switched off; it runs only when no candidate waits, and walks
+  unless switched off (the old default, off, was stored in every
+  settings.json, so the first start after this update switches a stored
+  off on once, G194; switching it off afterwards sticks). It runs only
+  when no candidate waits, and walks
   authors by the books you own, most first, leaving out books you own,
   pages already stored, sets, audio and translations. **Database
   migration**: the Goodreads cache database goes to `user_version` 14

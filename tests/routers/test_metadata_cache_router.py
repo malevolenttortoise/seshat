@@ -865,7 +865,7 @@ class TestGoodreadsCandidateStatus:
         assert r.status_code == 200, r.text
         c = r.json()["candidates"]
         assert c["first_fill"] == {"candidates": 0, "decided": 0, "authors": 0, "authors_left": 0}
-        assert c["phase2"]["enabled"] is False
+        assert c["phase2"]["enabled"] is True          # on by default (G178 / G194)
 
     async def test_phase2_switches_on_and_off(self, gr_cache_router_client):
         r = await gr_cache_router_client.patch(

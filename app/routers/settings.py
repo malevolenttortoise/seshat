@@ -64,6 +64,7 @@ _RUNTIME_STATE_KEYS: frozenset[str] = frozenset({
     "mam_last_validated_at",
     "last_mam_validated_at",
     "qbit_orphan_adoption_since",
+    "goodreads_phase2_on_applied",     # G194's one-time switch-on
     # v2.13.0 — Goodreads bot-protection (AWS WAF) state. Written by
     # `app/metadata/goodreads_session.py` on every response. Cleared
     # to "active" manually via the Settings panel "Mark as active"

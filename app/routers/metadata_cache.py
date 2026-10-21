@@ -607,7 +607,7 @@ async def patch_settings(
             timezone=str(sched_now.get("timezone") or ""),
         ),
         phase2_enabled=(
-            bool(_cache_settings_get(source).get("phase2_enabled", False))
+            bool(_cache_settings_get(source).get("phase2_enabled", True))
             if source == metadata_cache.SOURCE_GOODREADS else None
         ),
     )

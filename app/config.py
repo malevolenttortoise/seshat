@@ -650,9 +650,9 @@ DEFAULT_SETTINGS = {
                 "timezone": "",
             },
             # Phase 2 of the candidate worker (2026-10 audit wave 4b, G88):
-            # fetch the page of every cached list entry. Off until the
-            # operator switches it on.
-            "phase2_enabled": False,
+            # fetch the page of every cached list entry. On (G178); it runs
+            # only while the worker runs and no candidate waits.
+            "phase2_enabled": True,
         },
     },
     "notify_daily_accepted": True,
@@ -969,6 +969,7 @@ RUNTIME_SETTINGS_KEYS: frozenset[str] = frozenset({
     "amazon_blocked_until_by_kind",    # G181: one cooldown per request kind
     "source_gate_kind_last_start",     # source_gate: a kind gap survives a restart
     "v2_12_1_dual_row_backfill_done",  # main: one-time backfill sentinel
+    "goodreads_phase2_on_applied",     # G194: phase 2's one-time switch-on
 })
 # Read with a default, written by nothing: a value set by hand survives.
 READ_ONLY_SETTINGS_KEYS: frozenset[str] = frozenset({
@@ -1138,6 +1139,16 @@ def _apply_legacy_settings_migrations(settings: dict) -> bool:
                         if sub_k not in cur_src[key]:
                             cur_src[key][sub_k] = sub_v
                             changed = True
+    # G194 (2026-10-21): phase 2 went on by default (G178), but every
+    # install had the old default `phase2_enabled: false` stored, so it
+    # never ran. Switch a stored false on once; switching it off after
+    # that sticks.
+    if not settings.get("goodreads_phase2_on_applied"):
+        gr = (settings.get("metadata_cache") or {}).get("goodreads")
+        if isinstance(gr, dict) and gr.get("phase2_enabled") is False:
+            gr["phase2_enabled"] = True
+        settings["goodreads_phase2_on_applied"] = True
+        changed = True
     return changed
 
 
@@ -1193,6 +1204,7 @@ def load_settings() -> dict:
     # First run — start from defaults and seed from env vars.
     settings = dict(DEFAULT_SETTINGS)
     _apply_env_overrides(settings)
+    _apply_legacy_settings_migrations(settings)    # marks the one-time ones done
     save_settings(settings)
     try:
         _settings_cache["mtime"] = SETTINGS_PATH.stat().st_mtime
