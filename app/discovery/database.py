@@ -709,6 +709,9 @@ MIGRATIONS = [
     # NULL for a book hidden by hand.
     "ALTER TABLE books ADD COLUMN hidden_reason TEXT",
     "CREATE INDEX IF NOT EXISTS idx_books_hidden_reason ON books(hidden_reason)",
+    # S5 (D6 / F8 / C7): the per-author "list missing books" switch; off,
+    # scans skip the author and their missing books are hidden `author_off`.
+    "ALTER TABLE authors ADD COLUMN list_missing INTEGER NOT NULL DEFAULT 1",
 ]
 
 

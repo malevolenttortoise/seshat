@@ -3699,6 +3699,14 @@ async def merge_goodreads_book(
             if row is None:
                 return 0, 0
             author_name = row["name"]
+            from app.discovery.roster import SKIP_MESSAGES, author_scan_skip_reason
+            skip = await author_scan_skip_reason(db, author_id, author_name, slug)
+            if skip:
+                logger.info(
+                    "  [goodreads] not merging %r for %r: %s", book.title,
+                    author_name, SKIP_MESSAGES.get(skip, skip),
+                )
+                return 0, 0
             linked, link_type_by_id = [], {}
             for pr in await (await db.execute(
                 "SELECT canonical_author_id, alias_author_id, link_type "
@@ -3765,6 +3773,32 @@ def _log_source_timeout_summary(timeouts: dict[str, list[str]]) -> None:
         )
 
 
+def _note_skips(skips: list[dict]) -> None:
+    """Skipped authors on the scan widget (F15): a count, and the first 50
+    with their reason."""
+    if not skips:
+        return
+    prog = state._lookup_progress
+    prog["skipped"] = int(prog.get("skipped") or 0) + len(skips)
+    names = list(prog.get("skipped_authors") or [])
+    prog["skipped_authors"] = (names + skips)[:50]
+
+
+async def _scan_skip(author_id: int, author_name: str) -> Optional[str]:
+    """F15: every scan path stops here for an author who isn't
+    scan-eligible (ADR-0021 amended), and says why."""
+    from app.discovery.roster import SKIP_MESSAGES, author_scan_skip_reason
+    db = await get_db()
+    try:
+        reason = await author_scan_skip_reason(db, author_id, author_name)
+    finally:
+        await db.close()
+    if reason:
+        logger.info("  [scan] skipped %r: %s", author_name, SKIP_MESSAGES.get(reason, reason))
+        _note_skips([{"name": author_name, "reason": reason}])
+    return reason
+
+
 @source_gate.as_caller(source_gate.CALLER_SCAN)
 async def lookup_author(author_id: int, author_name: str, full_scan: bool = False, on_progress=None, timeout_collector: dict | None = None):
     """Scan all enabled sources for one author and merge results.
@@ -3786,6 +3820,8 @@ async def lookup_author(author_id: int, author_name: str, full_scan: bool = Fals
     for single-author scans, where the per-source warning log line
     is enough on its own.
     """
+    if await _scan_skip(author_id, author_name):
+        return 0
     logger.info(f"{'Full re-scan' if full_scan else 'Looking up'} author: {author_name}")
     # Signal MAM to pause its batch loop while we hold the writer
     # lock for merges. Counter (not boolean) so overlapping scans
@@ -4453,7 +4489,9 @@ async def run_full_lookup(on_progress=None):
         # roster filter is applied inside `scan_eligible_authors` so this
         # loop and the router's pre-flight due-count can't disagree.
         from app.discovery.roster import scan_eligible_authors
-        rows = await scan_eligible_authors(db, time.time() - cache_sec)
+        skips: list[dict] = []
+        rows = await scan_eligible_authors(db, time.time() - cache_sec, skips=skips)
+        _note_skips(skips)
         authors = list(rows)
         total = 0; checked = 0
         timeouts: dict[str, list[str]] = {}
@@ -4513,9 +4551,17 @@ async def run_full_rescan(on_progress=None):
     try:
         cur = await db.execute("INSERT INTO sync_log (sync_type, started_at) VALUES (?, ?)", ("full_rescan", start))
         sid = cur.lastrowid; await db.commit()
-        # Skip orphan authors — same reasoning as run_full_lookup above.
+        # Skip orphan authors — same reasoning as run_full_lookup above —
+        # and authors who aren't scan-eligible (F15).
+        from app.discovery.roster import load_roster
         rows = await (await db.execute("SELECT id, name FROM authors WHERE id IN (SELECT DISTINCT author_id FROM book_authors) ORDER BY sort_name ASC")).fetchall()
-        authors = list(rows)
+        roster = await load_roster(db)
+        skips = [{"name": r["name"], "reason": why} for r in rows
+                 if (why := roster.scan_skip_reason(r["name"], r["id"]))]
+        if skips:
+            logger.info("full re-scan: %d of %d authors not scan-eligible, skipped", len(skips), len(rows))
+        _note_skips(skips)
+        authors = [r for r in rows if roster.is_scan_eligible(r["name"], r["id"])]
         total = 0; checked = 0
         timeouts: dict[str, list[str]] = {}
         for a in authors:

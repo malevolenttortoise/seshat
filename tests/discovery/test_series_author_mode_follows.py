@@ -222,6 +222,13 @@ async def test_a_source_scan_ends_with_a_recompute(discovery_db, monkeypatch):
     sid = await _series("Stale", a, "multi_author")
     await _book("S1", [a], sid)
     monkeypatch.setattr(lookup, "_sources_for_content_type", lambda *a, **k: [])
+    # Alice owns nothing here: open S5's scan gate for her.
+    from app.discovery import roster
+
+    async def _eligible(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(roster, "author_scan_skip_reason", _eligible)
 
     await lookup.lookup_author(a, "Alice")
     assert await _mode(sid) == ("per_author", a)

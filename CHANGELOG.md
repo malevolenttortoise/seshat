@@ -51,6 +51,24 @@ frontend test suite.
   at the same place in the series ("Geostorm The Shift" = "The Shift",
   Geostorm #1). Scans stop creating these beside the book they are (one
   was an owned book).
+- **Scans visit only authors you own or picked, and each author gets a
+  "List missing books" switch** (discovery fix pass S5, ADR-0021
+  amended). An author is scanned when they own a book in the library or
+  you put them on the allow list yourself (autobrr import, manual,
+  tentative approve). An author grab auto-train added as a co-author
+  still passes the MAM filter and is still credited on books, but isn't
+  scanned for missing books. The check is now on every scan path: the
+  author page, multi-select, book scans and Full Re-Scan scanned anyone
+  until now, and the Goodreads worker set its own pace. A skipped author
+  is named with the reason, and the Goodreads worker sets their books
+  aside without a request. The switch is on by default. Turned off
+  (API now, author page in S7), the author isn't scanned and their
+  missing books are hidden (reason "author off"), unless another of
+  their contributors still lists missing books. Turned back on, the
+  books show at once and the Goodreads worker picks them up again. MAM
+  announces for the author still pass your filter. **Database
+  migration**: library databases go to `user_version` 94
+  (`authors.list_missing`).
 - **An IRC announce of a book you already own is no longer grabbed**
   (discovery fix pass S4, ADR-0004 / 0013 amended). Claim-for-owned and
   format dedup now recognise an owned book by the title identity (below)

@@ -24,8 +24,10 @@ from app.discovery import (
 from app.discovery.database import set_active_library
 from app.metadata import goodreads_session
 from app.discovery import lookup as _lookup
+from app.discovery import roster as _roster
 
 _ORIGINAL_MERGE = _lookup.merge_goodreads_book
+_REAL_SCAN_SKIP = _roster.author_scan_skip_reason
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "goodreads"
 NEUROPATH = (FIXTURES / "book_page_neuropath.html").read_text()
@@ -145,6 +147,14 @@ async def env(tmp_path, monkeypatch):
 
     from app.discovery import lookup
     monkeypatch.setattr(lookup, "merge_goodreads_book", _merge)
+    # The fixture's authors own nothing and there's no allow list here;
+    # TestScanGate puts the real scan gate (S5) back.
+    from app.discovery import roster
+
+    async def _eligible(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(roster, "author_scan_skip_reason", _eligible)
     yield {"gr": fake, "merged": merged, "tmp": tmp_path}
     goodreads_session.reset_session_for_tests()
     set_active_library(prev)
@@ -1079,3 +1089,96 @@ class TestQuietBeforeAPage:
         await w.tick_goodreads()
 
         assert any("/author/list/" in u for u in env["gr"].urls)
+
+
+# ─── The scan gate (wave B S5: D1 / D6 / F15) ────────────────
+
+
+async def _list_missing_off(aid, slug="books-lib"):
+    from app.discovery.database import get_db
+    db = await get_db(slug=slug)
+    try:
+        await db.execute("UPDATE authors SET list_missing = 0 WHERE id = ?", (aid,))
+        await db.commit()
+    finally:
+        await db.close()
+    _roster.invalidate()
+
+
+class TestScanGate:
+    """An author who isn't scan-eligible costs no Goodreads request: the
+    candidate is set aside with the reason, and the merge refuses it."""
+
+    @pytest.fixture(autouse=True)
+    def _real_gate(self, env, monkeypatch):
+        monkeypatch.setattr(_roster, "author_scan_skip_reason", _REAL_SCAN_SKIP)
+        _roster.invalidate()
+        yield
+        _roster.invalidate()
+
+    async def test_an_author_owning_nothing_and_not_allow_listed_costs_no_autocomplete(self, env):
+        await _seeded(env)
+        env["gr"].autocomplete["New Book"] = [_hit(100, "New Book")]
+        res = await gc.step()
+        assert env["gr"].urls == []
+        row = (await _rows())["100"]
+        assert (row["state"], row["reason"]) == ("skipped", "not_scan_eligible")
+        assert "not scan-eligible" in res.detail
+
+    async def test_an_owner_is_still_worked(self, env):
+        await _seeded(env, books=[("Owned One", "9")])
+        env["gr"].autocomplete["New Book"] = [_hit(100, "New Book")]
+        await gc.step()
+        assert env["gr"].kinds() == ["ac"]
+
+    async def test_list_missing_off_costs_no_autocomplete(self, env):
+        await _seeded(env, books=[("Owned One", "9")])
+        await _list_missing_off(1)
+        env["gr"].autocomplete["New Book"] = [_hit(100, "New Book")]
+        await gc.step()
+        assert env["gr"].urls == []
+        row = (await _rows())["100"]
+        assert (row["state"], row["reason"]) == ("skipped", "list_missing_off")
+
+    async def test_list_missing_off_costs_no_page(self, env):
+        await _seeded(env, [_rec("100", "Neuropath")], books=[("Owned One", "9")])
+        env["gr"].autocomplete["Neuropath"] = [_hit("100", "Neuropath")]
+        await gc.step()
+        assert (await _rows())["100"]["state"] == "awaiting_page"
+        env["gr"].pages["100"] = FakeResp(200, NEUROPATH)
+        env["gr"].urls.clear()
+        await _list_missing_off(1)
+        await gc.step()
+        assert env["gr"].urls == [] and env["merged"] == []
+        assert (await _rows())["100"]["reason"] == "list_missing_off"
+
+    async def test_switching_back_on_requeues_the_set_aside_candidates(self, env):
+        from app.discovery import list_missing
+        await _seeded(env, books=[("Owned One", "9")])
+        await _list_missing_off(1)
+        await gc.step()
+        assert (await _rows())["100"]["state"] == "skipped"
+        r = await list_missing.set_list_missing(1, True, "books-lib")
+        assert r["on"] is True
+        row = (await _rows())["100"]
+        assert (row["state"], row["reason"]) == ("pending", None)
+
+    async def test_the_merge_refuses_an_author_with_the_switch_off(self, env, monkeypatch):
+        from app.discovery import lookup
+        from app.discovery.sources.base import BookResult, Contributor
+        monkeypatch.setattr(lookup, "merge_goodreads_book", _ORIGINAL_MERGE)
+        aid = await _author(scanned_at=time.time(), books=[("Owned One", "9")])
+        await _list_missing_off(aid)
+        book = BookResult(
+            title="Brand New Indie", external_id="4242", source="goodreads",
+            language="English", contributors=[Contributor(name="Ann Author", source_author_id=GR_AUTHOR)],
+        )
+        assert await lookup.merge_goodreads_book(aid, "books-lib", GR_AUTHOR, book) == (0, 0)
+        from app.discovery.database import get_db
+        db = await get_db(slug="books-lib")
+        try:
+            n = (await (await db.execute(
+                "SELECT COUNT(*) FROM books WHERE title = 'Brand New Indie'")).fetchone())[0]
+        finally:
+            await db.close()
+        assert n == 0

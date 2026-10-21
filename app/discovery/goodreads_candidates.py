@@ -708,6 +708,32 @@ async def _author_name(row: dict) -> str:
     return str(r[0]) if r and r[0] else ""
 
 
+async def _author_skip(row: dict) -> Optional[str]:
+    """The candidate's author isn't scan-eligible (D1 / D6 / F15): no request
+    is spent on its books; the row is set aside as `skipped` with the reason
+    (switching "list missing books" back on returns it to the queue)."""
+    from app.discovery.database import get_db
+    from app.discovery.roster import author_scan_skip_reason
+    if row.get("seshat_author_id") is None:
+        return None
+    db = await get_db(slug=row["library_slug"])
+    try:
+        cur = await db.execute(
+            "SELECT name FROM authors WHERE id = ?", (row["seshat_author_id"],),
+        )
+        r = await cur.fetchone()
+        if r is None:
+            return None
+        reason = await author_scan_skip_reason(
+            db, int(row["seshat_author_id"]), r[0] or "", row["library_slug"],
+        )
+    finally:
+        await db.close()
+    if reason:
+        await _set_state(row, SKIPPED, reason=reason)
+    return reason
+
+
 async def _still_unknown(row: dict) -> bool:
     """Re-check just before spending a request: a scan may have created
     the book since the row was written."""
@@ -787,6 +813,8 @@ async def step() -> StepResult:
         finally:
             await db.close()
         if awaiting is not None and page_wait <= 0 and page_backoff <= 0:
+            if await _author_skip(awaiting):
+                return StepResult("page", f"{awaiting.get('title')!r}: author not scan-eligible, set aside")
             if await _still_unknown(awaiting):
                 return await _page_step(awaiting)
             return StepResult("page", f"{awaiting.get('title')!r}: now known")
@@ -798,6 +826,8 @@ async def step() -> StepResult:
             # G199: the page's turn is near; no autocomplete inside its quiet.
             return StepResult("idle", retry_in_s=max(1.0, page_due))
         if pending is not None and ac_wait <= 0:
+            if await _author_skip(pending):
+                return StepResult("autocomplete", f"{pending.get('title')!r}: author not scan-eligible, set aside")
             if await _still_unknown(pending):
                 global _last_autocomplete_at
                 _last_autocomplete_at = _now()
