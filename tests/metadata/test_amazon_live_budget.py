@@ -232,3 +232,56 @@ async def test_a_cooldown_skip_is_soft_blocked_for_the_retry(amazon):
     assert enricher.last_source_log[0]["status"] == "soft_blocked"
     assert _gets() == []
 
+
+
+def _enrich_status(title="The Tale: Book 1", **kw):
+    """The enricher's source-log status for Amazon on one book."""
+    from app.metadata.enricher import EnrichmentConfig, MetadataEnricher
+
+    async def run():
+        enricher = MetadataEnricher(EnrichmentConfig(enabled=True), sources=[AmazonSource()])
+        await enricher.enrich(title=title, author="Author", **kw)
+        return enricher.last_source_log[0]["status"]
+    return run()
+
+
+@pytest.mark.parametrize("resp", [
+    Resp(200, "<html>Type the characters you see … /errors/validateCaptcha</html>"),
+    Resp(503, "To discuss automated access to Amazon data please contact api-services-support@amazon.com"),
+    Resp(429, "", {"Retry-After": "120"}),
+])
+async def test_a_block_on_the_books_own_search_is_soft_blocked(amazon, resp):
+    """G192 (2026-10-21): a bot page met by this book's own request was
+    filed 'no match' and never retried. One request, and the enricher's
+    cleaned-title retry sends nothing more."""
+    amazon["answers"][SEARCH] = resp
+    assert await _enrich_status() == "soft_blocked"
+    assert len(_gets()) == 1
+
+
+async def test_a_block_on_a_title_with_no_cleaned_variant_is_soft_blocked(amazon):
+    """No second call to meet the cooldown: the block itself marks it."""
+    amazon["answers"][SEARCH] = Resp(429, "", {"Retry-After": "120"})
+    assert await _enrich_status(title="The Tale") == "soft_blocked"
+
+
+async def test_a_store_page_cooldown_on_a_cache_miss_is_soft_blocked(amazon):
+    """The author's store page was cooling down (G181's store kind), so
+    the search a cache miss needs was refused: skipped, not missed."""
+    amazon["cache"]([])
+    resolver.record_amazon_soft_block("allbooks 429", kind=resolver.KIND_STORE)
+    assert await _enrich_status(author_amazon_id="B0C0AUTHOR") == "soft_blocked"
+    assert _gets() == []
+
+
+async def test_a_store_page_block_on_a_cache_miss_is_soft_blocked(amazon):
+    amazon["cache"]([])
+    amazon["answers"]["https://www.amazon.com/stores/author/B0C0AUTHOR/allbooks"] = Resp(429, "")
+    assert await _enrich_status(author_amazon_id="B0C0AUTHOR") == "soft_blocked"
+    assert resolver.is_amazon_blocked(resolver.KIND_STORE)
+
+
+async def test_a_real_miss_stays_no_result(amazon):
+    amazon["answers"][SEARCH] = _search_html()
+    assert await _enrich_status() == "no_result"
+    assert not resolver.is_amazon_blocked()

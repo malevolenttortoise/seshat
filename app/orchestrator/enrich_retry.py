@@ -18,9 +18,13 @@ never been skipped (Mark, review gate 2026-10-16):
     stays;
   - a cover the retried source wins is downloaded like a re-enrich's.
 
-Only pending reviews; nothing re-runs after a decision. Each skipped
-source is retried once: its `source_log` entry records the outcome
-(`retried: true`). A source still backing off waits for the next run.
+Only pending reviews; nothing re-runs after a decision. A source still
+backing off waits for the next run. A retry that gets an answer records
+it on the source's `source_log` entry (`retried: true`) and ends there.
+A retry blocked again (G192, 2026-10-21: three retries in a row met a
+fresh Amazon bot page and were filed as misses) stays `soft_blocked`
+with its count in `tries` and waits for the next backoff to end; after
+the third it is left `no_result`.
 """
 from __future__ import annotations
 
@@ -38,6 +42,7 @@ _log = logging.getLogger("seshat.orchestrator.enrich_retry")
 
 SKIPPED = "soft_blocked"
 _MAX_PER_RUN = 10
+MAX_TRIES = 3                      # per source per review (G192)
 
 # Enriched field -> top-level review field.
 _TOP_LEVEL = {
@@ -181,8 +186,10 @@ async def _retry_one(enricher, review_id: int, source: str) -> bool:
         # The single enricher's log says why: still blocked, below the
         # bar, another volume.
         status = _status_of(single, source) or "no_result"
-    if status == SKIPPED:
-        return False                       # backing off again: next run
+    tries = _tries(md, source) + 1
+    blocked_again = status == SKIPPED
+    if blocked_again and tries >= MAX_TRIES:
+        status = "no_result"               # blocked every time: left as a miss
 
     db = await get_db()
     try:
@@ -194,6 +201,17 @@ async def _retry_one(enricher, review_id: int, source: str) -> bool:
         ):
             return False                   # edited meanwhile: next run reads it again
         new_md = dict(md)
+        if status == SKIPPED:
+            # Blocked again: count the try, wait for the next backoff's end.
+            _count_try(new_md, source, tries)
+            await review_storage.set_status(
+                db, review_id, review_storage.STATUS_PENDING, metadata=new_md,
+            )
+            _log.info(
+                "enrich retry: review_id=%d %s blocked again (try %d of %d)",
+                review_id, source, tries, MAX_TRIES,
+            )
+            return True
         if result is not None:
             priority = list(enricher.config.audiobook_priority if audiobook else enricher.config.priority)
             new_enriched, changed = remerge(old_enriched, result.to_dict(), source, priority)
@@ -204,15 +222,16 @@ async def _retry_one(enricher, review_id: int, source: str) -> bool:
                     new_md["cover_enriched"] = cover
         else:
             changed = []
-        _mark_retried(new_md, source, status, changed)
+        _mark_retried(new_md, source, status, changed, tries)
         await review_storage.set_status(
             db, review_id, review_storage.STATUS_PENDING, metadata=new_md,
         )
     finally:
         await db.close()
     _log.info(
-        "enrich retry: review_id=%d %s → %s%s", review_id, source, status,
+        "enrich retry: review_id=%d %s → %s%s%s", review_id, source, status,
         f" (fields: {', '.join(changed)})" if changed else "",
+        f" (blocked {tries} times)" if blocked_again else "",
     )
     return True
 
@@ -223,8 +242,12 @@ def _still_backing_off(source: str) -> bool:
         from app.metadata.source_gate import KIND_BOOK_PAGE
         return goodreads_session.is_backing_off(KIND_BOOK_PAGE)
     if source == "amazon":
-        from app.discovery.amazon_author_id_resolver import KIND_CATALOG, is_amazon_blocked
-        return is_amazon_blocked(KIND_CATALOG)
+        # Enrichment uses both kinds: search / product pages, and the
+        # author's store page when the cache has nothing (G181).
+        from app.discovery.amazon_author_id_resolver import (
+            KIND_CATALOG, KIND_STORE, is_amazon_blocked,
+        )
+        return is_amazon_blocked(KIND_CATALOG) or is_amazon_blocked(KIND_STORE)
     return False
 
 
@@ -236,15 +259,36 @@ def _status_of(enricher, source: str) -> Optional[str]:
     return None
 
 
-def _mark_retried(metadata: dict, source: str, status: str, changed: list[str]) -> None:
+def _tries(metadata: dict, source: str) -> int:
+    for e in (metadata.get("enriched") or {}).get("source_log") or []:
+        if e.get("source") == source and e.get("status") == SKIPPED and not e.get("retried"):
+            return int(e.get("tries") or 0)
+    return 0
+
+
+def _update_entry(metadata: dict, source: str, **fields) -> None:
+    """Update the source's open `soft_blocked` entry on a copy of the log."""
     enriched = dict(metadata.get("enriched") or {})
     log = [dict(e) for e in (enriched.get("source_log") or [])]
     for e in log:
         if e.get("source") == source and e.get("status") == SKIPPED and not e.get("retried"):
-            e.update(status=status, retried=True, retried_fields=changed)
+            e.update(fields)
             break
     enriched["source_log"] = log
     metadata["enriched"] = enriched
+
+
+def _count_try(metadata: dict, source: str, tries: int) -> None:
+    _update_entry(metadata, source, tries=tries)
+
+
+def _mark_retried(
+    metadata: dict, source: str, status: str, changed: list[str], tries: int = 1,
+) -> None:
+    fields = dict(status=status, retried=True, retried_fields=changed)
+    if tries > 1:
+        fields["tries"] = tries
+    _update_entry(metadata, source, **fields)
 
 
 async def _fetch_cover(url: Optional[str], staged_path: str) -> Optional[str]:

@@ -537,7 +537,7 @@ class MetadataEnricher:
             # suffix) matched cleanly. Only costs a second HTTP call
             # when the first whiffed, never pays the fallback cost on
             # already-clean titles.
-            if result is None:
+            if result is None and not _hook(src, "skipped_for_backoff"):
                 cleaned = _retry_title(title)
                 if cleaned and cleaned != title:
                     elapsed_after = (

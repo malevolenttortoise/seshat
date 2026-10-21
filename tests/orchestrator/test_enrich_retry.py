@@ -207,12 +207,70 @@ class TestRetry:
         assert await enrich_retry.retry_skipped_sources() == 0
         assert amazon.calls == 0
 
+    async def test_a_retry_blocked_again_waits_and_gives_up_after_three(self, temp_db, sources):
+        """G192 (2026-10-21): reviews 2214-2216 each spent their one retry
+        on a fresh Amazon bot page and were filed 'no result'."""
+        class _Blocked(_Fake):
+            def skipped_for_backoff(self) -> bool:
+                return True
+
+        amazon = _Blocked("amazon", None)
+        sources(amazon)
+        rid = await _review(_base_metadata())
+
+        def entry(md):
+            return next(x for x in md["enriched"]["source_log"] if x["source"] == "amazon")
+
+        for n in (1, 2):
+            assert await enrich_retry.retry_skipped_sources() == 1
+            e = entry(await _metadata(rid))
+            assert e["status"] == "soft_blocked" and e["tries"] == n and "retried" not in e
+        assert await enrich_retry.retry_skipped_sources() == 1
+        e = entry(await _metadata(rid))
+        assert e["status"] == "no_result" and e["retried"] is True and e["tries"] == 3
+        assert await enrich_retry.retry_skipped_sources() == 0
+        assert amazon.calls == 3
+
+    async def test_an_answer_after_a_blocked_try_merges(self, temp_db, sources):
+        class _Flaky(_Fake):
+            blocked = True
+
+            def skipped_for_backoff(self) -> bool:
+                return self.blocked
+
+            async def search_book(self, title, author, **_):
+                self.calls += 1
+                return None if self.blocked else self._record
+
+        amazon = _Flaky("amazon", _amazon_record())
+        sources(amazon)
+        rid = await _review(_base_metadata())
+        await enrich_retry.retry_skipped_sources()
+        amazon.blocked = False
+        await enrich_retry.retry_skipped_sources()
+        md = await _metadata(rid)
+        e = next(x for x in md["enriched"]["source_log"] if x["source"] == "amazon")
+        assert e["status"] == "matched" and e["retried"] is True and e["tries"] == 2
+        assert md["publisher"] == "Big House"
+
     async def test_a_review_decided_meanwhile_is_left_alone(self, temp_db, sources):
         amazon = _Fake("amazon", _amazon_record())
         sources(amazon)
         rid = await _review(_base_metadata(), status="approved")
         assert await enrich_retry._retry_one(state.dispatcher.metadata_enricher, rid, "amazon") is False
         assert amazon.calls == 0
+
+
+class TestStillBackingOff:
+    def test_amazon_waits_for_its_store_pages_too(self, monkeypatch):
+        """Enrichment needs the author's store page on a cache miss: a
+        store-only cooldown would refuse the retry's search (G181 / G192)."""
+        from app.discovery import amazon_author_id_resolver as resolver
+        monkeypatch.setattr(resolver, "_persist_block_state", lambda **_: None)
+        monkeypatch.setattr(resolver, "_blocked_until", 0.0)
+        assert not enrich_retry._still_backing_off("amazon")
+        resolver.record_amazon_soft_block("allbooks 429", kind=resolver.KIND_STORE)
+        assert enrich_retry._still_backing_off("amazon")
 
 
 class TestRemerge:

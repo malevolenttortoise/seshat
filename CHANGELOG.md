@@ -84,9 +84,16 @@ frontend test suite.
   ranks above the field's current source (description keeps the longer
   text), a top-level field follows only if it was empty or still the old
   enriched value (your edits and file values stay), a cover it wins is
-  downloaded. Once per source; nothing re-runs after a decision. The
-  review's source list shows the retry (`retried`). A skip is now
-  recorded as `soft_blocked`, not as "no match".
+  downloaded. Nothing re-runs after a decision. The review's source list
+  shows the retry (`retried`). A skip is now recorded as `soft_blocked`,
+  not as "no match", and so is a block met by the book's own request
+  (G192: on 10-20 four grabs' Amazon or Goodreads lookups hit a bot page
+  and were filed as misses, never retried); the enricher no longer sends
+  its cleaned-title second try after a block. A retry blocked again
+  stays skipped and waits for the next backoff to end (three retries in
+  a row had met a fresh bot page and spent their one try), at most 3
+  tries per source, then it's left as no match. Amazon's retry waits for
+  its store pages too (a cache miss needs the author's store page).
 - **The Amazon cache worker refreshes quiet authors less often** (G183,
   wave S, ADR-0025 amended): a refresh that finds no book the cache
   didn't have puts the next one 14, then 28 days out; one that finds a

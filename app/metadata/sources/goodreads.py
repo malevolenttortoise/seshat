@@ -36,7 +36,7 @@ from typing import Optional
 from bs4 import BeautifulSoup
 
 from app.metadata.record import MetaRecord
-from app.metadata.sources.base import MetaSource
+from app.metadata.sources.base import MetaSource, current_enrichment_scope
 from app.metadata.text_clean import description_to_plain_text
 
 _log = logging.getLogger("seshat.metadata.goodreads")
@@ -67,10 +67,23 @@ _GOODREADS_BOILERPLATE = frozenset({
 })
 
 
+def _mark_backoff_skip() -> None:
+    """This book's lookup ended on a block or the book-page backoff, not a
+    miss: the enricher records Goodreads `soft_blocked` and G182 retries it
+    once the backoff ends (G192)."""
+    scope = current_enrichment_scope()
+    if scope is not None:
+        scope["goodreads_backoff_skip"] = True
+
+
 class GoodreadsSource(MetaSource):
     name = "goodreads"
     default_headers = _DEFAULT_HEADERS
     default_timeout = 45.0
+
+    def skipped_for_backoff(self) -> bool:
+        scope = current_enrichment_scope()
+        return bool(scope and scope.get("goodreads_backoff_skip"))
 
     async def search_book(
         self,
@@ -115,6 +128,7 @@ class GoodreadsSource(MetaSource):
                 "title=%r — returning None (session state already flipped)",
                 title,
             )
+            _mark_backoff_skip()
             return None
 
         if not result.goodreads_book_id:
@@ -171,18 +185,21 @@ async def _fetch_and_parse_book(
     session = await goodreads_session.get_session()
     try:
         resp = await session.get(url)
+    except goodreads_session.GoodreadsBackingOff:
+        _mark_backoff_skip()
+        return None
     except Exception as e:
         _log.debug("goodreads: /book/show fetch error for %s: %s", book_id, e)
         return None
 
     if goodreads_session.is_soft_block(resp):
-        # `session.get()` has already backed book pages off; this path
-        # is an informational log only.
+        # `session.get()` has already backed book pages off.
         _log.info(
             "goodreads: /book/show/%s blocked by AWS WAF — book pages "
             "backing off",
             book_id,
         )
+        _mark_backoff_skip()
         return None
 
     status = getattr(resp, "status_code", None)

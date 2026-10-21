@@ -144,7 +144,17 @@ class AmazonSource(MetaSource):
         return session
 
     @staticmethod
-    def _blocked_now() -> bool:
+    def _mark_backoff_skip() -> None:
+        """This book's search ended on a cooldown or a block, not a miss: the
+        enricher records Amazon `soft_blocked`, and G182 retries it (G192: a
+        block on the book's own request counts the same as a cooldown met
+        before it)."""
+        scope = current_enrichment_scope()
+        if scope is not None:
+            scope["amazon_backoff_skip"] = True
+
+    @classmethod
+    def _blocked_now(cls) -> bool:
         """Search and product pages cooling down (a store-page 429 no
         longer stops them, G181)."""
         from app.discovery.amazon_author_id_resolver import (
@@ -152,14 +162,13 @@ class AmazonSource(MetaSource):
         )
         if is_amazon_blocked(KIND_CATALOG):
             _log.info("amazon: skipped — soft-block cooldown active")
-            scope = current_enrichment_scope()
-            if scope is not None:
-                scope["amazon_backoff_skip"] = True
+            cls._mark_backoff_skip()
             return True
         return False
 
     def skipped_for_backoff(self) -> bool:
-        """A live request this book needed was refused by the cooldown (G182)."""
+        """A live request this book needed was refused by the cooldown, or
+        blocked (G182 / G192)."""
         return bool(self._scope().get("amazon_backoff_skip"))
 
     async def _fetch(self, url: str, params: dict = None) -> Optional[str]:
@@ -209,6 +218,7 @@ class AmazonSource(MetaSource):
                 f"enrichment GET {url}: {reason}", retry_after_s=retry_after,
                 kind=block_kind(KIND_CATALOG, status),
             )
+            self._mark_backoff_skip()
             return None
         if status != 200 or not body:
             _log.info("amazon: HTTP %s for %s", status, url)
@@ -771,6 +781,7 @@ class AmazonSource(MetaSource):
             _log.info(
                 "amazon author-store: skipped — soft-block cooldown active",
             )
+            self._mark_backoff_skip()
             return None
         if not self._spend_live_request():
             return None
@@ -796,6 +807,7 @@ class AmazonSource(MetaSource):
             record_amazon_soft_block(
                 f"enricher author-store GET {url} returned a bot page",
             )
+            self._mark_backoff_skip()
             return None
         if status in (429, 202):
             headers = getattr(resp, "headers", None)
@@ -815,6 +827,7 @@ class AmazonSource(MetaSource):
                 retry_after_s=parse_retry_after(raw_ra),
                 kind=block_kind(KIND_STORE, status),
             )
+            self._mark_backoff_skip()
             return None
         if status != 200 or not body:
             _log.debug(
