@@ -53,10 +53,48 @@ describe("useBooksList", () => {
       extraParams: { owned: "1" },
     }));
     await waitFor(() => expect(result.current.ld).toBe(false));
-    expect(lastGet()).toBe("/discovery/books/hidden?search=&sort=title&per_page=60&page=1&owned=1");
+    expect(lastGet()).toBe("/discovery/books/hidden?search=&sort=title&per_page=60&page=1&owned=1&filtered=false");
     act(() => { result.current.setMamFilter("found"); result.current.setOwnedFilter("discovered"); });
     await waitFor(() => expect(lastGet()).toBe(
-      "/discovery/books/hidden?search=&sort=title&per_page=60&page=1&owned=false&mam_status=found"));
+      "/discovery/books/hidden?search=&sort=title&per_page=60&page=1&owned=false&mam_status=found&filtered=false"));
+  });
+
+  it("Hidden: the two tabs, a chip's reasons, and the counts per tab and chip (F19)", async () => {
+    mockGet.mockImplementation(async (u: string) =>
+      String(u).startsWith("/discovery/books/hidden/reasons")
+        ? { counts: { mine: 4, comic: 10, split: 2, sampler: 1, junk: 3, author_off: 7 } }
+        : { books: [], total: 0 });
+    const { result } = renderHook(() => useBooksList({
+      ...base, apiPath: "/discovery/books/hidden", title: "Hidden Books", showOwnedFilter: true,
+    }));
+    await waitFor(() => expect(result.current.ld).toBe(false));
+    expect(gets()).toEqual([
+      "/discovery/books/hidden/reasons?content_type=all",
+      "/discovery/books/hidden?search=&sort=title&per_page=60&page=1&content_type=all&filtered=false",
+    ]);
+    expect(result.current.hiddenCounts).toEqual({
+      mine: 4, filtered: 23,
+      byGroup: { comic: 10, box_set: 0, anthology: 0, not_english: 0, split: 3, not_a_book: 3, author_off: 7 },
+    });
+    act(() => { result.current.setHiddenTab("filtered"); result.current.setReasonGroup("split"); });
+    await waitFor(() => expect(lastGet()).toBe(
+      "/discovery/books/hidden?search=&sort=title&per_page=60&page=1&content_type=all&filtered=true&reason=split%2Csampler%2Clisting"));
+    act(() => { result.current.setReasonGroup(""); });
+    await waitFor(() => expect(lastGet()).toBe(
+      "/discovery/books/hidden?search=&sort=title&per_page=60&page=1&content_type=all&filtered=true"));
+  });
+
+  it("Missing and Library hide short books when asked; other lists have no such filter (F11)", async () => {
+    const { result } = renderHook(() => useBooksList(base));
+    await waitFor(() => expect(result.current.ld).toBe(false));
+    expect(result.current.showShortFilter).toBe(true);
+    act(() => { result.current.setHideShort(true); });
+    await waitFor(() => expect(lastGet()).toBe(
+      "/discovery/missing?search=&sort=title&per_page=60&page=1&content_type=all&hide_short=true"));
+    const up = renderHook(() => useBooksList({ ...base, title: "Upcoming", apiPath: "/discovery/upcoming" }));
+    await waitFor(() => expect(up.result.current.ld).toBe(false));
+    expect(up.result.current.showShortFilter).toBe(false);
+    expect(lastGet()).toBe("/discovery/upcoming?search=&sort=title&per_page=60&page=1&content_type=all");
   });
 
   it("keeps search / sort / filters per page title", async () => {

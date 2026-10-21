@@ -90,6 +90,24 @@ frontend test suite.
   rows on the reference install). Rows that still list missing books
   stay until wave C's cleanup. Full sync time on the reference library:
   1.6 s → 3.7 s.
+- **The pages for all this** (discovery fix pass S7). **Hidden** has two
+  tabs: "Hidden by you" (the default) and "Filtered", the books Seshat
+  keeps hidden. Filtered has a chip per reason, each with its count:
+  Comic, Box set, Anthology, Not English, Split / sampler / listing, Not
+  a book (study guides, colouring books, junk titles) and Author off.
+  Unhiding a filtered book is for good. **Short books** (under 100
+  pages) carry a "Short" badge, and Missing and Library get a "Hide
+  short" filter; books with no page count can't be badged. **The
+  author page** has a "List missing books" switch in each library's
+  block, for that library's author. **Settings → Author Scanning**
+  reads "Skip audiobook editions", next to the new "Hide comics and
+  manga" and "Hide box sets and omnibuses". A scan of an author who
+  isn't scan-eligible now says why instead of "scan started", and the
+  dashboard's last-scan line counts the authors a bulk scan skipped
+  (hover for who and why). API: `hide_short` on `/discovery/missing`
+  and `/discovery/books`; `reason` on `/discovery/books/hidden` takes
+  several comma-separated reasons; `/discovery/missing` no longer
+  passes an unset `slug` through to `/books`.
 - **An IRC announce of a book you already own is no longer grabbed**
   (discovery fix pass S4, ADR-0004 / 0013 amended). Claim-for-owned and
   format dedup now recognise an owned book by the title identity (below)

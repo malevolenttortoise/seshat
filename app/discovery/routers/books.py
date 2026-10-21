@@ -78,11 +78,13 @@ _BOOKS_SELECT = (
 
 
 # ─── Books ───────────────────────────────────────────────────
-def _build_books_where(search, author_id, series_id, owned, book_type, mam_status, include_hidden, hidden_only):
+def _build_books_where(search, author_id, series_id, owned, book_type, mam_status, include_hidden, hidden_only, hide_short=False):
     """Compose the WHERE clause + params used by every books-query path.
 
     Kept separate so the per-library helper (`_query_books_for_lib`)
     and the active-library code path share the same filter logic.
+    `hide_short` (F11 / C8): leave out books under 100 pages, a list
+    filter, not a hide; a book with no page count stays.
     """
     c: list[str] = []
     p: list = []
@@ -124,6 +126,8 @@ def _build_books_where(search, author_id, series_id, owned, book_type, mam_statu
         c.append("b.mam_status='not_applicable'")
     elif mam_status == "unscanned":
         c.append("b.mam_status IS NULL")
+    if hide_short:
+        c.append(f"(COALESCE(b.page_count, 0) <= 0 OR b.page_count >= {_filters.SHORT_UNDER_PAGES})")
     return (" AND ".join(c) if c else "1=1"), p
 
 
@@ -167,7 +171,7 @@ async def _query_books_for_lib(db, where_sql: str, where_params: list, sort: str
 
 
 @router.get("/books")
-async def get_books(search: str = Query(None), author_id: int = Query(None), series_id: int = Query(None), owned: bool = Query(None), book_type: str = Query(None), mam_status: str = Query(None), sort: str = Query("title"), sort_dir: str = Query("asc"), page: int = Query(1, ge=1), per_page: int = Query(60, ge=1, le=5000), include_hidden: bool = Query(False), hidden_only: bool = Query(False), content_type: str = Query(None), slug: str | None = Query(None)):
+async def get_books(search: str = Query(None), author_id: int = Query(None), series_id: int = Query(None), owned: bool = Query(None), book_type: str = Query(None), mam_status: str = Query(None), sort: str = Query("title"), sort_dir: str = Query("asc"), page: int = Query(1, ge=1), per_page: int = Query(60, ge=1, le=5000), include_hidden: bool = Query(False), hidden_only: bool = Query(False), content_type: str = Query(None), slug: str | None = Query(None), hide_short: bool = Query(False)):
     """
     List books. `content_type` selects among:
       * omitted / "" — active library only (legacy behavior)
@@ -184,7 +188,7 @@ async def get_books(search: str = Query(None), author_id: int = Query(None), ser
     if content_type:
         where_sql, where_params = _build_books_where(
             search, author_id, series_id, owned, book_type, mam_status,
-            include_hidden, hidden_only,
+            include_hidden, hidden_only, hide_short,
         )
 
         async def q(db):
@@ -211,7 +215,7 @@ async def get_books(search: str = Query(None), author_id: int = Query(None), ser
     try:
         w, p = _build_books_where(
             search, author_id, series_id, owned, book_type, mam_status,
-            include_hidden, hidden_only,
+            include_hidden, hidden_only, hide_short,
         )
         cnt = (await (await db.execute(f"SELECT COUNT(*) c FROM books b JOIN book_authors bpa ON bpa.book_id=b.id AND bpa.position=0 JOIN authors a ON a.id=bpa.author_id LEFT JOIN series s ON b.series_id=s.id WHERE {w}", p)).fetchone())["c"]
         d = "DESC" if sort_dir == "desc" else "ASC"
@@ -225,7 +229,7 @@ async def get_books(search: str = Query(None), author_id: int = Query(None), ser
 
 
 @router.get("/missing")
-async def get_missing(search: str = Query(None), author_id: int = Query(None), series_id: int = Query(None), book_type: str = Query(None), mam_status: str = Query(None), sort: str = Query("title"), sort_dir: str = Query("asc"), page: int = Query(1, ge=1), per_page: int = Query(60, ge=1, le=5000), include_hidden: bool = Query(False), content_type: str = Query(None)):
+async def get_missing(search: str = Query(None), author_id: int = Query(None), series_id: int = Query(None), book_type: str = Query(None), mam_status: str = Query(None), sort: str = Query("title"), sort_dir: str = Query("asc"), page: int = Query(1, ge=1), per_page: int = Query(60, ge=1, le=5000), include_hidden: bool = Query(False), content_type: str = Query(None), hide_short: bool = Query(False)):
     """
     List missing (unowned, non-future) books.
 
@@ -243,7 +247,7 @@ async def get_missing(search: str = Query(None), author_id: int = Query(None), s
         # filter — avoids a partial page caused by filter evictions.
         per_page=5000,
         include_hidden=include_hidden, hidden_only=False,
-        content_type=content_type,
+        content_type=content_type, slug=None, hide_short=hide_short,
     )
     if not content_type:
         # Active-library path: nothing to re-filter; hand `base` back
@@ -474,7 +478,8 @@ async def get_hidden(search: str = Query(None), sort: str = Query("title"), sort
 
     `filtered` (ADR-0029, F19): True → books Seshat hid (a filter family,
     or the author's "list missing books" off), False → books you hid.
-    `reason`: one `hidden_reason` (e.g. `comic`).
+    `reason`: one `hidden_reason` (e.g. `comic`), or several comma-separated
+    (one Hidden-page chip covers "split,sampler,listing").
     """
     c = ["b.hidden=1"]; p: list = []
     seshat_reasons = sorted(_filters.FILTER_REASONS | {_filters.AUTHOR_OFF})
@@ -484,9 +489,10 @@ async def get_hidden(search: str = Query(None), sort: str = Query("title"), sort
     elif filtered is False:
         c.append(f"(b.hidden_reason IS NULL OR b.hidden_reason NOT IN ({','.join('?' * len(seshat_reasons))}))")
         p.extend(seshat_reasons)
-    if reason:
-        c.append("b.hidden_reason = ?")
-        p.append(reason)
+    reasons = [r for r in (reason or "").split(",") if r.strip()]
+    if reasons:
+        c.append(f"b.hidden_reason IN ({','.join('?' * len(reasons))})")
+        p.extend(r.strip() for r in reasons)
     if search:
         c.append("(b.title LIKE ? OR a.name LIKE ? OR COALESCE(s.name,'') LIKE ?)")
         p.extend([f"%{search}%"] * 3)

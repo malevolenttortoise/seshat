@@ -201,6 +201,22 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
     return v && typeof v === "object" ? (v as Record<string, number>) : {};
   })();
   const hasTimeouts = Object.keys(srcTimeouts).length > 0;
+  // F15: authors the scan skipped as not scan-eligible, with why.
+  const srcSkipped = (() => {
+    const v = srcExtra?.skipped;
+    return typeof v === "number" ? v : 0;
+  })();
+  const srcSkippedTitle = (() => {
+    const v = srcExtra?.skipped_authors;
+    if (!Array.isArray(v)) return "";
+    const why: Record<string, string> = {
+      not_scan_eligible: "not on your allow list and owns nothing",
+      list_missing_off: "List missing books is off",
+    };
+    return (v as { name?: string; reason?: string }[])
+      .map((x) => `${x.name ?? "?"}: ${why[x.reason ?? ""] ?? x.reason ?? ""}`)
+      .join("\n");
+  })();
 
   return (
     <div style={gridStyle}>
@@ -438,6 +454,11 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
                   >
                     {srcNewBooks ?? 0} new books
                   </span>
+                  {srcSkipped > 0 ? (
+                    <span style={{ color: t.td, cursor: "help" }} title={srcSkippedTitle}>
+                      {" "}· {srcSkipped} skipped (not scan-eligible)
+                    </span>
+                  ) : null}
                 </div>
               )}
             </div>

@@ -76,6 +76,8 @@ export const authorDetailRoutes = {
   "GET /discovery/persons/5": person,
   "GET /discovery/scan-status": idleScans,
   "GET /discovery/authors/11/pen-names": { links: [] },
+  "GET /discovery/authors/11/list-missing*": { on: true, missing: 3 },
+  "GET /discovery/authors/41/list-missing*": { on: true, missing: 0 },
   "GET /discovery/mam/status": { enabled: true, validation_ok: true },
   "GET /discovery/series/7*": seriesBooks,
   "GET /discovery/authors/11/source-breakdown": {

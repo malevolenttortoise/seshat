@@ -17,6 +17,7 @@ import { useAuthorWalk } from "../hooks/useAuthorWalk";
 import { AuthorCacheStatusBadge } from "../components/AuthorCacheStatusBadge";
 import { GoodreadsAuthorCacheStatusBadge } from "../components/GoodreadsAuthorCacheStatusBadge";
 import { useAuthorScans } from "../hooks/useAuthorScans";
+import { ListMissingSwitch } from "../components/ListMissingSwitch";
 import { useAuthorBulkActions } from "../hooks/useAuthorBulkActions";
 import { useAuthorDetail } from "../hooks/useAuthorDetail";
 import { useBulkSelection } from "../hooks/useBulkSelection";
@@ -408,6 +409,15 @@ export default function MobileAuthorDetailPage({
               </span>
             </div>
           )}
+          <div style={{ padding: "4px 4px 8px" }}>
+            <ListMissingSwitch
+              compact
+              authorId={block.data?.id}
+              slug={block.slug === "active" ? null : block.slug}
+              authorName={block.data?.name || a.name}
+              onChanged={() => loadA()}
+            />
+          </div>
           {(block.data.series || []).map((s) => (
             <MobileSeriesSection
               key={`${block.slug}-${s.id}`}

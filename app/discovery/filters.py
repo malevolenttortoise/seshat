@@ -47,6 +47,10 @@ JUNK = "junk"
 SHOWN = "shown"
 AUTHOR_OFF = "author_off"
 
+# F11: a book under this many pages is badged "short" (computed on read,
+# C8; the frontend's `SHORT_UNDER_PAGES` is the same number).
+SHORT_UNDER_PAGES = 100
+
 FAMILIES: tuple[str, ...] = (
     FOREIGN, JUNK, NOT_A_BOOK, STUDY_GUIDE, COMIC, BOX_SET, SPLIT, SAMPLER,
     ANTHOLOGY, LISTING,
@@ -371,6 +375,6 @@ def author_role_count(contributors) -> int:
 __all__ = [
     "ANTHOLOGY", "AUTHOR_OFF", "BOX_SET", "COMIC", "FAMILIES", "FILTER_REASONS",
     "FOREIGN", "JUNK", "LISTING", "NOT_A_BOOK", "SAMPLER", "SETTING_FOR", "SHOWN",
-    "SPLIT", "STUDY_GUIDE", "author_role_count", "book_class", "filter_reason",
+    "SHORT_UNDER_PAGES", "SPLIT", "STUDY_GUIDE", "author_role_count", "book_class", "filter_reason",
     "hides", "is_foreign_title",
 ]

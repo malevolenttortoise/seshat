@@ -51,6 +51,12 @@ export function useAuthorScans({
       const r = await api.post<ScanStartedResponse>(
         `/discovery/authors/${authorIdNum}/${full ? "full-rescan" : "lookup"}${scanQs}`,
       );
+      if (r.status === "skipped") {
+        // F15: the author isn't scan-eligible; the reply says why.
+        toast.info(r.message || `${r.author || "This author"} isn't scanned`);
+        setSourceBusy(false);
+        return;
+      }
       toast.info(
         `${full ? "Full re-scan" : "Source scan"} started for ${r.author || "author"}`,
       );

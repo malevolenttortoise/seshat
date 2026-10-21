@@ -38,6 +38,7 @@ import { useBookSidebar } from "../hooks/useBookSidebar";
 import { useMamEnabled } from "../hooks/useMamEnabled";
 import { useMobileCodepath } from "../components/mobile";
 import MobileAuthorDetailPage from "./MobileAuthorDetailPage";
+import { ListMissingSwitch } from "../components/ListMissingSwitch";
 import type {
   Book,
   BookAction,
@@ -1409,6 +1410,10 @@ function DesktopAuthorDetailPage({
         onDeselectMany={deselectMany}
         onBooksLoaded={onBooksLoaded}
         onNav={onNav}
+        onListMissingChanged={() => {
+          loadA();
+          setRk((k) => k + 1);
+        }}
       />
 
       {sb ? (
@@ -1520,6 +1525,7 @@ function PerLibraryBlocks({
   onDeselectMany,
   onBooksLoaded,
   onNav,
+  onListMissingChanged,
 }: {
   a: AuthorDetail;
   fmtTab: string;
@@ -1537,6 +1543,7 @@ function PerLibraryBlocks({
   onDeselectMany: (ids: number[]) => void;
   onBooksLoaded: (key: string, books: Book[]) => void;
   onNav: NavFn;
+  onListMissingChanged: () => void;
 }) {
   const crossLib = a.cross_library || {};
   const crossSlugs = Object.keys(crossLib);
@@ -1576,6 +1583,10 @@ function PerLibraryBlocks({
       const r = await api.post<ScanStartedResponse>(
         `/discovery/authors/${bAuthorId}/lookup?slug=${encodeURIComponent(block.slug)}`,
       );
+      if (r.status === "skipped") {
+        toast.info(r.message || `${r.author || "This author"} isn't scanned`);
+        return;
+      }
       toast.info(`${block.label} scan started for ${r.author || "author"}`);
       window.dispatchEvent(new CustomEvent("seshat:scan-started"));
     } catch (e) {
@@ -1729,6 +1740,12 @@ function PerLibraryBlocks({
                 )}
               </div>
             ) : null}
+            <ListMissingSwitch
+              authorId={block.data?.id}
+              slug={block.slug === "active" ? null : block.slug}
+              authorName={block.data?.name || a.name}
+              onChanged={onListMissingChanged}
+            />
             {series.map((s: Series) => (
               <IS
                 key={`${block.slug}_${s.id}_${rk}`}

@@ -9,6 +9,7 @@
 import { useTheme } from "../../theme";
 import { useViewport } from "../../hooks/useViewport";
 import { fmtDate } from "../../lib/format";
+import { isShort } from "../../lib/bookFilters";
 import type { Book, BookActionHandler } from "../../types";
 import { RADIUS, scaleFor } from "./tokens";
 import { MobileBadge } from "./MobileBadge";
@@ -243,6 +244,7 @@ export function MobileBookCard({
           {status && (
             <MobileBadge tone={status.tone}>{status.label}</MobileBadge>
           )}
+          {isShort(book) && <MobileBadge>Short</MobileBadge>}
           {showMamLink && book.mam_url && (
             <a
               href={book.mam_url}

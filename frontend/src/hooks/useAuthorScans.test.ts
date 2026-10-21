@@ -75,3 +75,28 @@ describe("useAuthorScans", () => {
     expect(result.current.mamBusy).toBe(false);
   });
 });
+
+describe("useAuthorScans: an author who isn't scan-eligible (F15)", () => {
+  beforeEach(() => {
+    mockPost.mockReset();
+    mockPoll.mockReset();
+  });
+
+  it("says why and frees the button; no scan-started event", async () => {
+    const { toast } = await import("../lib/toast");
+    const info = vi.spyOn(toast, "info");
+    const started = vi.fn();
+    window.addEventListener("seshat:scan-started", started);
+    mockPost.mockResolvedValue({
+      status: "skipped", reason: "list_missing_off",
+      message: "Tom Clancy: List missing books is off for this author",
+    });
+    const { result } = scans();
+    await act(async () => { await result.current.scanSources(); });
+    expect(info).toHaveBeenCalledWith("Tom Clancy: List missing books is off for this author");
+    expect(result.current.sourceBusy).toBe(false);
+    expect(started).not.toHaveBeenCalled();
+    window.removeEventListener("seshat:scan-started", started);
+    info.mockRestore();
+  });
+});

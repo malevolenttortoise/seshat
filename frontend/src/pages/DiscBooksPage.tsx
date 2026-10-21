@@ -25,7 +25,8 @@ import { ExportModal } from "../components/ExportModal";
 import { useViewport } from "../hooks/useViewport";
 import { useBookSidebar } from "../hooks/useBookSidebar";
 import { useMamEnabled } from "../hooks/useMamEnabled";
-import { useBooksList } from "../hooks/useBooksList";
+import { useBooksList, type HiddenTab } from "../hooks/useBooksList";
+import { REASON_GROUPS, SHORT_UNDER_PAGES } from "../lib/bookFilters";
 import { useMobileCodepath } from "../components/mobile";
 import MobileBooksPage from "./MobileBooksPage";
 import type {
@@ -109,6 +110,8 @@ function DesktopBooksPage({
   const {
     bks, total, totalPages, pg, setPg, ld, load, onAction: onBookAction,
     q, setQ, sort, setSort, fmt, setFmt, mamFilter, setMamFilter, ownedFilter, setOwnedFilter,
+    hiddenTabs, hiddenTab, setHiddenTab, reasonGroup, setReasonGroup, hiddenCounts,
+    showShortFilter, hideShort, setHideShort,
   } = useBooksList({
     title, apiPath, extraParams, showFormatTabs, showOwnedFilter, sortDir,
     sortOverride: grp === "author" ? "author" : grp === "series" ? "series" : undefined,
@@ -528,6 +531,21 @@ function DesktopBooksPage({
             }}
           />
         ) : null}
+        {hiddenTabs ? (
+          <HiddenTabs
+            tab={hiddenTab}
+            counts={hiddenCounts}
+            onTab={(v) => {
+              setHiddenTab(v);
+              setPg(1);
+            }}
+            group={reasonGroup}
+            onGroup={(v) => {
+              setReasonGroup(v);
+              setPg(1);
+            }}
+          />
+        ) : null}
         {showOwnedFilter ? (
           <OwnedFilterTabs
             value={ownedFilter}
@@ -650,6 +668,26 @@ function DesktopBooksPage({
                 <option value="not_applicable">MAM: N/A</option>
                 <option value="unscanned">MAM: Unscanned</option>
               </select>
+            ) : null}
+            {showShortFilter ? (
+              <button
+                onClick={() => {
+                  setHideShort(!hideShort);
+                  setPg(1);
+                }}
+                title={`Leave out books under ${SHORT_UNDER_PAGES} pages (books with no page count stay)`}
+                style={{
+                  padding: "6px 10px",
+                  borderRadius: 6,
+                  border: `1px solid ${hideShort ? t.abr : t.border}`,
+                  background: hideShort ? t.accent + "22" : t.inp,
+                  color: hideShort ? t.accent : t.text2,
+                  fontSize: 12,
+                  cursor: "pointer",
+                }}
+              >
+                {hideShort ? "✓ Hide short" : "Hide short"}
+              </button>
             ) : null}
             <select
               value={grp}
@@ -968,6 +1006,86 @@ function FormatTabs({
           <span>{tab.label}</span>
         </button>
       ))}
+    </div>
+  );
+}
+
+// ─── Hidden tabs (Hidden by you / Filtered + reason chips) ──
+// F19: the books you hid, and the books Seshat hid with the reason it
+// hid them. "Unhide" on a filtered book is for good: later scans and the
+// filter settings leave it listed.
+function HiddenTabs({
+  tab,
+  counts,
+  onTab,
+  group,
+  onGroup,
+}: {
+  tab: HiddenTab;
+  counts: { mine: number; filtered: number; byGroup: Record<string, number> };
+  onTab: (v: HiddenTab) => void;
+  group: string;
+  onGroup: (v: string) => void;
+}) {
+  const t = useTheme();
+  const tabs: { id: HiddenTab; label: string; n: number }[] = [
+    { id: "mine", label: "Hidden by you", n: counts.mine },
+    { id: "filtered", label: "Filtered", n: counts.filtered },
+  ];
+  const chip = (id: string, label: string, n: number) => (
+    <button
+      key={id || "all"}
+      onClick={() => onGroup(id)}
+      style={{
+        background: group === id ? t.abg : t.bg2,
+        color: group === id ? t.accent : t.text2,
+        border: `1px solid ${group === id ? t.abr : t.borderL}`,
+        borderRadius: 12,
+        padding: "2px 10px",
+        fontSize: 12,
+        fontWeight: group === id ? 600 : 500,
+        cursor: "pointer",
+      }}
+    >
+      {label} <span style={{ color: t.tg }}>{n.toLocaleString()}</span>
+    </button>
+  );
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 8 }}>
+      <div style={{ display: "flex", gap: 4 }}>
+        {tabs.map((x) => (
+          <button
+            key={x.id}
+            onClick={() => onTab(x.id)}
+            style={{
+              background: tab === x.id ? t.abg : "transparent",
+              color: tab === x.id ? t.accent : t.tm,
+              border: `1px solid ${tab === x.id ? t.abr : "transparent"}`,
+              borderRadius: 6,
+              padding: "4px 12px",
+              fontSize: 13,
+              fontWeight: tab === x.id ? 600 : 500,
+              cursor: "pointer",
+            }}
+          >
+            {x.label} <span style={{ color: t.tg }}>{x.n.toLocaleString()}</span>
+          </button>
+        ))}
+      </div>
+      {tab === "filtered" ? (
+        <>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {chip("", "All", counts.filtered)}
+            {REASON_GROUPS.filter((g) => counts.byGroup[g.id] > 0 || g.id === group).map((g) =>
+              chip(g.id, g.label, counts.byGroup[g.id] ?? 0),
+            )}
+          </div>
+          <div style={{ fontSize: 12, color: t.tg }}>
+            Books Seshat keeps hidden, with the reason. Unhide one and it stays listed: later scans and
+            the filter settings leave it alone.
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }

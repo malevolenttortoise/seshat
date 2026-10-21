@@ -268,7 +268,7 @@ const SECTIONS: SettingsSection[] = [
   { id: "sources", label: "Metadata Sources", group: "Discovery",
     keywords: ["goodreads", "hardcover", "amazon", "kobo", "openlibrary", "audible", "ibdb"] },
   { id: "scanning", label: "Author Scanning", group: "Discovery",
-    keywords: ["scan", "discover"] },
+    keywords: ["scan", "discover", "audiobook", "comic", "manga", "box set", "omnibus", "filter"] },
   { id: "library", label: "Library Management", group: "Discovery",
     keywords: ["libraries", "calibre"] },
   { id: "audiobookshelf", label: "Audiobookshelf", group: "Discovery",
@@ -827,8 +827,14 @@ function DesktopSettingsPage() {
           <SF label="Owned Books Only" desc="Only enrich metadata on books already in Calibre.">
             <STog on={(s.author_scan_owned_only as boolean) ?? false} onToggle={() => upd("author_scan_owned_only", !(s.author_scan_owned_only ?? false))} label />
           </SF>
-          <SF label="Exclude Audiobooks" desc="Filter out audiobook-only editions during scans.">
+          <SF label="Skip audiobook editions" desc="In ebook scans, leave out audiobook-only editions (Audible, Audio CD, narrator credits). Audiobooks are found by scanning the audiobook library.">
             <STog on={(s.exclude_audiobooks as boolean) ?? true} onToggle={() => upd("exclude_audiobooks", !(s.exclude_audiobooks ?? true))} label />
+          </SF>
+          <SF label="Hide comics and manga" desc="Comics, manga, graphic novels and comic issues found by scans are kept hidden (Hidden → Filtered). Light novels are always listed.">
+            <STog on={(s.hide_comics as boolean) ?? true} onToggle={() => upd("hide_comics", !(s.hide_comics ?? true))} label />
+          </SF>
+          <SF label="Hide box sets and omnibuses" desc={'Box sets, omnibuses and "Books 1–3" collections are kept hidden (Hidden → Filtered).'}>
+            <STog on={(s.hide_box_sets as boolean) ?? true} onToggle={() => upd("hide_box_sets", !(s.hide_box_sets ?? true))} label />
           </SF>
           <SF label="Lookup Interval" desc="How often the scheduled author scan runs. 0 = manual only.">
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>

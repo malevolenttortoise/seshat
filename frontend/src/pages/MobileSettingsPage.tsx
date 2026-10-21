@@ -910,6 +910,24 @@ export default function MobileSettingsPage() {
             )
           }
         />
+        <ToggleRow
+          label="Skip audiobook editions"
+          desc="In ebook scans, leave out audiobook-only editions (Audible, Audio CD, narrator credits). Audiobooks are found by scanning the audiobook library."
+          on={(s.exclude_audiobooks as boolean) ?? true}
+          onToggle={() => upd("exclude_audiobooks", !(s.exclude_audiobooks ?? true))}
+        />
+        <ToggleRow
+          label="Hide comics and manga"
+          desc="Comics, manga, graphic novels and comic issues found by scans are kept hidden (Hidden → Filtered). Light novels are always listed."
+          on={(s.hide_comics as boolean) ?? true}
+          onToggle={() => upd("hide_comics", !(s.hide_comics ?? true))}
+        />
+        <ToggleRow
+          label="Hide box sets and omnibuses"
+          desc={'Box sets, omnibuses and "Books 1–3" collections are kept hidden (Hidden → Filtered).'}
+          on={(s.hide_box_sets as boolean) ?? true}
+          onToggle={() => upd("hide_box_sets", !(s.hide_box_sets ?? true))}
+        />
         <FieldRow label="Lookup interval (days)">
           <MobileNumberInput
             value={(s.author_lookup_interval_days as number) ?? 7}

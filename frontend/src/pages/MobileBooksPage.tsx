@@ -15,6 +15,7 @@ import { useTheme } from "../theme";
 import { useBookSidebar } from "../hooks/useBookSidebar";
 import { useMamEnabled } from "../hooks/useMamEnabled";
 import { useBooksList } from "../hooks/useBooksList";
+import { REASON_GROUPS } from "../lib/bookFilters";
 import { BookSidebar } from "../components/BookSidebar";
 import { Ic } from "../icons";
 import {
@@ -65,6 +66,8 @@ export default function MobileBooksPage({
   const {
     bks, total, totalPages, pg, ld, load, onAction,
     q, setQ, sort, setSort, fmt, setFmt, mamFilter, setMamFilter, ownedFilter, setOwnedFilter,
+    hiddenTabs, hiddenTab, setHiddenTab, reasonGroup, setReasonGroup, hiddenCounts,
+    showShortFilter, hideShort, setHideShort,
   } = useBooksList({ title, apiPath, extraParams, showFormatTabs, showOwnedFilter });
   const mamOn = useMamEnabled();
   const { sb, setSb, sbClosing, closeSb } = useBookSidebar();
@@ -150,6 +153,37 @@ export default function MobileBooksPage({
         </div>
       )}
 
+      {/* F19: Hidden by you / Filtered, with the reasons Seshat hid books for. */}
+      {hiddenTabs && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ display: "flex", gap: 6 }}>
+            <MobileChip active={hiddenTab === "mine"} onClick={() => setHiddenTab("mine")}>
+              Hidden by you · {hiddenCounts.mine.toLocaleString()}
+            </MobileChip>
+            <MobileChip active={hiddenTab === "filtered"} onClick={() => setHiddenTab("filtered")}>
+              Filtered · {hiddenCounts.filtered.toLocaleString()}
+            </MobileChip>
+          </div>
+          {hiddenTab === "filtered" && (
+            <>
+              <div style={{ display: "flex", gap: 6, overflowX: "auto", scrollbarWidth: "none" }}>
+                <MobileChip active={reasonGroup === ""} onClick={() => setReasonGroup("")}>
+                  All
+                </MobileChip>
+                {REASON_GROUPS.filter((g) => hiddenCounts.byGroup[g.id] > 0 || g.id === reasonGroup).map((g) => (
+                  <MobileChip key={g.id} active={reasonGroup === g.id} onClick={() => setReasonGroup(g.id)}>
+                    {g.label} · {(hiddenCounts.byGroup[g.id] ?? 0).toLocaleString()}
+                  </MobileChip>
+                ))}
+              </div>
+              <div style={{ fontSize: 12, color: t.tg }}>
+                Books Seshat keeps hidden, with the reason. Unhide one and it stays listed.
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
       {/* v2.3.4.3 owned filter — Hidden page only. */}
       {showOwnedFilter && (
         <div
@@ -190,6 +224,11 @@ export default function MobileBooksPage({
         >
           Sort: {sortLabel}
         </MobileChip>
+        {showShortFilter && (
+          <MobileChip active={hideShort} onClick={() => setHideShort(!hideShort)}>
+            Hide short
+          </MobileChip>
+        )}
         {mamOn &&
           MAM_FILTER_OPTIONS.map((opt) => (
             <MobileChip
