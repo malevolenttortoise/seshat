@@ -43,6 +43,14 @@ frontend test suite.
   were listed as missing. Rows already in the library stay as they are
   until wave C's cleanup. **Database migration**: library databases go
   to `user_version` 93 (`books.hidden_reason` and its index).
+- **The title identity sees through a few more title shapes** (S3b,
+  ADR-0028 amended), for scans and the owned check alike: a description
+  after a comma ("Witches Be Crazy, an Urban Fantasy Men's Adventure"),
+  a " - She's …" tagline, an article inside a title ("The Voyage of
+  Sable Keech"), and a series name used as a prefix when both books sit
+  at the same place in the series ("Geostorm The Shift" = "The Shift",
+  Geostorm #1). Scans stop creating these beside the book they are (one
+  was an owned book).
 - **An IRC announce of a book you already own is no longer grabbed**
   (discovery fix pass S4, ADR-0004 / 0013 amended). Claim-for-owned and
   format dedup now recognise an owned book by the title identity (below)

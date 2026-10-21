@@ -45,6 +45,10 @@ The rules, strongest first:
      "Title: Series N" -> Title when the other part is a series name.
      A title part one author shares across 3+ different titles ("Star
      Wars Legends") is a label (`author_labels`), never an identity.
+     Also dropped: a description after a comma (", an Urban Fantasy
+     Adventure"), a " - She's …" tagline, articles inside a title; and,
+     when both are stored at one place in one series, that series' name as
+     a prefix ("Geostorm The Shift" = "The Shift", Geostorm #1).
      Two "Head: Tail" titles that share only one half are the same only
      when the other halves agree ("Star Trek Deep Space Nine - The
      Siege" is not "… - Wrath of the Prophets").
@@ -218,8 +222,15 @@ _GENERIC_WORDS = (
 # "Sci-Fi" or "Spider-Man" is not one), and never across another one:
 # "Star Wars: Tales of the Jedi - Redemption" keeps its title.
 _RX_GENERIC_SUBTITLE = re.compile(
-    r"(?i)(?:\s*:\s*|\s+-\s+)(?:(?:a|an|the)\s+)?(?:[\w'&+-]+\s+){0,6}"
+    # ", an Urban Fantasy Men's Adventure" too: a comma, then "a" / "an".
+    r"(?i)(?:\s*:\s*|\s+-\s+|,\s+(?=(?:a|an)\s))(?:(?:a|an|the)\s+)?(?:[\w'&+-]+\s+){0,6}"
     r"(?:" + _GENERIC_WORDS + r")s?\b(?:(?!\s*:\s|\s+-\s+).)*$"
+)
+# " - She's at the end of her rope": a tagline, not a title part. Only
+# after a dash and starting with a pronoun ("… - The Golden Age of the
+# Sith" is a title).
+_RX_TAGLINE = re.compile(
+    r"(?i)\s+-\s+(?:she|he|they|we|you|it|i)(?:'s|'re|'ll|'d|'ve|'m)?\s+(?:\S+\s+){2,}\S+\s*$"
 )
 # A whole segment that is only such a description: "A Witchlands Novel",
 # "A Magical Papillon Mystery" (two books sharing it are not one book),
@@ -282,6 +293,7 @@ def _key_text(t: str) -> str:
 def _without_description(t: str) -> str:
     """Drop trailing descriptions, one part at a time ("Apocalypse
     Cultivator: The Complete Series: A Cultivation Novel")."""
+    t = _RX_TAGLINE.sub("", t)
     for _ in range(4):
         stripped = _RX_GENERIC_SUBTITLE.sub("", _RX_PUBLISHER_ORIGINAL.sub("", t))
         if len(_RX_SEGMENTS.findall(stripped)) >= 2:
@@ -476,13 +488,26 @@ def _title_keys(
     labels: frozenset,
     position_agrees: bool,
     other_series: Optional[str],
+    shared_place: str = "",
 ) -> _Keys:
     p = proper.lower()
     # Any length: "It" is a title. The 3-character floor is for parts.
-    whole = frozenset(
+    whole_keys = [
         k for k in (_key_text(_without_description(p)), _key_text(p.replace(":", " ")))
         if k
-    )
+    ]
+    # "Geostorm The Shift: A Post-Apocalyptic …" filed as Geostorm #1 is
+    # "The Shift", Geostorm #1: the series name as a prefix with no colon,
+    # when both are stored at that place in that series (`shared_place`;
+    # a number read from a title isn't enough: "Hulk: Visionaries - Peter
+    # David Vol. 4" isn't "X-Factor Visionaries: Peter David, Vol. 4").
+    if shared_place:
+        for k in list(whole_keys):
+            if k.startswith(shared_place + " "):
+                rest = re.sub(r"^(?:the|a|an)\s+", "", k[len(shared_place) + 1:]).strip()
+                if len(rest) >= 3:
+                    whole_keys.append(rest)
+    whole = frozenset(whole_keys)
     parts: list[str] = []
     for i, segment in enumerate(s for s in _RX_SEGMENTS.split(p) if s.strip()):
         if i and _RX_BARE_VOLUME.match(segment):
@@ -518,10 +543,18 @@ def _close(x: str, y: str) -> bool:
     a truncated title)."""
     if x == y:
         return True
+    # "The Voyage of Sable Keech" / "… of the Sable Keech". (Not spaces:
+    # "Endgame" and "End Game" are two different books of one author.)
+    if min(len(x), len(y)) >= 6 and _without_articles(x) == _without_articles(y):
+        return True
     if min(len(x), len(y)) < 8:
         return False
     m = SequenceMatcher(None, x, y)
     return m.real_quick_ratio() >= 0.92 and m.quick_ratio() >= 0.92 and m.ratio() >= 0.92
+
+
+def _without_articles(k: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"\b(?:the|a|an)\b", " ", k)).strip()
 
 
 def _rests_agree(x: tuple, y: tuple) -> bool:
@@ -685,8 +718,14 @@ def same_book(a: TitleRef, b: TitleRef, labels: frozenset = frozenset()) -> bool
 
     # Titles.
     same_core = pa.core is not None and pa.core == pb.core
-    ka = _title_keys(pa.proper, a.series, same_core, labels, position_agrees, b.series)
-    kb = _title_keys(pb.proper, b.series, same_core, labels, position_agrees, a.series)
+    ia, ib = _as_index(a.index), _as_index(b.index)
+    shared_place = (
+        series_key(a.series)
+        if a.series and ia is not None and ia == ib and series_key(a.series) == series_key(b.series)
+        else ""
+    )
+    ka = _title_keys(pa.proper, a.series, same_core, labels, position_agrees, b.series, shared_place)
+    kb = _title_keys(pb.proper, b.series, same_core, labels, position_agrees, a.series, shared_place)
     if _titles_match(ka, kb):
         return True
     return position_agrees and (

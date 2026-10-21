@@ -109,6 +109,26 @@ The same parser reads "(Series Book N)" out of a title at creation (G171) and Ha
   miss a description with no separator, "Aurora Rises A LitRPG Adventure"). On the 158 text-search matches merged
   2026-10-17 → 10-20 it refuses 8, all Hardcover's Volume 1 for volumes 2–9. Kobo's search uses it to pick a result.
 
+
+## Amendment (2026-10-21, wave B S3b: the identity's residue)
+
+- **Rule 4's keys also drop** a description after a comma that starts "a" / "an" (", an Urban Fantasy Men's
+  Adventure": "Witches be Crazy" had been created beside the owned "Shotgun Sorcery 2: Witches Be Crazy, an
+  Urban Fantasy Men's Adventure"), a " - " tagline that starts with a pronoun ("Coiled - She's at the end of her
+  rope"; " - The Golden Age of the Sith" stays a title), and articles inside a title ("The Voyage of Sable Keech").
+  **When both titles are stored at one place in one series**, that series' name as a prefix with no colon is
+  dropped too ("Geostorm The Shift: A Post-Apocalyptic …" = "The Shift", Geostorm #1; "Prelude to Dune 03 House
+  Corrino" = "Dune: House Corrino"); a place read from a title isn't enough ("Hulk: Visionaries - Peter David Vol.
+  4" is not "X-Factor Visionaries: Peter David, Vol. 4").
+- Tried and dropped on the measurements: spaces as nothing ("Endgame" and "End Game" are two books), commas inside
+  a description ("Doctor Who: 12 Doctors, 12 Stories" would join "… Fifteen Doctors 15 Stories"), longer generic
+  last parts (no pair changed). Left as visible duplicates: a short title against its three-part form
+  ("Operation: Yellow Ribbon" vs "…: A Time For Peace", the shape of "Star Trek: New Frontier" vs "…: Blind
+  Man's Bluff"), a title that is its series' name ("The Dragon Business").
+- Measured old vs new: 21 of 1,019,235 same-author pairs change, all to "same" and all the same book; grab history
+  unchanged (77 of 2,119 snatched auto-grabs stopped as owned); F23's Hardcover replay merges 8 books it had
+  duplicated (5 Geostorm / Nuclear Winter, Voyage of Sable Keech, Witches be Crazy into the owned book), Amazon 11.
+
 ## Related
 
 - [0003](0003-bundle-dedup-prefer-duplicates.md) — the same duplicates-over-loss stance, for bundles.
