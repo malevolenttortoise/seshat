@@ -679,6 +679,24 @@ exports[`Author detail (desktop) > an author with series, standalones and a seco
           Scan Ebook
         </button>
       </div>
+      <div
+        style="display: flex; flex-direction: row; align-items: baseline; gap: 8px; flex-wrap: wrap;"
+      >
+        <label
+          style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: rgb(214, 212, 224); cursor: pointer; white-space: nowrap;"
+        >
+          <input
+            checked=""
+            type="checkbox"
+          />
+          List missing books
+        </label>
+        <span
+          style="font-size: 11px; color: rgb(98, 96, 122);"
+        >
+          Off: Seshat stops scanning Ada Quill for books you don't own and hides the 3 already listed. MAM announces for Ada Quill still pass your filter.
+        </span>
+      </div>
       <section
         style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 20px; margin-bottom: 16px;"
       >
@@ -974,6 +992,24 @@ exports[`Author detail (desktop) > an author with series, standalones and a seco
           Scan Audiobook
         </button>
       </div>
+      <div
+        style="display: flex; flex-direction: row; align-items: baseline; gap: 8px; flex-wrap: wrap;"
+      >
+        <label
+          style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: rgb(214, 212, 224); cursor: pointer; white-space: nowrap;"
+        >
+          <input
+            checked=""
+            type="checkbox"
+          />
+          List missing books
+        </label>
+        <span
+          style="font-size: 11px; color: rgb(98, 96, 122);"
+        >
+          Off: Seshat stops scanning Ada Quill for books you don't own and hides the 0 already listed. MAM announces for Ada Quill still pass your filter.
+        </span>
+      </div>
       <section
         style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 20px; margin-bottom: 16px;"
       >
@@ -1059,9 +1095,11 @@ exports[`Author detail (desktop) > an author with series, standalones and a seco
 
 exports[`Author detail (desktop) > an author with series, standalones and a second library > requests 1`] = `
 [
+  "GET /discovery/authors/11/list-missing?slug=calibre-library",
   "GET /discovery/authors/11/pen-names",
   "GET /discovery/authors/11/source-breakdown?slug=calibre-library",
   "GET /discovery/authors/11?include_cross_library=1&slug=calibre-library",
+  "GET /discovery/authors/41/list-missing?slug=audiobookshelf",
   "GET /discovery/mam/status",
   "GET /discovery/persons/5",
   "GET /discovery/scan-status",
@@ -1788,6 +1826,24 @@ exports[`Author detail (desktop) > with pen-name links while a source scan runs 
           Scan Ebook
         </button>
       </div>
+      <div
+        style="display: flex; flex-direction: row; align-items: baseline; gap: 8px; flex-wrap: wrap;"
+      >
+        <label
+          style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: rgb(214, 212, 224); cursor: pointer; white-space: nowrap;"
+        >
+          <input
+            checked=""
+            type="checkbox"
+          />
+          List missing books
+        </label>
+        <span
+          style="font-size: 11px; color: rgb(98, 96, 122);"
+        >
+          Off: Seshat stops scanning Ada Quill for books you don't own and hides the 3 already listed. MAM announces for Ada Quill still pass your filter.
+        </span>
+      </div>
       <section
         style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 20px; margin-bottom: 16px;"
       >
@@ -2083,6 +2139,24 @@ exports[`Author detail (desktop) > with pen-name links while a source scan runs 
           Scan Audiobook
         </button>
       </div>
+      <div
+        style="display: flex; flex-direction: row; align-items: baseline; gap: 8px; flex-wrap: wrap;"
+      >
+        <label
+          style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: rgb(214, 212, 224); cursor: pointer; white-space: nowrap;"
+        >
+          <input
+            checked=""
+            type="checkbox"
+          />
+          List missing books
+        </label>
+        <span
+          style="font-size: 11px; color: rgb(98, 96, 122);"
+        >
+          Off: Seshat stops scanning Ada Quill for books you don't own and hides the 0 already listed. MAM announces for Ada Quill still pass your filter.
+        </span>
+      </div>
       <section
         style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 20px; margin-bottom: 16px;"
       >
@@ -2168,9 +2242,11 @@ exports[`Author detail (desktop) > with pen-name links while a source scan runs 
 
 exports[`Author detail (desktop) > with pen-name links while a source scan runs > requests 1`] = `
 [
+  "GET /discovery/authors/11/list-missing?slug=calibre-library",
   "GET /discovery/authors/11/pen-names",
   "GET /discovery/authors/11/source-breakdown?slug=calibre-library",
   "GET /discovery/authors/11?include_cross_library=1&slug=calibre-library",
+  "GET /discovery/authors/41/list-missing?slug=audiobookshelf",
   "GET /discovery/mam/status",
   "GET /discovery/persons/5",
   "GET /discovery/scan-status",
@@ -2610,6 +2686,28 @@ exports[`Author detail (phone) > an author with series, standalones and a second
           📖 Ebook
         </span>
       </div>
+      <div
+        style="padding: 4px 4px 8px;"
+      >
+        <div
+          style="display: flex; flex-direction: column; align-items: flex-start; gap: 4px; flex-wrap: wrap;"
+        >
+          <label
+            style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: rgb(214, 212, 224); cursor: pointer; white-space: nowrap;"
+          >
+            <input
+              checked=""
+              type="checkbox"
+            />
+            List missing books
+          </label>
+          <span
+            style="font-size: 11px; color: rgb(98, 96, 122);"
+          >
+            Off: Seshat stops scanning Ada Quill for books you don't own and hides the 3 already listed. MAM announces for Ada Quill still pass your filter.
+          </span>
+        </div>
+      </div>
       <section
         style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
       >
@@ -2770,6 +2868,28 @@ exports[`Author detail (phone) > an author with series, standalones and a second
           🎧 Audio
         </span>
       </div>
+      <div
+        style="padding: 4px 4px 8px;"
+      >
+        <div
+          style="display: flex; flex-direction: column; align-items: flex-start; gap: 4px; flex-wrap: wrap;"
+        >
+          <label
+            style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: rgb(214, 212, 224); cursor: pointer; white-space: nowrap;"
+          >
+            <input
+              checked=""
+              type="checkbox"
+            />
+            List missing books
+          </label>
+          <span
+            style="font-size: 11px; color: rgb(98, 96, 122);"
+          >
+            Off: Seshat stops scanning Ada Quill for books you don't own and hides the 0 already listed. MAM announces for Ada Quill still pass your filter.
+          </span>
+        </div>
+      </div>
       <section
         style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
       >
@@ -2849,9 +2969,11 @@ exports[`Author detail (phone) > an author with series, standalones and a second
 
 exports[`Author detail (phone) > an author with series, standalones and a second library > requests 1`] = `
 [
+  "GET /discovery/authors/11/list-missing?slug=calibre-library",
   "GET /discovery/authors/11/pen-names",
   "GET /discovery/authors/11/source-breakdown?slug=calibre-library",
   "GET /discovery/authors/11?include_cross_library=1&slug=calibre-library",
+  "GET /discovery/authors/41/list-missing?slug=audiobookshelf",
   "GET /discovery/mam/status",
   "GET /discovery/persons/5",
   "GET /discovery/scan-status",
@@ -3309,6 +3431,28 @@ exports[`Author detail (phone) > with pen-name links while a source scan runs > 
           📖 Ebook
         </span>
       </div>
+      <div
+        style="padding: 4px 4px 8px;"
+      >
+        <div
+          style="display: flex; flex-direction: column; align-items: flex-start; gap: 4px; flex-wrap: wrap;"
+        >
+          <label
+            style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: rgb(214, 212, 224); cursor: pointer; white-space: nowrap;"
+          >
+            <input
+              checked=""
+              type="checkbox"
+            />
+            List missing books
+          </label>
+          <span
+            style="font-size: 11px; color: rgb(98, 96, 122);"
+          >
+            Off: Seshat stops scanning Ada Quill for books you don't own and hides the 3 already listed. MAM announces for Ada Quill still pass your filter.
+          </span>
+        </div>
+      </div>
       <section
         style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
       >
@@ -3469,6 +3613,28 @@ exports[`Author detail (phone) > with pen-name links while a source scan runs > 
           🎧 Audio
         </span>
       </div>
+      <div
+        style="padding: 4px 4px 8px;"
+      >
+        <div
+          style="display: flex; flex-direction: column; align-items: flex-start; gap: 4px; flex-wrap: wrap;"
+        >
+          <label
+            style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: rgb(214, 212, 224); cursor: pointer; white-space: nowrap;"
+          >
+            <input
+              checked=""
+              type="checkbox"
+            />
+            List missing books
+          </label>
+          <span
+            style="font-size: 11px; color: rgb(98, 96, 122);"
+          >
+            Off: Seshat stops scanning Ada Quill for books you don't own and hides the 0 already listed. MAM announces for Ada Quill still pass your filter.
+          </span>
+        </div>
+      </div>
       <section
         style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
       >
@@ -3548,9 +3714,11 @@ exports[`Author detail (phone) > with pen-name links while a source scan runs > 
 
 exports[`Author detail (phone) > with pen-name links while a source scan runs > requests 1`] = `
 [
+  "GET /discovery/authors/11/list-missing?slug=calibre-library",
   "GET /discovery/authors/11/pen-names",
   "GET /discovery/authors/11/source-breakdown?slug=calibre-library",
   "GET /discovery/authors/11?include_cross_library=1&slug=calibre-library",
+  "GET /discovery/authors/41/list-missing?slug=audiobookshelf",
   "GET /discovery/mam/status",
   "GET /discovery/persons/5",
   "GET /discovery/scan-status",
@@ -4217,6 +4385,24 @@ exports[`Author detail S17 states (desktop) > right after starting a source scan
           Scan Ebook
         </button>
       </div>
+      <div
+        style="display: flex; flex-direction: row; align-items: baseline; gap: 8px; flex-wrap: wrap;"
+      >
+        <label
+          style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: rgb(214, 212, 224); cursor: pointer; white-space: nowrap;"
+        >
+          <input
+            checked=""
+            type="checkbox"
+          />
+          List missing books
+        </label>
+        <span
+          style="font-size: 11px; color: rgb(98, 96, 122);"
+        >
+          Off: Seshat stops scanning Ada Quill for books you don't own and hides the 3 already listed. MAM announces for Ada Quill still pass your filter.
+        </span>
+      </div>
       <section
         style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 20px; margin-bottom: 16px;"
       >
@@ -4512,6 +4698,24 @@ exports[`Author detail S17 states (desktop) > right after starting a source scan
           Scan Audiobook
         </button>
       </div>
+      <div
+        style="display: flex; flex-direction: row; align-items: baseline; gap: 8px; flex-wrap: wrap;"
+      >
+        <label
+          style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: rgb(214, 212, 224); cursor: pointer; white-space: nowrap;"
+        >
+          <input
+            checked=""
+            type="checkbox"
+          />
+          List missing books
+        </label>
+        <span
+          style="font-size: 11px; color: rgb(98, 96, 122);"
+        >
+          Off: Seshat stops scanning Ada Quill for books you don't own and hides the 0 already listed. MAM announces for Ada Quill still pass your filter.
+        </span>
+      </div>
       <section
         style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 20px; margin-bottom: 16px;"
       >
@@ -4597,9 +4801,11 @@ exports[`Author detail S17 states (desktop) > right after starting a source scan
 
 exports[`Author detail S17 states (desktop) > right after starting a source scan and a MAM scan > requests 1`] = `
 [
+  "GET /discovery/authors/11/list-missing?slug=calibre-library",
   "GET /discovery/authors/11/pen-names",
   "GET /discovery/authors/11/source-breakdown?slug=calibre-library",
   "GET /discovery/authors/11?include_cross_library=1&slug=calibre-library",
+  "GET /discovery/authors/41/list-missing?slug=audiobookshelf",
   "GET /discovery/mam/status",
   "GET /discovery/persons/5",
   "GET /discovery/scan-status",
@@ -5332,6 +5538,24 @@ exports[`Author detail S17 states (desktop) > select mode with the standalones o
           Scan Ebook
         </button>
       </div>
+      <div
+        style="display: flex; flex-direction: row; align-items: baseline; gap: 8px; flex-wrap: wrap;"
+      >
+        <label
+          style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: rgb(214, 212, 224); cursor: pointer; white-space: nowrap;"
+        >
+          <input
+            checked=""
+            type="checkbox"
+          />
+          List missing books
+        </label>
+        <span
+          style="font-size: 11px; color: rgb(98, 96, 122);"
+        >
+          Off: Seshat stops scanning Ada Quill for books you don't own and hides the 3 already listed. MAM announces for Ada Quill still pass your filter.
+        </span>
+      </div>
       <section
         style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 20px; margin-bottom: 16px;"
       >
@@ -5645,6 +5869,24 @@ exports[`Author detail S17 states (desktop) > select mode with the standalones o
           Scan Audiobook
         </button>
       </div>
+      <div
+        style="display: flex; flex-direction: row; align-items: baseline; gap: 8px; flex-wrap: wrap;"
+      >
+        <label
+          style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: rgb(214, 212, 224); cursor: pointer; white-space: nowrap;"
+        >
+          <input
+            checked=""
+            type="checkbox"
+          />
+          List missing books
+        </label>
+        <span
+          style="font-size: 11px; color: rgb(98, 96, 122);"
+        >
+          Off: Seshat stops scanning Ada Quill for books you don't own and hides the 0 already listed. MAM announces for Ada Quill still pass your filter.
+        </span>
+      </div>
       <section
         style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 20px; margin-bottom: 16px;"
       >
@@ -5739,9 +5981,11 @@ exports[`Author detail S17 states (desktop) > select mode with the standalones o
 
 exports[`Author detail S17 states (desktop) > select mode with the standalones of both libraries picked > requests 1`] = `
 [
+  "GET /discovery/authors/11/list-missing?slug=calibre-library",
   "GET /discovery/authors/11/pen-names",
   "GET /discovery/authors/11/source-breakdown?slug=calibre-library",
   "GET /discovery/authors/11?include_cross_library=1&slug=calibre-library",
+  "GET /discovery/authors/41/list-missing?slug=audiobookshelf",
   "GET /discovery/mam/status",
   "GET /discovery/persons/5",
   "GET /discovery/scan-status",
@@ -6183,6 +6427,28 @@ exports[`Author detail S17 states (phone) > right after starting a source scan a
           📖 Ebook
         </span>
       </div>
+      <div
+        style="padding: 4px 4px 8px;"
+      >
+        <div
+          style="display: flex; flex-direction: column; align-items: flex-start; gap: 4px; flex-wrap: wrap;"
+        >
+          <label
+            style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: rgb(214, 212, 224); cursor: pointer; white-space: nowrap;"
+          >
+            <input
+              checked=""
+              type="checkbox"
+            />
+            List missing books
+          </label>
+          <span
+            style="font-size: 11px; color: rgb(98, 96, 122);"
+          >
+            Off: Seshat stops scanning Ada Quill for books you don't own and hides the 3 already listed. MAM announces for Ada Quill still pass your filter.
+          </span>
+        </div>
+      </div>
       <section
         style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
       >
@@ -6343,6 +6609,28 @@ exports[`Author detail S17 states (phone) > right after starting a source scan a
           🎧 Audio
         </span>
       </div>
+      <div
+        style="padding: 4px 4px 8px;"
+      >
+        <div
+          style="display: flex; flex-direction: column; align-items: flex-start; gap: 4px; flex-wrap: wrap;"
+        >
+          <label
+            style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: rgb(214, 212, 224); cursor: pointer; white-space: nowrap;"
+          >
+            <input
+              checked=""
+              type="checkbox"
+            />
+            List missing books
+          </label>
+          <span
+            style="font-size: 11px; color: rgb(98, 96, 122);"
+          >
+            Off: Seshat stops scanning Ada Quill for books you don't own and hides the 0 already listed. MAM announces for Ada Quill still pass your filter.
+          </span>
+        </div>
+      </div>
       <section
         style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
       >
@@ -6422,9 +6710,11 @@ exports[`Author detail S17 states (phone) > right after starting a source scan a
 
 exports[`Author detail S17 states (phone) > right after starting a source scan and a MAM scan > requests 1`] = `
 [
+  "GET /discovery/authors/11/list-missing?slug=calibre-library",
   "GET /discovery/authors/11/pen-names",
   "GET /discovery/authors/11/source-breakdown?slug=calibre-library",
   "GET /discovery/authors/11?include_cross_library=1&slug=calibre-library",
+  "GET /discovery/authors/41/list-missing?slug=audiobookshelf",
   "GET /discovery/mam/status",
   "GET /discovery/persons/5",
   "GET /discovery/scan-status",
@@ -6916,6 +7206,28 @@ exports[`Author detail S17 states (phone) > select mode with the standalones of 
           📖 Ebook
         </span>
       </div>
+      <div
+        style="padding: 4px 4px 8px;"
+      >
+        <div
+          style="display: flex; flex-direction: column; align-items: flex-start; gap: 4px; flex-wrap: wrap;"
+        >
+          <label
+            style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: rgb(214, 212, 224); cursor: pointer; white-space: nowrap;"
+          >
+            <input
+              checked=""
+              type="checkbox"
+            />
+            List missing books
+          </label>
+          <span
+            style="font-size: 11px; color: rgb(98, 96, 122);"
+          >
+            Off: Seshat stops scanning Ada Quill for books you don't own and hides the 3 already listed. MAM announces for Ada Quill still pass your filter.
+          </span>
+        </div>
+      </div>
       <section
         style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
       >
@@ -7094,6 +7406,28 @@ exports[`Author detail S17 states (phone) > select mode with the standalones of 
           🎧 Audio
         </span>
       </div>
+      <div
+        style="padding: 4px 4px 8px;"
+      >
+        <div
+          style="display: flex; flex-direction: column; align-items: flex-start; gap: 4px; flex-wrap: wrap;"
+        >
+          <label
+            style="display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: rgb(214, 212, 224); cursor: pointer; white-space: nowrap;"
+          >
+            <input
+              checked=""
+              type="checkbox"
+            />
+            List missing books
+          </label>
+          <span
+            style="font-size: 11px; color: rgb(98, 96, 122);"
+          >
+            Off: Seshat stops scanning Ada Quill for books you don't own and hides the 0 already listed. MAM announces for Ada Quill still pass your filter.
+          </span>
+        </div>
+      </div>
       <section
         style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
       >
@@ -7182,9 +7516,11 @@ exports[`Author detail S17 states (phone) > select mode with the standalones of 
 
 exports[`Author detail S17 states (phone) > select mode with the standalones of both libraries picked > requests 1`] = `
 [
+  "GET /discovery/authors/11/list-missing?slug=calibre-library",
   "GET /discovery/authors/11/pen-names",
   "GET /discovery/authors/11/source-breakdown?slug=calibre-library",
   "GET /discovery/authors/11?include_cross_library=1&slug=calibre-library",
+  "GET /discovery/authors/41/list-missing?slug=audiobookshelf",
   "GET /discovery/mam/status",
   "GET /discovery/persons/5",
   "GET /discovery/scan-status",
