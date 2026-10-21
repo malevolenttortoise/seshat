@@ -137,10 +137,10 @@ class TestPostUpdateMergeSweep:
         title to match. Sync should merge them."""
         from app.discovery import calibre_sync
 
-        # Step 1: First sync — Calibre has the WRONG title.
+        # Step 1: First sync — Calibre has the WRONG title (the wrong
+        # volume, so the title identity keeps them apart, F10).
         # This goes through the INSERT path (no existing calibre_id)
-        # but the merge query misses because the title doesn't match
-        # the Goodreads row exactly. Two rows result.
+        # but the merge misses. Two rows result.
         author_id = await _insert_author("William D. Arand", calibre_id=1)
         await _insert_unowned_discovery_row(
             author_id=author_id,
@@ -152,7 +152,7 @@ class TestPostUpdateMergeSweep:
         monkeypatch.setattr(
             calibre_sync, "_read_calibre_db",
             lambda *a, **kw: {"books": [
-                _book(3897, "Right of Retribution: Book 2", author_id=1),
+                _book(3897, "Right of Retribution: Book 3", author_id=1),
             ]},
         )
         await calibre_sync.sync_calibre("x", "y")
@@ -172,11 +172,13 @@ class TestPostUpdateMergeSweep:
             await db.close()
         assert count["n"] == 2
 
-        # Step 2: User fixes Calibre title. Re-sync. The sweep fires.
+        # Step 2: User fixes Calibre title. Re-sync. The sweep fires:
+        # "Right of Retribution: Book 2" is the Goodreads row's
+        # "Right of Retribution 2" by the title identity.
         monkeypatch.setattr(
             calibre_sync, "_read_calibre_db",
             lambda *a, **kw: {"books": [
-                _book(3897, "Right of Retribution 2", author_id=1),
+                _book(3897, "Right of Retribution: Book 2", author_id=1),
             ]},
         )
         await calibre_sync.sync_calibre("x", "y")
@@ -202,7 +204,7 @@ class TestPostUpdateMergeSweep:
         # goodreads_id (from the absorbed Goodreads row).
         winner = await _book_row_by_calibre_id(3897)
         assert winner is not None
-        assert winner["title"] == "Right of Retribution 2"
+        assert winner["title"] == "Right of Retribution: Book 2"
         assert winner["source"] == "calibre"
         assert winner["owned"] == 1
         assert winner["mam_torrent_id"] == "713780"
@@ -216,8 +218,8 @@ class TestPostUpdateMergeSweep:
 
     async def test_no_merge_when_titles_still_differ(self, discovery_db,
                                                     monkeypatch):
-        """If the Calibre title still doesn't match the Goodreads
-        title, the sweep is a no-op. Both rows survive."""
+        """If the Calibre book still isn't the Goodreads row's book (a
+        different volume), the sweep is a no-op. Both rows survive."""
         from app.discovery import calibre_sync
 
         author_id = await _insert_author("William D. Arand", calibre_id=1)
@@ -232,13 +234,13 @@ class TestPostUpdateMergeSweep:
         monkeypatch.setattr(
             calibre_sync, "_read_calibre_db",
             lambda *a, **kw: {"books": [
-                _book(3908, "Swing Shift: Book 2", author_id=1),
+                _book(3908, "Swing Shift: Book 3", author_id=1),
             ]},
         )
         await calibre_sync.sync_calibre("x", "y")
 
         # Re-sync without fixing the title — the sweep should NOT merge
-        # because exact-title-match fails.
+        # because the title identity tells the volumes apart.
         await calibre_sync.sync_calibre("x", "y")
 
         from app.discovery.database import get_db

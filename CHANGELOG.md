@@ -69,6 +69,27 @@ frontend test suite.
   announces for the author still pass your filter. **Database
   migration**: library databases go to `user_version` 94
   (`authors.list_missing`).
+- **Calibre sync recognises an owned book under any of its authors and
+  any title shape** (discovery fix pass S6, ADR-0028 amended). When a
+  book arrives in Calibre, or on every sync's end-of-sync heal, the
+  missing row it is gets merged into it (or marked owned, when there
+  are several). The match is now any of the book's Calibre authors, or
+  an author linked to one as a pen name or co-author, plus the title
+  identity, within the book's filter family. Until now it was the first
+  author and the exact title. Books owned under a pen name or co-author
+  stop showing as missing: "Atlantis University" (Michael Todd /
+  Anderle), "Hex Kittens 4–5", "Honor Among Thieves", and Hardcover's
+  "Book 06.0 - Blood Rites" rows. On the reference library the first
+  sync absorbs about 120 rows. A wrong title-identity call now also
+  turns a missing row into the owned book: comic adaptations whose
+  titles carry no comic word are the main case. After such a merge the
+  owned book keeps Calibre's author list. **Author hygiene:** Calibre's
+  `|` (its stored comma) reads back as a comma. A full sync deletes an
+  author row whose Calibre author is gone and that lists no book, with
+  its empty mirror in the audiobook library and its person link (9 such
+  rows on the reference install). Rows that still list missing books
+  stay until wave C's cleanup. Full sync time on the reference library:
+  1.6 s → 3.7 s.
 - **An IRC announce of a book you already own is no longer grabbed**
   (discovery fix pass S4, ADR-0004 / 0013 amended). Claim-for-owned and
   format dedup now recognise an owned book by the title identity (below)

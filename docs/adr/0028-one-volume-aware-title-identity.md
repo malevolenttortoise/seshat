@@ -129,6 +129,26 @@ The same parser reads "(Series Book N)" out of a title at creation (G171) and Ha
   unchanged (77 of 2,119 snatched auto-grabs stopped as owned); F23's Hardcover replay merges 8 books it had
   duplicated (5 Geostorm / Nuclear Winter, Voyage of Sable Keech, Witches be Crazy into the owned book), Amazon 11.
 
+## Amendment (2026-10-21, wave B S6: the Calibre-sync absorb)
+
+- **Who:** the discovery rows a Calibre book may absorb are the books any of its Calibre contributors, or an author
+  linked to one (`pen_name_links`, pen name or co-author, the links a scan's dedup reads), is credited on in any
+  position. Before, only the position-0 author's books counted. A pen-name split absorbs only once it's linked.
+- **What:** this identity, within the book's filter family ([ADR-0029](0029-filtered-discovery-rows-kept-hidden-with-a-reason.md)).
+  On the reference library the family check keeps 12 identity hits apart: signed-copy listings, French editions,
+  comic issues. One match is merged into the Calibre row. Two or more are each flipped owned, as before. The
+  end-of-sync legacy heal uses the same match. After an absorb merge, Calibre's own contributor list is written
+  back: the merge's contributor union had credited "Rachel Caine" on Ann Aguirre's owned book until the next sync.
+- Measured on a copy of the reference library (full sync, old vs new): 93 missing rows merged into the owned book
+  and 26 flipped owned, against 0 for the old code. Every cell was read. About 75 are right (Atlantis University
+  under Michael Todd / Anderle, Hex Kittens, Honor Among Thieves, Hardcover's "Book 06.0 - Blood Rites" rows,
+  subtitle variants). The wrong ones are this identity's existing calls, which scans and the owned check already
+  make (cost accepted at F10): comic and graphic-novel adaptations whose titles carry no comic word ("Ender's Game,
+  Volume 1: Battle School", "Speaker for the Dead [adaptation]", "The Dresden Files: Storm Front, Vol. 1", Dune
+  House volumes, "Cry Wolf #2"); "Dune" (title = series name) against two books a source filed at Dune #1; "The
+  world of Shannara" read as a spelling variant of "The Sword of Shannara"; "Human Resources: Bisexual Edition"
+  against the owned Hetero edition. A second sync changes nothing.
+
 ## Related
 
 - [0003](0003-bundle-dedup-prefer-duplicates.md) — the same duplicates-over-loss stance, for bundles.
