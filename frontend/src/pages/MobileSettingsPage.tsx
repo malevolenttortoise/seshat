@@ -892,22 +892,22 @@ export default function MobileSettingsPage() {
 
       {/* ─── Author Scanning ────────────────────────────────── */}
       <MobileSection title="Author Scanning" defaultOpen={false}>
+        {/* G201: the settings desktop and the backend use (these saved
+            author_autoscan_* names nothing read). */}
         <ToggleRow
           label="Auto-scan enabled"
-          on={!!s.author_autoscan_enabled}
+          desc="Periodically scan all authors against enabled sources."
+          on={(s.author_scanning_enabled as boolean) ?? true}
           onToggle={() =>
-            upd("author_autoscan_enabled", !s.author_autoscan_enabled)
+            upd("author_scanning_enabled", !(s.author_scanning_enabled ?? true))
           }
         />
         <ToggleRow
           label="Owned books only"
-          desc="Skip authors with no owned books."
-          on={!!s.author_autoscan_owned_only}
+          desc="Only enrich metadata on books already in Calibre."
+          on={(s.author_scan_owned_only as boolean) ?? false}
           onToggle={() =>
-            upd(
-              "author_autoscan_owned_only",
-              !s.author_autoscan_owned_only,
-            )
+            upd("author_scan_owned_only", !(s.author_scan_owned_only ?? false))
           }
         />
         <ToggleRow
@@ -930,10 +930,10 @@ export default function MobileSettingsPage() {
         />
         <FieldRow label="Lookup interval (days)">
           <MobileNumberInput
-            value={(s.author_lookup_interval_days as number) ?? 7}
-            min={1}
+            value={(s.lookup_interval_days as number) ?? 3}
+            min={0}
             suffix="days"
-            onChange={(v) => upd("author_lookup_interval_days", v)}
+            onChange={(v) => upd("lookup_interval_days", v)}
           />
         </FieldRow>
       </MobileSection>
