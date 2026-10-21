@@ -154,6 +154,17 @@ class TestGetStatus:
         assert worker["last_heartbeat_at"] is None
         assert worker["seconds_since_heartbeat"] is None
 
+    async def test_the_heartbeat_shown_counts_the_workers_requests(self, cache_router_client):
+        """G193: the panel's "heartbeat … ago" (and its stalled pill) read
+        the worker's last gated request when it's later than the stamp."""
+        from app.metadata import source_gate
+        with source_gate.caller(source_gate.CALLER_WORKER):
+            async with source_gate.turn("amazon"):
+                pass
+        body = (await cache_router_client.get("/api/v1/metadata-cache/amazon/status")).json()
+        assert body["worker"]["seconds_since_heartbeat"] is not None
+        assert body["worker"]["seconds_since_heartbeat"] < 5
+
     async def test_get_status_surfaces_active_cooldown(
         self, cache_router_client,
     ):

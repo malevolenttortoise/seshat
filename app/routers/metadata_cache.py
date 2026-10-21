@@ -395,7 +395,8 @@ async def get_status(source: str) -> StatusResponse:
         await db.close()
 
     now = time.time()
-    hb = wrow["last_heartbeat_at"] if wrow else None
+    from app.discovery.metadata_cache_worker import worker_heartbeat
+    hb = worker_heartbeat(source, wrow["last_heartbeat_at"] if wrow else None)
     scan_completed = wrow["last_scan_completed_at"] if wrow else None
     worker_model = WorkerStatusModel(
         last_block_at=float(wrow["last_block_at"]) if wrow else 0.0,

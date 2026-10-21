@@ -904,6 +904,16 @@ async def send_daily_summary(
     )
 
 
+def worker_heartbeat(source_name: str, stored: Optional[float]) -> Optional[float]:
+    """The worker's last sign of life: its stamped heartbeat (once a tick),
+    or the start of its last request through the source gate, whichever
+    is later (G193). A tick that waits its turn for every request of a big
+    author is alive; "stalled" is no request at all."""
+    live = source_gate.last_request_at(source_name, source_gate.CALLER_WORKER)
+    seen = [float(v) for v in (stored, live) if v is not None]
+    return max(seen) if seen else None
+
+
 async def check_stall(
     source_name: str = metadata_cache.SOURCE_AMAZON,
     *,
@@ -933,7 +943,7 @@ async def check_stall(
         # "stalled" warnings). At least 12 of the source's gaps.
         threshold_s = max(threshold_s, 12.0 * source_gate.gap_seconds(source_name))
     snapshot = await _read_state_for_summary(source_name)
-    heartbeat = snapshot["last_heartbeat_at"]
+    heartbeat = worker_heartbeat(source_name, snapshot["last_heartbeat_at"])
     if heartbeat is None:
         # Worker enabled but has never ticked. That's a stall.
         age_s = float("inf")
@@ -969,9 +979,9 @@ async def check_stall(
         )
     age_repr = f"{age_s:.0f}s" if age_s != float("inf") else "never"
     logger.warning(
-        "metadata_cache_worker: stall detected — last heartbeat %s ago "
-        "(threshold %.0fs)",
-        age_repr, threshold_s,
+        "metadata_cache_worker[%s]: stall detected — no heartbeat or request "
+        "for %s (threshold %.0fs)",
+        source_name, age_repr, threshold_s,
     )
     await _send_ntfy(
         event_key="metadata_cache_error",

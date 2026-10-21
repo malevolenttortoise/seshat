@@ -1379,6 +1379,32 @@ class TestStallThresholdFollowsTheGate:
         assert await metadata_cache_worker.check_stall("amazon") is True
         assert sent and sent[0]["title"] == "Amazon worker — stalled"
 
+    async def test_a_tick_still_sending_requests_is_no_stall(self, worker_under, monkeypatch, caplog):
+        """G193 (2026-10-21): two false warnings on Amazon ticks of 1,212s
+        and 1,213s (authors with 141 and 209 books) against 12 gaps = 1,200s.
+        Each request through the gate is a sign of life; another caller's
+        isn't, and the warning names the source."""
+        from app.metadata import source_gate
+        monkeypatch.setattr(source_gate, "gap_seconds", lambda source: 100.0)
+
+        async def _ntfy(**kw):
+            pass
+        monkeypatch.setattr(metadata_cache_worker, "_send_ntfy", _ntfy)
+        await self._stale(metadata_cache.SOURCE_AMAZON, 1300)
+        with source_gate.caller(source_gate.CALLER_ENRICHMENT):
+            async with source_gate.turn("amazon"):
+                pass
+        with caplog.at_level("WARNING", logger="seshat.discovery.metadata_cache_worker"):
+            assert await metadata_cache_worker.check_stall("amazon") is True
+        assert "metadata_cache_worker[amazon]: stall detected" in caplog.text
+
+        with source_gate.caller(source_gate.CALLER_WORKER):
+            async with source_gate.turn("amazon"):
+                pass
+        assert await metadata_cache_worker.check_stall("amazon") is False
+        # Amazon's requests don't keep the Goodreads worker alive.
+        assert metadata_cache_worker.worker_heartbeat("goodreads", None) is None
+
 
 def test_crash_ntfys_at_most_one_an_hour(monkeypatch):
     """Trial item (e): 2026-10-11 sent 78 crash ntfys in 45 minutes."""

@@ -235,6 +235,11 @@ _queues: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, _Queue]
 # When the last request to each source started (monotonic clock).
 _last_start: dict[str, float] = {}
 
+# The wall time each caller's last request to a source started (G193): a
+# cache worker stamps its stored heartbeat once a tick, and one Amazon
+# author scan of ~13 requests at a 100s gap ran 1,315s between stamps.
+_last_request_wall: dict[tuple[str, str], float] = {}
+
 # Goodreads' session always added up to 1s on top of its rate.
 _JITTER_S: dict[str, tuple[float, float]] = {"goodreads": (0.0, 1.0)}
 
@@ -493,6 +498,7 @@ async def turn(source: str, *, kind: str = "") -> AsyncIterator[Turn]:
     who = current_caller()
     level = _PRIORITY_FIRST if who in _FIRST_IN_LINE else _PRIORITY_NORMAL
     await _wait_turn(source, level, kind)
+    _last_request_wall[(source, who)] = _wall()
     t = Turn(source, who, kind)
     _last_turn.set(t)
     _bump(source, who, kind, "requests")
@@ -505,6 +511,12 @@ async def turn(source: str, *, kind: str = "") -> AsyncIterator[Turn]:
     finally:
         t._counted = t.outcome or OK
         _bump(source, who, kind, t._counted)
+
+
+def last_request_at(source: str, who: str = CALLER_WORKER) -> Optional[float]:
+    """When `who`'s last request to `source` started (wall clock), or None
+    since the process started."""
+    return _last_request_wall.get((source, who))
 
 
 def mark_last_blocked(source: str) -> None:
@@ -683,5 +695,6 @@ def reset() -> None:
     """Forget every turn and uncounted request (tests)."""
     global _last_prune_day
     _last_start.clear()
+    _last_request_wall.clear()
     _pending.clear()
     _last_prune_day = None

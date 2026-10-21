@@ -214,7 +214,12 @@ frontend test suite.
   Goodreads author-ID job moves to Sunday 15:00, after the list refresh
   (G187). A "tick crashed" ntfy goes at most once an hour per worker, and
   the stall warning allows for a scan waiting on its source's gate (12
-  gaps; it named the Amazon worker for Goodreads too).
+  gaps; it named the Amazon worker for Goodreads too). Each request a
+  cache worker sends counts as a heartbeat (G193): a stall is now no
+  request at all for 12 gaps, so a big author's scan (one of 209 books
+  took 22 minutes at Amazon's 100s gap) no longer raises a false warning,
+  and the panel's "heartbeat … ago" reads the same; the warning line
+  names its source.
 - **Goodreads non-fiction isn't added to discovery by default**: a book
   Goodreads files under Nonfiction, Self Help, Sports, Puzzles, Cookbooks,
   Reference or Picture Books, or whose title names a crossword, puzzle,
