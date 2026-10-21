@@ -299,6 +299,34 @@ def _kind_key(source: str, kind: str) -> str:
     return f"{source}:{kind}"
 
 
+# G199 (2026-10-21): a Goodreads book page goes only after 3 minutes with
+# no other Goodreads request, whoever sent it. Since wave S, pages sent
+# within 3 min of a list page or an autocomplete were blocked 18 of 56
+# times; after 3+ quiet minutes 0 of 14 (G179's read: 1 of 225).
+GOODREADS_PAGE_QUIET_S = 180.0
+
+# When each source last started a request of a kind that isn't its quiet
+# kind (gate clock).
+_last_other_start: dict[str, float] = {}
+
+
+def quiet_seconds(source: str, kind: str) -> float:
+    """The quiet `kind` needs before it: no other request to `source` for
+    that long (0 = none)."""
+    if source == "goodreads" and kind == KIND_BOOK_PAGE:
+        return GOODREADS_PAGE_QUIET_S
+    return 0.0
+
+
+def quiet_wait_seconds(source: str, kind: str) -> float:
+    """How long a request of `kind` would wait for its quiet if it asked now."""
+    quiet = quiet_seconds(source, kind)
+    other = _last_other_start.get(source)
+    if quiet <= 0 or other is None:
+        return 0.0
+    return max(0.0, other + quiet - _clock())
+
+
 # A kind with a gap of its own keeps its last start in settings.json (wall
 # time), so a restart doesn't let a book page go inside the gap (2026-10
 # trial item (d): the gate's memory was in-process only).
@@ -396,8 +424,27 @@ async def _wait_turn(source: str, level: int, kind: str = "") -> None:
                             source, kind, kwait, current_caller(),
                         )
                         await _sleep(kwait)
-            q = _queue(source)
-            await _take_turn(q, level)
+            quiet = quiet_seconds(source, kind) if kind else 0.0
+            while True:
+                # G199: wait for the quiet, then take the source's turn; if
+                # another kind started meanwhile, give the turn back and wait
+                # again. (One sleep per round: the loop turns only when a
+                # request really went.)
+                other = _last_other_start.get(source)
+                if quiet > 0 and other is not None:
+                    qwait = other + quiet - _clock()
+                    if qwait > 0:
+                        _log.debug(
+                            "source gate: %s %s waits %.1fs for quiet (%s)",
+                            source, kind, qwait, current_caller(),
+                        )
+                        await _sleep(qwait)
+                q = _queue(source)
+                await _take_turn(q, level)
+                if quiet > 0 and _last_other_start.get(source) != other:
+                    _pass_turn(q)
+                    continue
+                break
             try:
                 last = _last_start.get(source)
                 if last is not None:
@@ -414,6 +461,8 @@ async def _wait_turn(source: str, level: int, kind: str = "") -> None:
                         await _sleep(wait)
                 started = _clock()
                 _last_start[source] = started
+                if source == "goodreads" and kind != KIND_BOOK_PAGE:
+                    _last_other_start[source] = started
                 if kq is not None:
                     _last_start[kkey] = started
                     _persist_kind_start(kkey)
@@ -696,5 +745,6 @@ def reset() -> None:
     global _last_prune_day
     _last_start.clear()
     _last_request_wall.clear()
+    _last_other_start.clear()
     _pending.clear()
     _last_prune_day = None

@@ -215,7 +215,12 @@ frontend test suite.
   its autocomplete checks run at least 3 minutes apart (bursts of one a
   minute went with ~45% of the pages beside them blocked); the weekly
   Goodreads author-ID job moves to Sunday 15:00, after the list refresh
-  (G187). A "tick crashed" ntfy goes at most once an hour per worker, and
+  (G187). A book page now waits for 3 minutes of quiet: no other
+  Goodreads request in the 3 minutes before it, and the worker holds its
+  list pages and autocomplete in the 3 minutes before a page's turn
+  (G199, ADR-0026 amended: since the update pages beside other traffic
+  were blocked 18 of 56 times, pages after 3 quiet minutes 0 of 14); the
+  daily list refresh takes about twice as long. A "tick crashed" ntfy goes at most once an hour per worker, and
   the stall warning allows for a scan waiting on its source's gate (12
   gaps; it named the Amazon worker for Goodreads too). Each request a
   cache worker sends counts as a heartbeat (G193): a stall is now no

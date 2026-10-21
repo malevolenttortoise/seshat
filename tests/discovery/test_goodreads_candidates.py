@@ -545,13 +545,14 @@ async def test_while_the_page_gap_runs_autocomplete_carries_on(env, monkeypatch)
     env["gr"].autocomplete["Second"] = [_hit(101, "Second")]
     await gc.step()                                    # 100 → awaiting_page
     from app.metadata import source_gate
-    monkeypatch.setattr(source_gate, "kind_wait_seconds", lambda s, k: 90.0)
+    # More than the 3-min quiet away (G199: none inside it).
+    monkeypatch.setattr(source_gate, "kind_wait_seconds", lambda s, k: 390.0)
     env["gr"].urls.clear()
     res = await gc.step()
     assert env["gr"].kinds() == ["ac"]                 # no page during the gap
     assert (await _rows())["101"]["state"] == "awaiting_page"
     res = await gc.step()                              # nothing but the page left
-    assert res.outcome == "idle" and res.retry_in_s == pytest.approx(90.0)
+    assert res.outcome == "idle" and res.retry_in_s == pytest.approx(390.0)
 
 
 async def test_the_merge_waits_while_a_scan_runs(env, monkeypatch):
@@ -858,7 +859,7 @@ async def test_the_tick_sleeps_the_page_gap_when_only_a_page_is_left(env, monkey
     monkeypatch.setattr(source_gate, "kind_wait_seconds", lambda s, k: 30.0)
     env["gr"].urls.clear()
     res = await w.tick_goodreads()
-    assert res.outcome == "queue_empty"
+    assert res.outcome == "page_quiet"          # the page's turn is near (G199)
     assert res.next_sleep_s == pytest.approx(30.0)
     assert env["gr"].urls == []
 
@@ -1013,3 +1014,68 @@ async def test_the_worker_widens_the_first_fill_when_it_seeds(env, monkeypatch):
     monkeypatch.setattr(gc, "widen_first_fill", _widen)
     await w._seed_goodreads_candidates(time.time())
     assert len(calls) == 1
+
+
+class TestQuietBeforeAPage:
+    """G199 (2026-10-21): in the 3 minutes before a book page's turn the
+    worker sends no autocomplete or list page (pages beside them were
+    blocked 18 of 56 times since wave S; after 3 quiet minutes 0 of 14)."""
+
+    async def test_no_autocomplete_in_the_three_minutes_before_a_page(self, env, monkeypatch):
+        from app.metadata import source_gate
+        clock = {"t": 1_000_000.0}
+        monkeypatch.setattr(gc, "_now", lambda: clock["t"])
+        await _seeded(env, [_rec(100, "Neuropath"), _rec(101, "Second")])
+        env["gr"].autocomplete["Neuropath"] = [_hit(100, "Neuropath")]
+        env["gr"].autocomplete["Second"] = [_hit(101, "Second")]
+        await gc.step()                                        # Neuropath: page next
+        clock["t"] += 181                                      # autocomplete may go again
+        env["gr"].urls.clear()
+
+        monkeypatch.setattr(source_gate, "kind_wait_seconds", lambda s, k: 100.0)
+        res = await gc.step()
+        assert env["gr"].urls == []
+        assert res.outcome == "idle" and res.retry_in_s == pytest.approx(100.0)
+
+        monkeypatch.setattr(source_gate, "kind_wait_seconds", lambda s, k: 900.0)
+        await gc.step()
+        assert env["gr"].kinds() == ["ac"]
+
+    async def _list_due(self):
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_GOODREADS)
+        try:
+            await db.execute(
+                f"INSERT OR REPLACE INTO {metadata_cache.queue_table(metadata_cache.SOURCE_GOODREADS)} "
+                f"(author_id, priority, status, next_scan_due_at, consecutive_failures, enqueued_reason) "
+                f"VALUES (?, 100, 'pending', 0, 0, 'test')", (GR_AUTHOR,),
+            )
+            await db.commit()
+        finally:
+            await db.close()
+
+    async def test_no_list_page_in_the_three_minutes_before_a_page(self, env, monkeypatch):
+        from app.discovery import metadata_cache_worker as w
+        from app.metadata import source_gate
+        monkeypatch.setattr(w, "_gr_candidates_seeded_at", 0.0)
+        await _awaiting(env, page=FakeResp(200, NEUROPATH))
+        await self._list_due()
+        env["gr"].urls.clear()
+        monkeypatch.setattr(source_gate, "kind_wait_seconds", lambda s, k: 100.0)
+
+        res = await w.tick_goodreads()
+
+        assert res.outcome == "page_quiet" and env["gr"].urls == []
+        assert res.next_sleep_s == pytest.approx(100.0)
+
+    async def test_far_from_a_page_the_list_page_goes(self, env, monkeypatch):
+        from app.discovery import metadata_cache_worker as w
+        from app.metadata import source_gate
+        monkeypatch.setattr(w, "_gr_candidates_seeded_at", 0.0)
+        await _awaiting(env, page=FakeResp(200, NEUROPATH))
+        await self._list_due()
+        env["gr"].urls.clear()
+        monkeypatch.setattr(source_gate, "kind_wait_seconds", lambda s, k: 900.0)
+
+        await w.tick_goodreads()
+
+        assert any("/author/list/" in u for u in env["gr"].urls)

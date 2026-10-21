@@ -721,29 +721,53 @@ async def _still_unknown(row: dict) -> bool:
     return True
 
 
+async def _page_wanted() -> bool:
+    """Work is waiting for a book page: a candidate's page, or (no candidate
+    waiting at all) a phase-2 page."""
+    db = await metadata_cache.get_db(_SOURCE)
+    try:
+        if await _next_candidate(db, AWAITING_PAGE) is not None:
+            return True
+        if not phase2_enabled() or await _next_candidate(db, PENDING) is not None:
+            return False
+        p2 = metadata_cache.phase2_table(_SOURCE)
+        cur = await db.execute(f"SELECT 1 FROM {p2} WHERE state = 'pending' LIMIT 1")
+        return await cur.fetchone() is not None
+    finally:
+        await db.close()
+
+
 async def page_turn_ready() -> bool:
-    """A book page may go now and work is waiting for one: a candidate's
-    page, or (no candidate waiting at all) a phase-2 page. The worker runs
-    such a step before a due list page (trial item (f))."""
+    """A book page may go now and work is waiting for one. The worker runs
+    such a step before a due list page (trial item (f)); the gate then holds
+    the page for its quiet (G199)."""
     try:
         if source_gate.kind_wait_seconds("goodreads", source_gate.KIND_BOOK_PAGE) > 0:
             return False
         if _backoff_remaining(source_gate.KIND_BOOK_PAGE) > 0 or merge_blocked_by():
             return False
-        db = await metadata_cache.get_db(_SOURCE)
-        try:
-            if await _next_candidate(db, AWAITING_PAGE) is not None:
-                return True
-            if not phase2_enabled() or await _next_candidate(db, PENDING) is not None:
-                return False
-            p2 = metadata_cache.phase2_table(_SOURCE)
-            cur = await db.execute(f"SELECT 1 FROM {p2} WHERE state = 'pending' LIMIT 1")
-            return await cur.fetchone() is not None
-        finally:
-            await db.close()
+        return await _page_wanted()
     except Exception:
         _log.debug("goodreads candidates: page_turn_ready failed", exc_info=True)
         return False
+
+
+async def page_due_in() -> Optional[float]:
+    """Seconds until a wanted book page's turn (gap and backoff), or None
+    when no page is wanted. In the last `GOODREADS_PAGE_QUIET_S` of the
+    wait the worker sends no list page or autocomplete, so the page gets
+    its quiet (G199)."""
+    try:
+        if merge_blocked_by():
+            return None
+        due = max(
+            source_gate.kind_wait_seconds("goodreads", source_gate.KIND_BOOK_PAGE),
+            _backoff_remaining(source_gate.KIND_BOOK_PAGE),
+        )
+        return due if await _page_wanted() else None
+    except Exception:
+        _log.debug("goodreads candidates: page_due_in failed", exc_info=True)
+        return None
 
 
 async def step() -> StepResult:
@@ -768,6 +792,11 @@ async def step() -> StepResult:
             return StepResult("page", f"{awaiting.get('title')!r}: now known")
         ac_backoff = _backoff_remaining(source_gate.KIND_AUTOCOMPLETE)
         ac_wait = max(ac_backoff, _autocomplete_wait())
+        page_due = max(page_wait, page_backoff)
+        if (pending is not None and ac_wait <= 0 and awaiting is not None
+                and page_due <= source_gate.GOODREADS_PAGE_QUIET_S):
+            # G199: the page's turn is near; no autocomplete inside its quiet.
+            return StepResult("idle", retry_in_s=max(1.0, page_due))
         if pending is not None and ac_wait <= 0:
             if await _still_unknown(pending):
                 global _last_autocomplete_at

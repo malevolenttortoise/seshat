@@ -172,10 +172,71 @@ async def test_the_page_gap_runs_between_real_starts(clock, page_gap):
         with source_gate.caller("worker"):
             await source_gate.request("goodreads", send, kind="book_page")
 
+    page_gap["gap"] = 400.0                          # longer than the quiet (G199)
     await page()                                     # t=1000
     await _one("goodreads", "worker", kind="autocomplete")   # t=1030
     await page()
-    assert starts[1] - starts[0] == pytest.approx(120.0)
+    assert starts[1] - starts[0] == pytest.approx(400.0)
+
+
+# ─── G199: 3 minutes of quiet before a Goodreads book page ─────
+
+
+async def test_a_page_waits_three_quiet_minutes_after_another_kind(clock, page_gap):
+    """2026-10-21: pages within 3 min of a list page or an autocomplete
+    were blocked 18 of 56 times, after 3+ quiet minutes 0 of 14."""
+    starts: list[float] = []
+
+    async def page():
+        async def send():
+            starts.append(clock.now)
+            return httpx.Response(200)
+        with source_gate.caller("worker"):
+            await source_gate.request("goodreads", send, kind="book_page")
+
+    await _one("goodreads", "worker", kind="list_page")        # t=1000
+    clock.now += 60
+    assert source_gate.quiet_wait_seconds("goodreads", "book_page") == pytest.approx(120.0)
+    await page()
+    assert starts == [pytest.approx(1180.0)]
+    # Pages among themselves keep only their gap; other kinds never wait.
+    assert source_gate.quiet_wait_seconds("goodreads", "list_page") == 0.0
+    assert source_gate.quiet_wait_seconds("amazon", "book_page") == 0.0
+
+
+async def test_a_request_during_the_quiet_starts_it_over(clock, page_gap, monkeypatch):
+    """Enrichment's autocomplete going while the worker's page waits: the
+    page waits 3 min after it, and never goes inside the quiet."""
+    starts: dict[str, float] = {}
+    first_wait = asyncio.Event()
+    release = asyncio.Event()
+
+    async def sleep(seconds):
+        wake = clock.now + seconds              # an absolute wake time
+        if not first_wait.is_set():
+            first_wait.set()
+            await asyncio.wait_for(release.wait(), 5)
+        clock.now = max(clock.now, wake)
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(source_gate, "_sleep", sleep)
+
+    async def req(label, caller, kind):
+        async def send():
+            starts[label] = clock.now
+            return httpx.Response(200)
+        with source_gate.caller(caller):
+            await source_gate.request("goodreads", send, kind=kind)
+
+    await req("list", "worker", "list_page")                  # t=1000
+    page = asyncio.create_task(req("page", "worker", "book_page"))
+    await asyncio.wait_for(first_wait.wait(), 5)              # page asleep on its quiet
+    clock.now += 100                                          # t=1100
+    await asyncio.wait_for(req("ac", "enrichment", "autocomplete"), 5)
+    release.set()
+    await asyncio.wait_for(page, 5)
+    assert starts["ac"] == pytest.approx(1100.0)
+    assert starts["page"] - starts["ac"] >= 180.0
 
 
 async def test_other_kinds_dont_wait_for_the_page_gap(clock, page_gap):

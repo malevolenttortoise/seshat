@@ -99,6 +99,16 @@ rate); grey routes (`/book/show/{id}.xml`, Goodreads' internal AppSync API) — 
   The limited test G88 planned isn't run: the trial measured pages at the gap for days. A fresh install keeps
   phase 2 off, as it keeps the worker off.
 
+## Amendment (2026-10-21, wave S's live check)
+
+- **§3 — a book page also waits for 3 minutes of quiet** (G199): no other Goodreads request, from any caller, in the
+  3 minutes before it, and the worker sends no list page or autocomplete in the 3 minutes before a page's turn. Wave S
+  let pages go between the daily refresh's list pages and the ≤ 200 widening ran autocomplete at its 3-minute ceiling:
+  pages were blocked ~25% of the time in the evening and 6 of 16 in the next refresh. Pages sent within 3 minutes of
+  another kind were blocked 18 of 56 times, pages after 3 quiet minutes 0 of 14. Pages keep the gap's rhythm all day;
+  list pages and autocomplete get the rest of each gap, so the daily refresh takes about twice as long. A list scan
+  already running finishes; the page waits for its quiet after it.
+
 ## Related
 
 - [0018](0018-metadata-cache-goodreads-list-page.md) — the list-page cache this builds on; its §6 is decided here.

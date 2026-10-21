@@ -2493,6 +2493,14 @@ async def tick_goodreads() -> TickResult:
         return await _goodreads_candidate_tick(TickResult(
             source_name=source_name, outcome="page_turn", next_sleep_s=1.0,
         ))
+    # G199: a page's turn is near; no list page inside its quiet (a list
+    # scan already running finishes, and the gate holds the page after it).
+    page_due = await _candidates.page_due_in()
+    if page_due is not None and page_due <= source_gate.GOODREADS_PAGE_QUIET_S:
+        return await _goodreads_candidate_tick(TickResult(
+            source_name=source_name, outcome="page_quiet",
+            next_sleep_s=max(1.0, page_due),
+        ))
 
     db = await metadata_cache.get_db(source_name)
     try:
