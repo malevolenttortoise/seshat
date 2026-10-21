@@ -147,6 +147,12 @@ function DesktopFiltersPage() {
           Click to toggle allowed. Right-click to toggle excluded (red
           strike-through = excluded even if parent format is allowed).
         </p>
+        {/* G205: the any-match rule the RPG PDFs got through (2026-10-21). */}
+        <p style={{ fontSize: 11, color: theme.textDim, marginTop: 4 }}>
+          A torrent passes when any of its tags is allowed: a tag you leave off only stops a torrent
+          with no allowed tag (a [Fantasy, RPG] torrent passes on Fantasy). Right-click a tag to block
+          it outright.
+        </p>
       </Section>
 
       {/* ── Media Type ─────────────────────────────────────── */}

@@ -203,6 +203,12 @@ export default function MobileFiltersPage() {
             );
           })}
         </div>
+        {/* G205, with the phone's tap in place of right-click. */}
+        <div style={{ fontSize: 12, color: t.tg, marginTop: 8 }}>
+          A torrent passes when any of its tags is allowed: a tag you leave off only stops a torrent
+          with no allowed tag (a [Fantasy, RPG] torrent passes on Fantasy). Tap a tag until it turns red
+          and struck through to block it outright.
+        </div>
       </MobileSection>
 
       <MobileSection
