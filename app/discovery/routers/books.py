@@ -17,6 +17,8 @@ import time
 from fastapi import APIRouter, Body, HTTPException, Query
 
 from app import state
+from app.discovery import filters as _filters
+from app.discovery.filtered_rows import HIDE_SET, SHOW_SET
 from app.discovery.database import get_db, HF, cleanup_empty_series, attach_contributors, load_contributors
 from app.discovery.cross_library import (
     run_across_libraries,
@@ -409,7 +411,7 @@ async def hide(bid: int, slug: str | None = Query(None)):
     db = await get_db(slug)
     try:
         sid = await _series_id_for_book(db, bid)
-        await db.execute("UPDATE books SET hidden=1 WHERE id=?", (bid,))
+        await db.execute(f"UPDATE books SET {HIDE_SET} WHERE id=?", (bid,))
         # Clear any pending/ignored suggestion — hidden books shouldn't
         # carry stale series suggestion cards if the user re-opens them.
         await db.execute("DELETE FROM book_series_suggestions WHERE book_id=?", (bid,))
@@ -427,7 +429,7 @@ async def unhide(bid: int, slug: str | None = Query(None)):
     db = await get_db(slug)
     try:
         sid = await _series_id_for_book(db, bid)
-        await db.execute("UPDATE books SET hidden=0 WHERE id=?", (bid,))
+        await db.execute(f"UPDATE books SET {SHOW_SET} WHERE id=?", (bid,))
         if sid is not None:
             await _recompute_series_author(db, [sid])
         await db.commit()
@@ -436,16 +438,55 @@ async def unhide(bid: int, slug: str | None = Query(None)):
         await db.close()
 
 
+@router.get("/books/hidden/reasons")
+async def get_hidden_reasons(content_type: str = Query(None)):
+    """How many hidden books carry each reason (`mine` = hidden by you), for
+    the Hidden page's tabs and chips (F19)."""
+    async def q(db):
+        rows = await (await db.execute(
+            "SELECT COALESCE(hidden_reason, 'mine') r, COUNT(*) n FROM books "
+            "WHERE hidden = 1 GROUP BY 1"
+        )).fetchall()
+        return [{"reason": r["r"], "n": r["n"]} for r in rows]
+    if content_type:
+        rows = await run_across_libraries(content_type, q)
+    else:
+        db = await get_db()
+        try:
+            rows = await q(db)
+        finally:
+            await db.close()
+    counts: dict[str, int] = {}
+    for r in rows:
+        key = r["reason"] if r["reason"] in (_filters.FILTER_REASONS | {_filters.AUTHOR_OFF}) else "mine"
+        counts[key] = counts.get(key, 0) + int(r["n"])
+    return {"counts": counts}
+
+
 @router.get("/books/hidden")
-async def get_hidden(search: str = Query(None), sort: str = Query("title"), sort_dir: str = Query("asc"), page: int = Query(1, ge=1), per_page: int = Query(60, ge=1, le=5000), content_type: str = Query(None), owned: bool = Query(None)):
+async def get_hidden(search: str = Query(None), sort: str = Query("title"), sort_dir: str = Query("asc"), page: int = Query(1, ge=1), per_page: int = Query(60, ge=1, le=5000), content_type: str = Query(None), owned: bool = Query(None), filtered: bool = Query(None), reason: str = Query(None)):
     """Hidden books. `content_type` routes cross-library when supplied.
 
     `owned`: True → only owned books (catches accidental bulk-hide of
     Calibre-owned rows; pre-v2.3.4.3 there was no way to surface them
     on the Hidden page without scrolling past every discovered miss).
     False → only discovered/unowned. Omit for both.
+
+    `filtered` (ADR-0029, F19): True → books Seshat hid (a filter family,
+    or the author's "list missing books" off), False → books you hid.
+    `reason`: one `hidden_reason` (e.g. `comic`).
     """
     c = ["b.hidden=1"]; p: list = []
+    seshat_reasons = sorted(_filters.FILTER_REASONS | {_filters.AUTHOR_OFF})
+    if filtered is True:
+        c.append(f"b.hidden_reason IN ({','.join('?' * len(seshat_reasons))})")
+        p.extend(seshat_reasons)
+    elif filtered is False:
+        c.append(f"(b.hidden_reason IS NULL OR b.hidden_reason NOT IN ({','.join('?' * len(seshat_reasons))}))")
+        p.extend(seshat_reasons)
+    if reason:
+        c.append("b.hidden_reason = ?")
+        p.append(reason)
     if search:
         c.append("(b.title LIKE ? OR a.name LIKE ? OR COALESCE(s.name,'') LIKE ?)")
         p.extend([f"%{search}%"] * 3)
@@ -1501,7 +1542,7 @@ async def bulk_hide(data: dict = Body(...), slug: str | None = Query(None)):
         )).fetchall()
         affected_sids = [r["series_id"] for r in sid_rows]
 
-        await db.execute(f"UPDATE books SET hidden=1 WHERE id IN ({placeholders})", book_ids)
+        await db.execute(f"UPDATE books SET {HIDE_SET} WHERE id IN ({placeholders})", book_ids)
         await db.execute(f"DELETE FROM book_series_suggestions WHERE book_id IN ({placeholders})", book_ids)
         if affected_sids:
             await _recompute_series_author(db, affected_sids)
@@ -1535,7 +1576,7 @@ async def bulk_unhide(data: dict = Body(...), slug: str | None = Query(None)):
         affected_sids = [r["series_id"] for r in sid_rows]
 
         await db.execute(
-            f"UPDATE books SET hidden=0 WHERE id IN ({placeholders})", book_ids,
+            f"UPDATE books SET {SHOW_SET} WHERE id IN ({placeholders})", book_ids,
         )
         if affected_sids:
             await _recompute_series_author(db, affected_sids)

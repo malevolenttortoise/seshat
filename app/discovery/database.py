@@ -704,6 +704,11 @@ MIGRATIONS = [
     "ALTER TABLE books ADD COLUMN discovered_by TEXT",
     "UPDATE books SET discovered_by = source WHERE discovered_by IS NULL "
     "AND source IS NOT NULL AND source NOT IN ('calibre', 'audiobookshelf')",
+    # 2026-10 discovery fix pass S3 (ADR-0029, F4 / C7): why Seshat hid a
+    # row: a filter family, `shown` once Mark showed it, S5's `author_off`;
+    # NULL for a book hidden by hand.
+    "ALTER TABLE books ADD COLUMN hidden_reason TEXT",
+    "CREATE INDEX IF NOT EXISTS idx_books_hidden_reason ON books(hidden_reason)",
 ]
 
 

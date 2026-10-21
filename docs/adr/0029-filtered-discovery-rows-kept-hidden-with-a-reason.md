@@ -42,6 +42,30 @@ of what was filtered, and nothing for the next scan or the Goodreads worker to r
 - A mis-filter (a real book flagged as an anthology) is recoverable from the Filtered tab and stays recovered.
 - Existing installs get the same state through the cleanup Hygiene job (dry run first), not by a re-scan.
 
+## Amendment (2026-10-21, built in wave B S3)
+
+- **Reasons:** `comic`, `box_set`, `anthology`, `not_english`, `split`, `sampler`, `listing`, `study_guide`,
+  `not_a_book` (colouring books, notebooks, RPG rulebooks, prepacks; G198), `junk`, plus `shown` and `author_off`.
+  Seller listings include format and edition words ("[Unabridged Audiobook]", "Signed", "*Very Special Edition*").
+  The rules (`app/discovery/filters.py`) were held to no match among the reference install's 3,775 owned titles
+  outside the families Mark owns real members of (box sets, anthologies, manga).
+- **Books match only within their filter family** (G197), and the family used for matching is **read from the title
+  alone, the same way for a stored row and an incoming book.** A family known only from a book's description, its
+  4+ credited authors, its series name ("Lucifer (2015-2017)") or a page count ("#2" at 30 pages is an issue) decides
+  whether a *new* row is created hidden, never what a book matches: those signals depend on the source (a stored row
+  keeps no contributor list; sources name a comic's run differently), and the F23 replay showed 20 books that would
+  have been created again as hidden copies of the row they are. So a hidden comic row never absorbs the prose book,
+  a filtered book never merges into a listed one, and existing rows are left as they are (wave C's cleanup re-applies
+  the rules to them).
+- **A "Series #N" title** ("The Expanse #3") is junk unless the author owns a book of the same stem ("The Last
+  Paladin #7"). "Title: Series #N" ("Organ Donor: Afterlife of Ebon Black #1") is a book: the old skip of every
+  title ending " #N" dropped it.
+- **A superhero's name before the title's subtitle marks a comic** unless the title says novel / novelization; a
+  prose tie-in that doesn't (Jim Butcher's "Spider-Man: The Darkest Hours") is hidden as a comic and recoverable from
+  the Filtered tab.
+- Settings: `hide_comics` and `hide_box_sets` (on by default) in settings.json; saving either re-applies it to that
+  family's unowned rows in every library.
+
 ## Related
 
 - [0021](0021-roster-gates-discovery-author-creation.md) — roster and scan eligibility (amended: scan eligibility is

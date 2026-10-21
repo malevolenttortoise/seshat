@@ -823,6 +823,10 @@ DEFAULT_SETTINGS = {
     "author_scanning_enabled": True,
     "author_scan_owned_only": False,
     "exclude_audiobooks": True,
+    # Discovery filters with a setting (D2 / D10, ADR-0029): comics and box
+    # sets a scan finds are created hidden (Hidden → Filtered) while on.
+    "hide_comics": True,
+    "hide_box_sets": True,
     "calibre_url": "",
     # Discovery-side MAM scanning (search for missing books on MAM).
     "mam_enabled": False,

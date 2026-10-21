@@ -161,6 +161,16 @@ async def apply_settings_patch(body: dict[str, Any]) -> PatchResponse:
         save_settings(settings)
         _log.info("settings patched: %s", updated)
         await _run_post_save_hooks(settings)
+        # "Hide comics" / "Hide box sets" (D2 / D10): their rows follow at
+        # once, no re-scan (ADR-0029).
+        from app.discovery import filters as _filters
+        families = [f for f, k in _filters.SETTING_FOR.items() if k in updated]
+        if families:
+            try:
+                from app.discovery.filtered_rows import apply_family_settings
+                await apply_family_settings(settings, families)
+            except Exception:
+                _log.exception("filter settings: re-applying to the libraries failed (non-fatal)")
 
     return PatchResponse(ok=True, updated=updated, rejected=rejected)
 

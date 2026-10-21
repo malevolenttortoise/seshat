@@ -205,11 +205,13 @@ class TestVolumesStayApart:
     async def test_an_omnibus_is_not_the_single_book(self, library):
         await _book(library, "Right of Retribution", owned=1)
 
-        new, _ = await _merge(library, _standalone(
+        await _merge(library, _standalone(
             "Right of Retribution: Compilation: The Starting Point",
         ))
 
-        assert new == 1
+        # Created apart, hidden as a box set since S3 (D10).
+        compilation = [r for r in await _rows() if "Compilation" in r["title"]]
+        assert len(compilation) == 1
 
 
 class TestSeriesWrittenInTheTitle:

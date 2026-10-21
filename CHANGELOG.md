@@ -20,6 +20,29 @@ frontend test suite.
 
 **Behaviour changes to know about:**
 
+- **Scans keep comics, box sets, anthologies and other non-books hidden
+  instead of listing or dropping them** (discovery fix pass S3,
+  ADR-0029). A book a source finds that is a comic or manga, a box set
+  or omnibus, an anthology, magazine or story collection, a foreign
+  edition, a part or chapter of a book, a sampler, a seller's listing
+  ("Signed", "[Paperback]", "X by Author"), a study guide, something
+  that isn't a book (colouring books, notebooks, RPG rulebooks) or a
+  title that isn't one ("Untitled", "The Expanse #3") is created hidden,
+  with its family as the reason. About 2,100 of the 9,272 missing books
+  the 2026-10 audit read were one of these. Comics and box sets follow
+  two new settings, on by default ("Hide comics and manga", "Hide box
+  sets and omnibuses"): turned off, their rows show at once, no
+  re-scan. "Show" on a filtered row sticks (later scans and the settings
+  leave it alone); a book you hide yourself has no reason. A book
+  matches only books of its own family, read from the title, so a
+  hidden comic issue never swallows the novel of the same name.
+  Until now a few families were skipped (box sets, foreign-looking
+  titles, any title ending " #N", which also dropped real books such as
+  "Organ Donor: Afterlife of Ebon Black #1" and accented English titles
+  such as "Carbon Copy: An alien AI Doppelgänger Story") and the rest
+  were listed as missing. Rows already in the library stay as they are
+  until wave C's cleanup. **Database migration**: library databases go
+  to `user_version` 93 (`books.hidden_reason` and its index).
 - **An IRC announce of a book you already own is no longer grabbed**
   (discovery fix pass S4, ADR-0004 / 0013 amended). Claim-for-owned and
   format dedup now recognise an owned book by the title identity (below)

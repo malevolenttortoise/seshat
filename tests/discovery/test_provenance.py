@@ -166,8 +166,9 @@ async def test_the_migration_backfills_discovered_books_only(tmp_path, monkeypat
         await db.execute("INSERT INTO books (title, source, owned) VALUES ('C', 'calibre', 1)")
         await db.execute("INSERT INTO books (title, source, owned) VALUES ('S', 'audiobookshelf', 1)")
         await db.execute("UPDATE books SET discovered_by = NULL")
-        (v,) = await (await db.execute("PRAGMA user_version")).fetchone()
-        await db.execute(f"PRAGMA user_version = {v - 2}")   # replay the two S8 entries
+        # Replay from the two S8 entries on.
+        start = disco_db.MIGRATIONS.index("ALTER TABLE books ADD COLUMN discovered_by TEXT")
+        await db.execute(f"PRAGMA user_version = {start}")
         await db.commit()
     finally:
         await db.close()

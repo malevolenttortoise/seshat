@@ -45,6 +45,9 @@ _COVERED_ELSEWHERE = {
     ("metadata/source_config.py", "_derive_priority_list"),
     ("metadata/source_config.py", "_build_source_entry"),
     ("metadata/source_config.py", "_legacy_rate_for"),
+    # the D2 / D10 filter settings (`filters.SETTING_FOR`) →
+    # test_filter_setting_keys_are_known
+    ("discovery/filters.py", "hides"),
 }
 _MIGRATION_ONLY_PATTERNS = {"*_enabled", "rate_*"}
 
@@ -321,3 +324,9 @@ def test_known_key_patterns():
     assert config.is_known_settings_key("metadata_cache.goodreads.stall_notified_at")
     assert not config.is_known_settings_key("metadata_cache.goodreads.other")
     assert fnmatch.fnmatchcase("rate_kobo", "rate_*")
+
+
+def test_filter_setting_keys_are_known():
+    from app.discovery import filters
+    for key in filters.SETTING_FOR.values():
+        assert key in config.DEFAULT_SETTINGS, key
