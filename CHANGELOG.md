@@ -7,6 +7,74 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [3.13.1] — 2026-10-21
+
+A patch release: four fixes from `development` brought back to 3.13.
+The big one is CWA. Since CWA v4.0.8, every ebook Seshat had patched
+metadata into was deleted by CWA unimported, while Seshat recorded it as
+delivered (GitHub #41).
+
+**Getting lost books back:** the seeding copies are untouched. A missing
+book that shows in Discovery (found on MAM, snatched, not owned) has
+**Reingest from disk** in its sidebar, which runs it through the
+pipeline again from the file already on disk, without downloading
+anything from MAM. Otherwise, copy the seeding file into CWA's ingest
+folder yourself.
+
+No database migrations.
+
+### Fixed
+
+- **Ebooks delivered to Calibre-Web-Automated reach the library again.**
+  The patched epub was written root-only (mode 0600); CWA v4.0.8+
+  ingests as a non-root user, couldn't read it, deleted it and imported
+  nothing, while Seshat recorded the delivery. A patched epub now keeps
+  the file's own mode, and every file dropped into the CWA ingest folder
+  is made readable (0644) and, when Seshat runs as root, handed to the
+  ingest folder's owner.
+- **An audiobook that ships a PDF or epub goes to Audiobookshelf.** When
+  a torrent held both audio and ebook files, the ebook format priority
+  put every ebook file ahead of every audio file, so an audiobook
+  torrent's companion (an illustrations PDF, say) became the book: it
+  went to CWA and the audio never reached Audiobookshelf. An audiobook
+  grab (by its MAM category) now leads with its audio files; the
+  companion isn't delivered. Ebook grabs and adopted torrents without a
+  MAM category rank as before.
+- **A download counts as finished only when qBit has every piece.** The
+  watcher called any state outside its "downloading" list finished, so a
+  torrent added a second earlier (`checkingResumeData`) or paused
+  part-way (qBit 4's `pausedDL`) started the pipeline before its file
+  existed; since qBit writes straight to the final file name, a misfire
+  could have copied a truncated file. Now qBit's progress must be 100%
+  and the torrent not checking, errored or missing files; the completion
+  log line names the state and progress. Transmission, Deluge and
+  rTorrent report no progress and keep the state rule. A "no file
+  matching" failure holds its ntfy while a retry is due (sent on the last
+  try, or when the torrent is gone), and its message says what happened:
+  qBit lists the torrent as finished but its files aren't there.
+
+### Security
+
+From the 2026-10-12 triage of the open code-scanning alerts:
+
+- **Error messages no longer carry secret URL values to the UI.** An
+  httpx error's message holds its request URL, and a Google Books one
+  carries `?key=<your API key>`: the URL-import preview showed it on any
+  error but a 404 / 503. Every router that puts an exception's text in a
+  response (incl. a grab's failure reason, job rows, worker and IRC
+  errors) now masks `key` / `token` / `api_key` / `apikey` / `passkey` /
+  `mam_id` values and cuts the text to 200 characters
+  (`config.ui_error`), as the logs already did.
+- **Delayed-torrent reinject and delete touch only an exact
+  `<grab>_<torrent>.torrent`** in the delayed folder: the path is rebuilt
+  from its numbers, and a name with a trailing newline or non-ASCII
+  digits is refused (400). It was already confined to one file name.
+- **Manual Grab's cover cache checks the torrent ID itself** (ASCII
+  digits, read as a number) instead of trusting its callers; the cover
+  route refuses non-ASCII digits.
+- **The Tests workflow runs with a read-only token** (`permissions:
+  contents: read`).
+
 ## [3.13.0] — 2026-10-08
 
 Phase 2 of the 2026-10 roadmap, the **codebase audit**, wave 3: the
