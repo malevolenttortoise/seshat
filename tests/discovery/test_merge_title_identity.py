@@ -240,6 +240,24 @@ class TestSeriesWrittenInTheTitle:
         (row,) = await _rows()
         assert (row["series"], row["series_index"]) == ("Splinter Angel", 3)
 
+    async def test_a_series_this_result_creates_is_the_one_its_titles_name(self, library):
+        """2026-10-22 (wave C's cache re-merge): Amazon's series group created
+        "Terrible Worlds: Revolutions", then a standalone book whose title
+        names it tried to create it again and the merge died on
+        UNIQUE(series.name, author_id)."""
+        result = AuthorResult(name=AUTHOR, external_id="x", series=[SeriesResult(
+            name="Terrible Worlds: Revolutions", books=[BookResult(
+                title="Ironclads", series_name="Terrible Worlds: Revolutions", series_index=1,
+                source="amazon", source_url="https://amazon/1")],
+        )], books=[BookResult(
+            title="Walking to Aldebaran (Terrible Worlds: Revolutions Book 2)",
+            source="amazon", source_url="https://amazon/2")])
+        await _merge(library, result)
+
+        rows = await _rows()
+        assert [(r["series"], r["series_index"]) for r in rows] == [
+            ("Terrible Worlds: Revolutions", 1), ("Terrible Worlds: Revolutions", 2)]
+
     async def test_no_number_no_series(self, library):
         await _merge(library, _standalone("Splashdown (Book 2)", "Dragon Bound"))
 

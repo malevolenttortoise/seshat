@@ -1956,6 +1956,12 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                         (_sr.name, author_id, _sr.total_books, time.time()),
                     )
                     sid = cur.lastrowid
+                # A standalone book whose title names this series files into
+                # it (G171's `_series_for_title`); without this it created
+                # the series again and the merge died on UNIQUE(name, author).
+                author_series_id_by_name.setdefault(_sr.name.lower(), sid)
+                if _norm_consensus_series(_sr.name):
+                    author_series_id_by_name.setdefault(_norm_consensus_series(_sr.name), sid)
                 return sid
 
             for bk in sr.books:
