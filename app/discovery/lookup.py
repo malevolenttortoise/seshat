@@ -1461,6 +1461,27 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                 continue
             cross_isbn_owners.setdefault(isbn, r["author_id"])
 
+        # G219: rows of other authors holding an incoming book's Amazon id.
+        # The id only finds them (the old merge copied ids onto rows that
+        # aren't the book: a light novel's onto its manga); the identity
+        # decides, in `_cross_author_copy` below.
+        cross_asin_rows: dict[str, list] = {}
+        if source_name == "amazon":
+            incoming_asins = sorted({
+                str(bk.external_id) for bk in
+                [b for sr in result.series for b in sr.books] + list(result.books)
+                if bk.external_id
+            })
+            for i in range(0, len(incoming_asins), 500):
+                chunk = incoming_asins[i:i + 500]
+                for r in await (await db.execute(
+                    f"SELECT b.id, b.title, b.amazon_id, b.hidden_reason, s.name AS series_name, "
+                    f"b.series_index FROM books b LEFT JOIN series s ON s.id = b.series_id "
+                    f"WHERE b.amazon_id IN ({','.join('?' * len(chunk))})", chunk,
+                )).fetchall():
+                    if r["id"] not in prefilter_book_ids:
+                        cross_asin_rows.setdefault(str(r["amazon_id"]), []).append(r)
+
         # Series name (as stored, and normalized) → this author's series
         # id: G171 files a standalone book whose title names its series
         # into an existing series first (`_series_for_title`).
@@ -1486,7 +1507,7 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
         # the fuzzy loop, SERIES-POSITION MATCH and the "norm dup" skip,
         # which merged different volumes into each other and dropped
         # books that existed nowhere else (G170).
-        from app.works.title_identity import TitleIndex, TitleRef, author_labels
+        from app.works.title_identity import TitleIndex, TitleRef, author_labels, same_book
         incoming_titles = [bk.title for sr in result.series for bk in sr.books]
         incoming_titles += [bk.title for bk in result.books]
         title_index = TitleIndex(author_labels(
@@ -1535,6 +1556,21 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                 _normalize(row["title"] or "") != norm,
             ))
             return found[0]
+
+        def _cross_author_copy(bk, series_name, cls=None):
+            """Another author's row that holds `bk`'s Amazon id and is `bk`
+            by the title identity, in its filter family (G219), or None:
+            "Severed Wake (Flying Gas Can Book 4)" listed under a co-author
+            this scan doesn't read. Creating `bk` would list it twice."""
+            for row in cross_asin_rows.get(str(bk.external_id or ""), ()):
+                title = row["title"] or ""
+                if _cls(title, _filters.book_class(title, authors=author_names)) != cls:
+                    continue
+                if same_book(TitleRef(bk.title, series_name, bk.series_index),
+                             TitleRef(title, row["series_name"], row["series_index"]),
+                             title_index.labels):
+                    return row
+            return None
 
         def _note_created(book_id, bk, series_name, series_index, cls=None):
             title_index.add(
@@ -2095,6 +2131,13 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                             f"skipping insert"
                         )
                         continue
+                copy = _cross_author_copy(bk, sr.name, match_cls)
+                if copy is not None:
+                    logger.info(
+                        f"    CROSS-AUTHOR DEDUP: '{bk.title}' (amazon id={bk.external_id}) "
+                        f"is row {copy['id']} '{copy['title']}' under another author — skipping insert"
+                    )
+                    continue
                 # Insert path: also needs the series row to exist.
                 sid_use = await _ensure_series()
                 initial_urls = json.dumps({source_name: bk.source_url}) if bk.source_url else "{}"
@@ -2206,6 +2249,13 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                         f"skipping insert"
                     )
                     continue
+            copy = _cross_author_copy(bk, None, match_cls)
+            if copy is not None:
+                logger.info(
+                    f"    CROSS-AUTHOR DEDUP: '{bk.title}' (amazon id={bk.external_id}) "
+                    f"is row {copy['id']} '{copy['title']}' under another author — skipping insert"
+                )
+                continue
             initial_urls = json.dumps({source_name: bk.source_url}) if bk.source_url else "{}"
             omnibus = _is_omnibus(bk.title)
             # G171 / F14: the source gave no series, but the title names

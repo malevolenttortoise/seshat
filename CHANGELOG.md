@@ -295,6 +295,14 @@ frontend test suite.
   "Crooked Kingdom" (half of the 340 such folds so far were wrong).
   Owned books sharing a number are still logged at start for you to fix
   in Calibre.
+- **A shared id is checked against the titles** (discovery fix pass S25,
+  G219 / G220, ADR-0028 amended). A scan no longer lists an Amazon book
+  a second time when a co-author's row already has it under the same
+  Amazon id and title ("Severed Wake (Flying Gas Can Book 4)" twice).
+  Hygiene's Book deduplication folds two books sharing an id only when
+  their titles say they're one book: the old merge had copied ids onto
+  the wrong rows (a light novel's Amazon id onto its manga), and Hygiene
+  would have folded about 40 real books into them.
 - **OpenLibrary no longer creates missing books** (D11): it still
   matches and enriches books other sources list (IDs, covers, language).
 - **Hardcover**: "Book 06.0 - Blood Rites" titles come in as "Blood

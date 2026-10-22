@@ -283,3 +283,74 @@ class TestOpenLibraryNeverCreates:
 
         (row,) = await _rows()
         assert row["openlibrary_id"] == "OL123W"
+
+
+async def _other_authors_book(title: str, asin: str, *, name: str = "Other Writer") -> int:
+    from app.metadata.author_names import normalize_author_name
+    db = await _db()
+    try:
+        aid = (await db.execute(
+            "INSERT INTO authors (name, sort_name, normalized_name) VALUES (?, ?, ?)",
+            (name, name, normalize_author_name(name)),
+        )).lastrowid
+        bid = (await db.execute(
+            "INSERT INTO books (title, owned, hidden, source, amazon_id, source_url) "
+            "VALUES (?, 0, 0, 'amazon', ?, '{}')", (title, asin),
+        )).lastrowid
+        await db.execute("INSERT INTO book_authors (book_id, author_id, position) VALUES (?, ?, 0)",
+                         (bid, aid))
+        await db.commit()
+        return bid
+    finally:
+        await db.close()
+
+
+def _amazon(*books: tuple[str, str]) -> AuthorResult:
+    return AuthorResult(name=AUTHOR, external_id="x", books=[
+        BookResult(title=t, source="amazon", external_id=asin, source_url=f"https://amazon/{asin}")
+        for t, asin in books
+    ])
+
+
+class TestCrossAuthorAmazonId:
+    """G219: rows of other authors holding the incoming book's Amazon id
+    are candidates too; the title identity still decides."""
+
+    async def test_a_co_authors_row_of_the_same_book_isnt_listed_twice(self, library):
+        theirs = await _other_authors_book("Severed Wake (Flying Gas Can Book 4)", "B0SEVERED")
+        new, _ = await _merge(library, _amazon(("Severed Wake (Flying Gas Can Book 4)", "B0SEVERED")))
+        assert new == 0
+        assert [r["id"] for r in await _rows()] == [theirs]
+
+    async def test_an_id_on_a_different_book_doesnt_stop_it(self, library):
+        # The old merge left "High Risk: Rescue"'s id on "High Passion".
+        await _other_authors_book("High Passion", "B0RESCUE")
+        new, _ = await _merge(library, _amazon(("High Risk: Rescue (Adrenaline Search & Rescue Book 2)",
+                                                "B0RESCUE")))
+        assert new == 1
+        assert sorted(r["title"] for r in await _rows()) == [
+            "High Passion", "High Risk: Rescue (Adrenaline Search & Rescue Book 2)"]
+
+    async def test_a_light_novel_isnt_its_manga(self, library):
+        await _other_authors_book("A Pale Moon Reverie (Manga) Volume 1", "B0NOVEL")
+        new, _ = await _merge(library, _amazon(("A Pale Moon Reverie: Volume 1", "B0NOVEL")))
+        assert new == 1
+
+    async def test_a_series_book_held_by_a_co_author_isnt_listed_twice(self, library):
+        theirs = await _other_authors_book("Severed Wake (Flying Gas Can Book 4)", "B0SEVERED")
+        result = AuthorResult(name=AUTHOR, external_id="x", series=[SeriesResult(
+            name="Flying Gas Can", books=[BookResult(
+                title="Severed Wake (Flying Gas Can Book 4)", series_name="Flying Gas Can", series_index=4,
+                source="amazon", external_id="B0SEVERED", source_url="https://amazon/B0SEVERED")])])
+        new, _ = await _merge(library, result)
+        assert new == 0
+        assert [r["id"] for r in await _rows()] == [theirs]
+
+    async def test_another_family_of_the_same_title_is_its_own_row(self, library):
+        # One filter family per match (G197): an anniversary listing isn't
+        # the novel a co-author's row holds, though the titles agree.
+        await _other_authors_book("He Died with a Felafel in His Hand", "B0FELAFEL")
+        await _merge(library, _amazon((
+            "He Died With A Felafel In His Hand: 30th Anniversary Edition", "B0FELAFEL")))
+        # Created hidden as a listing, beside the novel.
+        assert len(await _rows()) == 2

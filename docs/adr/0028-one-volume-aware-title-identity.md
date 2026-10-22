@@ -206,6 +206,22 @@ The same parser reads "(Series Book N)" out of a title at creation (G171) and Ha
   Stories #2"); after the cleanup 9 → 0 (Saving A Life ×6 across its sub-series, "Hollow Earth Apocalypse: Arc 1" into
   the owned "Ashes Fall"). Missed: "Cazadores de sombras 3" (the family check) and "Turning of the Tides …(Book 2)".
 
+## Amendment (2026-10-22, wave C S25: an id finds, the identity decides)
+
+- **A shared source id isn't a match by itself.** Measured on the reference library after the missing-books cleanup:
+  of the 105 rows sharing an Amazon id with a newer row, ~40 hold an id the old merge copied onto them from a
+  different book it folded in (a light novel's id on its manga row: Slime, Saving 80,000 Gold, Campfire Cooking, A
+  Pale Moon Reverie; "High Risk: Rescue"'s on "High Passion"). The ISBN stays the one id that decides outright.
+- **The scan merge reads other authors' rows by Amazon id** (G219): an incoming Amazon book whose id another author's
+  row holds, and which this identity calls that row's book in its filter family, isn't created ("Severed Wake (Flying
+  Gas Can Book 4)" under a co-author the scan doesn't read). Like the cross-author ISBN guard, the other row is left
+  as it is. Replayed on the 10-22 copy: the cleanup's cache re-merge creates 8 fewer rows, all real copies.
+- **Hygiene's identifier dedup folds only one book** (G220): rows sharing a Goodreads / Hardcover / ISBN / Amazon /
+  Audible id fold only when this identity, read in each row's series, calls the loser the winner's book, in one
+  filter family. On the post-cleanup library: 96 folds instead of 166, the 70 refused being the copied-id rows and
+  ~15 copies the identity misses; 94 of the 96 read right (the two wrong ones: German-titled Slime rows filed into
+  "The Slime Diaries" at the numbers of the English books).
+
 ## Related
 
 - [0003](0003-bundle-dedup-prefer-duplicates.md) — the same duplicates-over-loss stance, for bundles.

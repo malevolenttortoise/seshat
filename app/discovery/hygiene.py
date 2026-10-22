@@ -848,7 +848,35 @@ async def _dedupe_by_identifier(
     by the user; merging silently would surface the unwanted row's
     metadata under the kept id. Same reason MAM / source scans
     skip hidden during fuzzy match.
+
+    A shared id alone isn't a match (G220): the old merge copied ids onto
+    rows that weren't the book (a light novel's Amazon id onto its manga),
+    so a loser folds only when the title identity, read in each row's
+    series, calls it the winner's book, in one filter family.
     """
+    from app.discovery import filters
+    from app.works.title_identity import TitleRef, author_labels, same_book
+
+    labels_by_author: dict = {}
+
+    async def _labels(book_id: int) -> frozenset:
+        row = await (await db.execute(
+            "SELECT author_id FROM book_authors WHERE book_id = ? ORDER BY position LIMIT 1", (book_id,),
+        )).fetchone()
+        aid = row[0] if row else None
+        if aid not in labels_by_author:
+            labels_by_author[aid] = author_labels(r[0] or "" for r in await (await db.execute(
+                "SELECT title FROM books WHERE id IN (SELECT book_id FROM book_authors WHERE author_id = ?)",
+                (aid,),
+            )).fetchall()) if aid is not None else frozenset()
+        return labels_by_author[aid]
+
+    def _family(m) -> Optional[str]:
+        stored = m["hidden_reason"]
+        return stored if stored in filters.FILTER_REASONS else filters.book_class(m["title"] or "")
+
+    def _ref(m) -> TitleRef:
+        return TitleRef(m["title"] or "", m["series_name"], m["series_index"])
     cur = await db.execute(
         f"SELECT {col}, COUNT(*) AS c FROM books "
         f"WHERE {col} IS NOT NULL AND {col} != '' AND hidden = 0 "
@@ -859,15 +887,26 @@ async def _dedupe_by_identifier(
     for grp in groups:
         ident = grp[col]
         cur2 = await db.execute(
-            f"SELECT id, owned, title FROM books WHERE {col} = ? "
-            f"AND hidden = 0 ORDER BY owned DESC, id ASC",
+            f"SELECT b.id, b.owned, b.title, b.hidden_reason, s.name AS series_name, b.series_index "
+            f"FROM books b LEFT JOIN series s ON s.id = b.series_id WHERE b.{col} = ? "
+            f"AND b.hidden = 0 ORDER BY b.owned DESC, b.id ASC",
             (ident,),
         )
         members = await cur2.fetchall()
         if len(members) < 2:
             continue
-        winner_id = int(members[0]["id"])
-        loser_ids = [int(m["id"]) for m in members[1:]]
+        winner = members[0]
+        winner_id = int(winner["id"])
+        labels = await _labels(winner_id)
+        loser_ids = []
+        for m in members[1:]:
+            if _family(m) == _family(winner) and same_book(_ref(winner), _ref(m), labels):
+                loser_ids.append(int(m["id"]))
+            else:
+                logger.debug(
+                    "hygiene[%s] dedup-by-%s: kept id=%d %r beside id=%d %r (shared %r, not one book)",
+                    slug, col, m["id"], m["title"], winner_id, winner["title"], ident,
+                )
         # Local fold: copy identity columns COALESCE-style from the
         # losers onto the winner, then delete the loser rows. We
         # stay inside the per-library DB transaction.
