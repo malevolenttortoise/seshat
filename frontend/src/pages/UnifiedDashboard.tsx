@@ -32,6 +32,8 @@ import { useMobileCodepath } from "../components/mobile";
 import MobileUnifiedDashboard from "./MobileUnifiedDashboard";
 import { Tile } from "../components/dashboard/Tile";
 import { AmazonCacheRail, GoodreadsCacheRail } from "../components/dashboard/CacheRails";
+import { MissingCleanupBody } from "../components/dashboard/MissingCleanup";
+import { useMissingCleanup } from "../hooks/useMissingCleanup";
 import type { NavFn, ScanProgress } from "../types";
 
 interface Props {
@@ -64,6 +66,7 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
     triggerSync, triggerEbookSources, triggerAudiobookSources, triggerMam,
     cancelSources, cancelMam, triggerHygiene, cancelHygiene,
   } = useDashboard(toast.error);
+  const cleanup = useMissingCleanup(toast.error);
   // Seconds to the next 30s refresh, restarted by each one.
   const [cd, setCd] = useState(DASHBOARD_POLL_S);
   useEffect(() => { setCd(DASHBOARD_POLL_S); }, [refreshes]);
@@ -365,6 +368,14 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
                 ("running" in hygieneScan && !!hygieneScan.running)
               }
               onClick={() => setShowHygieneConfirm(true)}
+            />
+            <CmdBtn
+              label={
+                <>
+                  <Dot color={t.ylw} /> Clean up missing books
+                </>
+              }
+              onClick={cleanup.show}
             />
             <CmdBtn
               label={`Review ${reviewCount ? `(${reviewCount})` : ""}`}
@@ -1119,6 +1130,7 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
           onCancel={() => setShowHygieneConfirm(false)}
         />
       )}
+      {cleanup.open && <MissingCleanupModal cleanup={cleanup} />}
     </div>
   );
 }
@@ -1637,6 +1649,68 @@ function HygieneConfirmModal({
             {starting ? <Spin size={12} /> : null}
             Run Hygiene
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MissingCleanupModal({ cleanup }: { cleanup: ReturnType<typeof useMissingCleanup> }) {
+  const t = useTheme();
+  const busy = cleanup.starting || cleanup.running;
+  const button = (primary: boolean, disabled: boolean): React.CSSProperties => ({
+    padding: "7px 14px",
+    borderRadius: 5,
+    fontSize: 13,
+    fontWeight: primary ? 600 : 400,
+    background: primary ? t.accent : t.bg4,
+    color: primary ? t.bg : t.text2,
+    border: `1px solid ${primary ? t.accent : t.border}`,
+    cursor: disabled ? "wait" : "pointer",
+    opacity: disabled ? 0.6 : 1,
+  });
+  return (
+    <div
+      onClick={cleanup.close}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.55)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 100,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "min(720px, 92vw)",
+          background: t.bg2,
+          border: `1px solid ${t.border}`,
+          borderRadius: 8,
+          padding: 20,
+          color: t.text,
+          maxHeight: "85vh",
+          overflowY: "auto",
+        }}
+      >
+        <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 10 }}>Clean up missing books</div>
+        <MissingCleanupBody mc={cleanup} />
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
+          <button onClick={cleanup.close} style={button(false, false)}>
+            Close
+          </button>
+          {!cleanup.running && (
+            <button onClick={cleanup.preview} disabled={busy} style={button(!cleanup.canApply, busy)}>
+              {cleanup.last ? "Preview again" : "Preview"}
+            </button>
+          )}
+          {cleanup.canApply && (
+            <button onClick={cleanup.apply} disabled={busy} style={button(true, busy)}>
+              Apply {fmtNum(cleanup.changes)} changes
+            </button>
+          )}
         </div>
       </div>
     </div>

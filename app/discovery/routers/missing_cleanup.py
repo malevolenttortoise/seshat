@@ -25,9 +25,10 @@ router = APIRouter(prefix="/api/discovery", tags=["missing-cleanup"])
 
 
 def _start(mode: str, preview_id: str | None = None) -> dict:
+    # Refused, not queued: the page says why and the operator runs it again.
     blocker = missing_cleanup.blocked_by()
     if blocker:
-        return {"status": "busy", "message": f"Waiting for {blocker} to finish"}
+        raise HTTPException(409, f"{blocker} is running")
 
     async def _do():
         try:
@@ -53,6 +54,8 @@ async def start_apply(preview_id: str = Body(..., embed=True)):
         raise HTTPException(409, "Run a preview first: Apply follows the preview you looked at.")
     if (time.time() - last["finished_at"]) > missing_cleanup.PREVIEW_TTL_S:
         raise HTTPException(409, "That preview is over an hour old: run it again before applying.")
+    if missing_cleanup.was_applied(preview_id):
+        raise HTTPException(409, "That preview was applied: run a new one before applying again.")
     return _start("apply", preview_id)
 
 

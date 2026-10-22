@@ -112,9 +112,12 @@ frontend test suite.
   reference library a full sync flips 8 copies instead of 26 rows); a
   row the filters hid as a comic is never the owned prose book.
 - **"Clean up missing books": the fix pass's rules for the books listed
-  before them** (discovery fix pass S8, ADR-0029 amended). Preview runs
-  every step on copies of the databases and lists what would change;
-  Apply follows a preview. In order: remove missing books none of whose
+  before them** (discovery fix pass S8, ADR-0029 amended). On the
+  Dashboard beside Data Hygiene, desktop and phone. Preview runs every
+  step on copies of the databases and lists each step's count with a
+  sample of its books; Apply follows the preview on screen, once (an
+  hour-old or applied preview is previewed again first), and a run that
+  can't start says what is running. In order: remove missing books none of whose
   authors you scan in that library (you own one of their books there,
   or you put them on the allow list; owning their audiobooks doesn't
   count for ebooks); remove books only OpenLibrary knows, unless a MAM

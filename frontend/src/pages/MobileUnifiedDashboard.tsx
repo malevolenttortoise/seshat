@@ -8,11 +8,14 @@ import { toast } from "../lib/toast";
 import { useTheme } from "../theme";
 import { fmtNum } from "../lib/format";
 import { useDashboard } from "../hooks/useDashboard";
+import { useMissingCleanup } from "../hooks/useMissingCleanup";
+import { MissingCleanupBody } from "../components/dashboard/MissingCleanup";
 import type { NavFn, ScanProgress } from "../types";
 import {
   MobileBtn,
   MobileSection,
   MobileRow,
+  MobileSheet,
 } from "../components/mobile";
 import {
   MobileLibraryHero,
@@ -36,6 +39,8 @@ export default function MobileUnifiedDashboard({ onNav }: Props) {
     triggerSync, triggerEbookSources, triggerAudiobookSources, triggerMam,
     cancelSources, cancelMam, triggerHygiene, cancelHygiene,
   } = useDashboard(toast.error);
+  const cleanup = useMissingCleanup(toast.error);
+  const cleanupBusy = cleanup.starting || cleanup.running;
 
   // Pipeline health derivations
   const dispatcherOk = !!health?.dispatcher_ready;
@@ -156,6 +161,9 @@ export default function MobileUnifiedDashboard({ onNav }: Props) {
               Review {reviewCount > 0 ? `(${reviewCount})` : ""}
             </MobileBtn>
           </div>
+          <MobileBtn variant="secondary" fullWidth onClick={cleanup.show}>
+            Clean up missing books
+          </MobileBtn>
           {activeScans.length > 0 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}>
               {libScans.map((s) => (
@@ -449,6 +457,31 @@ export default function MobileUnifiedDashboard({ onNav }: Props) {
           onCancel={() => setShowHygieneConfirm(false)}
         />
       )}
+      <MobileSheet
+        open={cleanup.open}
+        onClose={cleanup.close}
+        title="Clean up missing books"
+        footer={cleanup.running ? undefined : (
+          <div style={{ display: "flex", gap: 8 }}>
+            <MobileBtn
+              variant={cleanup.canApply ? "secondary" : "primary"}
+              primary={!cleanup.canApply}
+              fullWidth
+              onClick={cleanup.preview}
+              disabled={cleanupBusy}
+            >
+              {cleanup.last ? "Preview again" : "Preview"}
+            </MobileBtn>
+            {cleanup.canApply && (
+              <MobileBtn variant="primary" primary fullWidth onClick={cleanup.apply} disabled={cleanupBusy}>
+                Apply {fmtNum(cleanup.changes)}
+              </MobileBtn>
+            )}
+          </div>
+        )}
+      >
+        <MissingCleanupBody mc={cleanup} compact />
+      </MobileSheet>
     </div>
   );
 }

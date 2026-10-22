@@ -6,7 +6,7 @@ import { act, fireEvent } from "@testing-library/react";
 import UnifiedDashboard from "../../pages/UnifiedDashboard";
 import { EVT } from "../../types";
 import { renderPage, reply, resetPageEnv, type PageRender, type Viewport } from "../render";
-import { dashboardRoutes } from "../fixtures/dashboard";
+import { cleanupNeverRun, cleanupPreviewed, dashboardRoutes } from "../fixtures/dashboard";
 import { runningScans, scan } from "../fixtures/common";
 
 let toasts: string[] = [];
@@ -91,5 +91,37 @@ describe.each<Viewport>(["desktop", "phone"])("Dashboard commands (%s)", (viewpo
       "error: Couldn't cancel the MAM scan: no scan to cancel",
       "error: Couldn't cancel Data Hygiene: no chain to cancel",
     ]);
+  });
+
+  // Discovery fix pass S8 (G209): Apply follows the preview on screen.
+  it("Clean up missing books applies the preview it shows", async () => {
+    const r = await renderPage(<UnifiedDashboard onNav={vi.fn()} />, {
+      viewport,
+      routes: {
+        ...dashboardRoutes,
+        "GET /discovery/missing-cleanup/status": cleanupPreviewed,
+        "POST /discovery/missing-cleanup/apply": { status: "started", mode: "apply" },
+      },
+    });
+    await press(r, buttons(r, /Clean up missing books$/)[0]);
+    await press(r, buttons(r, /^Apply 3,260( changes)?$/)[0]);
+    expect(r.unmatched).toEqual([]);
+    expect(r.requests).toContain('POST /discovery/missing-cleanup/apply {"preview_id":"p1"}');
+    expect(toasts).toEqual([]);
+  });
+
+  it("Clean up missing books says why a preview didn't start", async () => {
+    const r = await renderPage(<UnifiedDashboard onNav={vi.fn()} />, {
+      viewport,
+      routes: {
+        ...dashboardRoutes,
+        "GET /discovery/missing-cleanup/status": cleanupNeverRun,
+        "POST /discovery/missing-cleanup/preview": reply(409, { detail: "a library sync is running" }),
+      },
+    });
+    await press(r, buttons(r, /Clean up missing books$/)[0]);
+    await press(r, buttons(r, /^Preview$/)[0]);
+    expect(r.unmatched).toEqual([]);
+    expect(toasts).toEqual(["error: Couldn't start the preview: a library sync is running"]);
   });
 });

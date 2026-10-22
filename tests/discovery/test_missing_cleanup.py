@@ -199,9 +199,12 @@ async def test_a_stored_comic_is_hidden_with_its_reason(env):
     blurb = await _book("Dead Man's Hand", [mine], description="An anthology of the weird west.")
     novel = await _book("The Cruel Prince", [mine])
     shown = await _book("Lucifer (2015-2017) #2", [mine], reason="shown")
-    await _apply()
+    _, report = await _apply()
     rows = dict((r[0], r[1:]) for r in await _q("SELECT id, hidden, hidden_reason FROM books"))
     assert rows[comic] == (1, "comic")
+    page = {r["id"]: (r["reason"], r["stays_shown"])
+            for r in next(s for s in report["steps"] if s["key"] == "filtered")["rows"]}
+    assert page == {comic: ("comic", False), blurb: ("anthology", False)}
     assert rows[blurb] == (1, "anthology")
     assert rows[novel] == (0, None)
     assert rows[shown] == (0, "shown")
@@ -212,8 +215,9 @@ async def test_a_family_whose_setting_is_off_keeps_its_reason_and_shows(env):
     mine = await _author("Holly Black")
     await _allow("Holly Black")
     comic = await _book("Lucifer (2015-2017) #1", [mine])
-    await _apply()
+    _, report = await _apply()
     assert await _q("SELECT hidden, hidden_reason FROM books WHERE id = ?", (comic,)) == [(0, "comic")]
+    assert next(s for s in report["steps"] if s["key"] == "filtered")["rows"][0]["stays_shown"] is True
 
 
 async def test_a_foreign_title_stays_when_english_isnt_read(env):
@@ -246,6 +250,8 @@ async def test_a_missing_copy_folds_into_the_owned_book_which_keeps_its_byline(e
     assert await _q("SELECT reason FROM book_merges WHERE loser_id = ?", (copy,)) == [
         ("missing_cleanup_owned_copy",)]
     assert _count(report, "owned_copy") == 1
+    row = next(s for s in report["steps"] if s["key"] == "owned_copy")["rows"][0]
+    assert (row["into_id"], row["into_title"]) == (owned, "Truthwitch")
 
 
 async def test_matches_that_arent_one_book_fold_nothing(env):
@@ -505,6 +511,30 @@ async def test_apply_needs_the_last_preview(env):
     p["finished_at"] -= missing_cleanup.PREVIEW_TTL_S + 1
     with pytest.raises(missing_cleanup.PreviewNeeded):
         await missing_cleanup.apply(p["id"])
+    # One preview, one Apply: after it the library isn't what it described.
+    p = await missing_cleanup.preview()
+    await missing_cleanup.apply(p["id"])
+    with pytest.raises(missing_cleanup.PreviewNeeded):
+        await missing_cleanup.apply(p["id"])
+
+
+async def test_the_status_says_where_a_run_is(env, monkeypatch):
+    from app.discovery import missing_cleanup
+    seen = []
+
+    async def look(lib, report):
+        st = missing_cleanup.status()
+        seen.append(tuple(st[k] for k in ("running", "mode", "library_name", "step", "step_name")))
+    funcs = list(missing_cleanup._STEP_FUNCS)
+    funcs[2] = look
+    monkeypatch.setattr(missing_cleanup, "_STEP_FUNCS", tuple(funcs))
+    await missing_cleanup.run("preview")
+    assert seen == [
+        (True, "preview", "Books", "filtered", "Comics, box sets, anthologies and other non-books"),
+        (True, "preview", "Audio", "filtered", "Comics, box sets, anthologies and other non-books"),
+    ]
+    st = missing_cleanup.status()
+    assert (st["running"], st["library_name"], st["step_name"]) == (False, "", "")
 
 
 async def test_the_copies_are_this_tasks_alone(tmp_path):
@@ -545,6 +575,7 @@ async def test_the_routes_preview_then_apply(env, monkeypatch):
     assert (await routes.start_preview())["status"] == "started"
     await _wait()
     status = await routes.cleanup_status()
+    assert (status["running"], status["preview_ttl_s"]) == (False, missing_cleanup.PREVIEW_TTL_S)
     assert status["last_preview"]["steps"][0]["count"] == 1
     assert status["last_preview"]["steps"][0]["sample"][0]["title"] == "Morganville 3"
     assert await _exists(gone)
@@ -552,12 +583,20 @@ async def test_the_routes_preview_then_apply(env, monkeypatch):
     await _wait()
     assert not await _exists(gone)
     assert (await routes.cleanup_report(mode="apply"))["steps"][0]["count"] == 1
+    with pytest.raises(HTTPException) as e:
+        await routes.start_apply(preview_id=status["last_preview"]["id"])
+    assert e.value.detail == "That preview was applied: run a new one before applying again."
 
 
 async def test_a_scan_or_sync_in_progress_holds_it(env, monkeypatch):
+    from fastapi import HTTPException
     from app.discovery.routers import missing_cleanup as routes
     monkeypatch.setattr(state, "_library_sync_in_progress", True)
-    assert (await routes.start_preview())["status"] == "busy"
+    before = state._missing_cleanup_task
+    with pytest.raises(HTTPException) as e:
+        await routes.start_preview()
+    assert (e.value.status_code, e.value.detail) == (409, "a library sync is running")
+    assert state._missing_cleanup_task is before
 
 
 async def test_the_goodreads_worker_waits_for_it(env, monkeypatch):

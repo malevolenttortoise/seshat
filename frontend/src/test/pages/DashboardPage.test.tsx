@@ -2,7 +2,10 @@ import { afterEach, describe, it, vi } from "vitest";
 import { act, fireEvent } from "@testing-library/react";
 import UnifiedDashboard from "../../pages/UnifiedDashboard";
 import { expectRendered, renderPage, reply, resetPageEnv, type Viewport } from "../render";
-import { dashboardRoutes, dashboardScanningRoutes } from "../fixtures/dashboard";
+import {
+  cleanupApplied, cleanupNeverRun, cleanupPreviewed, cleanupRunning, cleanupStale,
+  dashboardRoutes, dashboardScanningRoutes,
+} from "../fixtures/dashboard";
 import { idleScans, scan } from "../fixtures/common";
 import { amazonStatus, goodreadsStatus } from "../fixtures/cacheStatus";
 
@@ -72,5 +75,23 @@ describe.each<Viewport>(["desktop", "phone"])("Dashboard (%s)", (viewport) => {
   it("every request fails", async () => {
     const r = await renderPage(<UnifiedDashboard onNav={vi.fn()} />, { viewport, routes: allFailRoutes });
     expectRendered(r, "Command Center");
+  });
+
+  // Discovery fix pass S8: the dialog in each of its states.
+  it.each([
+    ["before any preview", cleanupNeverRun, "nothing changes until you Apply"],
+    ["a preview to apply", cleanupPreviewed, "Previewed 5m ago"],
+    ["a preview over an hour old", cleanupStale, "over an hour old"],
+    ["a preview running", cleanupRunning, "Previewing"],
+    ["after Apply", cleanupApplied, "Applied 1m ago"],
+  ])("Clean up missing books: %s", async (_state, status, marker) => {
+    const r = await renderPage(<UnifiedDashboard onNav={vi.fn()} />, {
+      viewport,
+      routes: { ...dashboardRoutes, "GET /discovery/missing-cleanup/status": status },
+    });
+    const open = r.getAllByRole("button").find((b) => /Clean up missing books$/.test((b.textContent ?? "").trim()))!;
+    act(() => { fireEvent.click(open); });
+    await r.settle();
+    expectRendered(r, marker);
   });
 });

@@ -72,7 +72,8 @@ _OTHER_SOURCE_ID_COLS = (
 )
 
 _last: dict[str, Optional[dict]] = {"preview": None, "apply": None}
-_progress: dict[str, Any] = {"running": False, "mode": None, "library": "", "step": ""}
+_progress: dict[str, Any] = {"running": False, "mode": None, "library": "", "library_name": "", "step": "",
+                             "step_name": ""}
 
 
 # ─── The report ──────────────────────────────────────────────
@@ -114,9 +115,16 @@ def last_report(mode: str) -> Optional[dict]:
     return _last.get(mode)
 
 
+def was_applied(preview_id: str) -> bool:
+    """A preview describes one Apply: after it, the library has changed."""
+    done = _last["apply"]
+    return bool(done and done.get("preview_id") == preview_id)
+
+
 def status() -> dict:
     return {
         **_progress,
+        "preview_ttl_s": PREVIEW_TTL_S,
         "last_preview": summary(_last["preview"]),
         "last_apply": summary(_last["apply"]),
     }
@@ -176,7 +184,10 @@ class _Library:
             return True
         return bool(row["hidden"]) and not reason
 
-    def record(self, row, *, detail: str = "") -> dict:
+    def record(self, row, *, detail: str = "", **extra: Any) -> dict:
+        """One row of a step's report: `detail` for the log and the full
+        report, `extra` for the page (the filter reason, the owned book a
+        copy folds into)."""
         return {
             "library": self.slug,
             "id": row["id"],
@@ -188,6 +199,7 @@ class _Library:
             "hidden": bool(row["hidden"]),
             "hidden_reason": row["hidden_reason"],
             "detail": detail,
+            **extra,
         }
 
 
@@ -324,7 +336,8 @@ async def _filtered(lib: _Library, report: dict) -> None:
             "UPDATE books SET hidden_reason = ?, hidden = ? WHERE id = ?",
             (reason, 1 if hide else 0, row["id"]),
         )
-        step["rows"].append(lib.record(row, detail=reason if hide else f"{reason} (shown: its setting is off)"))
+        step["rows"].append(lib.record(row, detail=reason if hide else f"{reason} (shown: its setting is off)",
+                                       reason=reason, stays_shown=not hide))
         step["count"] += 1
 
 
@@ -384,7 +397,8 @@ async def _owned_copy(lib: _Library, report: dict) -> None:
             await write_book_authors(lib.db, winner["id"], byline)
         step["rows"].append(lib.record(
             loser, detail=f"→ owned {winner['id']} {winner['title']!r}"
-            + (" (an owned row with no library item)" if flipped else "")))
+            + (" (an owned row with no library item)" if flipped else ""),
+            into_id=winner["id"], into_title=winner["title"]))
         step["count"] += 1
 
 
@@ -618,13 +632,13 @@ async def _run_steps(report: dict) -> None:
     try:
         for libinfo in _libraries():
             slug = libinfo["slug"]
-            _progress["library"] = slug
+            _progress.update({"library": slug, "library_name": libinfo.get("name") or slug})
             with with_active_library(slug):
                 db = await get_db(slug)
                 try:
                     lib = _Library(db, pdb, slug, settings, libinfo.get("content_type") or "ebook")
-                    for (key, _name, _action), func in zip(STEPS, _STEP_FUNCS):
-                        _progress["step"] = key
+                    for (key, name, _action), func in zip(STEPS, _STEP_FUNCS):
+                        _progress.update({"step": key, "step_name": name})
                         await lib.load()
                         await func(lib, report)
                         await db.commit()
@@ -693,6 +707,8 @@ async def apply(preview_id: str) -> dict:
     p = _last["preview"]
     if not p or p["id"] != preview_id or time.time() - (p["finished_at"] or 0) > PREVIEW_TTL_S:
         raise PreviewNeeded("run a preview first (Apply follows a preview from the last hour)")
+    if was_applied(preview_id):
+        raise PreviewNeeded("that preview was applied: run a new one")
     report = _new_report("apply")
     report["preview_id"] = preview_id
     await _run_steps(report)
@@ -704,13 +720,14 @@ async def apply(preview_id: str) -> dict:
 
 async def run(mode: str, preview_id: Optional[str] = None) -> dict:
     """The background task the routes start: one run at a time."""
-    _progress.update({"running": True, "mode": mode, "library": "", "step": ""})
+    _progress.update({"running": True, "mode": mode, "library": "", "library_name": "", "step": "",
+                      "step_name": ""})
     try:
         if mode == "apply":
             return await apply(preview_id or "")
         return await preview()
     finally:
-        _progress.update({"running": False, "library": "", "step": ""})
+        _progress.update({"running": False, "library": "", "library_name": "", "step": "", "step_name": ""})
 
 
 def _log_summary(report: dict) -> None:
@@ -724,5 +741,5 @@ def _log_summary(report: dict) -> None:
 
 __all__ = [
     "PREVIEW_TTL_S", "PreviewNeeded", "STEPS", "apply", "blocked_by", "is_running",
-    "last_report", "preview", "run", "status", "summary",
+    "last_report", "preview", "run", "status", "summary", "was_applied",
 ]
