@@ -66,6 +66,23 @@ of what was filtered, and nothing for the next scan or the Goodreads worker to r
 - Settings: `hide_comics` and `hide_box_sets` (on by default) in settings.json; saving either re-applies it to that
   family's unowned rows in every library.
 
+## Amendment (2026-10-22, wave C S8: the missing-books cleanup)
+
+- **Its own action, Preview → Apply** (G209), not a job in the Hygiene chain: the chain has no preview and makes
+  network requests; the cleanup deletes rows and makes none. Steps, in order: remove missing books none of whose
+  authors is scan-eligible in that library (owning books in the other library doesn't count, G212; the List-missing
+  switch doesn't either, so a switched-off author's books stay); remove books only OpenLibrary knows, where a MAM
+  torrent found for the row counts as another source (G210); hide the filtered families on stored rows with the
+  creation verdict (title, description, series name, page count, a stored Goodreads page's genres); fold a missing
+  copy into the one owned library book it matches ([ADR-0028](0028-one-volume-aware-title-identity.md), amended);
+  file a standalone book in the series its title names.
+- **Never touched:** owned books (except as a fold's winner), books hidden with no reason (yours), `shown` and
+  `author_off` books, and, for the removals, books a grab is linked to.
+- **Preview runs the steps on copies** of every library DB and `seshat.db` (SQLite backup), with the cleanup task's
+  own connections pointed at them; Apply needs a preview from the last hour. Measured on the reference install
+  (2026-10-22 copies): 667 removed (no scan-eligible author), 824 removed (OpenLibrary only; 523 kept by a MAM
+  torrent), 1,345 hidden, 9 folded (22 left listed as ambiguous), 72 filed; preview 3 s, the copies unchanged.
+
 ## Related
 
 - [0021](0021-roster-gates-discovery-author-creation.md) — roster and scan eligibility (amended: scan eligibility is

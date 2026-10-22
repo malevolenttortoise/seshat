@@ -171,6 +171,33 @@ async def test_two_matches_are_flipped_owned_not_merged(env, monkeypatch):
     assert await _row(b2) == (1, None, "hardcover")
 
 
+async def test_two_matches_that_are_different_books_flip_nothing(env, monkeypatch):
+    """G211 (2026-10-22): a graphic novel's Vol. 1 and Vol. 2 both read as the
+    owned novel; flipping them owned hid two real missing books (and the owned
+    check would stop their announces). Which, if any, is the book is a guess."""
+    a = await _author("Kevin J. Anderson", calibre_id=1)
+    v1 = await _missing("Dune: House Corrino, Vol. 1", [a], series="Dune: House Corrino", index=1.0)
+    v2 = await _missing("Dune: House Corrino, Vol. 2", [a])
+    await _q("UPDATE books SET series_id = (SELECT series_id FROM books WHERE id = ?), "
+             "series_index = 2.0 WHERE id = ?", (v1, v2))
+    await _sync(monkeypatch, [_book(10, "Dune: House Corrino", [(1, "Kevin J. Anderson")],
+                                    series="Prelude to Dune", index=3.0)])
+    assert await _row(v1) == (0, None, "hardcover")
+    assert await _row(v2) == (0, None, "hardcover")
+
+
+async def test_a_row_the_filters_hid_as_a_comic_is_not_absorbed(env, monkeypatch):
+    """G197 as ruled: a row's stored filter reason is its family here, so a
+    graphic novel hidden from its series name ("The Dresden Files Graphic
+    Novels") never becomes the owned novel though its title reads as one."""
+    a = await _author("Jim Butcher", calibre_id=1)
+    bid = await _missing("The Dresden Files: Storm Front, Vol. 1", [a],
+                         series="The Dresden Files Graphic Novels", index=1.0)
+    await _q("UPDATE books SET hidden = 1, hidden_reason = 'comic' WHERE id = ?", (bid,))
+    await _sync(monkeypatch, [_book(10, "Storm Front", [(1, "Jim Butcher")])])
+    assert await _row(bid) == (0, None, "hardcover")
+
+
 async def test_the_update_sweep_keeps_calibres_byline(env, monkeypatch):
     """The merge unions the absorbed row's contributors; Calibre's own list
     stays the byline (Honor Among Thieves and Rachel Caine)."""

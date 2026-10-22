@@ -20,7 +20,11 @@ Tables cover the full pipeline: author lists, announce audit log,
 grabs + snatch ledger, book review queue, tentative/ignored capture,
 calibre additions counter, and metadata enrichment support.
 """
+import contextlib
+import contextvars
 import logging
+from pathlib import Path
+from typing import Iterator, Optional
 
 import aiosqlite
 
@@ -1181,9 +1185,28 @@ MIGRATIONS: list[str] = [
 ]
 
 
+# The missing-books cleanup's preview writes to a copy of this DB (merge
+# redirects grab links); this points its own task's connections there
+# (discovery fix pass S8, C27).
+_path_override: contextvars.ContextVar[Optional[Path]] = contextvars.ContextVar(
+    "pipeline_db_path_override", default=None,
+)
+
+
+@contextlib.contextmanager
+def using_copy(path: Path) -> Iterator[None]:
+    """Inside this block (this task and the tasks it starts), `get_db`
+    opens `path`."""
+    token = _path_override.set(Path(path))
+    try:
+        yield
+    finally:
+        _path_override.reset(token)
+
+
 async def get_db() -> aiosqlite.Connection:
     """Open a connection with the standard pragmas applied."""
-    db = await aiosqlite.connect(str(APP_DB_PATH))
+    db = await aiosqlite.connect(str(_path_override.get() or APP_DB_PATH))
     db.row_factory = aiosqlite.Row
     await db.execute("PRAGMA journal_mode=WAL")
     await db.execute("PRAGMA foreign_keys=ON")

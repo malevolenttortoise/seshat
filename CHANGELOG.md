@@ -95,7 +95,30 @@ frontend test suite.
   its empty mirror in the audiobook library and its person link (9 such
   rows on the reference install). Rows that still list missing books
   stay until wave C's cleanup. Full sync time on the reference library:
-  1.6 s → 3.7 s.
+  1.6 s → 3.7 s. **When a book matches several missing rows that aren't
+  all one book, it now matches none** (wave C, G211): a graphic novel's
+  Vol. 1 and Vol. 2 against the owned novel, or two books a source filed
+  at "Dune #1", stay listed instead of being marked owned (on the
+  reference library a full sync flips 8 copies instead of 26 rows); a
+  row the filters hid as a comic is never the owned prose book.
+- **"Clean up missing books": the fix pass's rules for the books listed
+  before them** (discovery fix pass S8, ADR-0029 amended). Preview runs
+  every step on copies of the databases and lists what would change;
+  Apply follows a preview. In order: remove missing books none of whose
+  authors you scan in that library (you own one of their books there,
+  or you put them on the allow list; owning their audiobooks doesn't
+  count for ebooks); remove books only OpenLibrary knows, unless a MAM
+  scan found a torrent for them; hide comics, box sets, anthologies,
+  foreign editions and the other non-books with their reason; fold a
+  missing copy into the one owned book it is (never when it matches
+  several books, or two owned ones); and file a standalone book in the
+  series its title names ("The Rainy Season (The Ghosts Trilogy Book
+  3)"). It never touches owned books, books you hid or showed, books
+  hidden because an author's List missing books switch is off, and
+  never removes a book a grab is linked to. No source requests. On the
+  reference library: 667 + 824 removed, 1,345 hidden, 9 folded, 72
+  filed; the preview takes 3 seconds. While it runs, scheduled library
+  syncs and the Goodreads worker's merges wait.
 - **The pages for all this** (discovery fix pass S7). **Hidden** has two
   tabs: "Hidden by you" (the default) and "Filtered", the books Seshat
   keeps hidden. Filtered has a chip per reason, each with its count:

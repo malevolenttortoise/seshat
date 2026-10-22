@@ -149,6 +149,22 @@ The same parser reads "(Series Book N)" out of a title at creation (G171) and Ha
   world of Shannara" read as a spelling variant of "The Sword of Shannara"; "Human Resources: Bisexual Edition"
   against the owned Hetero edition. A second sync changes nothing.
 
+## Amendment (2026-10-22, wave C: several matches that aren't one book)
+
+- **When a Calibre book matches two or more rows that aren't all the same book, it matches none** (G211): no merge,
+  no flip. The ones above were exactly that shape (a graphic novel's Vol. 1 and Vol. 2 against the owned novel, two
+  books a source filed at "Dune #1"), and flipping them owned hid real missing books and made the owned check stop
+  their announces. Rows that are all one book ("Small Favour: The Dresden Files, Book Ten" and "Book 10.0 - Small
+  Favor") still merge or flip. Rows that are all one book are compared in the owned book's series when a source gave
+  them none ("Truthwitch: The Witchlands" and "Truthwitch: A Witchlands Novel" in The Witchlands). The missing-books
+  cleanup's fold uses the same match, for Calibre and Audiobookshelf books alike.
+- **For these matches a row's filter family is its stored reason first, then its title's** (G197 as ruled). A scan's
+  merge keeps reading the title alone (C21, [ADR-0029](0029-filtered-discovery-rows-kept-hidden-with-a-reason.md)):
+  there a refused match would create a hidden copy of the row, here it only leaves the row listed.
+- Measured (full sync on a 2026-10-22 copy, old vs new): flips 26 → 8, every one of the 8 a copy of the owned book;
+  the 18 no longer flipped are the graphic-novel volumes, the "Dune #1" pair, Arm of the Sphinx's two parts and three
+  "Changes" rows whose stored series names make them read as different books (left listed).
+
 ## Related
 
 - [0003](0003-bundle-dedup-prefer-duplicates.md) — the same duplicates-over-loss stance, for bundles.

@@ -445,6 +445,9 @@ def merge_blocked_by() -> Optional[str]:
     task = getattr(state, "_hygiene_task", None)
     if task is not None and not task.done():
         return "Hygiene"
+    task = getattr(state, "_missing_cleanup_task", None)
+    if task is not None and not task.done():
+        return "the missing-books cleanup"
     return None
 
 

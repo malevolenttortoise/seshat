@@ -389,6 +389,8 @@ def release_mam_scan_unless_handed_off(claim: MamScanClaim) -> None:
 # stats so the Command Center banner can render both the overall
 # 1-of-6 sub-step and the in-flight job's own count.
 _hygiene_task: Optional[asyncio.Task] = None
+# The missing-books cleanup (discovery fix pass S8): preview or apply.
+_missing_cleanup_task: Optional[asyncio.Task] = None
 _hygiene_progress: Dict[str, Any] = {
     "running": False,
     "current_job_idx": 0,

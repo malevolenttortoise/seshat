@@ -112,6 +112,7 @@ from app.discovery.routers.config import router as disc_config_router
 from app.discovery.routers.pipeline_send import router as disc_pipeline_send_router
 from app.discovery.routers.reingest import router as disc_reingest_router
 from app.discovery.routers.hygiene import router as disc_hygiene_router
+from app.discovery.routers.missing_cleanup import router as disc_missing_cleanup_router
 
 # Configure logging once at import time. The verbose toggle gets re-applied
 # from settings.json after load_settings() runs in the lifespan.
@@ -1545,6 +1546,7 @@ app.include_router(disc_config_router)
 app.include_router(disc_pipeline_send_router)
 app.include_router(disc_reingest_router)
 app.include_router(disc_hygiene_router)
+app.include_router(disc_missing_cleanup_router)
 
 
 @app.get("/api/health")

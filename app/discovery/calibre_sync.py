@@ -543,15 +543,37 @@ def _labels_for(titles: tuple) -> frozenset:
     return author_labels(titles)
 
 
+def _one_book(rows, series_name=None, series_index=None) -> bool:
+    """Every pair of these rows is the same book by the title identity. Each
+    already matched the book (`series_name` / `series_index`), so a row a
+    source gave no series is read in that one ("Truthwitch: The Witchlands"
+    and "Truthwitch: A Witchlands Novel" are one book in The Witchlands)."""
+    from app.works.title_identity import TitleRef, same_book
+
+    def ref(r):
+        if r["series_name"]:
+            return TitleRef(r["title"] or "", r["series_name"], r["series_index"])
+        return TitleRef(r["title"] or "", series_name, series_index)
+
+    refs = [ref(r) for r in rows]
+    return all(same_book(a, b) for i, a in enumerate(refs) for b in refs[i + 1:])
+
+
 async def _absorb_matches(
     db, author_ids, title: str, series_name, series_index, *, exclude_id=None,
+    ambiguous: list | None = None,
 ) -> list:
     """The discovery rows this Calibre book is (F10, ADR-0028): books any of
     its contributors, or an author linked to one (pen name or co-author,
     the links a scan's dedup reads), is credited on in any position, that
     the title identity calls the same book, within the book's filter
-    family (G197). Rows already holding a Calibre book are never
-    candidates. Rows: id, title, owned, hidden."""
+    family (G197: a row's stored filter reason first, else its title's).
+    Rows already holding a Calibre book are never candidates (the
+    missing-books cleanup also uses this for Audiobookshelf books, whose
+    owned rows it never folds, S8). Several rows that aren't all one book match nothing (G211): a
+    graphic novel's Vol. 1 and Vol. 2 against the owned novel, two books a
+    source filed at "Dune #1"; they go to `ambiguous` when given. Rows: id,
+    title, owned, hidden, series_name, series_index."""
     from app.discovery import filters
     from app.works.title_identity import TitleRef, same_book
 
@@ -567,8 +589,8 @@ async def _absorb_matches(
         ids.update((int(r[0]), int(r[1])))
     ph = ",".join("?" * len(ids))
     rows = await (await db.execute(
-        f"SELECT b.id, b.title, b.owned, b.hidden, b.calibre_id, b.source, "
-        f"b.series_index, s.name AS series_name FROM books b "
+        f"SELECT b.id, b.title, b.owned, b.hidden, b.hidden_reason, b.calibre_id, "
+        f"b.source, b.series_index, s.name AS series_name FROM books b "
         f"LEFT JOIN series s ON s.id = b.series_id WHERE b.id IN "
         f"(SELECT book_id FROM book_authors WHERE author_id IN ({ph}))",
         list(ids),
@@ -598,8 +620,17 @@ async def _absorb_matches(
     ]
     if not hits:
         return []
+    if len(hits) > 1 and not _one_book(hits, series_name, series_index):
+        if ambiguous is not None:
+            ambiguous.extend(hits)
+        return []
     cls = _cls(title)
-    return [r for r in hits if _cls(r["title"] or "") == cls]
+
+    def _row_cls(r):
+        stored = r["hidden_reason"]
+        return stored if stored in filters.FILTER_REASONS else _cls(r["title"] or "")
+
+    return [r for r in hits if _row_cls(r) == cls]
 
 
 async def _calibre_ref(db, book_id: int):

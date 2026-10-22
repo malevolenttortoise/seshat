@@ -7,10 +7,13 @@ Per-library databases live under DATA_DIR with filenames like
 against the right database without passing the slug explicitly.
 """
 import asyncio
+import contextlib
+import contextvars
 import logging
 import re
 from collections import defaultdict
-from typing import Iterable, Optional
+from pathlib import Path
+from typing import Iterable, Iterator, Optional
 import aiosqlite
 from app.config import DATA_DIR
 
@@ -24,6 +27,42 @@ HF = "b.hidden = 0"
 # ─── Active Library Tracking ─────────────────────────────────
 _active_library_slug = None
 
+# The missing-books cleanup's preview runs its steps on copies of the
+# library DBs (discovery fix pass S8, C27). These point the preview task's
+# own connections, and its active library, at the copies; every other task
+# keeps the real ones (a ContextVar is per task, inherited by the tasks it
+# starts).
+_path_override: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
+    "discovery_db_path_override", default=None,
+)
+_active_override: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "discovery_active_library_override", default=None,
+)
+
+
+@contextlib.contextmanager
+def using_copies(paths: dict, active: Optional[str] = None) -> Iterator[None]:
+    """Inside this block (this task and the tasks it starts), library
+    `slug` opens `paths[slug]`; `active` stands in for the active library."""
+    tp = _path_override.set(dict(paths))
+    ta = _active_override.set(active)
+    try:
+        yield
+    finally:
+        _active_override.reset(ta)
+        _path_override.reset(tp)
+
+
+@contextlib.contextmanager
+def with_active_library(slug: str) -> Iterator[None]:
+    """`slug` is the active library for this task only (the process-wide
+    one is left alone)."""
+    t = _active_override.set(slug)
+    try:
+        yield
+    finally:
+        _active_override.reset(t)
+
 
 def set_active_library(slug):
     """Set the active library slug. All get_db() calls will use this library."""
@@ -33,8 +72,10 @@ def set_active_library(slug):
 
 
 def get_active_library():
-    """Get the current active library slug."""
-    return _active_library_slug
+    """Get the current active library slug (this task's stand-in, inside
+    `using_copies` / `with_active_library`)."""
+    override = _active_override.get()
+    return override if override is not None else _active_library_slug
 
 
 def get_db_path(slug=None):
@@ -44,7 +85,10 @@ def get_db_path(slug=None):
     If slug is None, uses the active library slug.
     Falls back to seshat_default.db if no library is set.
     """
-    effective_slug = slug or _active_library_slug or "default"
+    effective_slug = slug or get_active_library() or "default"
+    override = _path_override.get()
+    if override and effective_slug in override:
+        return Path(override[effective_slug])
     return DATA_DIR / f"seshat_{effective_slug}.db"
 
 
