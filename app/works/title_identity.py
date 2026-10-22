@@ -698,11 +698,61 @@ def _lone_number_differs(
     return True
 
 
-def same_book(a: TitleRef, b: TitleRef, labels: frozenset = frozenset()) -> bool:
+# Any number or volume word in a title proper (outside its parentheticals):
+# such a title may name its volume in a way the parse doesn't read as one
+# ("Incredible Hulk Visionaries - Peter David, Vol. 3", "JSA: Strange
+# Adventures #4", "Dune: House Harkonnen, Volume Three"), so G213 leaves it
+# to the number rules.
+_RX_TITLE_NUMBER = re.compile(
+    r"\d|\b(?:book|books|volume|volumes|vol|part|parts|issue|episode|chapter|arc|tome|season|no)\b",
+    re.IGNORECASE,
+)
+
+
+# `author_labels` marks a title the author writes with several numbers.
+_NUMBERED = "#numbered:"
+
+
+def _plain_key(proper: str) -> str:
+    """The title proper without descriptions and punctuation, every word and
+    number kept ("Halo: Evolutions, Volume II" isn't "… Volume I")."""
+    t = re.sub(r"[^\w\s]", " ", _without_description(proper.lower()))
+    t = re.sub(r"^\s*(?:the|a|an)\s+", "", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def _one_title(
+    pa: ParsedTitle, pb: ParsedTitle, series_a: Optional[str], series_b: Optional[str],
+    labels: frozenset,
+) -> bool:
+    """G213: both titles' own text is one real title, so where a source
+    puts the book in its series doesn't make it another book. Amazon and
+    Calibre number Halo, Pinwheel or "Mistborn: Secret History" (#8 vs
+    #3.5) differently, and the old merge left rows one place off ("Sword of
+    the Legion" stored at Galaxy's Edge #6). Only position numbers are
+    overridden: a number of the title's own ("Splinter Angel: Book 3", a
+    Hardcover "Book 06.0 -") still decides, and a placeholder, a bare series
+    name or one of the author's labels is no title."""
+    if pa.prefix_volume is not None or pb.prefix_volume is not None:
+        return False
+    if _RX_TITLE_NUMBER.search(pa.proper) or _RX_TITLE_NUMBER.search(pb.proper):
+        return False
+    ka, kb = _plain_key(pa.proper), _plain_key(pb.proper)
+    if not ka or ka != kb or not _key_text(ka) or _key_text(ka) in labels or _NUMBERED + ka in labels:
+        return False
+    return not (_no_real_title(pa.proper, series_a) or _no_real_title(pb.proper, series_b)
+                or _no_real_title(pa.proper, series_b) or _no_real_title(pb.proper, series_a))
+
+
+def same_book(
+    a: TitleRef, b: TitleRef, labels: frozenset = frozenset(), *, positions_decide: bool = False,
+) -> bool:
     """True when the two titles name the same book (ADR-0028).
 
     `labels` is the author's label set (`author_labels`): title parts
-    that never identify a book on their own.
+    that never identify a book on their own. `positions_decide`: series
+    positions separate even one title (no G213), for the grab side, where
+    a wrong "same" skips a wanted volume as owned (C35).
     """
     fmt_a, pa = _parsed(a.title or "")
     fmt_b, pb = _parsed(b.title or "")
@@ -712,6 +762,8 @@ def same_book(a: TitleRef, b: TitleRef, labels: frozenset = frozenset()) -> bool
         fmt_b = (fmt_b[0], True)
     if fmt_a != fmt_b:
         return False
+    if not positions_decide and _one_title(pa, pb, a.series, b.series, labels):
+        return True
     position_agrees = _volumes_agree(a, b, pa, pb)
     if position_agrees is None:
         return False
@@ -807,7 +859,18 @@ def author_labels(titles: Iterable[str]) -> frozenset:
                 partners[parts[i]].add(
                     " ".join(p for j, p in enumerate(parts) if j != i)
                 )
-    return frozenset(k for k, rest in partners.items() if len(rest) >= 3)
+    labels = {k for k, rest in partners.items() if len(rest) >= 3}
+    # G213's guard: a title this author writes with 2+ different numbers
+    # ("Blade Angels", "Blade Angels (Blade Academy Book 2)", "… Book 3":
+    # one title for every book of the series) is told apart by its numbers.
+    numbers: dict[str, set[float]] = defaultdict(set)
+    for t in set(titles):
+        p = parse_title(t or "")
+        k = _plain_key(p.proper)
+        if k:
+            numbers[k] |= {v for _, v in p.tags} | ({p.core} if p.core is not None else set())
+    labels |= {_NUMBERED + k for k, vals in numbers.items() if len(vals) >= 2}
+    return frozenset(labels)
 
 
 # ─── Series written in a title (G171) and Hardcover's prefix ──

@@ -368,7 +368,58 @@ def test_series_key_is_series_consensus_normalisation(name):
 def test_index_may_come_as_text_or_int():
     a = TitleRef("Splashdown (Pinwheel Book 2)")
     assert same_book(a, TitleRef("Splashdown", "Pinwheel", "2")) is True
-    assert same_book(a, TitleRef("Splashdown", "Pinwheel", 3)) is False
+    assert same_book(a, TitleRef("Splashdown", "Pinwheel", 3), positions_decide=True) is False
+
+
+class TestOneTitleWhateverTheNumbers:
+    """G213 (2026-10-22): the same title in the same series is the same book
+    when only the series numbers disagree. Wave C's cache re-merge listed
+    17 owned books again: Amazon and Calibre number Halo, Pinwheel and
+    "Mistborn: Secret History" differently, and the old merge left rows one
+    place off."""
+
+    @pytest.mark.parametrize("a,b", [
+        (TitleRef("Outpost (Pinwheel Book 7)", "Pinwheel", 7), TitleRef("Outpost", "Pinwheel", 6)),
+        (TitleRef("Halo: Hunters in the Dark", "Halo", 3), TitleRef("Halo: Hunters in the Dark", "Halo", 16)),
+        (TitleRef("Mistborn: Secret History", "Mistborn", 8),
+         TitleRef("Mistborn: Secret History", "The Mistborn Saga", 3.5)),
+        (TitleRef("Sword of the Legion (Galaxy's Edge Book 5)", "Galaxy's Edge", 5),
+         TitleRef("Sword of the Legion", "Galaxy's Edge", 6)),
+        (TitleRef("Lost Souls: Sci-Fi Adventure with a sense of humor! (Get Lost Saga Book 1)", "Get Lost Saga", 1),
+         TitleRef("Lost Souls", "Get Lost Saga", 2)),
+    ])
+    def test_one_title(self, a, b):
+        assert same_book(a, b) and same_book(b, a)
+        # The grab side keeps positions decisive (C35).
+        assert not same_book(a, b, positions_decide=True)
+
+    @pytest.mark.parametrize("a,b", [
+        (TitleRef("Splinter Angel: Book 3"), TitleRef("Splinter Angel: Book 2")),
+        (TitleRef("Halo: Evolutions, Volume II", "Halo", 7.2), TitleRef("Halo: Evolutions Volume I", "Halo", 7.1)),
+        (TitleRef("Incredible Hulk Visionaries - Peter David, Vol. 3", "Incredible Hulk", 3),
+         TitleRef("Incredible Hulk Visionaries - Peter David, Vol. 1", "Incredible Hulk", 1)),
+        (TitleRef("JSA: Strange Adventures #4 (of 6)", "JSA: Strange Adventures", 4),
+         TitleRef("JSA: Strange Adventures #5 (of 6)", "JSA: Strange Adventures", 5)),
+        (TitleRef("Dune: House Harkonnen, Volume Three", "Dune: Graphic Novel", 22),
+         TitleRef("Dune: House Harkonnen, Volume Two", "Dune: Graphic Novel", 21)),
+        (TitleRef("High Risk: Gambit (Adrenaline Search & Rescue Book 3)", "Adrenaline Search & Rescue", 3),
+         TitleRef("High Risk", "Adrenaline Search & Rescue", 1)),
+        (TitleRef("Space Fleet Academy: Year Two (Biostellar Book 2)", "Biostellar", 2),
+         TitleRef("Space Fleet Academy: Year One", "Biostellar", 3)),
+        (TitleRef("The Dresden Files", "The Dresden Files", 1), TitleRef("The Dresden Files", "The Dresden Files", 2)),
+        (TitleRef("Untitled", "X", 1), TitleRef("Untitled", "X", 2)),
+    ])
+    def test_numbers_of_the_title_still_decide(self, a, b):
+        assert not same_book(a, b)
+
+    def test_a_title_the_author_numbers_is_told_apart_by_its_numbers(self):
+        """Mark's Calibre: four Blade Academy books all titled "Blade Angels"."""
+        titles = ["Blade Angels", "Blade Angels (Blade Academy Book 2)", "Blade Angels (Blade Academy Book 3)"]
+        labels = author_labels(titles)
+        two = TitleRef("Blade Angels (Blade Academy Book 2)", "Blade Academy", 2)
+        three = TitleRef("Blade Angels (Blade Academy Book 3)", "Blade Academy", 3)
+        assert not same_book(two, three, labels)
+        assert not same_book(TitleRef("Blade Angels", "Blade Academy", 1), two, labels)
 
 
 class TestSeriesInTitle:

@@ -174,7 +174,9 @@ async def owned_books_matching(
             if not include_linked and r["mam_status"] == "found":
                 continue
             owned = TitleRef(r["title"] or "", r["series_name"], r["series_index"])
-            if not same_book(announce, owned, labels):
+            # Positions decide here (C35): a wrong "same" would skip a
+            # wanted volume as owned.
+            if not same_book(announce, owned, labels, positions_decide=True):
                 continue
             matches.append(OwnedMatch(
                 library_slug=slug,

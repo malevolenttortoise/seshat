@@ -56,7 +56,15 @@ frontend test suite.
   Sable Keech"), and a series name used as a prefix when both books sit
   at the same place in the series ("Geostorm The Shift" = "The Shift",
   Geostorm #1). Scans stop creating these beside the book they are (one
-  was an owned book).
+  was an owned book). **And one title in one series is one book whatever
+  the series numbers say** (wave C S23, G213): Amazon numbering Halo or
+  Pinwheel differently from Calibre ("Outpost (Pinwheel Book 7)" vs the
+  owned "Outpost" at #6, "Mistborn: Secret History" #8 vs #3.5) no longer
+  lists an owned book again. Titles that name their own volume ("Vol.
+  3", "#4", "Volume Three") and a title an author gives every book of a
+  series ("Blade Angels" for Blade Academy 1, 2 and 3) are still told
+  apart by their numbers; the owned check before a grab keeps the
+  numbers decisive, so it never skips a wanted volume this way.
 - **Scans visit only authors you own or picked, and each author gets a
   "List missing books" switch** (discovery fix pass S5, ADR-0021
   amended). An author is scanned when they own a book in the library or

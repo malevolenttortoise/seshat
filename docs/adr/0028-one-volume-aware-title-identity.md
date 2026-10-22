@@ -165,6 +165,26 @@ The same parser reads "(Series Book N)" out of a title at creation (G171) and Ha
   the 18 no longer flipped are the graphic-novel volumes, the "Dune #1" pair, Arm of the Sphinx's two parts and three
   "Changes" rows whose stored series names make them read as different books (left listed).
 
+## Amendment (2026-10-22, wave C S23: one title, whatever the series numbers say)
+
+- **The same title in the same series is the same book even when the series numbers disagree** (G213): "Outpost
+  (Pinwheel Book 7)" is the owned "Outpost" stored at Pinwheel #6, "Halo: Hunters in the Dark" Halo #3 the owned one at
+  #16, "Mistborn: Secret History" #8 the one at #3.5. Amazon and Calibre number some series differently, and the old
+  merge left rows one place off ("Sword of the Legion" at Galaxy's Edge #6), so a number clash between one real title
+  had listed owned books again (17 in the cleanup's cache re-merge) and duplicated listed ones (~35).
+- **What counts as one title:** the title proper (parentheticals out, descriptions stripped) is the same text, with no
+  number or volume word in it (a title that names its volume, "Incredible Hulk Visionaries - Peter David, Vol. 3",
+  "JSA: Strange Adventures #4", "Dune: House Harkonnen, Volume Three", is left to the number rules), not a Hardcover
+  "Book NN -" title, not a placeholder or the series name alone, not one of the author's labels, and **not a title
+  the author writes with two or more numbers** ("Blade Angels", "Blade Angels (Blade Academy Book 2)", "… Book 3":
+  every book of the series carries one title).
+- **The grab side keeps positions decisive** (C35, Claude's call): claim-for-owned, the owned skip and format dedup's
+  owned check pass `positions_decide`, as a wrong "same" there skips a wanted volume as owned; MAM titles carry their
+  numbers in the title itself, so G213 would rarely apply there anyway.
+- Measured on 2026-10-22 copies: 1 of 1,010,366 same-author pairs changes ("System Incursion" stored at Super Genetics
+  #3 and #5); grab history unchanged (77 of 2,129 snatched auto-grabs stopped, the same list); the cleanup's cache
+  re-merge creates 32 fewer duplicates, every one read; a full Calibre sync is unchanged.
+
 ## Related
 
 - [0003](0003-bundle-dedup-prefer-duplicates.md) — the same duplicates-over-loss stance, for bundles.
