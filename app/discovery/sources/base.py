@@ -147,6 +147,9 @@ class BookResult:
     # 3.1 contract: zero behavior change until sources emit this). See
     # `Contributor` for role/ID/image semantics and the role-filter.
     contributors: list["Contributor"] = field(default_factory=list)
+    # The source's genres, most-shelved first (Goodreads book pages): the
+    # filters read a comic from them (G208). Empty for every other source.
+    genres: list[str] = field(default_factory=list)
 
 
 @dataclass

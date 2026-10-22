@@ -94,9 +94,29 @@ _RX_HERO = re.compile(
 )
 _RX_PROSE_TIE_IN = re.compile(r"(?i)(?<!graphic\s)\bnovel(?:i[sz]ation)?s?\b")
 
+# G208: a Goodreads page's genres, most-shelved first. A comic in its top
+# two is a comic ("Germ Warfare: A Very Graphic History"); at third it
+# also caught a prose novel ("Final Fantasy XIII-2: Fragments After":
+# fiction, gaming, manga). A light novel genre anywhere means prose (F12).
+_COMIC_GENRES = frozenset({
+    "comics", "comic", "comic book", "comic books", "graphic novels", "graphic novel",
+    "graphic novels comics", "comics manga", "graphic novels manga", "manga",
+    "manhwa", "manhua", "webcomic", "webcomics", "webtoon",
+})
+_LIGHT_NOVEL_GENRES = frozenset({"light novel", "light novels"})
+COMIC_GENRE_TOP = 2
+
+
+def genres_say_comic(genres: Iterable[str]) -> bool:
+    g = [str(x).strip().lower() for x in genres or ()]
+    if any(x in _LIGHT_NOVEL_GENRES for x in g):
+        return False
+    return any(x in _COMIC_GENRES for x in g[:COMIC_GENRE_TOP])
+
 _RX_BOX_SET = re.compile(
     r"(?i)\bbox(?:ed)?\s*set\b|\bboxset\b|\bomnibus\b|\bcompilation\b"
     r"|\bbooks?\s+#?\d+\s*(?:[-–&+]|to|and|through)\s*#?\d+"   # "Books 1-3", "Book 1 & 2"
+    r"|#\d+(?:\.\d+)?\s*[-–]\s*\d{1,2}(?:\.\d+)?\b"           # "(Alpha & Omega, #0.5-3)" (not "#2-1976")
     r"|\bvolumes?\s+\d+\s*[-–&]\s*\d+"
     r"|\b\d+[-\s]book\s+(?:collection|set|bundle|omnibus|series)\b"
     r"|\b(?:two|three|four|five|six|seven|eight|nine|ten)[-\s]book\s+(?:collection|set|bundle|box|omnibus|series)\b"
@@ -312,13 +332,15 @@ def filter_reason(
     authors: Iterable[str] = (),
     series_name: Optional[str] = None,
     page_count: Optional[int] = None,
+    genres: Iterable[str] = (),
 ) -> Optional[str]:
     """The family a source's book belongs to, or None for a book to list.
 
     `n_authors`: the source's credited author-role contributors (an
     anthology has 4+, F7); `authors`: names a seller's listing would put in
     the title; `series_name`: the book's series, a comic's run often named
-    only there ("Lucifer, Volume 1: Cold Heaven" in "Lucifer (2015-2017)").
+    only there ("Lucifer, Volume 1: Cold Heaven" in "Lucifer (2015-2017)");
+    `genres`: the source's genres, most-shelved first (Goodreads pages).
     """
     t = (title or "").strip()
     if not t:
@@ -335,7 +357,8 @@ def filter_reason(
             _RX_COMIC.search(t)
             or (_RX_HERO.search(_head(t)) and not _RX_PROSE_TIE_IN.search(t))
             or (series_name and _RX_COMIC.search(series_name) and not _RX_LIGHT_NOVEL.search(series_name))
-            or (page_count and 0 < page_count <= COMIC_ISSUE_MAX_PAGES and _RX_ISSUE_NUMBER.search(t))):
+            or (page_count and 0 < page_count <= COMIC_ISSUE_MAX_PAGES and _RX_ISSUE_NUMBER.search(t))
+            or genres_say_comic(genres)):
         return COMIC
     if series_ref_stem(t) is not None:
         return JUNK
@@ -376,5 +399,5 @@ __all__ = [
     "ANTHOLOGY", "AUTHOR_OFF", "BOX_SET", "COMIC", "FAMILIES", "FILTER_REASONS",
     "FOREIGN", "JUNK", "LISTING", "NOT_A_BOOK", "SAMPLER", "SETTING_FOR", "SHOWN",
     "SHORT_UNDER_PAGES", "SPLIT", "STUDY_GUIDE", "author_role_count", "book_class", "filter_reason",
-    "hides", "is_foreign_title",
+    "genres_say_comic", "hides", "is_foreign_title",
 ]

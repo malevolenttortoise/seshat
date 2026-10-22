@@ -41,6 +41,11 @@ from tests.discovery.test_merge_title_identity import (  # noqa: F401  (fixture)
     ("The Last Cyborg 3 -- Codename: ATLAS: The Thrilling Conclusion to the Last Cyborg Trilogy.", None),
     ("The Weight of Oblivion: The Land of Nowhere Book 3 (The Land of Nowhere Trilogy)", None),
     ("Jupiter War: The Owner Trilogy 3", None),
+    # G208: Goodreads' "#N-M" range (0 owned titles carry one on the 10-22 copy)
+    ("Call of the Hunt (Alpha & Omega, #0.5-3)", F.BOX_SET),
+    ("Snow-Walker (Snow-Walker #1-3)", F.BOX_SET),
+    ("Expanse series 2 #4-6", F.BOX_SET),
+    ("Dancing with the Cobra (Tales of the Carnal Adventurer #3)", None),
     # anthologies (D4 / D9 / F7)
     ("Galaxy's Edge Magazine: Issue 24, January 2017", F.ANTHOLOGY),
     ("The Year's Best Fantasy and Horror 2008", F.ANTHOLOGY),
@@ -107,6 +112,33 @@ def test_a_comic_issue_by_its_pages_or_its_run():
     assert F.filter_reason("Lucifer, Volume 1: Cold Heaven", series_name="Lucifer (2015-2017)") == F.COMIC
     # Matching reads the title alone: two sources name a run differently.
     assert F.book_class("Lucifer, Volume 1: Cold Heaven") is None
+
+
+def test_a_range_with_a_year_is_no_box_set():
+    """"Bst Sci Fic of Yr#2-1976" is one year's anthology, not books 2–1976."""
+    assert F.filter_reason("Bst Sci Fic of Yr#2-1976") != F.BOX_SET
+
+
+def test_a_comic_by_its_goodreads_genres():
+    """G208 (2026-10-22): graphic novels with no comic word in the title,
+    read from the page's top two genres (most-shelved first); a light novel
+    genre anywhere keeps it prose."""
+    assert F.filter_reason("Germ Warfare: A Very Graphic History",
+                           genres=["Graphic Novels", "Science", "History"]) == F.COMIC
+    assert F.filter_reason("The Good Neighbors", genres=["Graphic Novels", "Fantasy"]) == F.COMIC
+    assert F.filter_reason("Campfire Cooking in Another World with My Absurd Skill: Sui's Great Adventure",
+                           genres=["Manga"]) == F.COMIC
+    # Third place caught a prose novel.
+    assert F.filter_reason("Final Fantasy XIII-2: Fragments After",
+                           genres=["Fiction", "Gaming", "Manga", "Fantasy"]) is None
+    assert F.filter_reason("Campfire Cooking in Another World with My Absurd Skill: Volume 1",
+                           genres=["Light Novel", "Fantasy", "Manga"]) is None
+    # A light novel shelved Manga first is still prose (F12).
+    assert F.filter_reason("Re:ZERO -Starting Life in Another World-, Vol. 29",
+                           genres=["Manga", "Fantasy", "Light Novel"]) is None
+    assert F.filter_reason("Germ Warfare: A Very Graphic History") is None
+    # Matching still reads the title alone (C21).
+    assert F.book_class("Germ Warfare: A Very Graphic History") is None
 
 
 def test_a_seller_listing_names_the_author():

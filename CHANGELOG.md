@@ -36,6 +36,12 @@ frontend test suite.
   leave it alone); a book you hide yourself has no reason. A book
   matches only books of its own family, read from the title, so a
   hidden comic issue never swallows the novel of the same name.
+  Goodreads' "(Series, #1-3)" ranges count as box sets, and a Goodreads
+  book whose two most-shelved genres include Comics, Graphic Novels or
+  Manga counts as a comic unless it's shelved as a light novel (G208:
+  "Germ Warfare: A Very Graphic History", "Call of the Hunt (Alpha &
+  Omega, #0.5-3)"); the Goodreads worker's log and its candidate now say
+  such a book was created hidden, not "merged into an existing book".
   Until now a few families were skipped (box sets, foreign-looking
   titles, any title ending " #N", which also dropped real books such as
   "Organ Donor: Afterlife of Ebon Black #1" and accented English titles

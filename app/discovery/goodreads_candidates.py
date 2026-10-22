@@ -639,6 +639,7 @@ def _book_result(row: dict, details: dict):
         source="goodreads",
         source_url=f"{_BASE}/book/show/{book_id}",
         contributors=list(details.get("contributors") or []),
+        genres=[str(g) for g in details.get("genres") or []],
     )
 
 
@@ -650,10 +651,11 @@ async def _merge(row: dict, details: dict) -> str:
     if blocker:
         return f", merge waits for {blocker}"
     from app.discovery.lookup import merge_goodreads_book
+    stats: dict = {}
     try:
         created, updated = await merge_goodreads_book(
             int(row["seshat_author_id"]), row["library_slug"], row["author_id"],
-            _book_result(row, details),
+            _book_result(row, details), stats=stats,
         )
     except Exception:
         attempts = int(row.get("attempts") or 0) + 1
@@ -666,8 +668,15 @@ async def _merge(row: dict, details: dict) -> str:
         else:
             await _set_state(row, ACCEPTED, attempts=attempts)
         return ", merge failed"
-    await _set_state(row, CREATED, reason="new" if created else "existing")
-    return ", created" if created else ", merged into an existing book"
+    if created:
+        await _set_state(row, CREATED, reason="new")
+        return ", created"
+    if stats.get("filtered"):
+        # G208: created hidden by the filters (Hidden → Filtered), not merged.
+        await _set_state(row, CREATED, reason="filtered")
+        return ", created hidden (filtered)"
+    await _set_state(row, CREATED, reason="existing")
+    return ", merged into an existing book"
 
 
 async def merge_waiting() -> Optional[StepResult]:

@@ -1183,7 +1183,7 @@ def _filtered_tag(reason: Optional[str], hidden: bool) -> str:
     return f" (hidden: {reason})" if hidden else f" ({reason}, shown by its setting)"
 
 
-async def _merge_result(author_id: int, result: AuthorResult, source_name: str, languages: list[str], full_scan: bool = False, owned_only: bool = False, series_collector: dict | None = None, on_new_book=None, exclude_audiobooks: bool = True, linked_author_ids: list[int] = None, link_type_by_id: dict[int, str] | None = None):
+async def _merge_result(author_id: int, result: AuthorResult, source_name: str, languages: list[str], full_scan: bool = False, owned_only: bool = False, series_collector: dict | None = None, on_new_book=None, exclude_audiobooks: bool = True, linked_author_ids: list[int] = None, link_type_by_id: dict[int, str] | None = None, stats: dict | None = None):
     """Merge an AuthorResult, filtering by language. In full_scan mode, updates metadata on existing books.
 
     When owned_only=True (the "Library-only source scan" setting), the
@@ -1387,6 +1387,7 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                 title, description=bk.description,
                 n_authors=_filters.author_role_count(getattr(bk, "contributors", None)),
                 authors=author_names, series_name=series_name, page_count=bk.page_count,
+                genres=getattr(bk, "genres", None) or (),
             )))
             return reason, match_cls
 
@@ -2268,6 +2269,9 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                 ", ".join(roster_stats.get("non_roster_names") or []) or "—",
             )
         await db.commit()
+        if stats is not None:
+            # Rows created hidden by the filters, beside the counts returned.
+            stats["filtered"] = stats.get("filtered", 0) + filtered_books
         return new_books, updated_books
     finally:
         await db.close()
@@ -3654,6 +3658,7 @@ async def _merge_unfinished_source(
 @source_gate.as_caller(source_gate.CALLER_WORKER)
 async def merge_goodreads_book(
     author_id: int, slug: str, goodreads_author_id: str, book: BookResult,
+    *, stats: dict | None = None,
 ) -> tuple[int, int]:
     """Merge one book the Goodreads candidate worker accepted into `slug`
     (2026-10 audit wave 4b, G87 / G102): the scan's merge path
@@ -3731,6 +3736,7 @@ async def merge_goodreads_book(
             full_scan=False, owned_only=False,
             exclude_audiobooks=bool(settings.get("exclude_audiobooks", True)),
             linked_author_ids=linked, link_type_by_id=link_type_by_id,
+            stats=stats,
         )
         source_gate.count_merged("goodreads", created=n, updated=u)
         if n:
@@ -3745,7 +3751,10 @@ async def merge_goodreads_book(
         logger.info(
             "  [goodreads] candidate %r for %s: %s",
             book.title, author_name,
-            "created" if n else ("merged into an existing book" if u else "no change"),
+            "created" if n else (
+                "created hidden (filtered)" if (stats or {}).get("filtered")
+                else "merged into an existing book" if u else "no change"
+            ),
         )
         return n, u
     finally:

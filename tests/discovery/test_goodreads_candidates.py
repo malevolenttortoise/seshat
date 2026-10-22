@@ -141,7 +141,7 @@ async def env(tmp_path, monkeypatch):
     monkeypatch.setattr(goodreads_session.GoodreadsSession, "_get_curl", lambda self: fake)
     merged: list = []
 
-    async def _merge(author_id, slug, gr_author_id, book):
+    async def _merge(author_id, slug, gr_author_id, book, **_kw):
         merged.append((author_id, slug, gr_author_id, book))
         return 1, 0
 
@@ -516,6 +516,30 @@ async def test_a_page_that_passes_is_created_at_once(env):
     assert (slug, gr_author, book.external_id, book.source) == ("books-lib", GR_AUTHOR, "100", "goodreads")
     assert book.language == "English" and book.isbn == "9780752882796"
     assert (await goodreads_store.get_book("100"))["page_fetched_at"]
+
+
+async def test_a_comic_by_its_genres_is_created_hidden_and_says_so(env, monkeypatch, caplog):
+    """G208 (2026-10-22): the page's genres reach the filters, and a book the
+    filters create hidden is noted as that, not "merged into an existing
+    book" with reason `existing` (G.I. Joe #2–5, Mercy Thompson Issue #1–4)."""
+    from app.discovery import lookup
+    monkeypatch.setattr(lookup, "merge_goodreads_book", _ORIGINAL_MERGE)
+    await _awaiting(env, page=FakeResp(200, _with_genres(NEUROPATH, ["Graphic Novels", "Science"])))
+    with caplog.at_level("INFO", logger="seshat.discovery.lookup"):
+        res = await gc.step()
+    assert res.detail.endswith("accepted, created hidden (filtered)")
+    row = (await _rows())["100"]
+    assert (row["state"], row["reason"]) == ("created", "filtered")
+    assert "created hidden (filtered)" in caplog.text
+    from app.discovery.database import get_db
+    db = await get_db(slug="books-lib")
+    try:
+        got = await (await db.execute(
+            "SELECT hidden, hidden_reason FROM books WHERE goodreads_id = '100'",
+        )).fetchall()
+    finally:
+        await db.close()
+    assert [tuple(r) for r in got] == [(1, "comic")]
 
 
 async def test_a_nonfiction_page_is_rejected_unless_allowed(env):
