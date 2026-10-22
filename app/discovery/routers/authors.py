@@ -24,7 +24,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Body, HTTPException, Query
 
 from app import state
-from app.config import load_settings
+from app.config import load_settings, ui_error
 from app.database import get_db as get_global_db
 from app.discovery.author_identity import (
     MIRRORABLE_SOURCE_ID_COLUMNS,
@@ -1630,7 +1630,7 @@ async def preview_source_id(
     try:
         parsed = parse_source_id(source, value)
     except ValueError as exc:
-        raise HTTPException(400, str(exc))
+        raise HTTPException(400, ui_error(exc))
     url = canonical_author_url(source, parsed) if parsed else None
     return {
         "source": source,
@@ -1675,7 +1675,7 @@ async def patch_source_id(person_id: int, data: dict = Body(...)):
         try:
             canonical = parse_source_id(source, str(value))
         except ValueError as exc:
-            raise HTTPException(400, str(exc))
+            raise HTTPException(400, ui_error(exc))
         if canonical is None:
             raise HTTPException(
                 400,
@@ -1852,10 +1852,10 @@ def _spawn_lookup_task(scan_type: str, total: int, runner) -> None:
             raise
         except Exception as e:
             logger.error(f"Author scan task error: {e}", exc_info=True)
-            state._lookup_progress.update({"running": False, "status": f"error: {e}"})
+            state._lookup_progress.update({"running": False, "status": f"error: {ui_error(e)}"})
             try:
                 from app.orchestrator.sse_publishers import publish_toast
-                await publish_toast("error", f"Author scan failed: {e}")
+                await publish_toast("error", f"Author scan failed: {ui_error(e)}")
             except Exception:
                 logger.debug("author-scan error toast failed", exc_info=True)
 
@@ -2991,7 +2991,7 @@ async def _start_authors_mam_scan(
         except Exception as e:
             logger.error(f"Bulk author MAM scan error: {e}", exc_info=True)
             state._mam_scan_progress.update({
-                "running": False, "status": f"error: {e}",
+                "running": False, "status": f"error: {ui_error(e)}",
                 "current_book": "", "current_library": "",
             })
 

@@ -55,3 +55,14 @@ async def test_rtorrent_failure_is_none(monkeypatch):
         assert await client.list_torrents() == []
     finally:
         await client.aclose()
+
+
+def test_only_qbit_reports_progress():
+    """G173: the download watcher requires 100% only from a client whose
+    `TorrentInfo.progress` is real; the others leave it at 0.0 and keep
+    the state rule (else nothing of theirs would ever finish)."""
+    from app.clients.qbittorrent import QbitClient
+
+    assert QbitClient.reports_progress is True
+    for other in (DelugeClient, RtorrentClient, TransmissionClient):
+        assert getattr(other, "reports_progress", False) is False, other.__name__

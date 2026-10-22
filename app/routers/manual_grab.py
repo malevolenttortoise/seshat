@@ -172,7 +172,7 @@ async def grab_status(job_id: str) -> dict:
 
 @router.get("/cover/{torrent_id}")
 async def cover(torrent_id: str):
-    if not torrent_id.isdigit():
+    if not (torrent_id.isascii() and torrent_id.isdigit()):
         raise HTTPException(400, "bad torrent id")
     path = manual_grab.cached_cover_path(torrent_id)
     if path is None:

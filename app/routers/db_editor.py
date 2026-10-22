@@ -35,6 +35,7 @@ from app import state
 from app.database import get_db as get_pipeline_db
 from app.discovery.database import get_db as get_discovery_db
 from app.discovery import metadata_cache
+from app.config import ui_error
 
 _log = logging.getLogger("seshat.routers.db_editor")
 
@@ -606,7 +607,7 @@ async def delete_row(
             )
             await db.commit()
         except sqlite3.IntegrityError as e:
-            msg = str(e)
+            msg = ui_error(e)
             if "FOREIGN KEY" in msg.upper():
                 raise HTTPException(
                     409,

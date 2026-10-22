@@ -46,6 +46,7 @@ from app.rate_limit import ledger as ledger_mod
 from app.rate_limit import mam_floor
 from app.rate_limit import queue as queue_mod
 from app.storage import grabs as grabs_storage
+from app.config import ui_error
 
 _log = logging.getLogger("seshat.orchestrator.budget_watcher")
 
@@ -97,7 +98,7 @@ async def tick(deps: DispatcherDeps) -> TickResult:
             queue_pops_attempted=0,
             queue_pops_submitted=0,
             queue_pops_failed=0,
-            error=f"{type(e).__name__}: {e}",
+            error=f"{type(e).__name__}: {ui_error(e)}",
             qbit_reachable=False,
         )
     finally:
@@ -210,7 +211,9 @@ async def _tick_inner(deps: DispatcherDeps, db) -> TickResult:
     except Exception:
         _log.exception("orphan adoption failed (non-fatal)")
 
-    # Build the richer snapshot that the download watcher needs.
+    # Build the richer snapshot that the download watcher needs. Progress
+    # only from a client that reports it (G173); others keep state-only.
+    reports_progress = bool(getattr(deps.qbit, "reports_progress", False))
     # Translate qBit's save_path from qBit's container namespace
     # to Seshat's container namespace so the pipeline can find files.
     dl_snapshot = {
@@ -219,6 +222,7 @@ async def _tick_inner(deps: DispatcherDeps, db) -> TickResult:
             save_path=translate_path(
                 t.save_path, deps.qbit_path_prefix, deps.local_path_prefix
             ),
+            progress=t.progress if reports_progress else None,
         )
         for t in qbit_torrents if t.hash
     }
@@ -404,7 +408,7 @@ async def _resubmit_queued_grab(
             db,
             grab.id,
             grabs_storage.STATE_FAILED_QBIT_REJECTED,
-            failed_reason=f"unparseable torrent file: {e}",
+            failed_reason=f"unparseable torrent file: {ui_error(e)}",
         )
         torrent_store.discard(grab.torrent_file_path)
         return "failed"

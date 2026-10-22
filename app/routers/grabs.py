@@ -30,6 +30,7 @@ from app.database import get_db
 from app.mam.torrent_id import extract_torrent_id
 from app.orchestrator.auto_train import train_author
 from app.orchestrator.dispatch import inject_grab
+from app.config import ui_error
 
 _log = logging.getLogger("seshat.routers.grabs")
 
@@ -179,7 +180,7 @@ async def inject_batch(body: InjectBatchRequest) -> InjectBatchResponse:
                 GrabResultItem(
                     torrent_id=tid,
                     ok=False,
-                    error=str(e),
+                    error=ui_error(e),
                 )
             )
             failed += 1

@@ -317,3 +317,65 @@ class TestEbookFormatPriority:
         # Primary should be EPUB despite PDF being larger — the
         # canary scenario from Mark's "Methodology of Secrets" grab.
         assert result.book_filename == "book.epub"
+
+
+class TestPreferAudio:
+    """2026-10-12: an audiobook grab's companion PDF / epub must not become
+    the primary (three Stormlight audiobooks went to CWA as their PDFs)."""
+
+    def test_audio_leads_over_a_ranked_pdf(self, tmp_path):
+        _create_file(tmp_path / "book.pdf", size=500)
+        _create_file(tmp_path / "book.m4b", size=100)
+        files = find_book_files(
+            tmp_path,
+            audiobook_priority=["m4b", "mp3"],
+            ebook_priority=["epub", "pdf"],
+            prefer_audio=True,
+        )
+        assert [f.name for f in files] == ["book.m4b", "book.pdf"]
+
+    def test_audio_leads_without_an_audiobook_priority(self, tmp_path):
+        """No audiobook priority set: the ebook pass alone would still put
+        the epub first."""
+        _create_file(tmp_path / "book.epub", size=500)
+        _create_file(tmp_path / "book.mp3", size=100)
+        files = find_book_files(
+            tmp_path, ebook_priority=["epub"], prefer_audio=True,
+        )
+        assert files[0].name == "book.mp3"
+
+    def test_each_kind_keeps_its_priority_order(self, tmp_path):
+        _create_file(tmp_path / "book.pdf", size=500)
+        _create_file(tmp_path / "book.epub", size=100)
+        _create_file(tmp_path / "book.mp3", size=400)
+        _create_file(tmp_path / "book.m4b", size=200)
+        files = find_book_files(
+            tmp_path,
+            audiobook_priority=["m4b", "mp3"],
+            ebook_priority=["epub", "pdf"],
+            prefer_audio=True,
+        )
+        assert [f.name for f in files] == ["book.m4b", "book.mp3", "book.epub", "book.pdf"]
+
+    def test_noop_for_pure_ebook_torrent(self, tmp_path):
+        _create_file(tmp_path / "book.pdf", size=500)
+        _create_file(tmp_path / "book.epub", size=100)
+        files = find_book_files(
+            tmp_path, ebook_priority=["epub", "pdf"], prefer_audio=True,
+        )
+        assert files[0].name == "book.epub"
+
+    def test_copy_to_staging_explicit_files_prefer_audio(self, tmp_path):
+        source = tmp_path / "src"
+        pdf = _create_file(source / "Oathbringer.pdf", size=500)
+        m4b = _create_file(source / "Oathbringer.m4b", size=100)
+        result = copy_to_staging(
+            source, tmp_path / "stage", "Oathbringer",
+            explicit_files=[pdf, m4b],
+            audiobook_priority=["m4b"],
+            ebook_priority=["epub", "pdf"],
+            prefer_audio=True,
+        )
+        assert result.success
+        assert result.book_filename == "Oathbringer.m4b"
+        assert result.book_format == "m4b"

@@ -310,3 +310,143 @@ class TestAudiobookRouting:
             book_format="epub",
         )
         assert isinstance(sink, CalibreSink)
+
+
+class TestAudiobookWithCompanionFile:
+    """2026-10-12: three Stormlight audiobook torrents (m4b + illustrations
+    PDF) had the PDF picked as the primary — the ebook-priority pass ranks
+    every ebook file ahead of every audio file — so the PDF went to CWA and
+    the m4b never reached Audiobookshelf. The grab's MAM category decides
+    which kind leads."""
+
+    async def _run(self, db, tmp_path, category: str):
+        grab_id = await grabs_storage.create_grab(
+            db,
+            announce_id=None,
+            mam_torrent_id="1275961",
+            torrent_name="Rhythm of War",
+            category=category,
+            author_blob="Brandon Sanderson",
+            state=grabs_storage.STATE_DOWNLOADED,
+        )
+        save_path = tmp_path / "downloads"
+        folder = save_path / "Rhythm of War - Brandon Sanderson"
+        folder.mkdir(parents=True)
+        (folder / "Rhythm of War.m4b").write_bytes(b"\x00" * 5000)
+        (folder / "Rhythm of War.pdf").write_bytes(b"%PDF-1.4" + b"\x00" * 100)
+        run_id = await pipe_storage.create_run(
+            db, grab_id=grab_id, qbit_hash="hash_row", source_path=str(save_path),
+        )
+        event = CompletionEvent(
+            grab_id=grab_id, qbit_hash="hash_row", torrent_name="Rhythm of War",
+            save_path=str(save_path), pipeline_run_id=run_id,
+        )
+        library = tmp_path / "library"
+        abs_library = tmp_path / "abs"
+        ok = await process_completion(
+            db, event,
+            staging_path=str(tmp_path / "staging"),
+            default_sink="folder",
+            calibre_library_path="",
+            folder_sink_path=str(library),
+            audiobookshelf_library_path=str(abs_library),
+            category_routing={},
+            ntfy_url="", ntfy_topic="",
+            torrent_files=[
+                "Rhythm of War - Brandon Sanderson/Rhythm of War.m4b",
+                "Rhythm of War - Brandon Sanderson/Rhythm of War.pdf",
+            ],
+            audiobook_format_priority=["m4b", "m4a", "mp3"],
+            ebook_format_priority=["epub", "azw3", "mobi", "pdf"],
+        )
+        assert ok is True
+        run = await pipe_storage.get_run(db, run_id)
+        return run, library, abs_library
+
+    async def test_audiobook_grab_delivers_the_m4b_to_abs(self, temp_db, tmp_path):
+        db = await get_db()
+        try:
+            run, library, abs_library = await self._run(
+                db, tmp_path, "Audiobooks - Fantasy",
+            )
+            assert run.book_format == "m4b"
+            assert run.book_filename == "Rhythm of War.m4b"
+            assert run.sink_name == "audiobookshelf"
+            assert [p.name for p in abs_library.rglob("*.m4b")] == ["Rhythm of War.m4b"]
+            # The PDF goes nowhere (Mark, 2026-10-12): not into ABS, not to
+            # the ebook sink.
+            assert list(abs_library.rglob("*.pdf")) == []
+            assert not library.exists() or list(library.rglob("*")) == []
+        finally:
+            await db.close()
+
+    async def test_ebook_grab_still_leads_with_the_ebook(self, temp_db, tmp_path):
+        db = await get_db()
+        try:
+            run, library, abs_library = await self._run(
+                db, tmp_path, "Ebooks - Fantasy",
+            )
+            assert run.book_format == "pdf"
+            assert run.sink_name == "folder"
+            assert not abs_library.exists() or list(abs_library.rglob("*")) == []
+        finally:
+            await db.close()
+
+
+class TestFileRaceFailureNotification:
+    """G185: grab 4744 *Ignite* failed "no file matching" and sent a
+    "Pipeline error" ntfy, then the file-race retry recovered it. The
+    ntfy now waits while a retry is due, and goes out on the last try."""
+
+    async def _fail_on_missing_files(self, tmp_path, monkeypatch, retries_used: int):
+        from app.notifications import bus
+        from app.orchestrator import download_watcher
+
+        sent: list[str] = []
+
+        async def record(event, **kw):
+            sent.append(kw.get("message", ""))
+
+        monkeypatch.setattr(bus, "emit", record)
+        download_watcher._file_race_held_ntfy.clear()
+        db = await get_db()
+        try:
+            grab_id = await grabs_storage.create_grab(
+                db, announce_id=None, mam_torrent_id="1277000",
+                torrent_name="Ignite", category="Audiobooks - Fantasy",
+                author_blob="Nobody", state=grabs_storage.STATE_DOWNLOADED,
+            )
+            monkeypatch.setitem(download_watcher._file_race_retry_counts, grab_id, retries_used)
+            downloads = tmp_path / "downloads"
+            downloads.mkdir()
+            run_id = await pipe_storage.create_run(db, grab_id=grab_id, source_path=str(downloads))
+            event = CompletionEvent(
+                grab_id=grab_id, qbit_hash="hash_ignite", torrent_name="Ignite",
+                save_path=str(downloads), pipeline_run_id=run_id,
+            )
+            result = await process_completion(
+                db, event, staging_path="", default_sink="folder",
+                calibre_library_path="", folder_sink_path=str(tmp_path / "lib"),
+                category_routing={}, ntfy_url="", ntfy_topic="",
+            )
+            run = await pipe_storage.get_run(db, run_id)
+        finally:
+            await db.close()
+        assert result is False
+        assert run.state == pipe_storage.PIPE_FAILED
+        assert run.error.startswith("no file matching 'Ignite'")
+        assert "torrent files unavailable from client" not in run.error
+        return sent, download_watcher._file_race_held_ntfy.get(grab_id)
+
+    async def test_held_while_a_retry_is_due(self, temp_db, tmp_path, monkeypatch):
+        sent, held = await self._fail_on_missing_files(tmp_path, monkeypatch, retries_used=0)
+        assert sent == []
+        assert held is not None and held.startswith("no file matching 'Ignite'")
+
+    async def test_sent_on_the_last_try(self, temp_db, tmp_path, monkeypatch):
+        from app.orchestrator import download_watcher
+        sent, held = await self._fail_on_missing_files(
+            tmp_path, monkeypatch, retries_used=download_watcher._FILE_RACE_MAX_RETRIES,
+        )
+        assert len(sent) == 1 and sent[0].startswith("Ignite\nno file matching")
+        assert held is None

@@ -21,6 +21,16 @@ def _links(n: int) -> list[dict]:
     return [{"kind": "link", "value": str(1000 + i)} for i in range(n)]
 
 
+async def test_cover_route_refuses_a_non_ascii_id(monkeypatch):
+    """Security triage #59: "١٢٣".isdigit() is True; the route still 400s."""
+    looked: list[str] = []
+    monkeypatch.setattr(manual_grab, "cached_cover_path", lambda tid: looked.append(tid))
+    async with _client() as c:
+        resp = await c.get("/api/v1/manual-grab/cover/١٢٣")
+    assert resp.status_code == 400
+    assert looked == []
+
+
 async def test_more_than_30_is_refused_and_nothing_starts(temp_db, monkeypatch):
     started: list = []
     monkeypatch.setattr(manual_grab, "start_job", lambda deps, items: started.append(items))

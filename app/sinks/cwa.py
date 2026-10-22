@@ -20,6 +20,7 @@ same host directory that CWA watches (e.g. /mnt/user/.../cwa-import).
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 from pathlib import Path
 
@@ -28,6 +29,26 @@ from app.sinks._cwa_throttle import throttle
 from app.sinks.base import SinkResult
 
 _log = logging.getLogger("seshat.sinks")
+
+
+def _hand_to_cwa(path: Path, ingest_dir: Path) -> None:
+    """Make a dropped file CWA's to read and fix in place: mode 0644 and,
+    when Seshat runs as root, the ingest folder's owner.
+
+    CWA v4.0.8+ ingests as a non-root user (`abc`). A root-owned 0600
+    file (a patched epub) was unreadable to it: CWA logged Permission
+    denied, deleted the file and imported nothing, while the pipeline
+    recorded the delivery (every patched ebook from 2026-09-29 to
+    2026-10-09).
+    """
+    os.chmod(path, 0o644)
+    if os.geteuid() != 0:
+        return
+    owner = ingest_dir.stat()
+    try:
+        os.chown(path, owner.st_uid, owner.st_gid)
+    except OSError as e:
+        _log.warning("cwa sink: couldn't hand %s to the ingest folder's owner: %s", path.name, e)
 
 
 class CWASink:
@@ -89,6 +110,7 @@ class CWASink:
                 # with a dot so CWA's "ignored/temporary file" filter skips it.
                 tmp_dest = target_dir / f".seshat-tmp-{dest.name}"
                 shutil.copy2(str(src), str(tmp_dest))
+                _hand_to_cwa(tmp_dest, target_dir)
                 tmp_dest.replace(dest)  # atomic rename on the same filesystem
 
                 _log.info("cwa sink: dropped %s → %s", src.name, dest)

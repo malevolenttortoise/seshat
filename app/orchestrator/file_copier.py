@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from app.config import ui_error
+
 _log = logging.getLogger("seshat.orchestrator.file_copier")
 
 # Recognized book file extensions (lowercase, no dot).
@@ -145,6 +147,34 @@ def _apply_ebook_priority(
     return sorted(files, key=_key)
 
 
+def rank_book_files(
+    files: list[Path],
+    *,
+    audiobook_priority: Optional[list[str]] = None,
+    ebook_priority: Optional[list[str]] = None,
+    prefer_audio: bool = False,
+) -> list[Path]:
+    """Order a torrent's book files so the primary comes first.
+
+    The audiobook pass runs, then the ebook pass, and the ebook pass puts
+    every ebook file ahead of every audio file. Right for an ebook grab;
+    wrong for an audiobook torrent that ships a companion PDF or epub
+    (2026-10-12: three Stormlight audiobooks had their illustrations PDF
+    picked, routed to CWA, and the m4b never reached Audiobookshelf). So
+    an audiobook grab (`prefer_audio`) moves its audio files to the front,
+    each kind keeping its priority order.
+    """
+    ranked = _apply_ebook_priority(
+        _apply_audiobook_priority(files, audiobook_priority), ebook_priority,
+    )
+    if prefer_audio:
+        ranked = sorted(
+            ranked,
+            key=lambda p: p.suffix.lstrip(".").lower() not in _AUDIOBOOK_EXTENSIONS,
+        )
+    return ranked
+
+
 @dataclass(frozen=True)
 class CopyResult:
     """Outcome of a file copy operation."""
@@ -162,6 +192,7 @@ def find_book_files(
     *,
     audiobook_priority: Optional[list[str]] = None,
     ebook_priority: Optional[list[str]] = None,
+    prefer_audio: bool = False,
 ) -> list[Path]:
     """Find all book files in a directory tree.
 
@@ -169,8 +200,8 @@ def find_book_files(
     `audiobook_priority` is provided and the torrent contains
     audiobook files, a second pass reorders so the user's preferred
     audiobook format lands first. Same for `ebook_priority` on the
-    ebook side. Both can be applied independently — they touch
-    different file extensions and won't interfere.
+    ebook side. Ebook files lead unless `prefer_audio` (an audiobook
+    grab): see `rank_book_files`.
 
     Covers mixed-format bundles where Seshat would otherwise pick
     whichever single file happened to be largest regardless of
@@ -193,8 +224,12 @@ def find_book_files(
                 found.append(path)
 
     by_size = sorted(found, key=lambda p: p.stat().st_size, reverse=True)
-    by_audio = _apply_audiobook_priority(by_size, audiobook_priority)
-    return _apply_ebook_priority(by_audio, ebook_priority)
+    return rank_book_files(
+        by_size,
+        audiobook_priority=audiobook_priority,
+        ebook_priority=ebook_priority,
+        prefer_audio=prefer_audio,
+    )
 
 
 def copy_to_staging(
@@ -205,6 +240,7 @@ def copy_to_staging(
     explicit_files: Optional[list[Path]] = None,
     audiobook_priority: Optional[list[str]] = None,
     ebook_priority: Optional[list[str]] = None,
+    prefer_audio: bool = False,
 ) -> CopyResult:
     """Copy book files from source to staging.
 
@@ -219,8 +255,8 @@ def copy_to_staging(
     format torrents pick a preferred extension for the primary file
     — the baseline largest-first sort runs first, then stable
     re-ranks promote files whose extension appears earlier in each
-    respective priority list. The two priorities operate on disjoint
-    extension sets and don't interfere.
+    respective priority list. Ebook files lead unless `prefer_audio`
+    (an audiobook grab): see `rank_book_files`.
 
     Creates a subdirectory under staging_dir named after the torrent.
     Returns info about the primary (largest) book file.
@@ -245,13 +281,18 @@ def copy_to_staging(
                  if p.is_file() and p.suffix.lstrip(".").lower() in BOOK_EXTENSIONS],
                 key=lambda p: p.stat().st_size, reverse=True,
             )
-            by_audio = _apply_audiobook_priority(by_size, audiobook_priority)
-            book_files = _apply_ebook_priority(by_audio, ebook_priority)
+            book_files = rank_book_files(
+                by_size,
+                audiobook_priority=audiobook_priority,
+                ebook_priority=ebook_priority,
+                prefer_audio=prefer_audio,
+            )
         else:
             book_files = find_book_files(
                 source_dir,
                 audiobook_priority=audiobook_priority,
                 ebook_priority=ebook_priority,
+                prefer_audio=prefer_audio,
             )
         if not book_files:
             return CopyResult(
@@ -300,7 +341,7 @@ def copy_to_staging(
         )
     except Exception as e:
         _log.exception("file copy failed: %s → %s", source_dir, staging_dir)
-        return CopyResult(success=False, error=f"{type(e).__name__}: {e}")
+        return CopyResult(success=False, error=f"{type(e).__name__}: {ui_error(e)}")
 
 
 def _safe_dirname(name: str) -> str:

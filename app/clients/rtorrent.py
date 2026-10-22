@@ -33,6 +33,7 @@ import xmlrpc.client
 from typing import Optional
 
 from app.clients.base import AddResult, TorrentInfo
+from app.config import ui_error
 
 _log = logging.getLogger("seshat.clients.rtorrent")
 
@@ -112,11 +113,11 @@ class RtorrentClient:
         except xmlrpc.client.Fault as e:
             _log.warning("rTorrent add_torrent fault: %s", e)
             if "already loaded" in str(e).lower():
-                return AddResult(success=False, failure_kind="duplicate", failure_detail=str(e))
-            return AddResult(success=False, failure_kind="rejected", failure_detail=str(e))
+                return AddResult(success=False, failure_kind="duplicate", failure_detail=ui_error(e))
+            return AddResult(success=False, failure_kind="rejected", failure_detail=ui_error(e))
         except Exception as e:
             _log.warning("rTorrent add_torrent error: %s", e)
-            return AddResult(success=False, failure_kind="network_error", failure_detail=str(e))
+            return AddResult(success=False, failure_kind="network_error", failure_detail=ui_error(e))
 
     async def list_torrents(self, category: Optional[str] = None) -> list[TorrentInfo]:
         return await self.list_torrents_checked(category) or []

@@ -22,6 +22,8 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Coroutine, Optional
 
+from app.config import ui_error
+
 _log = logging.getLogger("seshat.orchestrator.jobs")
 
 JOB_TTL_S = 3600
@@ -108,7 +110,7 @@ def start_batch_job(
             job.result = await run(job)
         except Exception as e:
             _log.exception("%s job %s crashed", kind, job.id)
-            job.error = f"Unexpected error: {e}"
+            job.error = f"Unexpected error: {ui_error(e)}"
         finally:
             job.done = True
             job.finished_at = time.time()

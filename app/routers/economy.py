@@ -32,7 +32,7 @@ from typing import Literal, Optional, Union
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from app.config import load_settings, save_settings
+from app.config import load_settings, save_settings, ui_error
 from app.database import get_db
 from app.mam import cookie as mam_cookie
 from app.mam.bonus_buy import (
@@ -293,11 +293,11 @@ async def preflight(body: PreflightRequest) -> PreflightResponse:
     try:
         info = await get_torrent_info(body.torrent_id, token=token, ttl=0)
     except TorrentInfoError as e:
-        raise HTTPException(502, f"Couldn't fetch torrent info: {e}") from e
+        raise HTTPException(502, f"Couldn't fetch torrent info: {ui_error(e)}") from e
     try:
         status = await get_user_status(token=token, ttl=0)
     except UserStatusError as e:
-        raise HTTPException(502, f"Couldn't fetch user status: {e}") from e
+        raise HTTPException(502, f"Couldn't fetch user status: {ui_error(e)}") from e
 
     size_bytes = info.size_bytes or 0
     buffer_bytes = int(status.upload_buffer_bytes or 0)
@@ -356,7 +356,7 @@ async def _fetch_prev_seedbonus(token: str) -> float:
     try:
         status = await get_user_status(token=token, ttl=0)
     except UserStatusError as e:
-        raise HTTPException(502, f"Couldn't fetch current seedbonus: {e}") from e
+        raise HTTPException(502, f"Couldn't fetch current seedbonus: {ui_error(e)}") from e
     return float(status.seedbonus)
 
 

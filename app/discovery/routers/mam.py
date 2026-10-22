@@ -31,7 +31,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
-from app.config import load_settings, save_settings
+from app.config import load_settings, save_settings, ui_error
 from app.discovery.database import get_db, attach_contributors
 from app.discovery.sources.mam import (
     _NEEDS_SCAN_BASIC_BARE,
@@ -322,7 +322,7 @@ async def _start_mam_scan(
                     await db.commit()
                 except Exception as e:
                     logger.error(f"MAM scan batch error: {e}", exc_info=True)
-                    state._mam_scan_progress.update({"status": f"error: {e}", "running": False, "current_library": ""})
+                    state._mam_scan_progress.update({"status": f"error: {ui_error(e)}", "running": False, "current_library": ""})
                     return
                 finally:
                     await db.close()
@@ -1010,7 +1010,7 @@ async def _start_author_scan(
             raise
         except Exception as e:
             logger.error(f"MAM single-author scan failed: {e}", exc_info=True)
-            state._mam_scan_progress.update({"running": False, "status": f"error: {e}"})
+            state._mam_scan_progress.update({"running": False, "status": f"error: {ui_error(e)}"})
         finally:
             await bdb.close()
             if flip and original_slug:

@@ -33,6 +33,12 @@ concurrency:
   group: tests-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Read-only token for every job (CodeQL #63): the repo default is read
+# and docker-publish.yml's caller caps it too, but a workflow that runs
+# on PRs states its own.
+permissions:
+  contents: read
+
 jobs:
   pytest:
     name: pytest (py${{ matrix.python-version }})

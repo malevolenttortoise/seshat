@@ -35,7 +35,7 @@ from pydantic import BaseModel, Field
 
 from app import state
 from app.clients.qbittorrent import QbitClient
-from app.config import load_settings
+from app.config import load_settings, ui_error
 from app.orchestrator.download_folders import (
     ensure_folder_exists,
     translate_path,
@@ -487,7 +487,7 @@ async def cleanup_empty_folders(body: CleanupRequest):
             deleted += 1
             _log.info("cleaned up empty folder: %s", p)
         except Exception as e:
-            errors.append(f"{p.name}: {e}")
+            errors.append(f"{p.name}: {ui_error(e)}")
             fail += 1
 
     return CleanupResponse(deleted=deleted, failed=fail, errors=errors)

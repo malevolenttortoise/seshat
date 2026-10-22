@@ -27,6 +27,7 @@ from typing import Optional
 import httpx
 
 from app.clients.base import AddResult, TorrentInfo
+from app.config import ui_error
 
 _log = logging.getLogger("seshat.clients.transmission")
 
@@ -144,10 +145,10 @@ class TransmissionClient:
             return AddResult(success=True)
         except httpx.HTTPError as e:
             _log.warning("Transmission add_torrent network error: %s", e)
-            return AddResult(success=False, failure_kind="network_error", failure_detail=str(e))
+            return AddResult(success=False, failure_kind="network_error", failure_detail=ui_error(e))
         except Exception as e:
             _log.warning("Transmission add_torrent failed: %s", e)
-            return AddResult(success=False, failure_kind="unknown", failure_detail=str(e))
+            return AddResult(success=False, failure_kind="unknown", failure_detail=ui_error(e))
 
     async def list_torrents(self, category: Optional[str] = None) -> list[TorrentInfo]:
         return await self.list_torrents_checked(category) or []

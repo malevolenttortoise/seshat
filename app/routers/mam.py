@@ -31,7 +31,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from app.config import load_settings, save_settings
+from app.config import load_settings, save_settings, ui_error
 from app.mam import cookie as mam_cookie
 from app.mam import pacer as mam_pacer
 from app.mam.user_status import (
@@ -110,7 +110,7 @@ async def _build_status(
             last_validated_at=last_validated_at,
             validation_ok=validation_ok,
             cookie_age_seconds=cookie_age,
-            error=str(e),
+            error=ui_error(e),
         )
 
     return MamStatusResponse(
@@ -280,7 +280,7 @@ async def debug_match(
                 resolution_meta=cover_resolution,
             )
         except Exception as e:
-            cover_resolution["error"] = f"book_lookup_failed: {e}"
+            cover_resolution["error"] = f"book_lookup_failed: {ui_error(e)}"
             _log.exception("cover phash book lookup failed")
     elif seshat_cover_url:
         try:
@@ -289,7 +289,7 @@ async def debug_match(
                 resolution_meta=cover_resolution,
             )
         except Exception as e:
-            cover_resolution["error"] = f"url_fetch_failed: {e}"
+            cover_resolution["error"] = f"url_fetch_failed: {ui_error(e)}"
             _log.exception("cover phash url fetch failed")
 
     from app.discovery.sources.mam import debug_check_book
@@ -306,7 +306,7 @@ async def debug_match(
         )
     except Exception as e:
         _log.exception("debug_match cascade failed")
-        raise HTTPException(500, f"Debug match failed: {e}")
+        raise HTTPException(500, f"Debug match failed: {ui_error(e)}")
 
     # Surface resolution metadata even when the caller passed nothing —
     # makes the trace self-describing for diagnostic export.

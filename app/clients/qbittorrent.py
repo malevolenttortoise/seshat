@@ -32,6 +32,7 @@ from typing import Optional
 import httpx
 
 from app.clients.base import AddResult, TorrentInfo
+from app.config import ui_error
 
 _log = logging.getLogger("seshat.clients.qbittorrent")
 
@@ -59,6 +60,10 @@ class QbitClient:
         Production code leaves this as None and httpx uses its real
         network transport.
     """
+
+    # `TorrentInfo.progress` is real here (the other clients leave it at
+    # 0.0), so the download watcher may require 100% (G173).
+    reports_progress = True
 
     def __init__(
         self,
@@ -238,7 +243,7 @@ class QbitClient:
             return AddResult(
                 success=False,
                 failure_kind="network_error",
-                failure_detail=f"{type(e).__name__}: {e}",
+                failure_detail=f"{type(e).__name__}: {ui_error(e)}",
             )
 
         if resp.status_code == 200:

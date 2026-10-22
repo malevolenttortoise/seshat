@@ -480,6 +480,13 @@ async def _prepare_book(
     loop = asyncio.get_event_loop()
     save_path = Path(event.save_path)
 
+    # An audiobook grab (by its MAM category) has its audio files lead the
+    # ranking: its torrent may also carry an illustrations PDF or an epub,
+    # which the ebook pass would otherwise make the primary (and route to
+    # CWA). Adopted torrents (`manual_add`, no MAM category) rank as before.
+    grab = await grabs_storage.get_grab(db, event.grab_id)
+    prefer_audio = bool(grab) and _is_audiobook_grab("", grab.category or "")
+
     # Authoritative path resolution via the qBit file list. Every
     # book file we find here comes straight from the client's
     # view of what actually got written to disk — no string-match
@@ -500,20 +507,16 @@ async def _prepare_book(
                 matched_paths.append(candidate)
         if matched_paths:
             # Sort for deterministic primary selection when a torrent
-            # carries multiple book files (e.g. bundle / omnibus pack).
-            # Secondary pass applies the user's audiobook format
-            # priority (mixed-format bundles pick the preferred
-            # extension first; single-format is a no-op).
-            from app.orchestrator.file_copier import (
-                _apply_audiobook_priority,
-                _apply_ebook_priority,
-            )
-            after_audio = _apply_audiobook_priority(
+            # carries multiple book files (e.g. bundle / omnibus pack),
+            # then the user's audiobook and ebook format priorities
+            # (mixed-format torrents pick the preferred extension first;
+            # single-format is a no-op).
+            from app.orchestrator.file_copier import rank_book_files
+            book_files = rank_book_files(
                 sorted(matched_paths, key=lambda p: p.name.lower()),
-                audiobook_format_priority,
-            )
-            book_files = _apply_ebook_priority(
-                after_audio, ebook_format_priority,
+                audiobook_priority=audiobook_format_priority,
+                ebook_priority=ebook_format_priority,
+                prefer_audio=prefer_audio,
             )
             # `source` is a representative directory for logging +
             # staging copy fallback. Prefer the common parent when
@@ -532,10 +535,19 @@ async def _prepare_book(
         if not fallback_source.exists():
             matched = _find_torrent_file(save_path, event.torrent_name)
             if matched is None:
-                await _fail(db, run_id, event,
-                            f"torrent files unavailable from client; "
-                            f"no file matching {event.torrent_name!r} in {save_path}",
-                            ntfy_url, ntfy_topic)
+                # The watcher retries this shape ("no file matching") a
+                # few times; its ntfy waits until no retry is due (G185).
+                from app.orchestrator import download_watcher
+                error = (
+                    f"no file matching {event.torrent_name!r} in {save_path}: "
+                    f"qBit lists the torrent as finished, but its files "
+                    f"aren't there (yet)"
+                )
+                retry_due = download_watcher.file_race_retry_pending(event.grab_id)
+                if retry_due:
+                    download_watcher.hold_file_race_ntfy(event.grab_id, error)
+                await _fail(db, run_id, event, error, ntfy_url, ntfy_topic,
+                            notify=not retry_due)
                 return []
             fallback_source = matched
         source = fallback_source
@@ -545,6 +557,7 @@ async def _prepare_book(
                 find_book_files, source,
                 audiobook_priority=audiobook_format_priority,
                 ebook_priority=ebook_format_priority,
+                prefer_audio=prefer_audio,
             ),
         )
 
@@ -579,6 +592,7 @@ async def _prepare_book(
                 explicit_files=explicit,
                 audiobook_priority=audiobook_format_priority,
                 ebook_priority=ebook_format_priority,
+                prefer_audio=prefer_audio,
             ),
         )
         if not copy_result.success:
@@ -619,7 +633,6 @@ async def _prepare_book(
     settings = load_settings()
     bundle_enabled = bool(settings.get("bundle_detection_enabled", True))
 
-    grab = await grabs_storage.get_grab(db, event.grab_id)
     announce_author = grab.author_blob if grab else ""
     announce_title = grab.torrent_name if grab else ""
 
@@ -1713,14 +1726,21 @@ async def _fail(
     error: str,
     ntfy_url: str,
     ntfy_topic: str,
+    *,
+    notify: bool = True,
 ) -> None:
+    """Mark the run failed; `notify=False` holds the "Pipeline error"
+    notification (a file-race retry is still due)."""
     _log.warning(
-        "pipeline: failed grab_id=%d %s: %s",
+        "pipeline: failed grab_id=%d %s: %s%s",
         event.grab_id, event.torrent_name, error,
+        "" if notify else " (notification held: a retry is due)",
     )
     await pipe_storage.set_state(
         db, run_id, pipe_storage.PIPE_FAILED, error=error,
     )
+    if not notify:
+        return
     try:
         from app.notifications import bus, events
         await bus.emit(
