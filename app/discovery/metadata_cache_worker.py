@@ -906,11 +906,19 @@ async def send_daily_summary(
 
 def worker_heartbeat(source_name: str, stored: Optional[float]) -> Optional[float]:
     """The worker's last sign of life: its stamped heartbeat (once a tick),
-    or the start of its last request through the source gate, whichever
-    is later (G193). A tick that waits its turn for every request of a big
-    author is alive; "stalled" is no request at all."""
+    the start of its last request through the source gate (G193), or now
+    while it waits at the gate for its turn (G207), whichever is later. A
+    tick that waits its turn for every request of a big author is alive;
+    "stalled" is no request and no wait at all. A wait counts only for as
+    long as a working gate can make it last; past that it's stuck."""
     live = source_gate.last_request_at(source_name, source_gate.CALLER_WORKER)
     seen = [float(v) for v in (stored, live) if v is not None]
+    since = source_gate.waiting_since(source_name, source_gate.CALLER_WORKER)
+    if since is not None:
+        seen.append(min(
+            time.time(),
+            since + source_gate.longest_healthy_wait_seconds(source_name),
+        ))
     return max(seen) if seen else None
 
 

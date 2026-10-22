@@ -240,6 +240,12 @@ _last_start: dict[str, float] = {}
 # author scan of ~13 requests at a 100s gap ran 1,315s between stamps.
 _last_request_wall: dict[tuple[str, str], float] = {}
 
+# When each caller's waits for a source's turn began (wall clock), while
+# they last (G207): on 10-21 the Goodreads worker sat its full 400s
+# book-page turn after enrichment took the page before it, sent nothing
+# for 439s and was reported stalled at 360s.
+_waits: dict[tuple[str, str], list[float]] = {}
+
 # Goodreads' session always added up to 1s on top of its rate.
 _JITTER_S: dict[str, tuple[float, float]] = {"goodreads": (0.0, 1.0)}
 
@@ -546,7 +552,13 @@ async def turn(source: str, *, kind: str = "") -> AsyncIterator[Turn]:
     it. `kind` splits Goodreads' counts (`goodreads_kind`)."""
     who = current_caller()
     level = _PRIORITY_FIRST if who in _FIRST_IN_LINE else _PRIORITY_NORMAL
-    await _wait_turn(source, level, kind)
+    waits = _waits.setdefault((source, who), [])
+    began = _wall()
+    waits.append(began)
+    try:
+        await _wait_turn(source, level, kind)
+    finally:
+        waits.remove(began)
     _last_request_wall[(source, who)] = _wall()
     t = Turn(source, who, kind)
     _last_turn.set(t)
@@ -566,6 +578,24 @@ def last_request_at(source: str, who: str = CALLER_WORKER) -> Optional[float]:
     """When `who`'s last request to `source` started (wall clock), or None
     since the process started."""
     return _last_request_wall.get((source, who))
+
+
+def waiting_since(source: str, who: str = CALLER_WORKER) -> Optional[float]:
+    """When `who`'s oldest wait still waiting for `source`'s turn began
+    (wall clock), or None when it isn't waiting."""
+    waits = _waits.get((source, who))
+    return min(waits) if waits else None
+
+
+def longest_healthy_wait_seconds(source: str) -> float:
+    """The longest a wait for `source`'s turn takes when the gate works:
+    two callers' worth of the slowest kind's gap and quiet, plus the
+    source's own gap. A wait older than this is stuck, not waiting."""
+    slowest = 0.0
+    if source == "goodreads":
+        slowest = kind_gap_seconds(source, KIND_BOOK_PAGE) + quiet_seconds(source, KIND_BOOK_PAGE)
+    hi = _JITTER_S.get(source, (0.0, 0.0))[1]
+    return 2.0 * (slowest + gap_seconds(source) + hi)
 
 
 def mark_last_blocked(source: str) -> None:
@@ -745,6 +775,7 @@ def reset() -> None:
     global _last_prune_day
     _last_start.clear()
     _last_request_wall.clear()
+    _waits.clear()
     _last_other_start.clear()
     _pending.clear()
     _last_prune_day = None

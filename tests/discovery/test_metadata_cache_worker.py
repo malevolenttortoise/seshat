@@ -14,6 +14,7 @@ uses `stop_event` to break the loop cleanly.
 """
 from __future__ import annotations
 
+import asyncio
 import time
 
 import pytest
@@ -1404,6 +1405,74 @@ class TestStallThresholdFollowsTheGate:
         assert await metadata_cache_worker.check_stall("amazon") is False
         # Amazon's requests don't keep the Goodreads worker alive.
         assert metadata_cache_worker.worker_heartbeat("goodreads", None) is None
+
+    async def _goodreads_on(self, monkeypatch):
+        await metadata_cache.init_db(metadata_cache.SOURCE_GOODREADS)
+        monkeypatch.setattr(metadata_cache_worker, "is_worker_enabled", lambda source: True)
+        monkeypatch.setattr(metadata_cache_worker, "is_inside_schedule_window", lambda source: True)
+
+    async def _waiting_page(self, monkeypatch, began_ago: float):
+        """The worker's book page sitting out its turn at the gate (held
+        until the returned event is set), its wait begun `began_ago` s ago."""
+        from app.metadata import source_gate
+        monkeypatch.setattr(source_gate, "gap_seconds", lambda source: 30.0)
+        monkeypatch.setattr(
+            source_gate, "kind_gap_seconds",
+            lambda source, kind: 400.0 if kind == source_gate.KIND_BOOK_PAGE else 0.0,
+        )
+        release = asyncio.Event()
+
+        async def held_sleep(seconds):
+            await asyncio.wait_for(release.wait(), 5)
+        monkeypatch.setattr(source_gate, "_sleep", held_sleep)
+        source_gate._last_start["goodreads:book_page"] = source_gate._clock()
+        monkeypatch.setattr(source_gate, "_wall", lambda: time.time() - began_ago)
+
+        async def page():
+            with source_gate.caller(source_gate.CALLER_WORKER):
+                async with source_gate.turn("goodreads", kind=source_gate.KIND_BOOK_PAGE):
+                    pass
+        task = asyncio.create_task(page())
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert source_gate.waiting_since("goodreads") is not None
+        return task, release
+
+    async def test_a_worker_waiting_its_turn_is_no_stall(self, worker_under, monkeypatch):
+        """G207 (2026-10-21 20:30 EDT): enrichment took the book-page turn, the
+        worker sat its full 400s turn at the gate with nothing sent, and was
+        reported stalled at 439s (threshold 12 × 30s = 360s)."""
+        sent: list = []
+
+        async def _ntfy(**kw):
+            sent.append(kw)
+        monkeypatch.setattr(metadata_cache_worker, "_send_ntfy", _ntfy)
+        await self._goodreads_on(monkeypatch)
+        await self._stale(metadata_cache.SOURCE_GOODREADS, 439)
+        task, release = await self._waiting_page(monkeypatch, began_ago=210)
+        try:
+            assert await metadata_cache_worker.check_stall("goodreads") is False
+            assert sent == []
+        finally:
+            release.set()
+            await asyncio.wait_for(task, 5)
+        from app.metadata import source_gate
+        assert source_gate.waiting_since("goodreads") is None
+
+    async def test_a_wait_longer_than_the_gate_allows_is_a_stall(self, worker_under, monkeypatch):
+        """A wait that outlasts what a working gate makes (two book-page turns
+        with their quiet, ~20 min) is stuck: the watchdog still warns."""
+        async def _ntfy(**kw):
+            pass
+        monkeypatch.setattr(metadata_cache_worker, "_send_ntfy", _ntfy)
+        await self._goodreads_on(monkeypatch)
+        await self._stale(metadata_cache.SOURCE_GOODREADS, 3000)
+        task, release = await self._waiting_page(monkeypatch, began_ago=2000)
+        try:
+            assert await metadata_cache_worker.check_stall("goodreads") is True
+        finally:
+            release.set()
+            await asyncio.wait_for(task, 5)
 
 
 def test_crash_ntfys_at_most_one_an_hour(monkeypatch):

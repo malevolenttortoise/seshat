@@ -332,7 +332,12 @@ frontend test suite.
   request at all for 12 gaps, so a big author's scan (one of 209 books
   took 22 minutes at Amazon's 100s gap) no longer raises a false warning,
   and the panel's "heartbeat … ago" reads the same; the warning line
-  names its source.
+  names its source. A worker waiting at the gate for its turn counts as
+  alive too (G207): when enrichment takes the book-page turn first, the
+  Goodreads worker sits out a full 400s page gap with nothing sent, and
+  was reported stalled at 439s. A wait longer than a working gate can
+  make it (two book-page turns with their quiet, ~20 minutes) still
+  counts as a stall.
 - **Goodreads non-fiction isn't added to discovery by default**: a book
   Goodreads files under Nonfiction, Self Help, Sports, Puzzles, Cookbooks,
   Reference or Picture Books, or whose title names a crossword, puzzle,
