@@ -680,8 +680,14 @@ frontend test suite.
 
 ### Security
 
-From the 2026-10-12 triage of the open code-scanning alerts (wave S, S11):
+From the 2026-10-12 triage of the open code-scanning alerts (wave S, S11).
+Everything in this section, along with the 0600 CWA drops, the audiobook
+companion file and the download watcher's every-piece rule, was also
+backported in 3.13.1:
 
+- **The delayed-torrent filename check bounds each number to 20
+  digits**, so no request can make the match backtrack over a long
+  digit run (CodeQL `py/polynomial-redos`, flagged on the 3.13.1 PR).
 - **Error messages no longer carry secret URL values to the UI.** An
   httpx error's message holds its request URL, and a Google Books one
   carries `?key=<your API key>`: the URL-import preview showed it on any
