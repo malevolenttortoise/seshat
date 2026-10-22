@@ -248,6 +248,11 @@ _RX_FOREIGN_EDITION = re.compile(
     r"(?i)\b(?:band|teil|tome|tomo|libro|livro|volumen|coffret|ausgabe|edizione|edición|edição|wydanie|kitap|roman|"
     r"buch|bok|romanzo|novela)\s+\d+\b|\b(?:coffret|edizione|wydanie|broché|taschenbuch|tascabile)\b"
     r"|\w*ausgabe\b"                               # "Gesamtausgabe", "Sonderausgabe"
+    # Amazon's own marker, on titles with no foreign word to read ("Stahllied
+    # (German Edition)"): 0 owned titles carry one, 497 cached Amazon titles do.
+    r"|\(\s*(?:german|french|spanish|italian|portuguese|brazilian\s+portuguese|dutch|polish|russian|"
+    r"japanese|chinese|korean|turkish|swedish|norwegian|danish|finnish|czech|hungarian|romanian|"
+    r"greek|hebrew|catalan|ukrainian)\s+edition\s*\)"
 )
 # Romanian / Portuguese / Italian word shapes English doesn't make.
 _RX_FOREIGN_SHAPES = re.compile(r"(?i)\b\w+(?:ului|ção|ções|zione|zioni|ské|ského|ość)\b")

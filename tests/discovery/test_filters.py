@@ -57,6 +57,9 @@ from tests.discovery.test_merge_title_identity import (  # noqa: F401  (fixture)
     ("Star Wars: Flucht ins Ungewisse", F.FOREIGN),
     ("L'Empire caché", F.FOREIGN),
     ("Red Rabbit, tome 1", F.FOREIGN),
+    ("Stahllied (German Edition)", F.FOREIGN),            # Amazon's marker, no foreign word
+    ("L'ascesa di Senlin (Italian Edition)", F.FOREIGN),
+    ("Paladino do Novo Mundo 1 (Portuguese Edition)", F.FOREIGN),
     ("Der Werwolf: The Annals of Veight Volume 16", None),
     ("The Tides of Bára", None),
     ("Soul Harvest", None),

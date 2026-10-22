@@ -42,6 +42,8 @@ frontend test suite.
   "Germ Warfare: A Very Graphic History", "Call of the Hunt (Alpha &
   Omega, #0.5-3)"); the Goodreads worker's log and its candidate now say
   such a book was created hidden, not "merged into an existing book".
+  Amazon's own "(German Edition)" / "(Spanish Edition)" marker counts
+  as a foreign edition too, for titles with no foreign word to read.
   Until now a few families were skipped (box sets, foreign-looking
   titles, any title ending " #N", which also dropped real books such as
   "Organ Donor: Afterlife of Ebon Black #1" and accented English titles
