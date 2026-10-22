@@ -1506,7 +1506,7 @@ const HYGIENE_JOBS: { name: string; blurb: string }[] = [
   },
   {
     name: "Book deduplication",
-    blurb: "Merges book rows sharing any non-null identifier (Goodreads / Hardcover / ISBN / ASIN / Audible) plus same-series-position duplicates.",
+    blurb: "Merges book rows sharing any non-null identifier (Goodreads / Hardcover / ISBN / ASIN / Audible).",
   },
   {
     name: "Series consolidation",

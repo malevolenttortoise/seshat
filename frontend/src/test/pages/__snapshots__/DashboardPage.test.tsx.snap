@@ -9115,7 +9115,7 @@ exports[`Dashboard (desktop) > Data Hygiene asks first > markup 1`] = `
             <div
               style="font-size: 12px; color: rgb(214, 212, 224); margin-top: 2px;"
             >
-              Merges book rows sharing any non-null identifier (Goodreads / Hardcover / ISBN / ASIN / Audible) plus same-series-position duplicates.
+              Merges book rows sharing any non-null identifier (Goodreads / Hardcover / ISBN / ASIN / Audible).
             </div>
           </li>
           <li

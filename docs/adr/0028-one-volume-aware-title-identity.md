@@ -185,6 +185,27 @@ The same parser reads "(Series Book N)" out of a title at creation (G171) and Ha
   #3 and #5); grab history unchanged (77 of 2,129 snatched auto-grabs stopped, the same list); the cleanup's cache
   re-merge creates 32 fewer duplicates, every one read; a full Calibre sync is unchanged.
 
+## Amendment (2026-10-22, wave C S24: a taken series number isn't a match)
+
+- **Start-up deletes nothing by series number** (G215): two passes outside the merge still collapsed books sharing
+  `(series_id, series_index)` on the number alone, by plain DELETE: the same-series-position dedup (every start, and
+  Hygiene's "Book deduplication" pass B) and the series-index recovery from titles (on a taken number). After the
+  missing-books cleanup they'd have deleted 163 + 10 rows at the next restart, among them "The Forge of God" for its
+  Spanish edition at that number, "Harmonia" for "The Champions of Elan: Volume One" and "Just Over the Horizon (The
+  Complete Short Fiction of Greg Bear Book 1)". The first now only scrubs blank numbers and logs owned books sharing
+  one (a Calibre numbering slip, the Witcher case); the second leaves a row on a taken number as it is; Hygiene's pass
+  B is gone. Owned copies fold at the Calibre sync and in the cleanup.
+- **The scans' title→series passes fold only one book** (G216): when the series number a standalone's title names
+  (or an orphan series promotion picks) is taken, `_resolve_position_collision` folds the two (merge_books, as before)
+  only when this identity, read in that series, calls them one book of one filter family; otherwise the book is filed
+  beside the other. It had folded 340 books since v2.10.2, ~3 a day; of the 154 whose winner still exists the identity
+  agrees with 83 ("Remnant Book 3" into "Remnant III") and refuses 71, most of them wrong ("Six of Crows – Chapters 1
+  and 2" into the owned "Crooked Kingdom", "The Stormlight Archive Boxed Set 2" into "Words of Radiance") and about a
+  third copies the identity misses ("…: Now a Netflix Originals Movie"), which stay listed.
+- Replayed over every author on 2026-10-22 copies: 6 folds → 1 (the one kept: "The Year's Best Fantasy 02" into "…
+  Stories #2"); after the cleanup 9 → 0 (Saving A Life ×6 across its sub-series, "Hollow Earth Apocalypse: Arc 1" into
+  the owned "Ashes Fall"). Missed: "Cazadores de sombras 3" (the family check) and "Turning of the Tides …(Book 2)".
+
 ## Related
 
 - [0003](0003-bundle-dedup-prefer-duplicates.md) — the same duplicates-over-loss stance, for bundles.

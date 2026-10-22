@@ -11,9 +11,9 @@ configured library:
   3. Phase-2 author goodreads_id backfill (reverse-lookup from any
      book carrying a resolvable identifier — reuses
      `backfill_missing_author_ids`)
-  4. Book deduplication pass (identifier-keyed + same-series-position
-     — reuses `_dedupe_same_series_position` plus an explicit
-     identifier-grouping sweep that calls `merge_books` per pair)
+  4. Book deduplication pass (identifier-keyed sweep; the
+     same-series-position pass B was retired in the 2026-10 fix pass,
+     G215: a taken series number isn't a match)
   5. Series consolidation (intra-author canonical-form merge —
      reuses `_dedupe_intra_author_series`)
   6. ABS author name-match cross-stamp (cheap cross-library copy of
@@ -56,7 +56,6 @@ from app.config import load_settings
 from app.discovery import cross_library
 from app.discovery.database import (
     _dedupe_intra_author_series,
-    _dedupe_same_series_position,
     cleanup_empty_series,
     get_active_library,
     get_db as get_library_db,
@@ -871,9 +870,7 @@ async def _dedupe_by_identifier(
         loser_ids = [int(m["id"]) for m in members[1:]]
         # Local fold: copy identity columns COALESCE-style from the
         # losers onto the winner, then delete the loser rows. We
-        # stay inside the per-library DB transaction, matching the
-        # pattern `_dedupe_same_series_position` uses one section
-        # over.
+        # stay inside the per-library DB transaction.
         IDENT_COLS = (
             "isbn", "hardcover_id", "goodreads_id", "fictiondb_id",
             "kobo_id", "amazon_id", "google_books_id", "ibdb_id",
@@ -916,24 +913,19 @@ async def _dedupe_by_identifier(
 
 
 async def job_book_dedup(slug: str, stats: dict[str, Any]) -> None:
-    """Two-pass book dedup.
+    """Identifier-keyed book dedup: any two books sharing a non-null
+    `goodreads_id` / `hardcover_id` / `isbn` / etc. are the same book
+    (Hardcover-stamped Goodreads ids from Job 2 are what make this
+    newly productive).
 
-    Pass A — identifier-keyed merge. Any two books sharing a non-
-    null `goodreads_id` / `hardcover_id` / `isbn` / etc. are the
-    same book (Hardcover-stamped Goodreads ids from Job 2 are what
-    make this newly productive). Conservative; identifier matches
-    are extremely high-precision.
-
-    Pass B — `_dedupe_same_series_position`. Catches the
-    "Remnant II" vs "Remnant Book 2" case where two rows share
-    `(series_id, series_index)` even though titles don't fuzzy-
-    match. Existing helper, runs at init_db too.
+    The same-series-position pass B is gone (G215, 2026-10): it
+    deleted any unowned book on a taken series number, whatever its
+    title.
     """
     db = await get_library_db(slug)
     try:
-        # Pass A — identifier-keyed. Order matters: stronger
-        # identifiers first so the winning row keeps the most
-        # canonical id slot.
+        # Identifier-keyed. Order matters: stronger identifiers first so
+        # the winning row keeps the most canonical id slot.
         for col in (
             "goodreads_id", "hardcover_id", "isbn",
             "amazon_id", "audible_id", "asin",
@@ -941,14 +933,7 @@ async def job_book_dedup(slug: str, stats: dict[str, Any]) -> None:
             stats["books_merged"] += await _dedupe_by_identifier(
                 db, col, stats, slug,
             )
-
-        # Pass B — same-series-position.
-        deleted = await _dedupe_same_series_position(db) or 0
-        stats["books_merged"] += deleted
-        logger.info(
-            "hygiene[%s] book-dedup: total merged=%d (last-pass same-position=%d)",
-            slug, stats["books_merged"], deleted,
-        )
+        logger.info("hygiene[%s] book-dedup: total merged=%d", slug, stats["books_merged"])
     except Exception as e:
         msg = f"book-dedup ({slug}): {type(e).__name__}: {e}"
         logger.exception(msg)
@@ -969,7 +954,7 @@ async def job_series_consolidate(slug: str, stats: dict[str, Any]) -> None:
     try:
         collapsed = await _dedupe_intra_author_series(db) or 0
         stats["series_merged"] += collapsed
-        # And re-run empty-series cleanup in case Pass A + B
+        # And re-run empty-series cleanup in case the book dedup
         # orphaned anything.
         empty = await cleanup_empty_series(db) or 0
         stats["deleted_series"] += empty

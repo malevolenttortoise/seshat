@@ -2711,11 +2711,12 @@ async def _resolve_position_collision(
     """Shared dedup helper for series-position collisions.
 
     Used by both `_title_to_series_pass` and
-    `_orphan_series_promotion_pass`. Compares the incoming book
-    against any existing book at (sid, idx) and decides a winner
-    using (owned, non-Book-N title, lowest id), then routes the
-    fold through `merge_books` so identity fields coalesce and an
-    audit row is written.
+    `_orphan_series_promotion_pass`. When an existing book at (sid,
+    idx) is the incoming book by the title identity (G216, ADR-0028
+    amended), decides a winner using (owned, non-Book-N title, lowest
+    id), then routes the fold through `merge_books` so identity fields
+    coalesce and an audit row is written. Two different books on one
+    number both stay, and the caller files the incoming one there.
 
     Prior to v2.10.2 this helper hard-DELETEd the loser. That
     silently discarded identity fields the loser carried
@@ -2751,6 +2752,28 @@ async def _resolve_position_collision(
         (author_id, sid, idx, incoming_id),
     )).fetchone()
     if existing is None:
+        return (True, 0)
+
+    # A taken number isn't a match (G216): fold only what the title
+    # identity, read in this series, calls one book of one filter family
+    # ("Remnant Book 3" and "Remnant III"); otherwise the incoming book is
+    # filed beside the other ("Six of Crows - Chapters 1 and 2" isn't the
+    # owned "Crooked Kingdom" it once folded into).
+    from app.discovery import filters as _filters
+    from app.works.title_identity import TitleRef, author_labels, same_book
+    sname = await (await db.execute("SELECT name FROM series WHERE id = ?", (sid,))).fetchone()
+    sname = sname["name"] if sname else None
+    labels = author_labels(r[0] or "" for r in await (await db.execute(
+        "SELECT title FROM books WHERE id IN (SELECT book_id FROM book_authors WHERE author_id = ?)",
+        (author_id,),
+    )).fetchall())
+    if not same_book(TitleRef(incoming_title or "", sname, idx),
+                     TitleRef(existing["title"] or "", sname, idx), labels) \
+            or _filters.book_class(incoming_title or "") != _filters.book_class(existing["title"] or ""):
+        logger.debug(
+            f"    ORPHAN→SERIES: '{incoming_title}' (id={incoming_id}) filed beside "
+            f"'{existing['title']}' (id={existing['id']}) at series_id={sid} #{idx}: not one book"
+        )
         return (True, 0)
 
     ex_owned = int(existing["owned"] or 0)

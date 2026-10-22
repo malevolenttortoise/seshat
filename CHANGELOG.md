@@ -283,6 +283,18 @@ frontend test suite.
   "Splinter Angel: Book 3" from a source that gives no series now lands
   in that series with that number (an existing series of the author's
   first); the title is kept as the source wrote it.
+- **A taken series number no longer makes two books one** (discovery
+  fix pass S24, G215 / G216, ADR-0028 amended). Seshat's start no longer
+  deletes a missing book because another book holds its series number
+  (it had deleted "The Forge of God" for its Spanish edition, and would
+  have deleted 173 rows after the missing-books cleanup); Hygiene's Book
+  deduplication no longer does either. A scan filing a standalone book
+  into the series its title names folds it into the book on that number
+  only when the titles say it's that book ("Remnant Book 3" into
+  "Remnant III"), not "Six of Crows – Chapters 1 and 2" into your
+  "Crooked Kingdom" (half of the 340 such folds so far were wrong).
+  Owned books sharing a number are still logged at start for you to fix
+  in Calibre.
 - **OpenLibrary no longer creates missing books** (D11): it still
   matches and enriches books other sources list (IDs, covers, language).
 - **Hardcover**: "Book 06.0 - Blood Rites" titles come in as "Blood
