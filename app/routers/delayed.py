@@ -46,8 +46,10 @@ _log = logging.getLogger("seshat.routers.delayed")
 router = APIRouter(prefix="/api/v1/delayed", tags=["delayed"])
 
 # `fullmatch` with ASCII digits only: "$" would let a trailing newline
-# through and "\d" accepts any script's digits.
-_FILENAME_RX = re.compile(r"([0-9]+)_([0-9]+)\.torrent")
+# through and "\d" accepts any script's digits. The digit runs are
+# bounded (both IDs are far under 20 digits) so no request can make the
+# match backtrack over a long run (CodeQL py/polynomial-redos).
+_FILENAME_RX = re.compile(r"([0-9]{1,20})_([0-9]{1,20})\.torrent")
 
 
 class DelayedItem(BaseModel):

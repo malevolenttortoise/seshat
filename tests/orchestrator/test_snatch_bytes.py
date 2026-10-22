@@ -366,6 +366,7 @@ class TestDelayedDelete:
 
     @pytest.mark.parametrize("odd", [
         "12_34.torrent\n", "١٢_٣٤.torrent", "../12_34.torrent", "12_34.torrent.bak",
+        "1" * 21 + "_34.torrent",
     ])
     async def test_an_odd_filename_touches_nothing(self, temp_db, delayed_dir, odd):
         """Security triage #58."""

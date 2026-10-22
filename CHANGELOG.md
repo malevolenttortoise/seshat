@@ -69,6 +69,8 @@ From the 2026-10-12 triage of the open code-scanning alerts:
   `<grab>_<torrent>.torrent`** in the delayed folder: the path is rebuilt
   from its numbers, and a name with a trailing newline or non-ASCII
   digits is refused (400). It was already confined to one file name.
+  Each number is at most 20 digits, so no request can make the match
+  backtrack over a long digit run.
 - **Manual Grab's cover cache checks the torrent ID itself** (ASCII
   digits, read as a number) instead of trusting its callers; the cover
   route refuses non-ASCII digits.
