@@ -16,26 +16,33 @@ async def env(tmp_path, monkeypatch):
     from app import config as app_config
     from app import database as pipeline_database
     from app.discovery import database as disco_db
-    from app.discovery import missing_cleanup, roster
+    from app.discovery import metadata_cache, missing_cleanup, roster, source_blacklist
 
     monkeypatch.setattr(app_config, "DATA_DIR", tmp_path)
     monkeypatch.setattr(disco_db, "DATA_DIR", tmp_path)
+    # Step 6 reads the source caches: keep them off the real DATA_DIR.
+    monkeypatch.setattr(metadata_cache, "DATA_DIR", tmp_path)
     monkeypatch.setattr(app_config, "APP_DB_PATH", tmp_path / "seshat.db")
     monkeypatch.setattr(pipeline_database, "APP_DB_PATH", tmp_path / "seshat.db")
     monkeypatch.setattr(state, "_discovered_libraries", [
         {"slug": "test", "name": "Books", "content_type": "ebook"},
         {"slug": "audio", "name": "Audio", "content_type": "audiobook"},
     ])
-    settings = {"languages": ["English"]}
+    settings = {"languages": ["English"],
+                "metadata_sources": {"amazon": {"ebook_scan": True, "audiobook_scan": True}}}
     monkeypatch.setattr(missing_cleanup, "load_settings", lambda: dict(settings))
     await pipeline_database.init_db()
     await disco_db.init_db("test")
     await disco_db.init_db("audio")
+    await metadata_cache.init_db(metadata_cache.SOURCE_AMAZON)
+    await metadata_cache.init_db(metadata_cache.SOURCE_GOODREADS)
     monkeypatch.setitem(missing_cleanup._last, "preview", None)
     monkeypatch.setitem(missing_cleanup._last, "apply", None)
     roster.invalidate()
+    source_blacklist.invalidate()
     yield {"tmp": tmp_path, "settings": settings}
     roster.invalidate()
+    source_blacklist.invalidate()
 
 
 async def _q(sql, args=(), slug="test"):
@@ -293,6 +300,176 @@ async def test_a_standalone_titled_with_its_series_is_filed_there(env):
     assert rows[reused] == ("Xenowealth", 5.0)
     assert rows[plain] == (None, None)
     assert await _q("SELECT series_id FROM books WHERE id = ?", (reused,)) == [(existing,)]
+
+
+# ─── Step 6: the caches merged again (F13) ───────────────────
+
+
+async def _amazon_cache(asin, books, slug="test"):
+    import json
+    import time
+    from app.discovery import metadata_cache
+    db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+    try:
+        await db.execute(
+            f"INSERT INTO {metadata_cache.state_table()} (author_id, library_slug, last_scanned_at, "
+            f"last_outcome, book_count) VALUES (?,?,?,?,?)", (asin, slug, time.time(), "ok", len(books)))
+        for i, (title, series, pos) in enumerate(books):
+            await db.execute(
+                f"INSERT INTO {metadata_cache.books_table()} (author_id, library_slug, book_asin, title, "
+                f"series_name, series_pos, format, language, raw_json, cached_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (asin, slug, f"{asin}-{i}", title, series, pos, "kindle_edition", "English", json.dumps({}),
+                 time.time()))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def _scanned(aid, asin=None, gr=None):
+    await _q("UPDATE authors SET amazon_id = ?, goodreads_id = ?, last_lookup_at = 1.0 WHERE id = ?",
+             (asin, gr, aid))
+
+
+async def _gr_candidate(gr_author, aid, book_id, title, *, series=None, index=None, author="",
+                        slug="test"):
+    """A list entry the old merge called "existing", with its stored page."""
+    import json
+    import time
+    from app.discovery import metadata_cache
+    db = await metadata_cache.get_db(metadata_cache.SOURCE_GOODREADS)
+    try:
+        await db.execute(
+            f"INSERT OR IGNORE INTO {metadata_cache.candidate_authors_table()} (author_id, library_slug, "
+            f"seshat_author_id, seeded_at) VALUES (?,?,?,?)", (gr_author, slug, aid, time.time()))
+        await db.execute(
+            f"INSERT INTO {metadata_cache.candidates_table()} (author_id, library_slug, book_id, title, "
+            f"list_json, state, reason, first_seen_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            (gr_author, slug, book_id, title, json.dumps({"title": title}), "created", "existing",
+             time.time(), time.time()))
+        await db.execute(
+            f"INSERT INTO {metadata_cache.books_table(metadata_cache.SOURCE_GOODREADS)} (book_id, "
+            f"page_fetched_at, page_json) VALUES (?,?,?)",
+            (book_id, time.time(), json.dumps({
+                "series_name": series, "series_index": index, "language": "English", "genres": [],
+                "contributors": [{"name": author, "role": None}]})))
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def _titles(slug="test"):
+    return sorted(r[0] for r in await _q("SELECT title FROM books", (), slug))
+
+
+@pytest.fixture
+def no_network(monkeypatch):
+    """Every socket connect and curl_cffi request recorded and refused."""
+    import socket
+    tried = []
+
+    def refuse(*a, **k):
+        tried.append(a)
+        raise OSError("no requests in the cleanup")
+    monkeypatch.setattr(socket.socket, "connect", refuse)
+    monkeypatch.setattr(socket, "create_connection", refuse)
+    try:
+        import curl_cffi.requests as cr
+        monkeypatch.setattr(cr.AsyncSession, "request", refuse)
+        monkeypatch.setattr(cr.Session, "request", refuse)
+    except ImportError:
+        pass
+    return tried
+
+
+async def test_a_book_amazon_cached_for_a_scanned_author_comes_back(env, no_network):
+    mine = await _author("Susan Dennard")
+    await _scanned(mine, asin="B00DENNARD")
+    await _book("Truthwitch", [mine], owned=1, calibre_id=81)
+    await _amazon_cache("B00DENNARD", [("Truthwitch", "The Witchlands", 1.0),
+                                       ("Windwitch", "The Witchlands", 2.0)])
+    # Cached too, but never scanned: its first scan is the re-scans' job.
+    other = await _author("Rachel Caine")
+    await _q("UPDATE authors SET amazon_id = 'B00CAINE' WHERE id = ?", (other,))
+    await _book("Glass Houses", [other], owned=1, calibre_id=82)
+    await _amazon_cache("B00CAINE", [("Glass Houses", None, None), ("The Dead Girls' Dance", None, None)])
+    before = await _q("SELECT id, name, amazon_id, goodreads_id, last_lookup_at FROM authors ORDER BY id")
+    preview, report = await _apply()
+    assert await _titles() == ["Glass Houses", "Truthwitch", "Windwitch"]
+    assert _count(preview, "cache_remerge") == _count(report, "cache_remerge") == 1
+    # No author-level writes, no requests.
+    assert await _q("SELECT id, name, amazon_id, goodreads_id, last_lookup_at FROM authors ORDER BY id") == before
+    assert no_network == []
+
+
+async def test_a_cached_catalogue_sharing_no_owned_title_is_left_alone(env):
+    mine = await _author("Edward Ashton")
+    await _scanned(mine, asin="B00ASHTON")
+    await _book("Mickey7", [mine], owned=1, calibre_id=81)
+    await _amazon_cache("B00ASHTON", [("Of Bells and Clocks", None, None), ("Church Towers", None, None)])
+    _, report = await _apply()
+    assert await _titles() == ["Mickey7"]
+    step = next(s for s in report["steps"] if s["key"] == "cache_remerge")
+    assert [s["title"] for s in step["skipped"]] == ["Edward Ashton"]
+
+
+async def test_an_author_a_scan_wouldnt_visit_gets_nothing_back(env):
+    # Grab training added her as a co-author: linked, never scanned.
+    trained = await _author("Rachel Caine")
+    await _allow("Rachel Caine", "coauthor_train")
+    await _scanned(trained, asin="B00CAINE", gr="999")
+    await _amazon_cache("B00CAINE", [("Glass Houses", None, None)])
+    await _gr_candidate("999", trained, "123", "The Dead Girls' Dance", author="Rachel Caine")
+    await _apply()
+    assert await _titles() == []
+
+
+@pytest.mark.parametrize("stop", ["blacklisted", "amazon_not_asked", "library_only"])
+async def test_what_stops_a_scan_stops_the_amazon_remerge(env, stop):
+    from app.discovery import source_blacklist
+    mine = await _author("Jay Aury")
+    await _scanned(mine, asin="B079NLYFCQ")
+    await _book("Beyond the Borderlands", [mine], owned=1, calibre_id=81)
+    await _amazon_cache("B079NLYFCQ", [("Beyond the Borderlands", None, None), ("Station SS9", None, None)])
+    if stop == "blacklisted":
+        await source_blacklist.add("amazon", "B079NLYFCQ", author_name="Jay Aury")
+    elif stop == "amazon_not_asked":
+        env["settings"]["metadata_sources"] = {"amazon": {"ebook_scan": False, "audiobook_scan": True}}
+    else:
+        env["settings"]["author_scan_owned_only"] = True
+    await _apply()
+    assert await _titles() == ["Beyond the Borderlands"]
+
+
+async def test_a_goodreads_book_the_old_merge_folded_comes_back_unless_a_row_holds_its_id(env, no_network):
+    from app.discovery import source_blacklist
+    mine = await _author("C. Y. Croc")
+    await _scanned(mine, gr="555")
+    sid = await _q("INSERT INTO series (name, author_id) VALUES ('Perinqual Galaxy Hybrids', ?)", (mine,))
+    await _book("Xander Alien Hybrid", [mine], owned=1, calibre_id=81, series_id=sid, index=1.0)
+    # Renamed on Amazon; the old merge put Goodreads' id on it.
+    await _book("Drix Alien Hybrid", [mine], series_id=sid, index=2.0, source="amazon",
+                goodreads_id="55867801")
+    await _gr_candidate("555", mine, "55867801", "Drix Alien HalfBreed (Perinqual Galaxy Hybrids #2)",
+                        series="Perinqual Galaxy Hybrids", index=2.0, author="C. Y. Croc")
+    # Folded into book 1 before; its own book now.
+    await _gr_candidate("555", mine, "57323658", "Saaxx Alien Hybrid (Perinqual Galaxy Hybrids #3)",
+                        series="Perinqual Galaxy Hybrids", index=3.0, author="C. Y. Croc")
+    # Another author's record, blacklisted.
+    theirs = await _author("Edward Ashton")
+    await _scanned(theirs, gr="777")
+    await _book("Mickey7", [theirs], owned=1, calibre_id=82)
+    await _gr_candidate("777", theirs, "120169016", "Of Bells and Clocks", author="Edward Ashton")
+    await source_blacklist.add("goodreads", "777", author_name="Edward Ashton")
+    _, report = await _apply()
+    assert await _titles() == ["Drix Alien Hybrid", "Mickey7", "Saaxx Alien Hybrid (Perinqual Galaxy Hybrids #3)",
+                               "Xander Alien Hybrid"]
+    assert await _q("SELECT s.name, b.series_index, b.source, b.goodreads_id FROM books b "
+                    "JOIN series s ON s.id = b.series_id WHERE b.title LIKE 'Saaxx%'") == [
+        ("Perinqual Galaxy Hybrids", 3.0, "goodreads", "57323658")]
+    step = next(s for s in report["steps"] if s["key"] == "cache_remerge")
+    assert sorted(s["detail"] for s in step["skipped"]) == [
+        "Goodreads author record blacklisted", "a row already holds this Goodreads book's id"]
+    assert no_network == []
 
 
 # ─── Preview → Apply (G209, C27) ─────────────────────────────

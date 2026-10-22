@@ -17,6 +17,9 @@ the fix pass don't follow those rules; this applies them, in order:
      Audiobookshelf item, which a Calibre sync's flip leaves) into it, when
      exactly one owned book matches.
   5. File a standalone missing book in the series its title names.
+  6. Merge the cached Amazon books and Goodreads candidates again with the
+     title identity, as a cache-only scan would (no requests): books the
+     old merge folded into another row come back as their own.
 
 Never touched: owned books (except as a fold's winner), books you hid
 yourself, books you showed (`shown`), books hidden because an author's
@@ -55,6 +58,7 @@ STEPS: tuple[tuple[str, str, str], ...] = (
     ("filtered", "Comics, box sets, anthologies and other non-books", "hide"),
     ("owned_copy", "Copies of books you own", "fold"),
     ("series_in_title", "Series named in the title", "file"),
+    ("cache_remerge", "Amazon and Goodreads books merged again", "merge"),
 )
 PREVIEW_TTL_S = 3600.0
 # Rows per step a summary carries (the full lists are in the report).
@@ -137,8 +141,9 @@ def blocked_by() -> Optional[str]:
 class _Library:
     """What the steps read from one library DB, refreshed per step."""
 
-    def __init__(self, db, pdb, slug: str, settings: dict) -> None:
+    def __init__(self, db, pdb, slug: str, settings: dict, content_type: str = "ebook") -> None:
         self.db, self.pdb, self.slug, self.settings = db, pdb, slug, settings
+        self.content_type = content_type
         self.grab_linked: frozenset[int] = frozenset()
         self.rows: dict[int, Any] = {}
         self.contribs: dict[int, list[tuple[int, str]]] = {}
@@ -430,7 +435,168 @@ async def _series_in_title(lib: _Library, report: dict) -> None:
         step["count"] += 1
 
 
-_STEP_FUNCS = (_no_eligible_author, _openlibrary_only, _filtered, _owned_copy, _series_in_title)
+async def _linked(db, author_id: int) -> tuple[list[int], dict[int, str]]:
+    linked, kinds = [], {}
+    for r in await (await db.execute(
+        "SELECT canonical_author_id, alias_author_id, link_type FROM pen_name_links "
+        "WHERE canonical_author_id = ? OR alias_author_id = ?", (author_id, author_id),
+    )).fetchall():
+        for col in ("canonical_author_id", "alias_author_id"):
+            if r[col] != author_id and r[col] not in linked:
+                linked.append(r[col])
+                kinds[r[col]] = r["link_type"]
+    return linked, kinds
+
+
+async def _owned_refs(db, author_ids: list[int]) -> tuple[list[str], list[tuple]]:
+    """The owned titles a scan validates a source against, and its owned
+    omnibuses (`_validate_author`)."""
+    from app.discovery.lookup import _is_omnibus
+    ph = ",".join("?" * len(author_ids))
+    rows = await (await db.execute(
+        f"SELECT b.title, s.name AS series_name FROM books b LEFT JOIN series s ON s.id = b.series_id "
+        f"WHERE b.owned = 1 AND b.id IN (SELECT book_id FROM book_authors WHERE author_id IN ({ph}))",
+        author_ids,
+    )).fetchall()
+    titles = [r["title"] for r in rows]
+    return titles, [(r["title"], r["series_name"]) for r in rows if _is_omnibus(r["title"] or "")]
+
+
+async def _cache_remerge(lib: _Library, report: dict) -> None:
+    """Step 6 (F13): the books cached for each scan-eligible author merged
+    again with the title identity, as a cache-only scan would (Amazon's
+    author cache; Goodreads' candidates the old merge called "existing",
+    from their stored pages), with no author-level writes and no requests.
+    A book the old merge folded into the wrong row comes back as its own.
+    What stops a scan or the candidate worker stops it too: the roster, a
+    blacklisted author record, the library-only setting, a source the scan
+    doesn't ask, a Goodreads id a row already holds.
+    Ids the old merge left on the wrong row stay where they are (C34,
+    measured: which of two rows holds an id wrongly hinges on stored series
+    numbers that are often wrong themselves, so a moved id landed on a
+    duplicate about as often as on the book)."""
+    from app.discovery import lookup as L
+    from app.discovery import source_blacklist
+    from app.discovery.metadata_cache_reader import make_amazon_cached_source, read_cached_author
+    from app.discovery.roster import load_roster
+    from app.discovery.sources.base import AuthorResult, SeriesResult
+
+    # Scans list only owned books under this setting: nothing to bring back.
+    if lib.settings.get("author_scan_owned_only"):
+        return
+    roster = await load_roster(lib.db, lib.slug, force=True)
+    languages = lib.settings.get("languages", ["English"])
+    exclude_audio = bool(lib.settings.get("exclude_audiobooks", True))
+    first_new = (await (await lib.db.execute("SELECT COALESCE(MAX(id), 0) FROM books")).fetchone())[0]
+    step = _step(report, "cache_remerge")
+
+    async def merge(author_id, name, result, source):
+        linked, kinds = await _linked(lib.db, author_id)
+        await L._merge_result(
+            author_id, result, source, languages, full_scan=False, owned_only=False,
+            exclude_audiobooks=exclude_audio, linked_author_ids=linked, link_type_by_id=kinds,
+            touch_author=False,
+        )
+
+    # Amazon: each author's cached books, where a scan of this library asks Amazon.
+    amz = (lib.settings.get("metadata_sources") or {}).get("amazon") or {}
+    amazon_on = L.scan_uses_source("amazon", lib.settings, lib.content_type)
+    src = make_amazon_cached_source(
+        format_filter=amz.get("format") or "kindle",
+        audiobook_format_filter=amz.get("audiobook_format") or "audible_audiobook",
+        language=amz.get("language") or "English",
+    )
+    src._content_type = src.AUDIOBOOK if lib.content_type == "audiobook" else src.EBOOK
+    # Only authors a scan has merged before: the worker caches every
+    # library author, and re-merging one never scanned is that author's
+    # first scan (on the reference install ~21,000 new rows: F–Z and the
+    # audiobook library), which is the re-scans' job, after the cleanup.
+    authors = await (await lib.db.execute(
+        "SELECT id, name, amazon_id FROM authors WHERE amazon_id IS NOT NULL AND amazon_id != '' "
+        "AND last_lookup_at IS NOT NULL",
+    )).fetchall() if amazon_on else []
+    for a in authors:
+        if roster.scan_skip_reason(a["name"] or "", a["id"]):
+            continue
+        # An author record you blacklisted is one a scan never imports from.
+        if await source_blacklist.is_blacklisted("amazon", a["amazon_id"]):
+            step["skipped"].append({"library": lib.slug, "id": None, "title": a["name"],
+                                    "detail": "Amazon author record blacklisted"})
+            continue
+        linked, _ = await _linked(lib.db, a["id"])
+        our, owned_sets = await _owned_refs(lib.db, [a["id"], *linked])
+        result = await read_cached_author(
+            source_name="amazon", author_id=a["amazon_id"], library_slug=lib.slug,
+            language=src.language, format_filter=src._active_format_filter(),
+            owned_titles=our, owned_only=False,
+        )
+        if result is None:
+            continue
+        if not await L._validate_author(a["name"], our, result, owned_sets):
+            step["skipped"].append({"library": lib.slug, "id": None, "title": a["name"],
+                                    "detail": "Amazon's cached catalogue shares no title with the owned books"})
+            continue
+        await merge(a["id"], a["name"], AuthorResult(name=a["name"], books=result.books,
+                                                     series=result.series), "amazon")
+
+    # Goodreads: candidates the old merge put into an existing book.
+    from app.discovery import goodreads_candidates as gc
+    from app.discovery import goodreads_store, metadata_cache
+    gdb = await metadata_cache.get_db(metadata_cache.SOURCE_GOODREADS)
+    try:
+        ct = metadata_cache.candidates_table(metadata_cache.SOURCE_GOODREADS)
+        at = metadata_cache.candidate_authors_table(metadata_cache.SOURCE_GOODREADS)
+        cands = [dict(r) for r in await (await gdb.execute(
+            f"SELECT c.*, a.seshat_author_id FROM {ct} c JOIN {at} a "
+            f"ON a.author_id = c.author_id AND a.library_slug = c.library_slug "
+            f"WHERE c.state = 'created' AND c.reason = 'existing' AND c.library_slug = ? "
+            f"ORDER BY c.author_id, c.position",
+            (lib.slug,),
+        )).fetchall()]
+    finally:
+        await gdb.close()
+    names = {r["id"]: r["name"] for r in await (await lib.db.execute("SELECT id, name FROM authors")).fetchall()}
+    # A Goodreads book whose id a row already holds is one the candidate
+    # worker calls known and never merges (`_known_index`); re-merged by
+    # title it came back as a duplicate of a renamed book ("Drix Alien
+    # HalfBreed" beside "Drix Alien Hybrid", same Goodreads id).
+    known_ids = {str(r[0]) for r in await (await lib.db.execute(
+        "SELECT goodreads_id FROM books WHERE goodreads_id IS NOT NULL AND goodreads_id != ''",
+    )).fetchall()}
+    for c in cands:
+        aid = c.get("seshat_author_id")
+        if aid is None or aid not in names or roster.scan_skip_reason(names[aid] or "", aid):
+            continue
+        if await source_blacklist.is_blacklisted("goodreads", c["author_id"]):
+            step["skipped"].append({"library": lib.slug, "id": None, "title": c.get("title") or "",
+                                    "detail": "Goodreads author record blacklisted"})
+            continue
+        if str(c["book_id"]) in known_ids:
+            step["skipped"].append({"library": lib.slug, "id": None, "title": c.get("title") or "",
+                                    "detail": "a row already holds this Goodreads book's id"})
+            continue
+        details = goodreads_store.page_details_from_row(await goodreads_store.get_book(c["book_id"]))
+        if details is None:
+            continue
+        book = gc._book_result(c, details)
+        result = AuthorResult(name=names[aid])
+        if book.series_name:
+            result.series = [SeriesResult(name=book.series_name, books=[book])]
+        else:
+            result.books = [book]
+        await merge(aid, names[aid], result, "goodreads")
+
+    # What came back as its own row.
+    await lib.load()
+    for row in lib.rows.values():
+        if row["id"] > first_new:
+            step["rows"].append(lib.record(row, detail="created (hidden: %s)" % row["hidden_reason"]
+                                           if row["hidden"] else "created"))
+            step["count"] += 1
+
+
+_STEP_FUNCS = (_no_eligible_author, _openlibrary_only, _filtered, _owned_copy, _series_in_title,
+               _cache_remerge)
 
 
 # ─── Running it ──────────────────────────────────────────────
@@ -456,7 +622,7 @@ async def _run_steps(report: dict) -> None:
             with with_active_library(slug):
                 db = await get_db(slug)
                 try:
-                    lib = _Library(db, pdb, slug, settings)
+                    lib = _Library(db, pdb, slug, settings, libinfo.get("content_type") or "ebook")
                     for (key, _name, _action), func in zip(STEPS, _STEP_FUNCS):
                         _progress["step"] = key
                         await lib.load()

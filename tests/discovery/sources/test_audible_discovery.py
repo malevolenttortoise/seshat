@@ -244,6 +244,19 @@ class TestSourceRouting:
         from app.discovery.lookup import SOURCES
         assert "audible" not in [s.name for s in SOURCES]
 
+    def test_a_scan_asks_a_source_its_library_lists_and_its_switch_allows(self):
+        from app.discovery.lookup import scan_uses_source
+        on = {"metadata_sources": {"amazon": {"ebook_scan": True, "audiobook_scan": False},
+                                   "goodreads": {"ebook_scan": True, "audiobook_scan": True}}}
+        assert scan_uses_source("amazon", on, "ebook")
+        assert not scan_uses_source("amazon", on, "audiobook")
+        # Not in the audiobook list, whatever the switch says.
+        assert not scan_uses_source("goodreads", on, "audiobook")
+        # No panel entry: the source's default.
+        assert scan_uses_source("goodreads", {}, "ebook")
+        assert not scan_uses_source("amazon", {}, "ebook")
+        assert not scan_uses_source("amazon", {"metadata_sources": {"amazon": {}}}, "ebook")
+
 
 class TestActiveLibraryContentType:
     def test_no_active_library_returns_ebook(self, monkeypatch):

@@ -400,6 +400,20 @@ def _sources_for_content_type(content_type: str) -> list[SourceSpec]:
         return AUDIOBOOK_SOURCES
     return SOURCES
 
+
+def scan_uses_source(name: str, settings: dict, content_type: str) -> bool:
+    """Whether a scan of a `content_type` library asks source `name`: it is
+    in that library's source list and switched on for its scan surface
+    (`metadata_sources[name].ebook_scan` / `.audiobook_scan`), or on by
+    default (`SourceSpec.default_enabled`) while the panel has no entry."""
+    spec = next((s for s in _sources_for_content_type(content_type) if s.name == name), None)
+    if spec is None:
+        return False
+    entry = (settings.get("metadata_sources") or {}).get(name)
+    if entry is not None:
+        return bool(entry.get("audiobook_scan" if content_type == "audiobook" else "ebook_scan", False))
+    return spec.default_enabled
+
 # Total wall-clock budget across all sources for a single author.
 # At 25 minutes (v2.3.1, up from 15), even prolific authors with
 # slow Goodreads days have headroom. Eric Vall's 359-book scan at
@@ -1183,8 +1197,11 @@ def _filtered_tag(reason: Optional[str], hidden: bool) -> str:
     return f" (hidden: {reason})" if hidden else f" ({reason}, shown by its setting)"
 
 
-async def _merge_result(author_id: int, result: AuthorResult, source_name: str, languages: list[str], full_scan: bool = False, owned_only: bool = False, series_collector: dict | None = None, on_new_book=None, exclude_audiobooks: bool = True, linked_author_ids: list[int] = None, link_type_by_id: dict[int, str] | None = None, stats: dict | None = None):
+async def _merge_result(author_id: int, result: AuthorResult, source_name: str, languages: list[str], full_scan: bool = False, owned_only: bool = False, series_collector: dict | None = None, on_new_book=None, exclude_audiobooks: bool = True, linked_author_ids: list[int] = None, link_type_by_id: dict[int, str] | None = None, stats: dict | None = None, touch_author: bool = True):
     """Merge an AuthorResult, filtering by language. In full_scan mode, updates metadata on existing books.
+
+    `touch_author=False` leaves the author's `last_lookup_at` as it was:
+    the missing-books cleanup re-merges cached books, it isn't a lookup.
 
     When owned_only=True (the "Library-only source scan" setting), the
     function still UPDATEs existing books with new URLs, series links, and
@@ -1228,8 +1245,8 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
         up = []; pr = []
         if result.bio: up.append("bio = COALESCE(bio, ?)"); pr.append(result.bio)
         if result.external_id: up.append(f"{source_name}_id = ?"); pr.append(result.external_id)
-        up.append("last_lookup_at = ?"); pr.append(time.time()); pr.append(author_id)
-        if up: await db.execute(f"UPDATE authors SET {', '.join(up)} WHERE id = ?", pr)
+        if touch_author: up.append("last_lookup_at = ?"); pr.append(time.time())
+        if up: await db.execute(f"UPDATE authors SET {', '.join(up)} WHERE id = ?", [*pr, author_id])
 
         # v2.20.0 — mirror the source-ID write across linked per-library
         # author rows so a discovery scan in calibre-library populates
@@ -4101,15 +4118,8 @@ async def _lookup_author_inner(author_id: int, author_name: str, full_scan: bool
     # the SourceSpec is the fallback for fresh installs whose
     # metadata_sources dict hasn't been populated yet.
     ct = state.get_active_library_content_type()
-    scan_surface = "audiobook_scan" if ct == "audiobook" else "ebook_scan"
-    meta_sources = settings.get("metadata_sources") or {}
     for spec in active_sources:
-        entry = meta_sources.get(spec.name)
-        if entry is not None:
-            if not entry.get(scan_surface, False):
-                continue
-        elif not spec.default_enabled:
-            # No panel entry AND default is off — stay off.
+        if not scan_uses_source(spec.name, settings, ct):
             continue
         # Hardcover requires a configured API key — silently skip otherwise
         # so the user doesn't see a failed scan they never asked for.

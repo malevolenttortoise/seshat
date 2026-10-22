@@ -121,14 +121,22 @@ frontend test suite.
   scan found a torrent for them; hide comics, box sets, anthologies,
   foreign editions and the other non-books with their reason; fold a
   missing copy into the one owned book it is (never when it matches
-  several books, or two owned ones); and file a standalone book in the
+  several books, or two owned ones); file a standalone book in the
   series its title names ("The Rainy Season (The Ghosts Trilogy Book
-  3)"). It never touches owned books, books you hid or showed, books
-  hidden because an author's List missing books switch is off, and
-  never removes a book a grab is linked to. No source requests. On the
-  reference library: 667 + 824 removed, 1,345 hidden, 9 folded, 72
-  filed; the preview takes 3 seconds. While it runs, scheduled library
-  syncs and the Goodreads worker's merges wait.
+  3)"); and merge again what the source caches hold, so books the old
+  title matching folded into another book come back as their own: each
+  scanned author's cached Amazon books, and the Goodreads books the
+  worker merged into an existing row, from their stored pages. That
+  last step skips what a scan skips (authors no scan has visited, an
+  author record you blacklisted, a source the scan doesn't ask, the
+  library-only setting) and a Goodreads book a row already holds, and
+  leaves author rows as they are. It never touches owned books, books
+  you hid or showed, books hidden because an author's List missing
+  books switch is off, and never removes a book a grab is linked to.
+  No source requests. On the reference library: 667 + 824 removed,
+  1,354 hidden, 9 folded, 72 filed, 1,158 brought back (700 of them
+  hidden by the filters); the preview takes 13 seconds. While it runs,
+  scheduled library syncs and the Goodreads worker's merges wait.
 - **The pages for all this** (discovery fix pass S7). **Hidden** has two
   tabs: "Hidden by you" (the default) and "Filtered", the books Seshat
   keeps hidden. Filtered has a chip per reason, each with its count:

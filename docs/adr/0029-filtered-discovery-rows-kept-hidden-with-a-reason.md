@@ -75,13 +75,23 @@ of what was filtered, and nothing for the next scan or the Goodreads worker to r
   torrent found for the row counts as another source (G210); hide the filtered families on stored rows with the
   creation verdict (title, description, series name, page count, a stored Goodreads page's genres); fold a missing
   copy into the one owned library book it matches ([ADR-0028](0028-one-volume-aware-title-identity.md), amended);
-  file a standalone book in the series its title names.
+  file a standalone book in the series its title names; merge the source caches again under the identity (F13).
+- **Step 6 re-merges as a cache-only scan would**, from what is stored: each scan-eligible author's Amazon cache
+  (the scan's author check, the source's scan switch, a blacklisted author record and the library-only setting all
+  stop it), and the Goodreads candidates the worker merged into an existing row, from their stored pages, under
+  the worker's own rules (a book whose Goodreads id a row already holds is known and stays where it is: for a book
+  Amazon renamed, the id is the only link). Only authors a scan has visited: the worker caches every library author,
+  and merging an unscanned one is that author's first scan (~21,000 rows on the reference install), the re-scans'
+  job. No author-row writes (`_merge_result(touch_author=False)`). Ids the old merge left on a wrong row stay there
+  (moving them, measured, landed on a duplicate about as often as on the book).
 - **Never touched:** owned books (except as a fold's winner), books hidden with no reason (yours), `shown` and
   `author_off` books, and, for the removals, books a grab is linked to.
 - **Preview runs the steps on copies** of every library DB and `seshat.db` (SQLite backup), with the cleanup task's
-  own connections pointed at them; Apply needs a preview from the last hour. Measured on the reference install
-  (2026-10-22 copies): 667 removed (no scan-eligible author), 824 removed (OpenLibrary only; 523 kept by a MAM
-  torrent), 1,345 hidden, 9 folded (22 left listed as ambiguous), 72 filed; preview 3 s, the copies unchanged.
+  own connections pointed at them; the source caches are read in place and never written. Apply needs a preview
+  from the last hour. Measured on the reference install (2026-10-22 copies): 667 removed (no scan-eligible author),
+  824 removed (OpenLibrary only; 523 kept by a MAM torrent), 1,354 hidden, 9 folded (22 left listed as ambiguous),
+  72 filed, 1,158 created by step 6 (700 hidden by the filters; skipped: 4 blacklisted Amazon records, 19 authors
+  failing the author check, 62 known Goodreads ids); preview 13 s, the copies and caches unchanged.
 
 ## Related
 
