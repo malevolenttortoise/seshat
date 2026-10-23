@@ -222,6 +222,45 @@ The same parser reads "(Series Book N)" out of a title at creation (G171) and Ha
   ~15 copies the identity misses; 94 of the 96 read right (the two wrong ones: German-titled Slime rows filed into
   "The Slime Diaries" at the numbers of the English books).
 
+## Amendment (2026-10-23, wave D S26: more ways to write one book)
+
+- **A marketing tail is a description** (G225): a last part "Now a … Movie / Series / Show", "Soon to be a …",
+  "From / By the (bestselling) Author of …", "… #1 / New York Times bestseller" is dropped, its numbers too ("The
+  Humorous Science Fiction Thriller From the Author of Mickey 7"). "The School for Good and Evil #3: The Last Ever
+  After: Now a Netflix Originals Movie" is the owned "The Last Ever After".
+- **A spelled-out number (one–fifteen) ending a subtitle part is that number** (G226), in the last part that isn't a
+  description ("The Cannabis Preacher: Sermon Three" = "…, Sermon 3: A hunt for …"; "Sermon One: A financial thriller
+  …" is 1). An earlier part is a name ("The Star Trek: Deep Space Nine: The Siege"), a description's number isn't the
+  book's, a head is left alone ("Ready Player One"). Titles also compare as written, so "Round One (Mixed Martial
+  Cultivator #1)" still matches "Mixed Martial Cultivator: Round One", and the same-title rule (G213) reads the titles
+  as written. Of 144 stored titles the reading touches, 6 aren't volumes (Rogue One, Fantastick Four…): accepted, the
+  worst case is a later duplicate.
+- **Spaces don't count when the two books can't sit in different series** (G227): one side has no series, or both
+  are in one series ("The War Ship" = "The Warship"; "Endgame" in Merovingen Nights and "End Game" in Fallen Empire
+  stay two books). The scan merge's candidate index joins adjacent words so it offers such a pair.
+- **F29's mirror** (G228): "Series, Book N: Title" and "Title: Series: Book N" name a position when the named series
+  is where the book is filed (only "Book"; "86—EIGHTY-SIX, Vol. 7: Mist" stays a volume): "Rise of the Infernal
+  Paladin, Book Three: Infernal Liberation" = "Rise of The Infernal Paladin: Infernal Liberation", "Zero Point: The
+  Owner: Book Two" = "Zero Point".
+- **A series named in either title counts as a series name** (G229): the stored series as a suffix with no colon when
+  both are at one place ("Turning of the Tides Daughters of the High Seas (Book 2)"), and any series named in a
+  title's parentheses ("Invasion (The Autumn War #1)" = the owned "The Autumn War: Volume 1: Invasion", filed in
+  Calibre as Pinwheel #25). A bare "Series", "Book", "Volume", "Novel", "Saga" or "Collection" is never a title part.
+- **Fixed:** the same-title rule (G213) ignored a title's own number in its parentheses ("Roommate Control (Part
+  Four)" = "(Part Three)"); a generic word followed by more title was read as a description ("NieR:Automata: Long
+  Story Short" = "… Short Story Long"). A description now ends at its generic word, or goes on as one: a function
+  word ("with", "about", "inspired by"), an article ("Novella A Penguin eSpecial"), another generic word ("Fantasy
+  Novel"), punctuation ("LitRPG · Time Travel"), a part ending in a generic word, or, after an article, the book's
+  number (": A Matt Kearns Novel 3").
+- Measured on 2026-10-23 copies (after Hygiene): 79 of 2,498,085 same-author pairs change, every one read (joins: the
+  five SGE movie editions, Sermon 3, Zero Point, Infernal Paladin ×2, The Warship, Turning of the Tides, Excalibur:
+  Requiem, Gatefather, Changes; splits: comic issues from their collections, "Red School (Part 2)", two owned "Under
+  the Oak Tree" books, NieR); grab history 77 → 78 of 2,136 snatched auto-grabs stopped as owned, the new one a real
+  owned re-grab (4245 "Towerbound Is Not Just a Game"), no wanted volume blocked; the missing-books cleanup's preview
+  folds the five SGE copies into the owned books and its cache re-merge creates 7 "Patricia Briggs' Alpha & Omega: Cry
+  Wolf #2–#8" comic issues the old merge had folded into the owned novel (the filters' job). Two guards tried and
+  dropped, changing no pair: word order in the spelling-variant check, and a number belonging to the other title.
+
 ## Related
 
 - [0003](0003-bundle-dedup-prefer-duplicates.md) — the same duplicates-over-loss stance, for bundles.

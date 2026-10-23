@@ -55,6 +55,12 @@ The rules, strongest first:
   5. Series position alone decides only when one side has no real title
      ("Wild Wastes 3" = "Southern Storm" [Wild Wastes #3]).
 
+Wave D (2026-10-23) added: marketing tails as descriptions (G225),
+spelled-out numbers in a subtitle (G226; titles also compare as
+written), spaces when both books can't be in different series (G227),
+"Series, Book N: Title" / "Title: Series: Book N" as positions (G228),
+and a series named in either title as a series name (G229).
+
 When unsure the answer is "different": on the merge side a wrong
 "same" silently loses a missing book and a wrong "different" makes a
 visible duplicate; on the grab side a wrong "same" loses a wanted
@@ -102,7 +108,9 @@ class ParsedTitle:
     every number the title carries sits in a "(Series Book N)"
     parenthetical, so it says where the book sits, not which book it is.
     `subtitle_shapes`: for each subtitle tag, (series name, shape, the
-    title parts before it); see `_subtitle_tags`.
+    title parts before it); see `_subtitle_tags`. `written`: `proper` with
+    its spelled-out numbers as written ("Sermon Three", G226), for
+    comparing titles as spelled.
     """
     proper: str
     tags: tuple[tuple[Optional[str], float], ...]
@@ -110,6 +118,7 @@ class ParsedTitle:
     prefix_volume: Optional[float]
     position_only: bool = False
     subtitle_shapes: tuple[tuple[str, str, tuple[str, ...]], ...] = ()
+    written: str = ""
 
 
 # ─── Numbers ──────────────────────────────────────────────────
@@ -224,7 +233,23 @@ _GENERIC_WORDS = (
 _RX_GENERIC_SUBTITLE = re.compile(
     # ", an Urban Fantasy Men's Adventure" too: a comma, then "a" / "an".
     r"(?i)(?:\s*:\s*|\s+-\s+|,\s+(?=(?:a|an)\s))(?:(?:a|an|the)\s+)?(?:[\w'&+-]+\s+){0,6}"
-    r"(?:" + _GENERIC_WORDS + r")s?\b(?:(?!\s*:\s|\s+-\s+).)*$"
+    r"(?:" + _GENERIC_WORDS + r")s?\b"
+    # The generic word ends the part, or what follows it is more of a
+    # description ("… Romance with Forced Proximity", "… thriller about",
+    # "… Saga, Book 2", "… Novella A Penguin eSpecial", "… Stories Inspired
+    # by …", "… epic Agent Cormac science fiction series"), not a title
+    # going on ("Long Story Short").
+    r"(?:\s*$|(?=\s*[,;(\[!./·|])"
+    r"|\s+(?:with|for|about|in|of|set|from|featuring|where|that|and|to|on|by|like|a|an|the|inspired|based|box|boxed)\b"
+    r"|\s+(?:" + _GENERIC_WORDS + r")s?\b"
+    r"|(?:\s+[\w'&+-]+)*?\s+(?:" + _GENERIC_WORDS + r")s?\s*$)"
+    r"(?:(?!\s*:\s|\s+-\s+).)*$"
+)
+# ": A Matt Kearns Novel 3", ": The Valkeryn Chronicles 1": an article-led
+# description that numbers the book (": Collection 2" is a title).
+_RX_NUMBERED_DESCRIPTION = re.compile(
+    r"(?i)(?:\s*:\s*|\s+-\s+)(?:a|an|the)\s+(?:[\w'&+-]+\s+){0,6}"
+    r"(?:" + _GENERIC_WORDS + r")s?\s+#?\d{1,3}(?:\.\d+)?\s*$"
 )
 # " - She's at the end of her rope": a tagline, not a title part. Only
 # after a dash and starting with a pronoun ("… - The Golden Age of the
@@ -258,6 +283,11 @@ _RX_SERIES_VOLUME_PART = re.compile(
 _PLACEHOLDER_TITLES = frozenset({
     "untitled", "tba", "tbd", "untitled novel", "title tbd", "book",
 })
+# A bare word that is never a title part on its own (owned "Series:
+# Operator Chronicles, Book 1" isn't "Series: The Children of Earth, Book 1").
+_GENERIC_PARTS = frozenset({
+    "series", "book", "books", "volume", "novel", "novels", "saga", "collection",
+})
 
 
 def _ascii_fold(s: str) -> str:
@@ -267,6 +297,7 @@ def _ascii_fold(s: str) -> str:
 def _clean(title: str) -> str:
     t = (title or "").replace("’", "'").replace("‘", "'")
     t = t.replace("—", "-").replace("–", "-")
+    t = t.replace("·", ",")                           # "LitRPG · Time Travel · …"
     t = re.sub(r"(?<=\S)--(?=\S)", "-", t)
     t = re.sub(r"(?<=\w)-\s+", " - ", t)            # "Prism Academy- Prophecy"
     for _ in range(2):                                 # "(Supergirl (1996-2003))"
@@ -295,7 +326,8 @@ def _without_description(t: str) -> str:
     Cultivator: The Complete Series: A Cultivation Novel")."""
     t = _RX_TAGLINE.sub("", t)
     for _ in range(4):
-        stripped = _RX_GENERIC_SUBTITLE.sub("", _RX_PUBLISHER_ORIGINAL.sub("", t))
+        stripped = _RX_NUMBERED_DESCRIPTION.sub("", t)
+        stripped = _RX_GENERIC_SUBTITLE.sub("", _RX_PUBLISHER_ORIGINAL.sub("", stripped))
         if len(_RX_SEGMENTS.findall(stripped)) >= 2:
             stripped = _RX_SERIES_VOLUME_PART.sub("", stripped)
         stripped = _RX_BOOK_OF.sub("", stripped)
@@ -422,19 +454,69 @@ def _core_volume(proper: str, tags, prefix: Optional[float]) -> Optional[float]:
     return float(m.group(1)) if m else None
 
 
+# G225: a last part that sells the book is a description, its numbers
+# included ("…: Now a Netflix Originals Movie", "…: The Humorous Science
+# Fiction Thriller From the Author of Mickey 7", "… #1 Bestseller").
+_RX_MARKETING_PART = re.compile(
+    r"(?i)(?:\s*:\s*|\s+-\s+)(?:(?!\s*:\s|\s+-\s+).)*?\b(?:"
+    r"now\s+an?\s+(?:[\w'-]+\s+){0,4}(?:movie|film|motion\s+picture|series|show)"
+    r"|soon\s+to\s+be\s+an?\s"
+    r"|(?:from|by)\s+the\s+(?:[\w'-]+\s+){0,3}(?:author|creator|writer)s?\s+of\b"
+    r"|(?:new\s+york\s+times|usa\s+today|international|#1|number\s+one)\s+best\s*-?sell"
+    r")(?:(?!\s*:\s|\s+-\s+).)*$"
+)
+# G226: a spelled-out number ending a subtitle part is that number
+# ("Sermon Three" = "Sermon 3"). Not in the head: "Ready Player One".
+_SUBTITLE_NUMBER_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
+    "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,
+    "thirteen": 13, "fourteen": 14, "fifteen": 15,
+}
+_RX_SUBTITLE_NUMBER_WORD = re.compile(
+    r"(?i)(?<=[A-Za-z]\s)(" + "|".join(_SUBTITLE_NUMBER_WORDS) + r")(?=\s*$)"
+)
+_RX_PART_SEPARATOR = re.compile(r"(\s*:\s*|\s+-\s+)")
+
+
+def _is_description_part(piece: str) -> bool:
+    return bool(
+        _RX_GENERIC_SUBTITLE.fullmatch(": " + piece)
+        or _RX_NUMBERED_DESCRIPTION.fullmatch(": " + piece)
+        or _RX_GENERIC_ALONE.match(_key_text(piece.lower()))
+    )
+
+
+def _subtitle_numbers_as_digits(t: str) -> str:
+    """Only in the last part that isn't a description ("Sermon One: A
+    financial thriller about …"): an earlier part is a name ("The Star
+    Trek: Deep Space Nine: The Siege"), and a description's number isn't
+    this book's ("… Novel THE MALEVOLENT SEVEN")."""
+    pieces = _RX_PART_SEPARATOR.split(t)
+    last = max(
+        (i for i in range(0, len(pieces), 2) if not _is_description_part(pieces[i])),
+        default=0,
+    )
+    if last == 0:
+        return t
+    pieces[last] = _RX_SUBTITLE_NUMBER_WORD.sub(
+        lambda m: str(_SUBTITLE_NUMBER_WORDS[m.group(1).lower()]), pieces[last],
+    )
+    return "".join(pieces)
+
+
 @lru_cache(maxsize=16384)
 def parse_title(title: str) -> ParsedTitle:
     """Read the volume evidence out of one title (see the module doc)."""
-    t = _clean(title)
+    written = _RX_MARKETING_PART.sub("", _clean(title))
+    t = _subtitle_numbers_as_digits(written)
     prefix = None
     m = _RX_BOOK_PREFIX.match(t)
     if m:
         prefix = float(m.group(1))
         t = t[m.end():]
+        written = written[_RX_BOOK_PREFIX.match(written).end():]
     paren_tags = _parenthetical_tags(t)
-    proper = _RX_PAREN.sub(" ", t)
-    proper = re.sub(r"\[[^\]]*\]", " ", proper)
-    proper = re.sub(r"\s+", " ", proper).strip()
+    proper = _proper_text(t)
     core = _core_volume(proper, paren_tags, prefix)
     sub_tags = _subtitle_tags(proper)
     return ParsedTitle(
@@ -447,7 +529,14 @@ def parse_title(title: str) -> ParsedTitle:
             and all(name for name, _ in paren_tags)
         ),
         subtitle_shapes=tuple((name, shape, before) for name, _, shape, before in sub_tags),
+        written=_proper_text(written),
     )
+
+
+def _proper_text(t: str) -> str:
+    proper = _RX_PAREN.sub(" ", t)
+    proper = re.sub(r"\[[^\]]*\]", " ", proper)
+    return re.sub(r"\s+", " ", proper).strip()
 
 
 @lru_cache(maxsize=16384)
@@ -489,6 +578,7 @@ def _title_keys(
     position_agrees: bool,
     other_series: Optional[str],
     shared_place: str = "",
+    named_series: frozenset = frozenset(),
 ) -> _Keys:
     p = proper.lower()
     # Any length: "It" is a title. The 3-character floor is for parts.
@@ -507,6 +597,12 @@ def _title_keys(
                 rest = re.sub(r"^(?:the|a|an)\s+", "", k[len(shared_place) + 1:]).strip()
                 if len(rest) >= 3:
                     whole_keys.append(rest)
+            # G229: or as a suffix ("Turning of the Tides Daughters of the
+            # High Seas (Book 2)" = "Turning of the Tides", both at #2).
+            if k.endswith(" " + shared_place):
+                rest = k[:-len(shared_place) - 1].strip()
+                if len(rest) >= 3:
+                    whole_keys.append(rest)
     whole = frozenset(whole_keys)
     parts: list[str] = []
     for i, segment in enumerate(s for s in _RX_SEGMENTS.split(p) if s.strip()):
@@ -517,7 +613,10 @@ def _title_keys(
             parts.append(text)
     if len(parts) < 2:
         return _Keys(whole, "", "", (), ())
-    names = {series_key(s) for s in (series, other_series) if s} - {""}
+    # G229: a series either title names in its parentheses counts too
+    # ("Invasion (The Autumn War #1)" against "The Autumn War: Volume 1:
+    # Invasion" filed as Pinwheel #25).
+    names = ({series_key(s) for s in (series, other_series) if s} | named_series) - {""}
     head_text, tail_text = parts[0], parts[-1]
     head_rest, tail_rest = tuple(parts[1:]), tuple(parts[:-1])
     rest_is_series = series_key(" ".join(head_rest)) in names
@@ -525,7 +624,7 @@ def _title_keys(
 
     def usable(k: str) -> bool:
         return (
-            len(k) >= 3 and k not in labels
+            len(k) >= 3 and k not in labels and k not in _GENERIC_PARTS
             and (same_core or series_key(k) not in names)
         )
 
@@ -631,6 +730,44 @@ def _contains_words(inner: str, outer: str) -> bool:
     return bool(inner and outer) and f" {inner} " in f" {outer} "
 
 
+_RX_HEAD_BOOK = re.compile(r"(?i)^(.*?),?\s+book\s+#?\s*" + _NUMBER_TOKEN + r"\s*$")
+
+
+def _core_is_position(parsed: ParsedTitle, my_series: Optional[str]) -> bool:
+    """G228, F29's mirror: the title's own number says where the book sits
+    in the series it's filed in, beside a real title: "Rise of the
+    Infernal Paladin, Book Three: Infernal Liberation" and "Zero Point:
+    The Owner: Book Two" (filed in "Owner Trilogy"). Only "Book"; "86—
+    EIGHTY-SIX, Vol. 7: Mist" stays a volume."""
+    if parsed.core is None or parsed.prefix_volume is not None:
+        return False
+    if any(name is None for name, _ in parsed.tags):
+        return False                       # "(Book 2)" belongs to the title
+    stored = series_key(my_series)
+    if not stored:
+        return False
+    segments = [s for s in _RX_SEGMENTS.split(parsed.proper) if s.strip()]
+    if len(segments) < 2:
+        return False
+
+    def names_stored(text: str) -> bool:
+        k = series_key(text)
+        return bool(k) and (k == stored or _contains_words(k, stored))
+
+    def real(text: str) -> bool:
+        k = _key_text(_without_description(text.lower()))
+        return len(k) >= 3 and not _RX_GENERIC_ALONE.match(k) and not _contains_words(k, stored)
+
+    m = _RX_HEAD_BOOK.match(segments[0])
+    if m and names_stored(m.group(1)) and any(real(s) for s in segments[1:]):
+        return True                        # "Series, Book N: Title"
+    return (                               # "Title: Series: Book N"
+        len(segments) >= 3 and bool(_RX_BARE_VOLUME.match(segments[-1]))
+        and segments[-1].strip().lower().startswith("book")
+        and names_stored(segments[-2]) and real(segments[0])
+    )
+
+
 def _numbers_are_positions(parsed: ParsedTitle, my_series: Optional[str]) -> bool:
     """Every number this title writes says where the book sits, not which
     book it is: "(Series Book N)" parentheticals, or (F29) a subtitle
@@ -645,6 +782,8 @@ def _numbers_are_positions(parsed: ParsedTitle, my_series: Optional[str]) -> boo
     """
     if parsed.position_only:
         return True
+    if parsed.core is not None and _core_is_position(parsed, my_series):
+        return all(shape for _, shape, _ in parsed.subtitle_shapes)
     if parsed.core is not None or not parsed.subtitle_shapes:
         return False
     stored = series_key(my_series)
@@ -735,13 +874,18 @@ def _one_title(
     name or one of the author's labels is no title."""
     if pa.prefix_volume is not None or pb.prefix_volume is not None:
         return False
-    if _RX_TITLE_NUMBER.search(pa.proper) or _RX_TITLE_NUMBER.search(pb.proper):
+    # A number of the title's own, written in its parentheses: "Roommate
+    # Control (Part Four)" isn't "(Part Three)".
+    if pa.core is not None or pb.core is not None:
         return False
-    ka, kb = _plain_key(pa.proper), _plain_key(pb.proper)
+    wa, wb = pa.written or pa.proper, pb.written or pb.proper   # as spelled (G226)
+    if _RX_TITLE_NUMBER.search(wa) or _RX_TITLE_NUMBER.search(wb):
+        return False
+    ka, kb = _plain_key(wa), _plain_key(wb)
     if not ka or ka != kb or not _key_text(ka) or _key_text(ka) in labels or _NUMBERED + ka in labels:
         return False
-    return not (_no_real_title(pa.proper, series_a) or _no_real_title(pb.proper, series_b)
-                or _no_real_title(pa.proper, series_b) or _no_real_title(pb.proper, series_a))
+    return not (_no_real_title(wa, series_a) or _no_real_title(wb, series_b)
+                or _no_real_title(wa, series_b) or _no_real_title(wb, series_a))
 
 
 def same_book(
@@ -776,13 +920,35 @@ def same_book(
         if a.series and ia is not None and ia == ib and series_key(a.series) == series_key(b.series)
         else ""
     )
-    ka = _title_keys(pa.proper, a.series, same_core, labels, position_agrees, b.series, shared_place)
-    kb = _title_keys(pb.proper, b.series, same_core, labels, position_agrees, a.series, shared_place)
+    named = frozenset(series_key(n) for n, _ in (*pa.tags, *pb.tags) if n)
+    ka = _title_keys(pa.proper, a.series, same_core, labels, position_agrees, b.series, shared_place, named)
+    kb = _title_keys(pb.proper, b.series, same_core, labels, position_agrees, a.series, shared_place, named)
     if _titles_match(ka, kb):
         return True
+    # G226: also as written ("Round One" = "Mixed Martial Cultivator: Round
+    # One", whose "One" was read as 1); the numbers were compared above.
+    wa, wb = pa.written or pa.proper, pb.written or pb.proper
+    if (wa, wb) != (pa.proper, pb.proper) and _titles_match(
+        _title_keys(wa, a.series, same_core, labels, position_agrees, b.series, shared_place, named),
+        _title_keys(wb, b.series, same_core, labels, position_agrees, a.series, shared_place, named),
+    ):
+        return True
+    # G227: spaces don't count when the placements can't disagree ("The War
+    # Ship", no series, = "The Warship"; "Endgame" and "End Game" in two
+    # series stay two books).
+    if _placements_agree(a, b):
+        joined_a = {k.replace(" ", "") for k in ka.whole}
+        if any(len(k) >= 7 for k in joined_a & {k.replace(" ", "") for k in kb.whole}):
+            return True
     return position_agrees and (
         _no_real_title(pa.proper, a.series) or _no_real_title(pb.proper, b.series)
     )
+
+
+def _placements_agree(a: TitleRef, b: TitleRef) -> bool:
+    """One side has no series, or both are in one series (two places in it
+    were already told apart by the numbers)."""
+    return not (a.series and b.series) or series_key(a.series) == series_key(b.series)
 
 
 def different_edition_or_volume(a: TitleRef, b: TitleRef) -> bool:
@@ -830,7 +996,12 @@ def _volumes_agree(
         other = sb if pa.core is not None else sa
         other_written = nb if pa.core is not None else na
         anywhere = set().union(*other.values()) if other else set()
-        if v != 1.0 and v not in anywhere and v not in other_written:
+        # G228: a position core ("Series, Book 3: Title") against a copy
+        # with no number and no index: the titles decide.
+        position = (
+            _core_is_position(pa, a.series) if pa.core is not None else _core_is_position(pb, b.series)
+        ) and not other_written and (b_index if pa.core is not None else a_index) is None
+        if v != 1.0 and v not in anywhere and v not in other_written and not position:
             return None
     shared = [k for k in sa if k and k in sb]
     if any(not (sa[k] & sb[k]) for k in shared):
@@ -848,9 +1019,10 @@ def author_labels(titles: Iterable[str]) -> frozenset:
     """
     partners: dict[str, set[str]] = defaultdict(set)
     for t in set(titles):
+        parsed = parse_title(t or "")
         parts = [
             _key_text(x)
-            for x in _RX_SEGMENTS.split(parse_title(t or "").proper.lower())
+            for x in _RX_SEGMENTS.split((parsed.written or parsed.proper).lower())
         ]
         if len(parts) < 2:
             continue
@@ -866,7 +1038,7 @@ def author_labels(titles: Iterable[str]) -> frozenset:
     numbers: dict[str, set[float]] = defaultdict(set)
     for t in set(titles):
         p = parse_title(t or "")
-        k = _plain_key(p.proper)
+        k = _plain_key(p.written or p.proper)
         if k:
             numbers[k] |= {v for _, v in p.tags} | ({p.core} if p.core is not None else set())
     labels |= {_NUMBERED + k for k, vals in numbers.items() if len(vals) >= 2}
@@ -934,12 +1106,18 @@ class TitleIndex:
     def _tokens(ref: TitleRef) -> set[str]:
         _, parsed = _parsed(ref.title or "")
         tokens: set[str] = set()
-        for word in _key_text(parsed.proper.lower()).split():
+        words = _key_text(parsed.proper.lower()).split()
+        words += [w for w in _key_text((parsed.written or parsed.proper).lower()).split() if w not in words]
+        for word in words:
             if word in _INDEX_STOPWORDS:
                 continue
             tokens.add(word)
             if len(word) >= 5:
                 tokens.add("~" + word[:4])
+        # G227: "The War Ship" finds "The Warship" by the joined words.
+        for left, right in zip(words, words[1:]):
+            if len(left + right) >= 5:
+                tokens.add("~" + (left + right)[:4])
         numbers = _series_numbers(
             parsed.tags, ref.series, _as_index(ref.index), parsed.core,
         )

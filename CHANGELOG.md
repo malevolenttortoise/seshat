@@ -7,6 +7,31 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- **The title identity knows more ways to write one book** (ADR-0028,
+  discovery wave D): a marketing tail is ignored ("…: Now a Netflix
+  Originals Movie", "…From the Author of Mickey 7"); a spelled-out number
+  ending a subtitle is that number ("Sermon Three" = "Sermon 3"); spaces
+  don't count when the two books can't sit in different series ("The War
+  Ship" = "The Warship"); "Series, Book N: Title" and "Title: Series: Book
+  N" name a position, like "Title: Book N of Series"; a series named in
+  either title counts as a series name ("Invasion (The Autumn War #1)" is
+  your "The Autumn War: Volume 1: Invasion"). Five School for Good and
+  Evil movie editions and an owned Towerbound re-upload are now
+  recognised as books you own.
+
+### Fixed
+
+- **"Roommate Control (Part Four)" and "(Part Three)" were one book**:
+  the same-title rule ignored a title's own number in its parentheses.
+- **"Long Story Short" was read as a description** ("… Story …"), which
+  made "NieR:Automata: Long Story Short" and "… Short Story Long" one book;
+  a description now has to end, or go on as a description, after its
+  generic word.
+
 ## [3.14.0] — 2026-10-22
 
 Phase 2 of the 2026-10 roadmap, the **codebase audit**, waves 4 and 5,
