@@ -784,6 +784,17 @@ details in its section below), so not new here:
   remote cover images with Pillow to match MAM covers. A few covers'
   pHashes can move by a bit or two (well inside the match band); stored
   hashes are re-fetched after 30 days.
+- **A library slug from a request can only name a library database**
+  (CodeQL `py/path-injection`, flagged on this release's PR). Slugs
+  reach the database layer from `?slug=` and the library switch, and
+  the MAM author scan passed its `?slug=` on unchecked, so a slug like
+  `../x` became a path outside the data folder and an unknown one left
+  an empty `seshat_<slug>.db` behind. Every library database path now
+  takes only a slug of the form Seshat gives libraries (lowercase
+  letters, digits, single hyphens) and stays in the data folder, and
+  the MAM author scan answers 404 for a library it doesn't know, as the
+  library sync already did. Auth-gated, so reachable only by a
+  signed-in user.
 
 ---
 

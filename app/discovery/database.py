@@ -10,6 +10,7 @@ import asyncio
 import contextlib
 import contextvars
 import logging
+import os
 import re
 from collections import defaultdict
 from pathlib import Path
@@ -78,18 +79,35 @@ def get_active_library():
     return override if override is not None else _active_library_slug
 
 
+# What `config.slugify` makes of a library's name: the only shape a
+# library slug takes.
+_SLUG_RX = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+
+
 def get_db_path(slug=None):
     """Get the database file path for a library slug.
 
     If slug is provided, returns the per-library path.
     If slug is None, uses the active library slug.
     Falls back to seshat_default.db if no library is set.
+
+    Slugs reach here from requests (`?slug=`, the library switch), so one
+    `config.slugify` couldn't have made raises ValueError: nothing but a
+    `seshat_<slug>.db` in DATA_DIR is ever opened (CodeQL #69).
     """
     effective_slug = slug or get_active_library() or "default"
     override = _path_override.get()
     if override and effective_slug in override:
         return Path(override[effective_slug])
-    return DATA_DIR / f"seshat_{effective_slug}.db"
+    if not _SLUG_RX.fullmatch(str(effective_slug)):
+        raise ValueError(f"not a library slug: {effective_slug!r}")
+    # The pattern above is the rule; this containment check is the form
+    # CodeQL's path-injection query recognises.
+    base = os.path.normpath(DATA_DIR)
+    path = os.path.normpath(os.path.join(base, f"seshat_{effective_slug}.db"))
+    if not path.startswith(base + os.sep):
+        raise ValueError(f"not a library slug: {effective_slug!r}")
+    return Path(path)
 
 
 SCHEMA = """

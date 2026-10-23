@@ -900,6 +900,8 @@ async def _start_author_scan(
 ) -> dict:
     from app.discovery.database import get_active_library as _active, set_active_library as _set_active
     original_slug = _active()
+    if slug and not any(l["slug"] == slug for l in state._discovered_libraries):
+        raise HTTPException(404, f"Library '{slug}' not found")
     target_slug = slug or original_slug
     flip = bool(slug and slug != original_slug)
     db = await get_db(target_slug)
