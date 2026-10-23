@@ -244,6 +244,14 @@ def test_a_seller_listing_names_the_author():
     assert F.filter_reason("Stand by Me", authors=["Tom Clancy"]) is None
 
 
+def test_a_place_name_isnt_a_foreign_article():
+    """Wave D F–Z sort: "Las" / "Los" in a place name English titles use."""
+    for t in ("Viva, Las Vega IX", "Dirty Magick: Los Angeles", "The King of Las Vegas (Hammer Commission)"):
+        assert F.filter_reason(t) is None, t
+    assert F.filter_reason("Las Siete Plagas") == F.FOREIGN
+    assert F.filter_reason("Las cenizas de Babilonia") == F.FOREIGN
+
+
 def test_a_last_part_that_is_only_a_byline_is_a_listing():
     """Wave D: Amazon filed "Dracula : by Bram Stoker" under Holly Black;
     "By" starting a title-case subtitle is the title's own."""

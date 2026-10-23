@@ -156,6 +156,16 @@ of what was filtered, and nothing for the next scan or the Goodreads worker to r
   Files, White Sand, Moon Called), 2 Dresden comic omnibuses `box_set` → `comic`, the edition `listing`; 0 other owned
   changes.
 
+## Amendment (2026-10-23, wave D S31: Mark's sort of the F–Z sample)
+
+- **A place name isn't a foreign article**: "Las Vegas", "Los Angeles", "Los Alamos", "El Paso", "El Dorado", "La
+  Jolla", "La Paz" are left out of the word-list count ("Viva, Las Vega IX" and "Dirty Magick: Los Angeles" are English
+  books). Over every stored title it changes one row.
+- The sample (50 first scans, 1,203 listed / 355 hidden, 72 cards) read 68 right. The word test's one wrong call, the
+  invented "Ventura Starway", is G233's accepted cost: an English blurb, an English source language or a series with an
+  owned book would each un-hide 40–135 real translations (sources label translations "English" and give them the
+  original's blurb).
+
 ## Related
 
 - [0021](0021-roster-gates-discovery-author-creation.md) — roster and scan eligibility (amended: scan eligibility is

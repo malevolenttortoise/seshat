@@ -36,7 +36,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   volume number ("Patricia Briggs' Mercy Thompson: Moon Called Vol. 1"); a
   title ending in another person's byline ("Dracula : by Bram Stoker") is a
   seller's listing; an orientation edition of a book ("Birds of Prey -
-  Bisexual Edition") is listed hidden as a listing.
+  Bisexual Edition") is listed hidden as a listing. A place name ("Las
+  Vegas", "Los Angeles") no longer makes an English title look Spanish.
 - **Another spelling of an author you own or allow-listed counts as that
   author** for scans and the missing-books cleanup: "Thomas Doscher"'s
   books stay when you own "Thomas J. Doscher".

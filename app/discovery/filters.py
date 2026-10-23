@@ -323,13 +323,20 @@ def _unseen_words(title: str, authors: Iterable[str]) -> tuple[list[str], list[s
     return unseen, seen, english
 
 
+# Place names English titles use, whose first word is a foreign article
+# ("Viva, Las Vega IX", "Dirty Magick: Los Angeles"; wave D's F–Z sort).
+_RX_PLACE_NAMES = re.compile(
+    r"(?i)\b(?:las\s+vegas?|los\s+(?:angeles|alamos)|el\s+(?:paso|dorado)|la\s+(?:jolla|paz))\b"
+)
+
+
 def is_foreign_title(title: str) -> bool:
     t = title or ""
     if _RX_FOREIGN_SCRIPT.search(t) or _RX_FOREIGN_CHARS.search(t):
         return True
     if _RX_FOREIGN_EDITION.search(t):
         return True
-    words = [w.lower() for w in _RX_WORD.findall(t)]
+    words = [w.lower() for w in _RX_WORD.findall(_RX_PLACE_NAMES.sub(" ", t))]
     hits = [w for w in words if w in _FOREIGN_WORDS or w in _MORE_FOREIGN_WORDS or w in _MORE_WEAK]
     strong = [w for w in hits if w not in _WEAK and w not in _MORE_WEAK]
     english = sum(1 for w in words if w in _ENGLISH_WORDS)
