@@ -46,6 +46,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- **A metadata source that said "429 Too Many Requests" was asked again
+  within seconds**: ibdb, OpenLibrary, Google Books and Audible now get
+  nothing until the source's Retry-After (or 5 minutes) has passed, and a
+  scan says it skipped them. ibdb's scan also asks its search once instead
+  of twice per author.
 - **The title identity joined books that differ by one word or number**:
   "Dark Nest III" and "Dark Nest II", "Clockwork Princess" and "Clockwork
   Prince", "Episode Zero" and "Episode One", "… South Island" and "… North

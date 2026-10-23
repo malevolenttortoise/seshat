@@ -257,6 +257,7 @@ class BaseSource:
             logs without needing verbose mode.
         """
         for attempt in range(retries + 1):
+            source_gate.check_cooling(self.name)
             try:
                 async with source_gate.turn(self.name) as t:
                     resp = await self.client.get(url, **kwargs)
@@ -264,6 +265,11 @@ class BaseSource:
                 resp.raise_for_status()
                 return resp
             except Exception as e:
+                if isinstance(e, httpx.HTTPStatusError) and e.response.status_code == 429:
+                    # Told to stop: no quick retry, nothing more until the
+                    # cooldown ends (G255).
+                    source_gate.cool_down(self.name, e.response.headers.get("Retry-After"))
+                    raise
                 if attempt < retries:
                     backoff = min(3 * (2 ** attempt), 12)  # 3, 6, 12, 12, ...
                     self.logger.debug(

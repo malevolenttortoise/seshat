@@ -3458,6 +3458,11 @@ async def _try_source(source, author_name, author_id, our_titles, languages, sou
     part of the base interface.
     """
     try:
+        cooling = source_gate.cooling_seconds(getattr(source, "name", source_name))
+        if cooling > 0:
+            # G255: the source said 429; this author's scan skips it.
+            logger.info(f"  [{source_name}] skipped for '{author_name}': cooling down after a 429 ({cooling:.0f}s left)")
+            return 0
         if start_at > 0:
             logger.info(f"  [{source_name}] {'Full scan' if full_scan else 'Searching'} for '{author_name}' (resuming from book {start_at})...")
         else:

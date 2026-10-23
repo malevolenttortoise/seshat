@@ -108,6 +108,19 @@ The trial ran 2026-10-09 → 10-16 on the reference install and read every reque
   then 28 days; one that finds something returns to 7. 65% of the trial's refreshes found nothing, and the worker
   managed ~55 authors a day against the ~100 a 7-day cycle needs.
 
+## Amendment (2026-10-23, discovery wave D S31: a 429 means stop, G255)
+
+- **A source that answers 429 is sent nothing until its cooldown ends**: its Retry-After (seconds or an HTTP date,
+  1 s – 1 h), else 5 minutes, for every caller. A 429 isn't retried. A scan skips the source for that author and
+  says so in the log ("skipped … cooling down after a 429"); enrichment falls through to the next provider. Only
+  the 429 itself is counted (blocked); requests not sent aren't counted. In the generic clients
+  (`discovery.sources.base`, `metadata.sources.base`: ibdb, OpenLibrary, Google Books, Audible); Amazon (per
+  request kind, G181), Goodreads, Kobo and Hardcover (a 429 already isn't retried) keep their own handling.
+- Found in the first 100 F–Z first scans: ibdb.dev answered 429 for 12 authors over ~80 minutes at one request every
+  3 s, and each author still sent 3 requests (retries after 3 s and 6 s), then the next author asked again.
+- **ibdb's scan asks its search once**: `search_author` and `get_author_books` both searched by name; the second
+  reuses the first answer for 5 minutes, halving ibdb's scan traffic.
+
 ## Related
 
 - [0018](0018-metadata-cache-goodreads-list-page.md) — the Goodreads list-page cache; its §6 (Path C) is decided in

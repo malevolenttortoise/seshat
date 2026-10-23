@@ -8,6 +8,7 @@ publisher backfill when primary sources miss.
 """
 import logging
 import re
+import time
 from typing import Optional
 
 from app.discovery.sources.base import BaseSource, AuthorResult, SeriesResult, BookResult
@@ -16,6 +17,7 @@ from app.metadata.author_names import authors_match, flip_surname_first
 logger = logging.getLogger("seshat.discovery.ibdb")
 
 _SEARCH_URL = "https://ibdb.dev/api/search"
+_SEARCH_REUSE_S = 300.0
 
 
 class IbdbSource(BaseSource):
@@ -27,12 +29,24 @@ class IbdbSource(BaseSource):
 
     def __init__(self, rate_limit: float = 1.0):
         super().__init__(rate_limit=rate_limit)
+        self._last_search: Optional[tuple[str, float, object]] = None
+
+    async def _search(self, author_name: str):
+        """ibdb's search for `author_name`. A scan asks it twice in a row
+        (search_author, then get_author_books, both by name): the second
+        reuses the first answer for a few minutes (G255)."""
+        hit = self._last_search
+        if hit and hit[0] == author_name and time.monotonic() - hit[1] < _SEARCH_REUSE_S:
+            return hit[2]
+        resp = await self._get(_SEARCH_URL, params={"q": author_name})
+        data = resp.json()
+        self._last_search = (author_name, time.monotonic(), data)
+        return data
 
     async def search_author(self, author_name: str) -> Optional[AuthorResult]:
         """Search IBDB for an author. Returns minimal AuthorResult."""
         try:
-            resp = await self._get(_SEARCH_URL, params={"q": author_name})
-            data = resp.json()
+            data = await self._search(author_name)
         except Exception:
             return None
 
@@ -76,8 +90,7 @@ class IbdbSource(BaseSource):
         accept_authors = [author_name] + list(linked_names)
 
         try:
-            resp = await self._get(_SEARCH_URL, params={"q": author_name})
-            data = resp.json()
+            data = await self._search(author_name)
         except Exception:
             return None
 
