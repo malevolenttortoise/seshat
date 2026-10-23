@@ -246,6 +246,13 @@ _last_request_wall: dict[tuple[str, str], float] = {}
 # for 439s and was reported stalled at 360s.
 _waits: dict[tuple[str, str], list[float]] = {}
 
+# How many book pages each caller has waiting for a source's turn: the
+# Goodreads worker holds its other kinds for another caller's page as it
+# does for its own (G199). On 2026-10-22 a grab's enrichment page waited
+# 20+ minutes: the worker's autocomplete, every 3 minutes, landed as each
+# 3-minute quiet ran out and started it over.
+_pages_waiting: dict[tuple[str, str], int] = {}
+
 # Goodreads' session always added up to 1s on top of its rate.
 _JITTER_S: dict[str, tuple[float, float]] = {"goodreads": (0.0, 1.0)}
 
@@ -555,10 +562,15 @@ async def turn(source: str, *, kind: str = "") -> AsyncIterator[Turn]:
     waits = _waits.setdefault((source, who), [])
     began = _wall()
     waits.append(began)
+    page = kind == KIND_BOOK_PAGE
+    if page:
+        _pages_waiting[(source, who)] = _pages_waiting.get((source, who), 0) + 1
     try:
         await _wait_turn(source, level, kind)
     finally:
         waits.remove(began)
+        if page:
+            _pages_waiting[(source, who)] -= 1
     _last_request_wall[(source, who)] = _wall()
     t = Turn(source, who, kind)
     _last_turn.set(t)
@@ -585,6 +597,14 @@ def waiting_since(source: str, who: str = CALLER_WORKER) -> Optional[float]:
     (wall clock), or None when it isn't waiting."""
     waits = _waits.get((source, who))
     return min(waits) if waits else None
+
+
+def book_page_waiting(source: str, *, besides: str = CALLER_WORKER) -> bool:
+    """A book page from a caller other than `besides` is waiting for
+    `source`'s turn."""
+    return any(
+        n > 0 for (s, who), n in _pages_waiting.items() if s == source and who != besides
+    )
 
 
 def longest_healthy_wait_seconds(source: str) -> float:
@@ -776,6 +796,7 @@ def reset() -> None:
     _last_start.clear()
     _last_request_wall.clear()
     _waits.clear()
+    _pages_waiting.clear()
     _last_other_start.clear()
     _pending.clear()
     _last_prune_day = None

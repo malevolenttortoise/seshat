@@ -454,7 +454,9 @@ details in its section below), so not new here:
   list pages and autocomplete in the 3 minutes before a page's turn
   (G199, ADR-0026 amended: since the update pages beside other traffic
   were blocked 18 of 56 times, pages after 3 quiet minutes 0 of 14); the
-  daily list refresh takes about twice as long. A "tick crashed" ntfy goes at most once an hour per worker, and
+  daily list refresh takes about twice as long. The worker holds them
+  the same way while a grab's enrichment page waits for its quiet: its
+  autocomplete, every 3 minutes, had kept one waiting 20+ minutes. A "tick crashed" ntfy goes at most once an hour per worker, and
   the stall warning allows for a scan waiting on its source's gate (12
   gaps; it named the Amazon worker for Goodreads too). Each request a
   cache worker sends counts as a heartbeat (G193): a stall is now no

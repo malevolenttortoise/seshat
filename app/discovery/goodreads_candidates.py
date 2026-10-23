@@ -790,19 +790,33 @@ async def page_turn_ready() -> bool:
         return False
 
 
+def _other_page_due() -> Optional[float]:
+    """Seconds until another caller's waiting book page goes (its gap, then
+    its quiet), or None when none is waiting. A grab's enrichment page waits
+    for 3 quiet minutes like the worker's own; on 2026-10-22 the worker's
+    autocomplete every 3 minutes started that quiet over for 20+ minutes."""
+    if not source_gate.book_page_waiting("goodreads", besides=source_gate.CALLER_WORKER):
+        return None
+    return max(
+        source_gate.kind_wait_seconds("goodreads", source_gate.KIND_BOOK_PAGE),
+        source_gate.quiet_wait_seconds("goodreads", source_gate.KIND_BOOK_PAGE),
+    )
+
+
 async def page_due_in() -> Optional[float]:
-    """Seconds until a wanted book page's turn (gap and backoff), or None
-    when no page is wanted. In the last `GOODREADS_PAGE_QUIET_S` of the
-    wait the worker sends no list page or autocomplete, so the page gets
-    its quiet (G199)."""
+    """Seconds until the next book page's turn (gap and backoff), the
+    worker's own or another caller's waiting one, or None when no page is
+    wanted. In the last `GOODREADS_PAGE_QUIET_S` of the wait the worker
+    sends no list page or autocomplete, so the page gets its quiet (G199)."""
     try:
-        if merge_blocked_by():
-            return None
-        due = max(
-            source_gate.kind_wait_seconds("goodreads", source_gate.KIND_BOOK_PAGE),
-            _backoff_remaining(source_gate.KIND_BOOK_PAGE),
-        )
-        return due if await _page_wanted() else None
+        dues = [_other_page_due()]
+        if not merge_blocked_by() and await _page_wanted():
+            dues.append(max(
+                source_gate.kind_wait_seconds("goodreads", source_gate.KIND_BOOK_PAGE),
+                _backoff_remaining(source_gate.KIND_BOOK_PAGE),
+            ))
+        dues = [d for d in dues if d is not None]
+        return min(dues) if dues else None
     except Exception:
         _log.debug("goodreads candidates: page_due_in failed", exc_info=True)
         return None
@@ -833,10 +847,12 @@ async def step() -> StepResult:
         ac_backoff = _backoff_remaining(source_gate.KIND_AUTOCOMPLETE)
         ac_wait = max(ac_backoff, _autocomplete_wait())
         page_due = max(page_wait, page_backoff)
-        if (pending is not None and ac_wait <= 0 and awaiting is not None
-                and page_due <= source_gate.GOODREADS_PAGE_QUIET_S):
-            # G199: the page's turn is near; no autocomplete inside its quiet.
-            return StepResult("idle", retry_in_s=max(1.0, page_due))
+        dues = [d for d in (page_due if awaiting is not None else None, _other_page_due())
+                if d is not None and d <= source_gate.GOODREADS_PAGE_QUIET_S]
+        if pending is not None and ac_wait <= 0 and dues:
+            # G199: a page's turn is near, the worker's own or another
+            # caller's; no autocomplete inside its quiet.
+            return StepResult("idle", retry_in_s=max(1.0, min(dues)))
         if pending is not None and ac_wait <= 0:
             if await _author_skip(pending):
                 return StepResult("autocomplete", f"{pending.get('title')!r}: author not scan-eligible, set aside")

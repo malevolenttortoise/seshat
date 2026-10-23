@@ -1075,6 +1075,31 @@ class TestQuietBeforeAPage:
         await gc.step()
         assert env["gr"].kinds() == ["ac"]
 
+    def _another_page_waits(self, monkeypatch, *, waiting: bool, quiet_left: float = 0.0):
+        from app.metadata import source_gate
+        monkeypatch.setattr(source_gate, "kind_wait_seconds", lambda s, k: 0.0)
+        monkeypatch.setattr(source_gate, "quiet_wait_seconds", lambda s, k: quiet_left)
+        monkeypatch.setattr(
+            source_gate, "book_page_waiting", lambda s, besides="worker": waiting,
+        )
+
+    async def test_no_autocomplete_while_another_callers_page_waits(self, env, monkeypatch):
+        """2026-10-22: a grab's enrichment page waited 20+ minutes for its
+        3 quiet minutes; the worker's autocomplete, every 3 minutes, landed
+        as each quiet ran out and started it over."""
+        await _seeded(env, [_rec(101, "Second")])
+        env["gr"].autocomplete["Second"] = [_hit(101, "Second")]
+        env["gr"].urls.clear()
+
+        self._another_page_waits(monkeypatch, waiting=True, quiet_left=120.0)
+        res = await gc.step()
+        assert env["gr"].urls == []
+        assert res.outcome == "idle" and res.retry_in_s == pytest.approx(120.0)
+
+        self._another_page_waits(monkeypatch, waiting=False)
+        await gc.step()
+        assert env["gr"].kinds() == ["ac"]
+
     async def _list_due(self):
         db = await metadata_cache.get_db(metadata_cache.SOURCE_GOODREADS)
         try:
@@ -1113,6 +1138,21 @@ class TestQuietBeforeAPage:
         await w.tick_goodreads()
 
         assert any("/author/list/" in u for u in env["gr"].urls)
+
+    async def test_no_list_page_while_another_callers_page_waits(self, env, monkeypatch):
+        from app.discovery import metadata_cache_worker as w
+        monkeypatch.setattr(w, "_gr_candidates_seeded_at", 0.0)
+        await self._list_due()
+        env["gr"].urls.clear()
+
+        self._another_page_waits(monkeypatch, waiting=True, quiet_left=90.0)
+        res = await w.tick_goodreads()
+        assert res.outcome == "page_quiet" and env["gr"].urls == []
+        assert res.next_sleep_s == pytest.approx(90.0)
+
+        self._another_page_waits(monkeypatch, waiting=False)
+        res = await w.tick_goodreads()                 # the page went: the list scan runs
+        assert res.outcome.startswith("ok") and res.author_id == GR_AUTHOR
 
 
 # ─── The scan gate (wave B S5: D1 / D6 / F15) ────────────────

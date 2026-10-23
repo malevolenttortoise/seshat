@@ -239,6 +239,40 @@ async def test_a_request_during_the_quiet_starts_it_over(clock, page_gap, monkey
     assert starts["page"] - starts["ac"] >= 180.0
 
 
+async def test_a_waiting_page_is_seen_by_the_worker(clock, page_gap, monkeypatch):
+    """The worker holds its other kinds for another caller's waiting page
+    (2026-10-22: its autocomplete every 3 minutes kept a grab's enrichment
+    page waiting for its quiet for 20+ minutes)."""
+    asleep = asyncio.Event()
+    release = asyncio.Event()
+
+    async def sleep(seconds):
+        wake = clock.now + seconds
+        asleep.set()
+        await asyncio.wait_for(release.wait(), 5)
+        clock.now = max(clock.now, wake)
+
+    async def page(caller):
+        async def send():
+            return httpx.Response(200)
+        with source_gate.caller(caller):
+            await source_gate.request("goodreads", send, kind="book_page")
+
+    await _one("goodreads", "worker", kind="autocomplete")     # the quiet starts
+    monkeypatch.setattr(source_gate, "_sleep", sleep)
+    for caller, seen in (("enrichment", True), ("worker", False)):
+        asleep.clear()
+        release.clear()
+        task = asyncio.create_task(page(caller))
+        await asyncio.wait_for(asleep.wait(), 5)                # waiting on its quiet
+        assert source_gate.book_page_waiting("goodreads") is seen
+        assert source_gate.book_page_waiting("goodreads", besides="enrichment") is not seen
+        release.set()
+        await asyncio.wait_for(task, 5)
+        assert source_gate.book_page_waiting("goodreads") is False
+    assert source_gate.book_page_waiting("amazon") is False
+
+
 async def test_other_kinds_dont_wait_for_the_page_gap(clock, page_gap):
     await _one("goodreads", "worker", kind="book_page")
     await _one("goodreads", "worker", kind="autocomplete")
