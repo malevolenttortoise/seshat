@@ -162,7 +162,7 @@ export default function MobileUnifiedDashboard({ onNav }: Props) {
             </MobileBtn>
           </div>
           <MobileBtn variant="secondary" fullWidth onClick={cleanup.show}>
-            Clean up missing books
+            Missing Cleanup
           </MobileBtn>
           {activeScans.length > 0 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}>

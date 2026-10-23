@@ -89,7 +89,7 @@ describe.each<Viewport>(["desktop", "phone"])("Dashboard (%s)", (viewport) => {
       viewport,
       routes: { ...dashboardRoutes, "GET /discovery/missing-cleanup/status": status },
     });
-    const open = r.getAllByRole("button").find((b) => /Clean up missing books$/.test((b.textContent ?? "").trim()))!;
+    const open = r.getAllByRole("button").find((b) => /Missing Cleanup$/.test((b.textContent ?? "").trim()))!;
     act(() => { fireEvent.click(open); });
     await r.settle();
     expectRendered(r, marker);

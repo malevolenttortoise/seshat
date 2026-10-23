@@ -372,7 +372,7 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
             <CmdBtn
               label={
                 <>
-                  <Dot color={t.ylw} /> Clean up missing books
+                  <Dot color={t.ylw} /> Missing Cleanup
                 </>
               }
               onClick={cleanup.show}

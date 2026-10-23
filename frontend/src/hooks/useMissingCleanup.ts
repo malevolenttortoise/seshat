@@ -84,6 +84,11 @@ export const CLEANUP_STEPS: { key: string; name: string; blurb: string }[] = [
     blurb: "Folds a missing copy into the one owned book it is. A copy that matches several books stays listed.",
   },
   {
+    key: "listed_copy",
+    name: "Books listed twice",
+    blurb: "Folds two missing rows of one book into the one more sources know, which takes the other's links.",
+  },
+  {
     key: "series_in_title",
     name: "Series named in the title",
     blurb: "Files a standalone book in the series its title names.",
@@ -118,6 +123,7 @@ export function rowNote(stepKey: string, row: CleanupRow): string {
     case "filtered":
       return reasonLabel(row.reason) + (row.stays_shown ? " · stays shown: that filter is off" : "");
     case "owned_copy":
+    case "listed_copy":
       return row.into_title ? `into “${row.into_title}”` : "";
     case "series_in_title":
       return row.detail ?? "";

@@ -103,7 +103,7 @@ describe.each<Viewport>(["desktop", "phone"])("Dashboard commands (%s)", (viewpo
         "POST /discovery/missing-cleanup/apply": { status: "started", mode: "apply" },
       },
     });
-    await press(r, buttons(r, /Clean up missing books$/)[0]);
+    await press(r, buttons(r, /Missing Cleanup$/)[0]);
     await press(r, buttons(r, /^Apply 3,260( changes)?$/)[0]);
     expect(r.unmatched).toEqual([]);
     expect(r.requests).toContain('POST /discovery/missing-cleanup/apply {"preview_id":"p1"}');
@@ -119,7 +119,7 @@ describe.each<Viewport>(["desktop", "phone"])("Dashboard commands (%s)", (viewpo
         "POST /discovery/missing-cleanup/preview": reply(409, { detail: "a library sync is running" }),
       },
     });
-    await press(r, buttons(r, /Clean up missing books$/)[0]);
+    await press(r, buttons(r, /Missing Cleanup$/)[0]);
     await press(r, buttons(r, /^Preview$/)[0]);
     expect(r.unmatched).toEqual([]);
     expect(toasts).toEqual(["error: Couldn't start the preview: a library sync is running"]);
