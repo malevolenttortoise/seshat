@@ -400,6 +400,14 @@ CASES = [
      True, "a description's number isn't the book's (owned)"),
     ("Omega Squad", "Omega Metahumans", 1, "Omega Apex: Omega Squad 3", None, None,
      False, "the number belongs to the other title (G229: 'Omega Squad' is a named series)"),
+    # ── Wave D, Mark's sort of the cleanup preview ──
+    ("Secrets of the Silent Witch",
+     "サイレント・ウィッチ 沈黙の魔女の隠しごと [Silent Witch: Chinmoku no Mahou no Kakushigoto] (Light Novel)", 0,
+     "Secrets of the Silent Witch, Vol. ", "Secrets of the Silent Witch (Light Novel)", 4.5,
+     False, "a 'Vol.' that lost its number is some volume, not the plain-titled book"),
+    ("Secrets of the Silent Witch, Vol. ", "Secrets of the Silent Witch", 3,
+     "Secrets of the Silent Witch", "Secrets of the Silent Witch", 3,
+     True, "… unless both are filed at one place in one series"),
 ]
 
 

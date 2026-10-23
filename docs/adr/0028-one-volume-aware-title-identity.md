@@ -284,6 +284,15 @@ The same parser reads "(Series Book N)" out of a title at creation (G171) and Ha
   mostly hidden rows: "Penny, the Engineering Tail of the Fourth (Little) Pig", "W3 Women in Deep Time"); grab history
   unchanged (78 of 2,136); a full Calibre sync unchanged.
 
+## Amendment (2026-10-23, wave D S30b: a volume that lost its number)
+
+- **A title ending in a volume word with no number** ("Secrets of the Silent Witch, Vol. ", a light-novel volume a
+  source filed at 4.5) is not the plain-titled book ("Secrets of the Silent Witch"): its keys dropped the dangling
+  word, so the listed-copy fold joined them (Mark's sort of the cleanup preview). It still is when both are filed at
+  one place in one series, and a written number on either side goes on to the number rules.
+- Measured on the 2026-10-23 post-update copies: the one wrong fold gone; grab history and a full Calibre sync
+  unchanged.
+
 ## Related
 
 - [0003](0003-bundle-dedup-prefer-duplicates.md) — the same duplicates-over-loss stance, for bundles.

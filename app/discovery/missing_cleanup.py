@@ -217,15 +217,15 @@ async def _delete_books(db, ids: list[int]) -> None:
 
 async def _no_eligible_author(lib: _Library, report: dict) -> None:
     """Step 1 (D1 / F15, C6, C29): an author you scan owns a book here or
-    is on your allow list by your doing; a switched-off author still
-    counts (their books are `author_off`, kept)."""
+    is on your allow list by your doing, or is another spelling of one
+    (G245); a switched-off author still counts (their books are
+    `author_off`, kept)."""
     from app.discovery.roster import load_roster
-    from app.filter.normalize import normalize_author
 
     roster = await load_roster(lib.db, lib.slug, force=True)
 
     def scanned(aid: int, name: str) -> bool:
-        return aid in roster.owned_author_ids or normalize_author(name) in roster.scan_allowed_names
+        return roster.counts_for_scans(name, aid)
 
     step, doomed = _step(report, "no_eligible_author"), []
     for row in lib.rows.values():

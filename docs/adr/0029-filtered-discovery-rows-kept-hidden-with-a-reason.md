@@ -137,6 +137,25 @@ of what was filtered, and nothing for the next scan or the Goodreads worker to r
 - Measured on 2026-10-23 copies: 183 folds, every one read (about 180 right; wrong: "Marvel 1602: Fantastick Four"
   into "Fantastic Four", two unflagged comic rows).
 
+## Amendment (2026-10-23, wave D S30b: Mark's sort of the cleanup preview)
+
+- **An orientation edition is listed hidden as a listing** (G246): "Birds of Prey - Bisexual Edition (Pinwheel Book
+  20)" when Mark owns the other cut. "Bisexual / Bi / Gay / Lesbian / Queer / Hetero(sexual) / Straight Edition" marks
+  it at creation and in the cleanup's step 3, only when no other family does; matching (`book_class`) reads the title
+  without the rule, so the edition stays its own row beside the owned one and announces are unaffected. An owned row is
+  never filtered ("Human Resources: Hetero Edition" stays as it is).
+- **C45 also takes a volume:** the author's possessive name and "Vol. N" / "Volume N" mark a comic ("Patricia Briggs'
+  Mercy Thompson: Moon Called Vol. 1", "Brandon Sanderson's White Sand Vol. 2"). Amazon's lone "(Volume N)" tag doesn't
+  ("Matt Forbeck's Brave New World: Revolution (Volume 1)" is a novel), nor does a magazine ("Isaac Asimov's Science
+  Fiction Magazine, Volume 4").
+- **A last part that is only a byline is a listing**, whoever it names: "Dracula : by Bram Stoker", which Amazon filed
+  under Holly Black. The "by" must follow a colon or dash and be lower case (a title-case subtitle starts "By": "Learn
+  German: By Reading Urban Fantasy"). Without the separator real titles do it ("Milked by Her Master", "On The
+  Anatomization of an Unknown Man (1637) by Frans Mier"), so "Dracula by Bram Stoker" stays listed.
+- Measured on the 2026-10-23 post-update copies (verdicts over every stored title): 4 listed comics hidden (Dresden
+  Files, White Sand, Moon Called), 2 Dresden comic omnibuses `box_set` → `comic`, the edition `listing`; 0 other owned
+  changes.
+
 ## Related
 
 - [0021](0021-roster-gates-discovery-author-creation.md) — roster and scan eligibility (amended: scan eligibility is

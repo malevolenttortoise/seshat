@@ -174,3 +174,14 @@ prune-linkage operate on two rows that already exist and mint nothing.
 - **A book credited to more than 3 authors trains none of them** (G204, the anthology line of ADR-0029's F7), for
   the co-author list and the delivery's announce-author train alike; the matched author is already allowed.
 - Accepted cost: until a book is delivered, its co-authors' own announces still need their own match.
+
+## Amendment (2026-10-23, wave D S30b: another spelling of an author)
+
+- **A name that is another spelling of a scan-eligible author is scan-eligible** (G245): same surname and
+  `authors_match` against the name of an author who owns a book in this library (listing switch on) or an operator
+  allow-list entry. Calibre has "Thomas J. Doscher" (owns 7) and IBDB credited "Thomas Doscher", a second author row
+  that owned nothing, so the missing-books cleanup would have removed his 7 listed books (Mark's sort). Scans and the
+  cleanup's step 1 both read it (`Roster.counts_for_scans`); linking (`admits`) is unchanged. Accepted cost: two people
+  whose names differ by a middle initial both count.
+- On the 2026-10-23 copies it changes one author (Doscher); every other non-eligible author with books has no
+  same-surname match.

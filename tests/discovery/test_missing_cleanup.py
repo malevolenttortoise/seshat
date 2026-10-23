@@ -157,6 +157,19 @@ async def test_a_switched_off_author_you_picked_still_counts(env):
     assert await _exists(bid)
 
 
+async def test_another_spelling_of_an_owned_author_counts(env):
+    """G245: Thomas Doscher's seven listed books went because Calibre
+    has him as "Thomas J. Doscher"; a different surname still doesn't count."""
+    owner = await _author("Thomas J. Doscher")
+    await _book("Owned One", [owner], owned=1, calibre_id=1)
+    variant = await _author("Thomas Doscher")
+    other = await _author("Thomas J. Dosher")
+    kept = await _book("Doscher's Next", [variant])
+    gone = await _book("Dosher's Book", [other])
+    await _apply()
+    assert await _exists(kept) and not await _exists(gone)
+
+
 async def test_owning_books_in_the_other_library_doesnt_count(env):
     """G212: Matt Dinniman owns audiobooks only; his ebook missing rows go,
     as the ebook scan gate already skips him."""

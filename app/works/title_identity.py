@@ -945,6 +945,8 @@ def same_book(
         return False
     if not positions_decide and _one_title(pa, pb, a.series, b.series, labels):
         return True
+    if _cut_off_volume(pa, pb, a, b):
+        return False
     position_agrees = _volumes_agree(a, b, pa, pb)
     if position_agrees is None:
         return False
@@ -980,6 +982,24 @@ def same_book(
     return position_agrees and (
         _no_real_title(pa.proper, a.series) or _no_real_title(pb.proper, b.series)
     )
+
+
+# "Secrets of the Silent Witch, Vol. ": a volume whose number the source
+# lost.
+_RX_CUT_OFF_VOLUME = re.compile(r"(?i)(?:[,:]|\s[-–])\s*vol(?:ume)?\.?\s*$")
+
+
+def _cut_off_volume(pa: ParsedTitle, pb: ParsedTitle, a: TitleRef, b: TitleRef) -> bool:
+    """One title ends in a volume word with no number and neither writes
+    one: some volume of the series, not the plain-titled book (wave D, the
+    light novel's "Vol. " filed at 4.5 isn't "Secrets of the Silent
+    Witch"), unless both are filed at one place in one series."""
+    if pa.core is not None or pb.core is not None:
+        return False
+    if bool(_RX_CUT_OFF_VOLUME.search(pa.proper)) == bool(_RX_CUT_OFF_VOLUME.search(pb.proper)):
+        return False
+    ia, ib = _as_index(a.index), _as_index(b.index)
+    return not (a.series and ia is not None and ia == ib and series_key(a.series) == series_key(b.series))
 
 
 def _placements_agree(a: TitleRef, b: TitleRef) -> bool:

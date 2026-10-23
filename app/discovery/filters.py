@@ -196,6 +196,16 @@ _RX_LISTING = re.compile(
     r"|\bby\s+\w+(?:\s+\w\.)*\s+\w+\s+\(\d{4}\)\s+(?:paperback|hardcover)\b"   # "… by Asher, Neal (2013) Paperback"
     r"|,\s*\w+\s*\(\d{4}\)\s+(?:paperback|hardcover)\b"
 )
+# "Dracula : by Bram Stoker": a last part that is only a byline, whoever it
+# names (that row was Holly Black's). "by" in lower case: a title-case
+# subtitle starts "By" ("Learn German: By Reading Urban Fantasy").
+_RX_BYLINE_PART = re.compile(r"(?:\s[-–—:]|:)\s*by\s+[A-Z][\w.'’-]*(?:\s+[A-Z][\w.'’-]*){1,3}\s*$")
+# "Birds of Prey - Bisexual Edition (Pinwheel Book 20)": an author's other
+# cut of a book you own one cut of (G246). Hidden at creation and by the
+# cleanup only; matching reads the title without it (`book_class`).
+_RX_ORIENTATION_EDITION = re.compile(
+    r"(?i)\b(?:bisexual|bi|gay|lesbian|queer|hetero(?:sexual)?|straight)\s+edition\b"
+)
 _RX_STUDY_GUIDE = re.compile(
     r"(?i)\bsummary\s+(?:of|and|&)\b|^summary\b|\bstudy\s+guide\b|\bsparknotes\b|\bcliffs\s*notes\b"
     r"|\banalysis\s+of\b|\bkey\s+takeaways\b|\bquiz\s+book\b|\btrivia\b|\bconversation\s+starters\b"
@@ -453,11 +463,21 @@ def _byline(title: str, authors: Iterable[str]) -> bool:
     return False
 
 
+# "Moon Called Vol. 1"; Amazon's lone "(Volume 1)" tag is no mark of a
+# comic ("Matt Forbeck's Brave New World: Revolution (Volume 1)", a novel).
+_RX_VOLUME_MARK = re.compile(r"(?i)\bvol(?:ume)?\.?\s*\d")
+_RX_LONE_VOLUME_TAG = re.compile(r"(?i)\(\s*volume\s+\d+\s*\)")
+
+
 def _authors_comic_issue(title: str, authors: Iterable[str]) -> bool:
-    """"Patricia Briggs' Alpha & Omega: Cry Wolf #2": a comic adaptation
-    sold under its author's name and numbered by issue (C45). A prose
-    tie-in carries no "#N" ("Dean Koontz's Frankenstein, Book One")."""
-    if not re.search(r"#\d+", title or ""):
+    """"Patricia Briggs' Alpha & Omega: Cry Wolf #2", "Patricia Briggs'
+    Mercy Thompson: Moon Called Vol. 1": a comic adaptation sold under its
+    author's name and numbered by issue or volume (C45, wave D). A prose
+    tie-in carries neither ("Dean Koontz's Frankenstein, Book One"), nor
+    does a magazine ("Isaac Asimov's Science Fiction Magazine, Volume 4")."""
+    t = title or ""
+    if not (re.search(r"#\d+", t)
+            or (_RX_VOLUME_MARK.search(_RX_LONE_VOLUME_TAG.sub("", t)) and not _RX_ANTHOLOGY.search(t))):
         return False
     tl = (title or "").lower()
     return any(
@@ -490,6 +510,25 @@ def filter_reason(
     only there ("Lucifer, Volume 1: Cold Heaven" in "Lucifer (2015-2017)");
     `genres`: the source's genres, most-shelved first (Goodreads pages).
     """
+    reason = _title_family(
+        title, description=description, n_authors=n_authors, authors=authors,
+        series_name=series_name, page_count=page_count, genres=genres,
+    )
+    if reason is None and _RX_ORIENTATION_EDITION.search(title or ""):
+        return LISTING
+    return reason
+
+
+def _title_family(
+    title: str,
+    *,
+    description: Optional[str] = None,
+    n_authors: int = 0,
+    authors: Iterable[str] = (),
+    series_name: Optional[str] = None,
+    page_count: Optional[int] = None,
+    genres: Iterable[str] = (),
+) -> Optional[str]:
     t = (title or "").strip()
     if not t:
         return JUNK
@@ -521,7 +560,7 @@ def filter_reason(
             or (description and _description_says_anthology(description))
             or n_authors >= ANTHOLOGY_MIN_AUTHORS):
         return ANTHOLOGY
-    if _RX_LISTING.search(t) or _byline(t, authors):
+    if _RX_LISTING.search(t) or _byline(t, authors) or _RX_BYLINE_PART.search(t):
         return LISTING
     # G233, last: a title no other family claims, made of words no English
     # blurb uses, or with a foreign blurb (a comic issue named "Hopcross
@@ -538,8 +577,9 @@ def book_class(title: str, *, authors: Iterable[str] = ()) -> Optional[str]:
     blurb often names the anthology a standalone story came from, and two
     sources name a comic's series differently ("The Golden Age of the Sith"
     vs "… (1996-1997)") or give no page count. Those signals decide only
-    whether a new row is created hidden, never what it matches."""
-    return filter_reason(title, authors=authors)
+    whether a new row is created hidden, never what it matches; nor does an
+    orientation edition (G246)."""
+    return _title_family(title, authors=authors)
 
 
 def author_role_count(contributors) -> int:

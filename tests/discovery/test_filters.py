@@ -244,6 +244,41 @@ def test_a_seller_listing_names_the_author():
     assert F.filter_reason("Stand by Me", authors=["Tom Clancy"]) is None
 
 
+def test_a_last_part_that_is_only_a_byline_is_a_listing():
+    """Wave D: Amazon filed "Dracula : by Bram Stoker" under Holly Black;
+    "By" starting a title-case subtitle is the title's own."""
+    assert F.filter_reason("Dracula : by Bram Stoker", authors=["Holly Black"]) == F.LISTING
+    assert F.filter_reason("Dracula: by BRAM STOKER") == F.LISTING
+    assert F.filter_reason("Learn German: By Reading Urban Fantasy") is None
+    assert F.filter_reason("Trading By Firelight") is None
+    assert F.filter_reason("An Address To A Young Student, by Eumenes") is None
+
+
+def test_an_authors_name_and_a_volume_make_a_comic():
+    """C45, wave D: "Patricia Briggs' Mercy Thompson: Moon Called Vol. 1"
+    is the graphic novel. Amazon's lone "(Volume 1)" tag isn't a comic's
+    mark, nor is a magazine's volume."""
+    briggs = ["Patricia Briggs"]
+    assert F.filter_reason("Patricia Briggs' Mercy Thompson: Moon Called Vol. 1", authors=briggs) == F.COMIC
+    assert F.filter_reason("Patricia Briggs' Mercy Thompson (Moon Called Volume 2)", authors=briggs) == F.COMIC
+    assert F.filter_reason("Matt Forbeck's Brave New World: Revolution (Volume 1)",
+                           authors=["Matt Forbeck"]) is None
+    assert F.filter_reason("Isaac Asimov's Science Fiction Magazine, Volume 4, Issue 6, June 1980",
+                           authors=["Isaac Asimov"]) == F.ANTHOLOGY
+    assert F.filter_reason("Moon Called Vol. 1", authors=briggs) is None
+
+
+def test_an_orientation_edition_is_hidden_but_matches_as_before():
+    """G246: Snekguy's "Bisexual Edition" of a book Mark owns the other cut
+    of is listed hidden; matching reads the title without the rule."""
+    for t in ("Birds of Prey - Bisexual Edition (Pinwheel Book 20)", "Human Resources: Hetero Edition",
+              "Shore Leave: Gay Edition"):
+        assert F.filter_reason(t, authors=["Snekguy"]) == F.LISTING
+        assert F.book_class(t, authors=["Snekguy"]) is None
+    assert F.filter_reason("The Ship: Library Edition") is None
+    assert F.filter_reason("Straight Up Edition Wars") is None
+
+
 def test_an_anthology_by_description_or_four_authors():
     assert F.filter_reason("Dead Man's Hand", description="An anthology of the weird west.") == F.ANTHOLOGY
     assert F.filter_reason("Engineering Infinity", n_authors=4) == F.ANTHOLOGY

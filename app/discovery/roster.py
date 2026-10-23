@@ -37,10 +37,11 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from app.filter.normalize import normalize_author
+from app.metadata.author_names import authors_match
 
 logger = logging.getLogger("seshat.discovery.roster")
 
@@ -84,6 +85,17 @@ class Roster:
     scan_allowed_names: frozenset[str] = frozenset()
     #: Authors whose "list missing books" switch is off (D6).
     listing_off_ids: frozenset[int] = frozenset()
+    #: Names (filter-normalized) of the owned authors whose switch is on:
+    #: a spelling of one of them counts as that author (G245).
+    owned_names: frozenset[str] = frozenset()
+    _by_surname: dict = field(init=False, repr=False, compare=False, default=None)
+
+    def __post_init__(self) -> None:
+        index: dict[str, list[str]] = {}
+        for n in self.owned_names | self.scan_allowed_names:
+            if n:
+                index.setdefault(n.split()[-1], []).append(n)
+        object.__setattr__(self, "_by_surname", index)
 
     def may_mint(self, name: str) -> bool:
         """True when a source-reported name may CREATE an author row.
@@ -113,12 +125,22 @@ class Roster:
         co-author is still linked on discovered books, but not scanned."""
         if author_id is not None and author_id in self.listing_off_ids:
             return SKIP_LIST_MISSING_OFF
+        return None if self.counts_for_scans(name, author_id) else SKIP_NOT_ELIGIBLE
+
+    def counts_for_scans(self, name: str, author_id: Optional[int]) -> bool:
+        """Owns a book here, was allow-listed by the operator, or is another
+        spelling of one of those (G245: "Thomas Doscher" for the owned
+        "Thomas J. Doscher" — same surname, `authors_match`). The listing
+        switch is the caller's business."""
         if author_id is not None and author_id in self.owned_author_ids:
-            return None
+            return True
         norm = normalize_author(name or "")
-        if norm and norm in self.scan_allowed_names:
-            return None
-        return SKIP_NOT_ELIGIBLE
+        if not norm:
+            return False
+        if norm in self.scan_allowed_names:
+            return True
+        return any(authors_match(norm, other)
+                   for other in self._by_surname.get(norm.split()[-1], ()))
 
     def is_scan_eligible(self, name: str, author_id: Optional[int]) -> bool:
         return self.scan_skip_reason(name, author_id) is None
@@ -204,8 +226,9 @@ async def load_roster(
 
     # --- owned half (per-library discovery DB) ---
     rows = await (await db.execute(
-        "SELECT DISTINCT ba.author_id FROM book_authors ba "
+        "SELECT DISTINCT ba.author_id, a.name FROM book_authors ba "
         "JOIN books b ON b.id = ba.book_id "
+        "LEFT JOIN authors a ON a.id = ba.author_id "
         "WHERE b.owned = 1 AND ba.author_id IS NOT NULL"
     )).fetchall()
     owned = frozenset(int(r[0]) for r in rows)
@@ -216,10 +239,14 @@ async def load_roster(
         )).fetchall())
     except Exception:          # a library DB not migrated yet
         off = frozenset()
+    owned_names = frozenset(
+        normalize_author(r[1] or "") for r in rows if int(r[0]) not in off
+    ) - {""}
 
     roster = Roster(
         allowed_names=allowed, owned_author_ids=owned,
         scan_allowed_names=scan_allowed, listing_off_ids=off,
+        owned_names=owned_names,
     )
     _CACHE[slug] = (now, roster)
     logger.debug(

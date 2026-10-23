@@ -32,7 +32,14 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   "Books I-V", "The Ender Quintet" or a list of titles, "Word Search", web
   novel chapter ranges, and comic issues sold under their author's name.
   The Goodreads worker no longer spends an autocomplete on a title in
-  another language.
+  another language. A comic is also known by its author's name and a
+  volume number ("Patricia Briggs' Mercy Thompson: Moon Called Vol. 1"); a
+  title ending in another person's byline ("Dracula : by Bram Stoker") is a
+  seller's listing; an orientation edition of a book ("Birds of Prey -
+  Bisexual Edition") is listed hidden as a listing.
+- **Another spelling of an author you own or allow-listed counts as that
+  author** for scans and the missing-books cleanup: "Thomas Doscher"'s
+  books stay when you own "Thomas J. Doscher".
 
 ### Fixed
 
@@ -58,6 +65,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   filed in the author's existing series the head ends with.
 - **"Roommate Control (Part Four)" and "(Part Three)" were one book**:
   the same-title rule ignored a title's own number in its parentheses.
+- **"Secrets of the Silent Witch" folded into "Secrets of the Silent
+  Witch, Vol. "**, a volume whose number the source lost; such a title is
+  now one book with the plain title only when both are filed at one place
+  in one series.
 - **"Long Story Short" was read as a description** ("… Story …"), which
   made "NieR:Automata: Long Story Short" and "… Short Story Long" one book;
   a description now has to end, or go on as a description, after its

@@ -103,6 +103,26 @@ def test_list_missing_off_wins_over_owned_and_allow_listed():
     assert r.scan_skip_reason("Tom Clancy", 44) is None
 
 
+def test_another_spelling_of_an_owned_or_picked_author_is_scanned():
+    """G245: "Thomas Doscher" is the owned "Thomas J. Doscher"; a name the
+    operator allow-listed counts the same way. Same surname only, never a
+    train-only name, never an owner whose listing is off."""
+    from app.discovery.roster import SKIP_NOT_ELIGIBLE
+    r = Roster(
+        allowed_names=frozenset({"blaine l pardoe", "co trained"}),
+        owned_author_ids=frozenset({20, 30}),
+        scan_allowed_names=frozenset({"blaine l pardoe"}),
+        listing_off_ids=frozenset({30}),
+        owned_names=frozenset({"thomas j doscher"}),
+    )
+    assert r.scan_skip_reason("Thomas Doscher", 7489) is None
+    assert r.scan_skip_reason("Doscher, Thomas", None) is None
+    assert r.scan_skip_reason("Blaine Lee Pardoe", None) is None
+    assert r.scan_skip_reason("Thomas J. Dosher", None) == SKIP_NOT_ELIGIBLE
+    assert r.scan_skip_reason("Co Trainer", None) == SKIP_NOT_ELIGIBLE
+    assert r.scan_skip_reason("", None) == SKIP_NOT_ELIGIBLE
+
+
 def test_uses_the_filter_normalizer_not_the_author_row_one():
     """⚠️ The two normalizers disagree. `authors_allowed.normalized` is
     keyed on filter.normalize.normalize_author, which maps "J.R.R. Tolkien"
@@ -167,6 +187,25 @@ async def test_load_roster_owned_half(discovery_db):
         await db.close()
     assert 1 in r.owned_author_ids
     assert 2 not in r.owned_author_ids
+
+
+async def test_load_roster_keeps_the_names_of_owners_listing_on(discovery_db):
+    """G245: owner names feed the spelling rule; an owner switched off
+    lends its name to nobody."""
+    from app.discovery.database import get_db
+    from app.discovery.roster import load_roster
+
+    await _seed([(1, "Thomas J. Doscher", 1), (2, "Thomas Clancy", 1), (3, "Stranger", 0)])
+    db = await get_db()
+    try:
+        await db.execute("UPDATE authors SET list_missing = 0 WHERE id = 2")
+        await db.commit()
+        r = await load_roster(db, slug="test", force=True)
+    finally:
+        await db.close()
+    assert r.owned_names == frozenset({"thomas j doscher"})
+    assert r.is_scan_eligible("Thomas Doscher", 99)
+    assert not r.is_scan_eligible("Thomas J. Clancy", 98)
 
 
 async def test_owned_counts_any_position_not_just_primary(discovery_db):
