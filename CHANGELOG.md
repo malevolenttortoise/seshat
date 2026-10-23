@@ -25,6 +25,14 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- **"(Complete)" in a series name made a book an omnibus**: Amazon writes
+  series as "My Paranormal Girlfriends (Complete)", so "My Vampire
+  Bodyguards (… (Complete) Book 1)" never matched its copy, and start-up
+  cleared its series number. A "(Complete)" standing alone still marks a
+  set.
+- **A title like "Treachery at Martinique Isle Daughters of the High
+  Seas: Book 1" made a new series named after its whole head**: it is now
+  filed in the author's existing series the head ends with.
 - **"Roommate Control (Part Four)" and "(Part Three)" were one book**:
   the same-title rule ignored a title's own number in its parentheses.
 - **"Long Story Short" was read as a description** ("… Story …"), which

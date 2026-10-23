@@ -212,6 +212,32 @@ class TestBackfillOmnibus:
         plain = await _book_by_title(author_id, "Stay at Home Hero")
         assert plain["is_omnibus"] == 0
 
+    async def test_backfill_keeps_a_series_status_complete_off_and_its_number(self, discovery_db):
+        """G230: the start-up pass cleared the series number of every Tate
+        Bull "(My Paranormal Girlfriends (Complete) Book N)" row."""
+        from app.discovery.database import _backfill_omnibus_flag, get_db
+
+        title = "My Vampire Bodyguards: An Urban Fantasy Men's Adventure (My Paranormal Girlfriends (Complete) Book 1)"
+        author_id = await _insert_author("Tate Bull")
+        db = await get_db()
+        try:
+            cur = await db.execute(
+                "INSERT INTO books (title, source, owned, is_omnibus, series_index) "
+                "VALUES (?, 'amazon', 0, 0, 1.0)", (title,),
+            )
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) VALUES (?, ?, 0)",
+                (cur.lastrowid, author_id),
+            )
+            await db.commit()
+            touched = await _backfill_omnibus_flag(db)
+        finally:
+            await db.close()
+
+        assert touched == 0
+        row = await _book_by_title(author_id, title)
+        assert (row["is_omnibus"], row["series_index"]) == (0, 1.0)
+
     async def test_backfill_is_idempotent(self, discovery_db):
         """Second run touches nothing — already-flagged rows are skipped."""
         from app.discovery.database import _backfill_omnibus_flag, get_db
@@ -277,9 +303,8 @@ class TestOmnibusRegexCoverage:
         "Book of Carter: The Complete Volume",
         "The Witch Who Came In From The Cold: The Complete Season 2",
         "The Xothic Legend Cycle: The Complete Mythos Fiction of Lin Carter",
-        # New: "(complete)" at end (with optional trailing close-paren)
-        "Wayward (part 5): A Cozy Slice of Life Harem Romance (Wayward Harem Series (complete))",
-        "My Happy Ending: A Paranormal Harem Serial Fantasy (My Paranormal Girlfriends (Complete) Book 5)",
+        # "(complete)" standing alone in the title
+        "Harem Air (complete)",
     ])
     def test_matches(self, title: str) -> None:
         from app.discovery.lookup import _is_omnibus
@@ -295,6 +320,10 @@ class TestOmnibusRegexCoverage:
         "The Complete Idiot's Guide to Drawing Superheroes and Villains Illustrated",
         # "completely" must not trigger the "complete" arms
         "The Completely Wrong Map",
+        # G230: "(Complete)" inside a series parenthetical is the series'
+        # status, and the book is one book of it
+        "Wayward (part 5): A Cozy Slice of Life Harem Romance (Wayward Harem Series (complete))",
+        "My Happy Ending: A Paranormal Harem Serial Fantasy (My Paranormal Girlfriends (Complete) Book 5)",
     ])
     def test_does_not_match(self, title: str) -> None:
         from app.discovery.lookup import _is_omnibus

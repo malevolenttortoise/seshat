@@ -423,8 +423,9 @@ async def _series_in_title(lib: _Library, report: dict) -> None:
         title = row["title"] or ""
         if _is_omnibus(title):
             continue
-        named = series_in_title(title)
         contribs = lib.contribs.get(row["id"], [])
+        aids = {aid for aid, _ in contribs}
+        named = series_in_title(title, known=[name for aid, name in by_name if aid in aids])
         if named is None or not contribs:
             continue
         name, index = named

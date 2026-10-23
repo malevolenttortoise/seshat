@@ -1059,11 +1059,16 @@ def book_prefix(title: str) -> tuple[str, Optional[float]]:
     return title[m.end():].strip(), float(m.group(1))
 
 
-def series_in_title(title: str) -> Optional[tuple[str, float]]:
+def series_in_title(title: str, known: Iterable[str] = ()) -> Optional[tuple[str, float]]:
     """The series and number a title names when its source gave none
     (F14 / G171): "Title (Series Book N)", "(Series #N)", "(Series, Book
     N)" (the last such parenthetical), or "Series: Book N". A number is
-    required; "(Book 2)" alone names no series."""
+    required; "(Book 2)" alone names no series.
+
+    `known`: the author's series. A "Head: Book N" head that ends with one
+    of them (2+ words) names that series (G232): "Treachery at Martinique
+    Isle Daughters of the High Seas: Book 1" is Daughters of the High Seas
+    #1, not a series named after the whole head."""
     t = _clean(title)
     named = [(name, v) for name, v in _parenthetical_tags(t) if name]
     if named:
@@ -1075,8 +1080,20 @@ def series_in_title(title: str) -> Optional[tuple[str, float]]:
         if m:
             v = _match_number(m)
             if v is not None:
-                return segments[0].strip(), v
+                return _known_series_ending(segments[0].strip(), known), v
     return None
+
+
+def _known_series_ending(head: str, known: Iterable[str]) -> str:
+    key = series_key(head)
+    ends = [
+        k for k in known
+        if k and len(series_key(k).split()) >= 2
+        and series_key(k) != key and key.endswith(" " + series_key(k))
+    ]
+    if not ends or any(series_key(k) == key for k in known):
+        return head
+    return max(ends, key=lambda k: len(series_key(k)))
 
 
 # ─── An index of one author's titles ──────────────────────────

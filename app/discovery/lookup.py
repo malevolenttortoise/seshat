@@ -137,6 +137,9 @@ _RX_OMNIBUS = re.compile(
     r'|\(\s*complete\s*\)'  # bare "(complete)" parenthetical anywhere — series-status annotation pulled into title
     r')'
 )
+# "(My Paranormal Girlfriends (Complete) Book 1)": the series' status inside
+# its parenthetical, removed before `_is_omnibus` looks (G230).
+_RX_SERIES_COMPLETE = re.compile(r'(?i)\(([^()]*?)\s*\(\s*complete\s*\)([^()]*)\)')
 
 # Audiobook / non-ebook format detection. Matches titles and metadata
 # that indicate audiobook-only editions, narrator credits, or non-ebook
@@ -673,8 +676,12 @@ def _is_omnibus(title: str) -> bool:
       - "Mistborn: The Complete Trilogy"
       - "Super Sales on Super Heroes Books 1-3"
       - "The Expanse Box Set"
+
+    A "(Complete)" inside a series parenthetical is the series' status,
+    not a set (G230): "My Vampire Bodyguards (My Paranormal Girlfriends
+    (Complete) Book 1)" is one book.
     """
-    return bool(_RX_OMNIBUS.search(title))
+    return bool(_RX_OMNIBUS.search(_RX_SERIES_COMPLETE.sub(r"(\1\2)", title or "")))
 
 
 def _is_audiobook(title: str) -> bool:
@@ -2264,7 +2271,7 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
             title_sid = title_sidx = title_series = None
             if not omnibus and reason is None:
                 from app.works.title_identity import series_in_title
-                named = series_in_title(bk.title)
+                named = series_in_title(bk.title, known=author_series_id_by_name)
                 if named is not None:
                     title_series, title_sidx = named
                     title_sid = await _series_for_title(title_series)

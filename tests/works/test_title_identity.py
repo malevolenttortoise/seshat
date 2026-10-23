@@ -525,6 +525,16 @@ class TestSeriesInTitle:
     def test_cases(self, title, expected):
         assert series_in_title(title) == expected
 
+    def test_a_head_ending_in_a_known_series_names_that_series(self):
+        """G232: step 5 had filed this in a new series named after the whole head."""
+        title = "Treachery at Martinique Isle Daughters of the High Seas: Book 1"
+        known = ["Daughters of the High Seas", "Pirates"]
+        assert series_in_title(title, known) == ("Daughters of the High Seas", 1.0)
+        assert series_in_title(title) == ("Treachery at Martinique Isle Daughters of the High Seas", 1.0)
+        # The head is itself a known series, or the ending is one word: unchanged.
+        assert series_in_title("Splinter Angel: Book 3", ["Splinter Angel", "Angel"]) == ("Splinter Angel", 3.0)
+        assert series_in_title("Star Wars Legends: Book 2", ["Legends"]) == ("Star Wars Legends", 2.0)
+
 
 @pytest.mark.parametrize("title,expected", [
     ("Book 06.0 - Blood Rites", ("Blood Rites", 6.0)),

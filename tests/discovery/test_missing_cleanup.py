@@ -308,6 +308,18 @@ async def test_a_standalone_titled_with_its_series_is_filed_there(env):
     assert await _q("SELECT series_id FROM books WHERE id = ?", (reused,)) == [(existing,)]
 
 
+async def test_a_head_ending_in_the_authors_series_is_filed_in_it(env):
+    """G232: "… Daughters of the High Seas: Book 1" had made a series named
+    after the whole head."""
+    mine = await _author("Rachel Cherie")
+    await _allow("Rachel Cherie")
+    existing = await _q("INSERT INTO series (name, author_id) VALUES ('Daughters of the High Seas', ?)", (mine,))
+    book = await _book("Treachery at Martinique Isle Daughters of the High Seas: Book 1", [mine])
+    await _apply()
+    assert await _q("SELECT series_id, series_index FROM books WHERE id = ?", (book,)) == [(existing, 1.0)]
+    assert await _q("SELECT COUNT(*) FROM series") == [(1,)]
+
+
 # ─── Step 6: the caches merged again (F13) ───────────────────
 
 
