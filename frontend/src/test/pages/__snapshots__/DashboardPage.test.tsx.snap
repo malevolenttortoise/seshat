@@ -285,7 +285,7 @@ exports[`Dashboard (desktop) > Clean up missing books: a preview over an hour ol
             <span
               style="display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: rgb(224, 192, 96); margin-right: 5px; vertical-align: middle; box-shadow: 0 0 4px #e0c06044;"
             />
-             Clean up missing books
+             Missing Cleanup
           </button>
           <button
             style="padding: 7px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); cursor: pointer; opacity: 1; display: flex; align-items: center; justify-content: center; gap: 5px; white-space: nowrap;"
@@ -1416,6 +1416,18 @@ exports[`Dashboard (desktop) > Clean up missing books: a preview over an hour ol
               <div
                 style="font-size: 13px; font-weight: 600; color: rgb(236, 234, 244);"
               >
+                Books listed twice
+              </div>
+              <div
+                style="font-size: 12px; color: rgb(214, 212, 224); margin-top: 2px;"
+              >
+                Folds two missing rows of one book into the one more sources know, which takes the other's links.
+              </div>
+            </li>
+            <li>
+              <div
+                style="font-size: 13px; font-weight: 600; color: rgb(236, 234, 244);"
+              >
                 Series named in the title
               </div>
               <div
@@ -1768,7 +1780,7 @@ exports[`Dashboard (desktop) > Clean up missing books: a preview running > marku
             <span
               style="display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: rgb(224, 192, 96); margin-right: 5px; vertical-align: middle; box-shadow: 0 0 4px #e0c06044;"
             />
-             Clean up missing books
+             Missing Cleanup
           </button>
           <button
             style="padding: 7px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); cursor: pointer; opacity: 1; display: flex; align-items: center; justify-content: center; gap: 5px; white-space: nowrap;"
@@ -3170,7 +3182,7 @@ exports[`Dashboard (desktop) > Clean up missing books: a preview to apply > mark
             <span
               style="display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: rgb(224, 192, 96); margin-right: 5px; vertical-align: middle; box-shadow: 0 0 4px #e0c06044;"
             />
-             Clean up missing books
+             Missing Cleanup
           </button>
           <button
             style="padding: 7px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); cursor: pointer; opacity: 1; display: flex; align-items: center; justify-content: center; gap: 5px; white-space: nowrap;"
@@ -4844,7 +4856,7 @@ exports[`Dashboard (desktop) > Clean up missing books: after Apply > markup 1`] 
             <span
               style="display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: rgb(224, 192, 96); margin-right: 5px; vertical-align: middle; box-shadow: 0 0 4px #e0c06044;"
             />
-             Clean up missing books
+             Missing Cleanup
           </button>
           <button
             style="padding: 7px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); cursor: pointer; opacity: 1; display: flex; align-items: center; justify-content: center; gap: 5px; white-space: nowrap;"
@@ -6513,7 +6525,7 @@ exports[`Dashboard (desktop) > Clean up missing books: before any preview > mark
             <span
               style="display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: rgb(224, 192, 96); margin-right: 5px; vertical-align: middle; box-shadow: 0 0 4px #e0c06044;"
             />
-             Clean up missing books
+             Missing Cleanup
           </button>
           <button
             style="padding: 7px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); cursor: pointer; opacity: 1; display: flex; align-items: center; justify-content: center; gap: 5px; white-space: nowrap;"
@@ -7639,6 +7651,18 @@ exports[`Dashboard (desktop) > Clean up missing books: before any preview > mark
               <div
                 style="font-size: 13px; font-weight: 600; color: rgb(236, 234, 244);"
               >
+                Books listed twice
+              </div>
+              <div
+                style="font-size: 12px; color: rgb(214, 212, 224); margin-top: 2px;"
+              >
+                Folds two missing rows of one book into the one more sources know, which takes the other's links.
+              </div>
+            </li>
+            <li>
+              <div
+                style="font-size: 13px; font-weight: 600; color: rgb(236, 234, 244);"
+              >
                 Series named in the title
               </div>
               <div
@@ -7991,7 +8015,7 @@ exports[`Dashboard (desktop) > Data Hygiene asks first > markup 1`] = `
             <span
               style="display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: rgb(224, 192, 96); margin-right: 5px; vertical-align: middle; box-shadow: 0 0 4px #e0c06044;"
             />
-             Clean up missing books
+             Missing Cleanup
           </button>
           <button
             style="padding: 7px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); cursor: pointer; opacity: 1; display: flex; align-items: center; justify-content: center; gap: 5px; white-space: nowrap;"
@@ -9583,7 +9607,7 @@ exports[`Dashboard (desktop) > Data Hygiene running > markup 1`] = `
             <span
               style="display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: rgb(224, 192, 96); margin-right: 5px; vertical-align: middle; box-shadow: 0 0 4px #e0c06044;"
             />
-             Clean up missing books
+             Missing Cleanup
           </button>
           <button
             style="padding: 7px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); cursor: pointer; opacity: 1; display: flex; align-items: center; justify-content: center; gap: 5px; white-space: nowrap;"
@@ -10977,7 +11001,7 @@ exports[`Dashboard (desktop) > both libraries, idle > markup 1`] = `
             <span
               style="display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: rgb(224, 192, 96); margin-right: 5px; vertical-align: middle; box-shadow: 0 0 4px #e0c06044;"
             />
-             Clean up missing books
+             Missing Cleanup
           </button>
           <button
             style="padding: 7px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); cursor: pointer; opacity: 1; display: flex; align-items: center; justify-content: center; gap: 5px; white-space: nowrap;"
@@ -12337,7 +12361,7 @@ exports[`Dashboard (desktop) > cache workers in cooldown / out of budget > marku
             <span
               style="display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: rgb(224, 192, 96); margin-right: 5px; vertical-align: middle; box-shadow: 0 0 4px #e0c06044;"
             />
-             Clean up missing books
+             Missing Cleanup
           </button>
           <button
             style="padding: 7px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); cursor: pointer; opacity: 1; display: flex; align-items: center; justify-content: center; gap: 5px; white-space: nowrap;"
@@ -13578,7 +13602,7 @@ exports[`Dashboard (desktop) > every request fails > markup 1`] = `
             <span
               style="display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: rgb(224, 192, 96); margin-right: 5px; vertical-align: middle; box-shadow: 0 0 4px #e0c06044;"
             />
-             Clean up missing books
+             Missing Cleanup
           </button>
           <button
             style="padding: 7px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); cursor: pointer; opacity: 1; display: flex; align-items: center; justify-content: center; gap: 5px; white-space: nowrap;"
@@ -14761,7 +14785,7 @@ exports[`Dashboard (desktop) > mid-scan > markup 1`] = `
             <span
               style="display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: rgb(224, 192, 96); margin-right: 5px; vertical-align: middle; box-shadow: 0 0 4px #e0c06044;"
             />
-             Clean up missing books
+             Missing Cleanup
           </button>
           <button
             style="padding: 7px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); cursor: pointer; opacity: 1; display: flex; align-items: center; justify-content: center; gap: 5px; white-space: nowrap;"
@@ -16200,7 +16224,7 @@ exports[`Dashboard (phone) > Clean up missing books: a preview over an hour old 
           style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 44px; padding: 0px 16px; width: 100%; cursor: pointer;"
         >
           <span>
-            Clean up missing books
+            Missing Cleanup
           </span>
         </button>
       </div>
@@ -17307,6 +17331,18 @@ exports[`Dashboard (phone) > Clean up missing books: a preview over an hour old 
               <div
                 style="font-size: 13px; font-weight: 600; color: rgb(236, 234, 244);"
               >
+                Books listed twice
+              </div>
+              <div
+                style="font-size: 12px; color: rgb(214, 212, 224); margin-top: 2px;"
+              >
+                Folds two missing rows of one book into the one more sources know, which takes the other's links.
+              </div>
+            </li>
+            <li>
+              <div
+                style="font-size: 13px; font-weight: 600; color: rgb(236, 234, 244);"
+              >
                 Series named in the title
               </div>
               <div
@@ -17685,7 +17721,7 @@ exports[`Dashboard (phone) > Clean up missing books: a preview running > markup 
           style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 44px; padding: 0px 16px; width: 100%; cursor: pointer;"
         >
           <span>
-            Clean up missing books
+            Missing Cleanup
           </span>
         </button>
       </div>
@@ -19079,7 +19115,7 @@ exports[`Dashboard (phone) > Clean up missing books: a preview to apply > markup
           style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 44px; padding: 0px 16px; width: 100%; cursor: pointer;"
         >
           <span>
-            Clean up missing books
+            Missing Cleanup
           </span>
         </button>
       </div>
@@ -20757,7 +20793,7 @@ exports[`Dashboard (phone) > Clean up missing books: after Apply > markup 1`] = 
           style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 44px; padding: 0px 16px; width: 100%; cursor: pointer;"
         >
           <span>
-            Clean up missing books
+            Missing Cleanup
           </span>
         </button>
       </div>
@@ -22428,7 +22464,7 @@ exports[`Dashboard (phone) > Clean up missing books: before any preview > markup
           style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 44px; padding: 0px 16px; width: 100%; cursor: pointer;"
         >
           <span>
-            Clean up missing books
+            Missing Cleanup
           </span>
         </button>
       </div>
@@ -23530,6 +23566,18 @@ exports[`Dashboard (phone) > Clean up missing books: before any preview > markup
               <div
                 style="font-size: 13px; font-weight: 600; color: rgb(236, 234, 244);"
               >
+                Books listed twice
+              </div>
+              <div
+                style="font-size: 12px; color: rgb(214, 212, 224); margin-top: 2px;"
+              >
+                Folds two missing rows of one book into the one more sources know, which takes the other's links.
+              </div>
+            </li>
+            <li>
+              <div
+                style="font-size: 13px; font-weight: 600; color: rgb(236, 234, 244);"
+              >
                 Series named in the title
               </div>
               <div
@@ -23908,7 +23956,7 @@ exports[`Dashboard (phone) > Data Hygiene asks first > markup 1`] = `
           style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 44px; padding: 0px 16px; width: 100%; cursor: pointer;"
         >
           <span>
-            Clean up missing books
+            Missing Cleanup
           </span>
         </button>
       </div>
@@ -25349,7 +25397,7 @@ exports[`Dashboard (phone) > Data Hygiene running > markup 1`] = `
           style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 44px; padding: 0px 16px; width: 100%; cursor: pointer;"
         >
           <span>
-            Clean up missing books
+            Missing Cleanup
           </span>
         </button>
         <div
@@ -26756,7 +26804,7 @@ exports[`Dashboard (phone) > both libraries, idle > markup 1`] = `
           style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 44px; padding: 0px 16px; width: 100%; cursor: pointer;"
         >
           <span>
-            Clean up missing books
+            Missing Cleanup
           </span>
         </button>
       </div>
@@ -28091,7 +28139,7 @@ exports[`Dashboard (phone) > cache workers in cooldown / out of budget > markup 
           style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 44px; padding: 0px 16px; width: 100%; cursor: pointer;"
         >
           <span>
-            Clean up missing books
+            Missing Cleanup
           </span>
         </button>
       </div>
@@ -29322,7 +29370,7 @@ exports[`Dashboard (phone) > every request fails > markup 1`] = `
           style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 44px; padding: 0px 16px; width: 100%; cursor: pointer;"
         >
           <span>
-            Clean up missing books
+            Missing Cleanup
           </span>
         </button>
       </div>
@@ -30388,7 +30436,7 @@ exports[`Dashboard (phone) > mid-scan > markup 1`] = `
           style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 44px; padding: 0px 16px; width: 100%; cursor: pointer;"
         >
           <span>
-            Clean up missing books
+            Missing Cleanup
           </span>
         </button>
         <div
