@@ -57,6 +57,7 @@ STEPS: tuple[tuple[str, str, str], ...] = (
     ("openlibrary_only", "Found only by OpenLibrary", "remove"),
     ("filtered", "Comics, box sets, anthologies and other non-books", "hide"),
     ("owned_copy", "Copies of books you own", "fold"),
+    ("listed_copy", "Books listed twice", "fold"),
     ("series_in_title", "Series named in the title", "file"),
     ("cache_remerge", "Amazon and Goodreads books merged again", "merge"),
 )
@@ -402,8 +403,93 @@ async def _owned_copy(lib: _Library, report: dict) -> None:
         step["count"] += 1
 
 
+# What makes one listed copy the one to keep (G237): the row more sources know.
+_SOURCE_ID_COLS = (
+    "goodreads_id", "hardcover_id", "amazon_id", "kobo_id", "ibdb_id", "openlibrary_id",
+    "google_books_id", "fictiondb_id", "isbn", "asin", "audible_id", "mam_torrent_id",
+)
+
+
+async def _listed_copy(lib: _Library, report: dict) -> None:
+    """Step 5 (G237, C44): fold listed copies of one book into each other: one
+    shared contributor and the identity calls them one book. The row more
+    sources know (then the older one) is kept; ids, links, contributors and
+    grab links carry over (`merge_books`). Not folded: a match on series
+    position alone (a title that is only its series name), and a bare "X"
+    against "X: Y" whose "Y" isn't the series. (A family, omnibus or
+    two-series check measured on the reference install: no change, or only
+    right folds lost.)"""
+    from app.discovery.book_merge import MergeError, merge_books
+    from app.works.title_identity import (
+        TitleIndex, TitleRef, _no_real_title, _without_description, author_labels, parse_title, series_key,
+        title_parts,
+    )
+
+    step = _step(report, "listed_copy")
+    listed = [r for r in lib.rows.values() if not r["owned"] and not r["hidden"] and not lib.kept(r)]
+    by_author: dict[int, list] = {}
+    for r in listed:
+        for aid, _ in lib.contribs.get(r["id"], []):
+            by_author.setdefault(aid, []).append(r)
+    titles_by_author: dict[int, list[str]] = {}
+    for r in lib.rows.values():
+        for aid, _ in lib.contribs.get(r["id"], []):
+            titles_by_author.setdefault(aid, []).append(r["title"] or "")
+
+    def known(r) -> int:
+        return sum(1 for c in _SOURCE_ID_COLS if r[c] not in (None, ""))
+
+    def ref(r) -> TitleRef:
+        return TitleRef(r["title"] or "", r["series_name"], r["series_index"])
+
+    def only_series(r) -> bool:
+        return _no_real_title(parse_title(r["title"] or "").proper, r["series_name"])
+
+    def head_of_another(a, b) -> bool:
+        """A bare "X" against "X: Y" whose "Y" isn't the series: "Without
+        Warning" and "Without Warning - After America", "Dark Faith" and
+        "Dark Faith: Invocations" are two books (C44). "Zero Point" and
+        "Zero Point: The Owner: Book Two" (the Owner series) fold."""
+        names = {series_key(s).replace(" ", "") for s in (a["series_name"], b["series_name"]) if s}
+        pa = title_parts(_without_description(parse_title(a["title"] or "").proper))
+        pb = title_parts(_without_description(parse_title(b["title"] or "").proper))
+        for one, many in ((pa, pb), (pb, pa)):
+            if len(one) == 1 and len(many) >= 2 and one[0] == many[0]:
+                if series_key(" ".join(many[1:])).replace(" ", "") not in names:
+                    return True
+        return False
+
+    folded: set[int] = set()
+    for aid, rows in sorted(by_author.items()):
+        rows = sorted(rows, key=lambda r: (-known(r), r["id"]))
+        index = TitleIndex(author_labels(titles_by_author.get(aid, [])))
+        for r in rows:
+            index.add(ref(r), r)
+        for winner in rows:
+            if winner["id"] in folded or only_series(winner):
+                continue
+            for loser in index.find_all(ref(winner)):
+                if loser["id"] == winner["id"] or loser["id"] in folded or only_series(loser):
+                    continue
+                if head_of_another(winner, loser):
+                    continue
+                try:
+                    await merge_books(
+                        lib.db, lib.pdb, library_slug=lib.slug,
+                        winner_id=winner["id"], loser_id=loser["id"], reason="missing_cleanup_listed_copy",
+                    )
+                except MergeError as exc:
+                    step["skipped"].append(lib.record(loser, detail=f"not merged: {exc}"))
+                    continue
+                folded.add(loser["id"])
+                step["rows"].append(lib.record(
+                    loser, detail=f"→ {winner['id']} {winner['title']!r}",
+                    into_id=winner["id"], into_title=winner["title"]))
+                step["count"] += 1
+
+
 async def _series_in_title(lib: _Library, report: dict) -> None:
-    """Step 5 (F14 / G171, C33): a standalone missing book whose title names
+    """Step 6 (F14 / G171, C33): a standalone missing book whose title names
     its series and number is filed there, in a contributor's series of that
     name first, as a scan files a new one."""
     from app.discovery.lookup import _is_omnibus, _norm_consensus_series
@@ -478,7 +564,7 @@ async def _owned_refs(db, author_ids: list[int]) -> tuple[list[str], list[tuple]
 
 
 async def _cache_remerge(lib: _Library, report: dict) -> None:
-    """Step 6 (F13): the books cached for each scan-eligible author merged
+    """Step 7 (F13): the books cached for each scan-eligible author merged
     again with the title identity, as a cache-only scan would (Amazon's
     author cache; Goodreads' candidates the old merge called "existing",
     from their stored pages), with no author-level writes and no requests.
@@ -610,8 +696,8 @@ async def _cache_remerge(lib: _Library, report: dict) -> None:
             step["count"] += 1
 
 
-_STEP_FUNCS = (_no_eligible_author, _openlibrary_only, _filtered, _owned_copy, _series_in_title,
-               _cache_remerge)
+_STEP_FUNCS = (_no_eligible_author, _openlibrary_only, _filtered, _owned_copy, _listed_copy,
+               _series_in_title, _cache_remerge)
 
 
 # ─── Running it ──────────────────────────────────────────────

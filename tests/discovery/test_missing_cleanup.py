@@ -289,7 +289,53 @@ async def test_a_copy_folds_into_an_audiobookshelf_book_too(env):
     assert await _exists(owned, "audio") and not await _exists(copy, "audio")
 
 
-# ─── Step 5: the series a title names (F14 / G171) ───────────
+# ─── Step 5: books listed twice (G237, C44) ─────────────────
+
+
+async def _series(name, author):
+    return await _q("INSERT INTO series (name, author_id) VALUES (?, ?)", (name, author))
+
+
+async def test_two_listed_copies_of_one_book_fold_into_the_one_more_sources_know(env):
+    mine = await _author("Joshua Dalzelle")
+    await _allow("Joshua Dalzelle")
+    trilogy = await _series("Black Fleet Trilogy", mine)
+    hardcover = await _book("Warship", [mine], series_id=trilogy, index=1.0, hardcover_id="hc1", isbn="111")
+    ibdb = await _book("Warship: Black Fleet Trilogy 1 (Black Fleet Saga)", [mine], source="ibdb",
+                       series_id=trilogy, ibdb_id="ib1")
+    other = await _book("Counterstrike", [mine], series_id=trilogy, index=3.0)
+    p, _ = await _apply()
+    assert _count(p, "listed_copy") == 1
+    assert await _exists(hardcover) and not await _exists(ibdb) and await _exists(other)
+    assert await _q("SELECT ibdb_id FROM books WHERE id = ?", (hardcover,)) == [("ib1",)]
+
+
+async def test_listed_copies_that_arent_one_book_stay(env):
+    """C44: a match on series position alone, a bare title against "Title:
+    Another Title" (unless the other part is the series)."""
+    mine = await _author("John Birmingham")
+    await _allow("John Birmingham")
+    without = await _book("Without Warning", [mine])
+    after = await _book("Without Warning - After America", [mine], source="google_books")
+    owner = await _series("Owner Trilogy", mine)
+    zero_kobo = await _book("Zero Point", [mine], source="kobo", series_id=owner)
+    zero_amazon = await _book("Zero Point: The Owner: Book Two", [mine], source="amazon", series_id=owner,
+                              index=2.0, amazon_id="B0ZP")
+    dune = await _series("Dune", mine)
+    named = await _book("Dune", [mine], series_id=dune, index=1.0)
+    story = await _book("Dune: A Whisper of Caladan Seas", [mine], series_id=dune, index=1.0)
+    frontier = await _series("Star Trek: New Frontier", mine)
+    series_titled = await _book("Star Trek: New Frontier", [mine], series_id=frontier, index=1.0)
+    returned = await _book("The Returned, Part 1", [mine], source="amazon", series_id=frontier, index=1.0)
+    p, _ = await _apply()
+    assert _count(p, "listed_copy") == 1                     # the two Zero Points only
+    assert await _exists(without) and await _exists(after)
+    assert await _exists(zero_amazon) and not await _exists(zero_kobo)
+    assert await _exists(named) and await _exists(story)
+    assert await _exists(series_titled) and await _exists(returned)     # position alone
+
+
+# ─── Step 6: the series a title names (F14 / G171) ───────────
 
 
 async def test_a_standalone_titled_with_its_series_is_filed_there(env):

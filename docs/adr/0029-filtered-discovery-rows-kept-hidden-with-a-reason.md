@@ -121,6 +121,22 @@ of what was filtered, and nothing for the next scan or the Goodreads worker to r
   `box_set` 23, `comic` 5, `split` 5. The cleanup's preview hides 172 rows in step 3 and creates the Cry Wolf / Moon
   Called comic issues hidden instead of listed.
 
+## Amendment (2026-10-23, wave D S30: books listed twice)
+
+- **The missing-books cleanup folds listed copies of one book into each other** (G237), a new step after the
+  owned-copy fold: rows sharing a contributor that the title identity calls one book. The row more sources know
+  (then the older) is kept; ids, links, contributors and grab links carry over (`merge_books`). Not folded (C44): a
+  match on series position alone (a title that is only its series name: "Star Trek: New Frontier" and "The Returned,
+  Part 1" both filed at #1), and a bare "X" against "X: Y" whose "Y" isn't the series ("Without Warning" and
+  "Without Warning - After America", "Dark Faith" and "Dark Faith: Invocations"; "Zero Point" and "Zero Point: The
+  Owner: Book Two" fold). Family, omnibus and two-series checks were measured and left out: no change, or only right
+  folds lost (Tithe, KTF, Takhini Wolves…).
+- Reading the step's folds found identity calls that would fold two books (ADR-0028, amended) and, beside G230, that
+  a series parenthetical naming a position ("Far Thoughts and Pale Gods (The Complete Short Fiction of Greg Bear Book
+  2)") marked a book an omnibus, so the cache re-merge re-created it beside its copy.
+- Measured on 2026-10-23 copies: 183 folds, every one read (about 180 right; wrong: "Marvel 1602: Fantastick Four"
+  into "Fantastic Four", two unflagged comic rows).
+
 ## Related
 
 - [0021](0021-roster-gates-discovery-author-creation.md) — roster and scan eligibility (amended: scan eligibility is

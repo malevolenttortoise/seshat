@@ -23,6 +23,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   Evil movie editions and an owned Towerbound re-upload are now
   recognised as books you own.
 
+- **"Clean up missing books" also folds books listed twice** into one row
+  (a new step after "Copies of books you own"), keeping the row more sources
+  know.
 - **Discovery filters catch more** (ADR-0029, wave D): foreign titles with
   no edition marker (more languages' words, and a title whose words no
   English blurb uses), box sets written as "The Complete Wheel of Time",

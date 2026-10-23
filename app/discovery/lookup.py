@@ -139,6 +139,7 @@ _RX_OMNIBUS = re.compile(
 )
 # "(My Paranormal Girlfriends (Complete) Book 1)": the series' status inside
 # its parenthetical, removed before `_is_omnibus` looks (G230).
+_RX_SERIES_POSITION_PAREN = re.compile(r'(?i)\([^()]*?\b(?:book|#)\s*\d+(?:\.\d+)?\s*\)')
 _RX_SERIES_COMPLETE = re.compile(r'(?i)\(([^()]*?)\s*\(\s*complete\s*\)([^()]*)\)')
 
 # Audiobook / non-ebook format detection. Matches titles and metadata
@@ -681,7 +682,12 @@ def _is_omnibus(title: str) -> bool:
     not a set (G230): "My Vampire Bodyguards (My Paranormal Girlfriends
     (Complete) Book 1)" is one book.
     """
-    return bool(_RX_OMNIBUS.search(_RX_SERIES_COMPLETE.sub(r"(\1\2)", title or "")))
+    t = _RX_SERIES_COMPLETE.sub(r"(\1\2)", title or "")
+    # A series parenthetical naming the book's place is one book of it:
+    # "Far Thoughts and Pale Gods (The Complete Short Fiction of Greg Bear
+    # Book 2)" (wave D, beside G230).
+    t = _RX_SERIES_POSITION_PAREN.sub(" ", t)
+    return bool(_RX_OMNIBUS.search(t))
 
 
 def _is_audiobook(title: str) -> bool:

@@ -649,7 +649,9 @@ def title_parts(proper: str) -> list[str]:
     """A title proper's parts as keys ("Head: Middle: Tail"), bare "Book 3"
     parts and generic descriptions left out."""
     parts: list[str] = []
-    for i, segment in enumerate(s for s in _RX_SEGMENTS.split(proper.lower()) if s.strip()):
+    # Trailing descriptions go first, as for the whole title (": LitRPG ,
+    # Time Travel , Dystopia" is no title part; split alone it would be).
+    for i, segment in enumerate(s for s in _RX_SEGMENTS.split(_without_description(proper.lower())) if s.strip()):
         if i and _RX_BARE_VOLUME.match(segment):
             continue
         text = _key_text(_without_description(segment) if i else segment)
