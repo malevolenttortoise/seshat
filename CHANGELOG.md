@@ -7,110 +7,94 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
-## [Unreleased]
+## [3.14.0] — 2026-10-22
 
-Phase 2 of the 2026-10 roadmap, the codebase audit, waves 4a and 4b: the
-**metadata sources**. Every request to a source now goes through one
-gate that paces and counts it, and Goodreads-only books are found by a
-background worker instead of during scans. Wave 5a: **reliability** —
-grabs a restart or a failed qBit submit left stranded now heal
-themselves. Wave 5b: **frontend structure** — the desktop and phone
-versions of each page share their logic through hooks, under a new
-frontend test suite.
+Phase 2 of the 2026-10 roadmap, the **codebase audit**, waves 4 and 5,
+and the **discovery fix pass** that followed it, each built and then
+checked on the live container:
+
+- **Metadata sources** (waves 4a, 4b): every request to a source goes
+  through one gate that paces and counts it, Goodreads-only books are
+  found by a background candidate worker instead of during scans, and
+  Amazon, Goodreads and Kobo back off per kind of request instead of
+  switching off.
+- **Reliability** (wave 5a): grabs a restart or a failed qBit submit
+  stranded heal themselves, every ebook dropped into CWA is checked
+  against Calibre, and settings.json loses the keys no code knows.
+- **Frontend** (wave 5b): the desktop and phone versions of each page
+  share their logic through hooks, under a new Vitest suite; Vite 8,
+  TypeScript 7, Node 26.
+- **Discovery** (fix pass waves A, S, B, C): one title identity decides
+  "same book?" everywhere (ADR-0028), so an IRC announce of a book you
+  own is skipped and scans stop merging different volumes; comics, box
+  sets and other non-books are kept hidden with a reason (ADR-0029); only
+  authors you own or picked are scanned; Calibre sync finds an owned book
+  under any of its authors; and a Dashboard action clears out the books
+  listed before these rules.
+
+**Already shipped in 3.13.1** (a patch cut from `main` on 2026-10-21;
+details in its section below), so not new here:
+
+- Ebooks Seshat patched reach Calibre-Web-Automated again (no more
+  root-only 0600 drops).
+- An audiobook that ships a PDF or epub goes to Audiobookshelf.
+- A download counts as finished only when qBit has every piece.
+- The 2026-10-12 security triage's fixes: error messages masked before
+  they reach the UI, exact delayed-torrent paths, Manual Grab's cover
+  cache checks its torrent ID, a read-only Tests token. Here the masking
+  also covers the routes this release adds.
+- The delayed-torrent filename check bounds each number to 20 digits.
 
 **Behaviour changes to know about:**
 
-- **Scans keep comics, box sets, anthologies and other non-books hidden
-  instead of listing or dropping them** (discovery fix pass S3,
-  ADR-0029). A book a source finds that is a comic or manga, a box set
-  or omnibus, an anthology, magazine or story collection, a foreign
-  edition, a part or chapter of a book, a sampler, a seller's listing
-  ("Signed", "[Paperback]", "X by Author"), a study guide, something
-  that isn't a book (colouring books, notebooks, RPG rulebooks) or a
-  title that isn't one ("Untitled", "The Expanse #3") is created hidden,
-  with its family as the reason. About 2,100 of the 9,272 missing books
-  the 2026-10 audit read were one of these. Comics and box sets follow
-  two new settings, on by default ("Hide comics and manga", "Hide box
-  sets and omnibuses"): turned off, their rows show at once, no
-  re-scan. "Show" on a filtered row sticks (later scans and the settings
-  leave it alone); a book you hide yourself has no reason. A book
-  matches only books of its own family, read from the title, so a
-  hidden comic issue never swallows the novel of the same name.
-  Goodreads' "(Series, #1-3)" ranges count as box sets, and a Goodreads
-  book whose two most-shelved genres include Comics, Graphic Novels or
-  Manga counts as a comic unless it's shelved as a light novel (G208:
-  "Germ Warfare: A Very Graphic History", "Call of the Hunt (Alpha &
-  Omega, #0.5-3)"); the Goodreads worker's log and its candidate now say
-  such a book was created hidden, not "merged into an existing book".
-  Amazon's own "(German Edition)" / "(Spanish Edition)" marker counts
-  as a foreign edition too, for titles with no foreign word to read.
-  Until now a few families were skipped (box sets, foreign-looking
-  titles, any title ending " #N", which also dropped real books such as
-  "Organ Donor: Afterlife of Ebon Black #1" and accented English titles
-  such as "Carbon Copy: An alien AI Doppelgänger Story") and the rest
-  were listed as missing. Rows already in the library stay as they are
-  until wave C's cleanup. **Database migration**: library databases go
-  to `user_version` 93 (`books.hidden_reason` and its index).
-- **The title identity sees through a few more title shapes** (S3b,
-  ADR-0028 amended), for scans and the owned check alike: a description
-  after a comma ("Witches Be Crazy, an Urban Fantasy Men's Adventure"),
-  a " - She's …" tagline, an article inside a title ("The Voyage of
-  Sable Keech"), and a series name used as a prefix when both books sit
-  at the same place in the series ("Geostorm The Shift" = "The Shift",
-  Geostorm #1). Scans stop creating these beside the book they are (one
-  was an owned book). **And one title in one series is one book whatever
-  the series numbers say** (wave C S23, G213): Amazon numbering Halo or
-  Pinwheel differently from Calibre ("Outpost (Pinwheel Book 7)" vs the
-  owned "Outpost" at #6, "Mistborn: Secret History" #8 vs #3.5) no longer
-  lists an owned book again. Titles that name their own volume ("Vol.
-  3", "#4", "Volume Three") and a title an author gives every book of a
-  series ("Blade Angels" for Blade Academy 1, 2 and 3) are still told
-  apart by their numbers; the owned check before a grab keeps the
-  numbers decisive, so it never skips a wanted volume this way.
-- **Scans visit only authors you own or picked, and each author gets a
-  "List missing books" switch** (discovery fix pass S5, ADR-0021
-  amended). An author is scanned when they own a book in the library or
-  you put them on the allow list yourself (autobrr import, manual,
-  tentative approve). An author grab auto-train added as a co-author
-  still passes the MAM filter and is still credited on books, but isn't
-  scanned for missing books. The check is now on every scan path: the
-  author page, multi-select, book scans and Full Re-Scan scanned anyone
-  until now, and the Goodreads worker set its own pace. A skipped author
-  is named with the reason, and the Goodreads worker sets their books
-  aside without a request. The switch is on by default. Turned off
-  (API now, author page in S7), the author isn't scanned and their
-  missing books are hidden (reason "author off"), unless another of
-  their contributors still lists missing books. Turned back on, the
-  books show at once and the Goodreads worker picks them up again. MAM
-  announces for the author still pass your filter. **Database
-  migration**: library databases go to `user_version` 94
-  (`authors.list_missing`).
-- **Calibre sync recognises an owned book under any of its authors and
-  any title shape** (discovery fix pass S6, ADR-0028 amended). When a
-  book arrives in Calibre, or on every sync's end-of-sync heal, the
-  missing row it is gets merged into it (or marked owned, when there
-  are several). The match is now any of the book's Calibre authors, or
-  an author linked to one as a pen name or co-author, plus the title
-  identity, within the book's filter family. Until now it was the first
-  author and the exact title. Books owned under a pen name or co-author
-  stop showing as missing: "Atlantis University" (Michael Todd /
-  Anderle), "Hex Kittens 4–5", "Honor Among Thieves", and Hardcover's
-  "Book 06.0 - Blood Rites" rows. On the reference library the first
-  sync absorbs about 120 rows. A wrong title-identity call now also
-  turns a missing row into the owned book: comic adaptations whose
-  titles carry no comic word are the main case. After such a merge the
-  owned book keeps Calibre's author list. **Author hygiene:** Calibre's
-  `|` (its stored comma) reads back as a comma. A full sync deletes an
-  author row whose Calibre author is gone and that lists no book, with
-  its empty mirror in the audiobook library and its person link (9 such
-  rows on the reference install). Rows that still list missing books
-  stay until wave C's cleanup. Full sync time on the reference library:
-  1.6 s → 3.7 s. **When a book matches several missing rows that aren't
-  all one book, it now matches none** (wave C, G211): a graphic novel's
-  Vol. 1 and Vol. 2 against the owned novel, or two books a source filed
-  at "Dune #1", stay listed instead of being marked owned (on the
-  reference library a full sync flips 8 copies instead of 26 rows); a
-  row the filters hid as a comic is never the owned prose book.
+- **Database migrations**; take a backup before updating, as usual. The
+  app database goes from `user_version` 60 to 67 (per-source traffic
+  counts, CWA import checks, every MAM content tag, a grab's co-authors),
+  each library database from 89 to 94 (`books.discovered_by`,
+  `books.hidden_reason`, `authors.list_missing`), the Goodreads cache
+  from 7 to 14 (the book-page store, the candidate worker's progress,
+  phase 2) and the Amazon cache from 15 to 16 (`quiet_refreshes`). At
+  first start the MAM content tags of announces since 2026-10-08 are
+  read back from their stored IRC lines, and `discovered_by` is filled
+  from `source` for books no library owns.
+- **Settings keys no code knows leave settings.json** (ADR-0027): on
+  the first start they are removed (26 of 205 on the reference install)
+  after a copy of the file is saved as `settings.json.pre-sweep-<build>`,
+  and each removed key is logged. Downgrading afterwards gives those keys their
+  defaults back, not your values.
+- **Every ebook dropped into CWA is checked against Calibre.** Nothing
+  in Calibre within 15 minutes sends a `pipeline.import_failed`
+  notification (on by default) and brings the review back as **Import
+  failed**, with **Re-drop** and **Mark as imported**. A review's files
+  are now kept until its import is confirmed.
+- **Stranded grabs heal themselves.** A grab a restart left
+  mid-pipeline is re-run from the files qBit already has (after 10 quiet
+  minutes, at most twice), and a failed qBit submit whose torrent qBit
+  has complete goes back through the pipeline; nothing is fetched from
+  MAM or re-added to qBit. Stranded grabs older than 7 days are closed
+  as `failed` instead, including old ones on the first start.
+- **Scans visit only authors you own or picked**: an author you own a
+  book by in that library, or put on the allow list yourself (autobrr
+  import, manual, tentative approve). Co-authors that grab auto-train
+  added still pass the MAM filter but aren't scanned. This holds on
+  every scan path, the Goodreads worker included. Each author gets a
+  **List missing books** switch (on); off hides their missing books.
+- **Non-books are kept hidden with a reason** instead of listed or
+  dropped: comics and manga, box sets and omnibuses, anthologies,
+  foreign editions, parts, samplers and seller listings, study guides
+  and things that aren't books. They show under Hidden → Filtered.
+  Comics and box sets follow two new settings, on by default. Books
+  already listed stay until you run the cleanup below.
+- **"Clean up missing books"** (Dashboard, beside Data Hygiene) applies
+  the new rules to the books listed before them. Nothing happens until
+  you press it, and **Preview** comes first: it runs every step on
+  copies of the databases and shows each step's count with a sample;
+  **Apply** then does what the preview showed. It never touches owned
+  books, books you hid or showed, or a book a grab is linked to, and
+  sends no source requests.
+
+### Added
+
 - **"Clean up missing books": the fix pass's rules for the books listed
   before them** (discovery fix pass S8, ADR-0029 amended). On the
   Dashboard beside Data Hygiene, desktop and phone. Preview runs every
@@ -140,7 +124,7 @@ frontend test suite.
   1,354 hidden, 9 folded, 72 filed, 1,158 brought back (700 of them
   hidden by the filters); the preview takes 13 seconds. While it runs,
   scheduled library syncs and the Goodreads worker's merges wait.
-- **The pages for all this** (discovery fix pass S7). **Hidden** has two
+- **The pages for the fix pass** (discovery fix pass S7). **Hidden** has two
   tabs: "Hidden by you" (the default) and "Filtered", the books Seshat
   keeps hidden. Filtered has a chip per reason, each with its count:
   Comic, Box set, Anthology, Not English, Split / sampler / listing, Not
@@ -159,25 +143,185 @@ frontend test suite.
   and `/discovery/books`; `reason` on `/discovery/books/hidden` takes
   several comma-separated reasons; `/discovery/missing` no longer
   passes an unset `slug` through to `/books`.
-- **A grab's co-authors join your allow list only once the book is
-  delivered, and never from a book with 4 or more authors** (discovery
-  fix pass S20, ADR-0021 amended). Until now every co-author MAM lists
-  was added the moment the filter allowed the announce: before the
-  grab policy, the download and your review. One namesake match ("Chris
-  Harris" on a Kobold Press RPG book) set off 16 RPG grabs that added
-  56 names, publishers among them, some from grabs you then rejected.
-  Now the list is saved on the grab and trained when the book is
-  delivered (an approved review, its timeout, or no review). A rejected
-  review, a grab the policy skips or a failed download adds nobody. A
-  book credited to 4 or more authors (anthologies, RPG books) adds none
-  of them, for the co-author list and the announce's own authors alike.
-  The Filters page now says how the categories work: a torrent passes
-  when any of its tags is allowed, and right-click (on the phone, tap
-  until struck through) blocks a tag outright. **Database migration**: the pipeline
-  database goes to `user_version` 67 (`grabs.coauthors_json`).
+- **Every ebook dropped into Calibre-Web-Automated is checked against
+  Calibre** (wave 5a). CWA reports nothing back, so Seshat looks for the
+  book in Calibre's `metadata.db` (read-only): a record added or changed
+  since the drop with the same title or one of its authors confirms it.
+  Nothing within 15 minutes → a new `pipeline.import_failed` notification
+  (on by default), the review comes back as **Import failed** at the top of
+  the Review page with **Re-drop** and **Mark as imported**, its grab goes
+  back to `processing` and its run to `failed`. The review's files are now
+  kept until the import is confirmed (so a Re-drop has something to send).
+  A file CWA titled from its file name (author "Unknown") counts as
+  imported too. From 2026-09-29 to 10-09 CWA deleted every patched ebook
+  unimported while Seshat said delivered; this is what would have caught
+  it.
+- **Stranded grabs heal themselves** (wave 5a). A grab a restart left
+  mid-pipeline (staged / extracted / metadata_done, not moving for 10
+  minutes) is re-run from the files qBit already has, at most twice; one
+  older than 7 days is closed (`failed`, "interrupted by a restart; too old
+  to re-run") instead. A grab whose qBit submit failed (`failed_unknown`,
+  `duplicate_in_qbit`) but whose torrent qBit has complete goes back to
+  `submitted` and through the pipeline, within 7 days. Nothing is fetched
+  from MAM or re-added to qBit.
+- **A source skipped while backing off is retried before you review**
+  (G182, wave S, ADR-0025 amended): when a grab's enrichment skipped
+  Amazon (its search / product pages cooling down), Goodreads (book
+  pages backing off) or Kobo, a job every 5 minutes re-runs that source
+  alone for the still-pending review once the backoff is over, and merges
+  it as if it had never been skipped: a field takes its value where it
+  ranks above the field's current source (description keeps the longer
+  text), a top-level field follows only if it was empty or still the old
+  enriched value (your edits and file values stay), a cover it wins is
+  downloaded. Nothing re-runs after a decision. The review's source list
+  shows the retry (`retried`). A skip is now recorded as `soft_blocked`,
+  not as "no match", and so is a block met by the book's own request
+  (G192: on 10-20 four grabs' Amazon or Goodreads lookups hit a bot page
+  and were filed as misses, never retried); the enricher no longer sends
+  its cleaned-title second try after a block. A retry blocked again
+  stays skipped and waits for the next backoff to end (three retries in
+  a row had met a fresh bot page and spent their one try), at most 3
+  tries per source, then it's left as no match. Amazon's retry waits for
+  its store pages too (a cache miss needs the author's store page).
+- **One title identity** (discovery fix pass S1, ADR-0028):
+  `app/works/title_identity.same_book` decides whether two titles are the
+  same book: numbers written in either title must agree ("Monster's Mercy"
+  is not "Monster's Mercy 3"), a series index counts only within its own
+  series name, a comic is never the prose book and a dramatised edition
+  never the plain one, a generic subtitle (": A LitRPG Adventure") or an
+  author's franchise label ("Star Wars Legends") never identifies a book,
+  and series position alone decides only when one side has no real title.
+  When unsure it says "different". Its case table is
+  `tests/works/test_title_identity.py`. The grab side and the scan merge
+  use it (see Changed and Fixed). ADR-0028 and ADR-0029
+  (filtered discovery rows), amendments to ADR-0004, 0013 and
+  0021, and the new terms in CONTEXT.md.
+- **Every MAM content tag is kept** (wave 5a): an announce carries several
+  ("Crime, Mystery, Thriller/Suspense"), the filter already read them all,
+  but announces, tentative torrents and grabs kept only the first (in
+  `category`, "Ebooks - Crime", which stays as it is for every reader).
+  They now also store the list, and the Tentative page, the Announces log
+  and the Review page show it as chips (desktop + mobile).
+  `GET /api/v1/announces`, `GET /api/v1/tentative` and `GET /api/v1/review`
+  rows gain `categories` (a list, or null when only one category is
+  known: grabs from Manual Grab or discovery, rows from before).
+- `POST /api/v1/review/{id}/redrop` and `POST /api/v1/review/{id}/mark-imported`
+  for reviews whose CWA import failed; `GET /api/v1/review` lists those
+  (status `import_failed`, the reason in `decision_note`) ahead of the
+  pending ones (`pending_count` still counts pending only). Re-drop first
+  removes Seshat's earlier drop if it's still in the ingest folder.
+- **Goodreads candidate worker + detail store** (wave 4b, ADR-0026): the
+  Goodreads cache worker checks, between list-page refreshes, the books
+  Goodreads lists that discovery doesn't have, for authors a scan has
+  covered (first fill: authors listing up to 100 books; then any author's
+  newly listed books), one request at a time, and creates the ones that
+  pass. Its progress survives restarts and blocks; a scan puts its author
+  first. The Goodreads cache card shows it (first fill, newly listed,
+  waiting, created, rejected and why, the next book-page slot);
+  `GET /api/v1/metadata-cache/goodreads/status` gains `candidates`.
+  **Phase 2** (fetch the page of every cached list entry) has a switch on
+  the same card (`PATCH …/goodreads/settings` `{"phase2_enabled": …}`),
+  on by default (see Changed).
+- **Provenance** (wave 4b, audit issue 14): a discovered book remembers
+  which source created it after it becomes owned (`books.discovered_by`;
+  Calibre sync used to overwrite `source` with `calibre`, losing it), and
+  which source wrote each of its fields (`books.field_source_map`, JSON
+  field → source: written when a source creates the book, fills a field a
+  later scan finds empty, wins its series, or when you accept a queued
+  change). A grab's review metadata records which source won each field of
+  its enrichment (`enriched.field_sources`). No merge decision changes.
+- Metadata Sources › Goodreads: **Book-page gap** and **Include
+  non-fiction from Goodreads** (`metadata_sources.goodreads.book_page_gap`,
+  `.include_nonfiction`).
+- **Per-source traffic counts** (audit issue 15): every request to a
+  metadata source is counted per day, source and caller: requests, OK,
+  blocked, errors, timeouts; scans add the books they created and updated
+  and the times a source hit its scan time cap. Goodreads splits by
+  request kind (book pages, list pages, autocomplete). The Metadata
+  Sources panel shows today by caller and the last 7 days for the
+  selected source (`GET /api/v1/metadata-sources/traffic`). Kept 90 days.
+- **A frontend test suite** (wave 5b): Vitest + jsdom + Testing Library
+  (`npm test` in `frontend/`), run by CI beside pytest and gating the
+  image the same way. Besides unit tests for the shared page hooks, it
+  renders every page wave 5b's refactor touches (desktop and phone, with
+  canned API responses) and snapshots the markup and the requests each
+  page makes while loading, so moving page logic into shared hooks has to
+  leave both unchanged.
+- ADR-0026 (supersedes ADR-0018 §6).
+- ADR-0025: source access stays within tiers 0–1 (no challenge solving,
+  no borrowed browser cookies, no proxies or grey API routes), enforced
+  through one gate per source.
+
+### Changed
+
+- **Scans visit only authors you own or picked, and each author gets a
+  "List missing books" switch** (discovery fix pass S5, ADR-0021
+  amended). An author is scanned when they own a book in the library or
+  you put them on the allow list yourself (autobrr import, manual,
+  tentative approve). An author grab auto-train added as a co-author
+  still passes the MAM filter and is still credited on books, but isn't
+  scanned for missing books. The check is now on every scan path: the
+  author page, multi-select, book scans and Full Re-Scan scanned anyone
+  until now, and the Goodreads worker set its own pace. A skipped author
+  is named with the reason, and the Goodreads worker sets their books
+  aside without a request. The switch is on by default. Turned off
+  (author page or API), the author isn't scanned and their
+  missing books are hidden (reason "author off"), unless another of
+  their contributors still lists missing books. Turned back on, the
+  books show at once and the Goodreads worker picks them up again. MAM
+  announces for the author still pass your filter. **Database
+  migration**: library databases go to `user_version` 94
+  (`authors.list_missing`).
+- **Scans keep comics, box sets, anthologies and other non-books hidden
+  instead of listing or dropping them** (discovery fix pass S3,
+  ADR-0029). A book a source finds that is a comic or manga, a box set
+  or omnibus, an anthology, magazine or story collection, a foreign
+  edition, a part or chapter of a book, a sampler, a seller's listing
+  ("Signed", "[Paperback]", "X by Author"), a study guide, something
+  that isn't a book (colouring books, notebooks, RPG rulebooks) or a
+  title that isn't one ("Untitled", "The Expanse #3") is created hidden,
+  with its family as the reason. About 2,100 of the 9,272 missing books
+  the 2026-10 audit read were one of these. Comics and box sets follow
+  two new settings, on by default ("Hide comics and manga", "Hide box
+  sets and omnibuses"): turned off, their rows show at once, no
+  re-scan. "Show" on a filtered row sticks (later scans and the settings
+  leave it alone); a book you hide yourself has no reason. A book
+  matches only books of its own family, read from the title, so a
+  hidden comic issue never swallows the novel of the same name.
+  Goodreads' "(Series, #1-3)" ranges count as box sets, and a Goodreads
+  book whose two most-shelved genres include Comics, Graphic Novels or
+  Manga counts as a comic unless it's shelved as a light novel (G208:
+  "Germ Warfare: A Very Graphic History", "Call of the Hunt (Alpha &
+  Omega, #0.5-3)"); the Goodreads worker's log and its candidate now say
+  such a book was created hidden, not "merged into an existing book".
+  Amazon's own "(German Edition)" / "(Spanish Edition)" marker counts
+  as a foreign edition too, for titles with no foreign word to read.
+  Until now a few families were skipped (box sets, foreign-looking
+  titles, any title ending " #N", which also dropped real books such as
+  "Organ Donor: Afterlife of Ebon Black #1" and accented English titles
+  such as "Carbon Copy: An alien AI Doppelgänger Story") and the rest
+  were listed as missing. Rows already in the library stay as they are
+  until the missing-books cleanup. **Database migration**: library databases go
+  to `user_version` 93 (`books.hidden_reason` and its index).
+- **The title identity sees through a few more title shapes** (S3b,
+  ADR-0028 amended), for scans and the owned check alike: a description
+  after a comma ("Witches Be Crazy, an Urban Fantasy Men's Adventure"),
+  a " - She's …" tagline, an article inside a title ("The Voyage of
+  Sable Keech"), and a series name used as a prefix when both books sit
+  at the same place in the series ("Geostorm The Shift" = "The Shift",
+  Geostorm #1). Scans stop creating these beside the book they are (one
+  was an owned book). **And one title in one series is one book whatever
+  the series numbers say** (wave C S23, G213): Amazon numbering Halo or
+  Pinwheel differently from Calibre ("Outpost (Pinwheel Book 7)" vs the
+  owned "Outpost" at #6, "Mistborn: Secret History" #8 vs #3.5) no longer
+  lists an owned book again. Titles that name their own volume ("Vol.
+  3", "#4", "Volume Three") and a title an author gives every book of a
+  series ("Blade Angels" for Blade Academy 1, 2 and 3) are still told
+  apart by their numbers; the owned check before a grab keeps the
+  numbers decisive, so it never skips a wanted volume this way.
 - **An IRC announce of a book you already own is no longer grabbed**
   (discovery fix pass S4, ADR-0004 / 0013 amended). Claim-for-owned and
-  format dedup now recognise an owned book by the title identity (below)
+  format dedup now recognise an owned book by the title identity (Added)
   and any of its contributors: "Dragon Bound" is your "Dragon Bound: A
   Legacy Building Fantasy", but "Monster's Mercy 3" is not your "Monster's
   Mercy". An unlinked owned row is still claimed in place; an owned row
@@ -199,145 +343,55 @@ frontend test suite.
   Book 9" stored in Forgotten Ruin; ~60 owned books carried that shape.
   Manual Grab's preview and the Review page's "already owned" banner use
   the same rule.
-- **A download counts as finished only when qBit has every piece**
-  (G173, wave S): the watcher called any state outside its "downloading"
-  list finished, so a torrent added a second earlier (`checkingResumeData`)
-  or paused part-way (qBit 4's `pausedDL`) started the pipeline before its
-  file existed. Grab 4744 failed that way and sent a "Pipeline error"
-  ntfy, then recovered on the retry; since qBit writes straight to the
-  final file name, a later misfire could have copied a truncated file.
-  Now qBit's progress must be 100% and the torrent not checking, errored
-  or missing files; the completion log line names the state and
-  progress. Transmission, Deluge and rTorrent report no progress and keep
-  the state rule. A "no file matching" failure holds its ntfy while a
-  retry is due (sent on the last try, or when the torrent is gone), and
-  its message says what happened: qBit lists the torrent as finished but
-  its files aren't there.
-- **Enrichment never merges another volume or edition of the book**
-  (G189, wave S): a source's fuzzy match could score another volume as
-  the book (Hardcover's "My Dungeon Life: Volume 1" scored 1.00 for "My
-  Dungeon Life Vol 2", grabs 4770 and 4796–4802). The title identity's
-  format and number rules now veto any text-search match (cache-backed
-  ones included; MAM's and Audnexus's exact-ID lookups untouched). The
-  review's source list shows it as `other_volume`.
-- **Amazon cools down per request kind** (G181, wave S, ADR-0025
-  amended): a 429 on the cache worker's author-store pages switched
-  Amazon off for every grab's enrichment inside the cooldown (~22 of 72
-  grabs in the trial's last days skipped Amazon). A 429 / 503 now cools
-  down only its own kind: store pages (author store, allbooks, /juvec,
-  the vanity-URL redirect) or search and product pages (`/s`, `/dp/`).
-  A bot / robot-check page, the 202 sensor challenge or a thin page still
-  stops every kind. The worker's escalation (10 → 30 → 60 min) extends
-  the cooldown its scan tripped. Settings gain the runtime key
-  `amazon_blocked_until_by_kind`; Reset cooldown clears both.
-- **A source skipped while backing off is retried before you review**
-  (G182, wave S, ADR-0025 amended): when a grab's enrichment skipped
-  Amazon (its search / product pages cooling down), Goodreads (book
-  pages backing off) or Kobo, a job every 5 minutes re-runs that source
-  alone for the still-pending review once the backoff is over, and merges
-  it as if it had never been skipped: a field takes its value where it
-  ranks above the field's current source (description keeps the longer
-  text), a top-level field follows only if it was empty or still the old
-  enriched value (your edits and file values stay), a cover it wins is
-  downloaded. Nothing re-runs after a decision. The review's source list
-  shows the retry (`retried`). A skip is now recorded as `soft_blocked`,
-  not as "no match", and so is a block met by the book's own request
-  (G192: on 10-20 four grabs' Amazon or Goodreads lookups hit a bot page
-  and were filed as misses, never retried); the enricher no longer sends
-  its cleaned-title second try after a block. A retry blocked again
-  stays skipped and waits for the next backoff to end (three retries in
-  a row had met a fresh bot page and spent their one try), at most 3
-  tries per source, then it's left as no match. Amazon's retry waits for
-  its store pages too (a cache miss needs the author's store page).
-- **The Amazon cache worker refreshes quiet authors less often** (G183,
-  wave S, ADR-0025 amended): a refresh that finds no book the cache
-  didn't have puts the next one 14, then 28 days out; one that finds a
-  new book (or a first scan) brings it back to 7. 65% of the trial's
-  refreshes found nothing, and the worker managed ~55 authors a day
-  against ~100 a 7-day cycle needs. The `[scan]` log line shows
-  `next_days`. **Database migration**: the Amazon cache database goes to
-  `user_version` 16 (a `quiet_refreshes` column on the queue).
-- **Kobo can contribute to enrichment again** (G188, wave S): its record
-  never carried an author, so even a perfect title scored under the
-  0.80 bar and Kobo hadn't merged a field. It now reads each search
-  result's authors to pick the result, never picks another volume, and
-  reads the detail page's authors and subtitle ("Heaven Sent: Soul
-  Lessons from the Afterlife" is not "Heaven Sent an Inquisitor…").
-- **Source scans no longer merge one volume into another or drop books
-  as duplicates** (discovery fix pass S2, G170). The scan merge decides
-  "same book?" with the title identity: different volumes, and two real
-  titles a series numbers the same, stay apart; a book is skipped only
-  when it is a book already listed, never because its title merely
-  normalises like another one ("SKIP (norm dup)" is gone). Replayed on
-  Amazon's cache (6,257 books, 2026-10-16 copies): 104 books missing from
-  the library would now be listed, 179 wrong merges are undone and 50
-  move to the right book (all six Monster Hunter International books
-  had landed on their neighbours), 147 books the old merge dropped merge
-  into their own row, and about 36 come in as visible duplicates. The
-  Goodreads worker's merges replay the same way (66 of 188 "existing"
-  ones are real books it lost). A "Title: Series Name" listing is that
-  book, no longer a separate "omnibus" row. Merges are also much faster
-  for big authors (Peter David's Amazon merge 5.9s → 0.5s).
+- **Calibre sync recognises an owned book under any of its authors and
+  any title shape** (discovery fix pass S6, ADR-0028 amended). When a
+  book arrives in Calibre, or on every sync's end-of-sync heal, the
+  missing row it is gets merged into it (or marked owned, when there
+  are several). The match is now any of the book's Calibre authors, or
+  an author linked to one as a pen name or co-author, plus the title
+  identity, within the book's filter family. Until now it was the first
+  author and the exact title. Books owned under a pen name or co-author
+  stop showing as missing: "Atlantis University" (Michael Todd /
+  Anderle), "Hex Kittens 4–5", "Honor Among Thieves", and Hardcover's
+  "Book 06.0 - Blood Rites" rows. On the reference library the first
+  sync absorbs about 120 rows. A wrong title-identity call now also
+  turns a missing row into the owned book: comic adaptations whose
+  titles carry no comic word are the main case. After such a merge the
+  owned book keeps Calibre's author list. **Author hygiene:** Calibre's
+  `|` (its stored comma) reads back as a comma. A full sync deletes an
+  author row whose Calibre author is gone and that lists no book, with
+  its empty mirror in the audiobook library and its person link (9 such
+  rows on the reference install). Rows that still list missing books
+  stay until the missing-books cleanup. Full sync time on the reference library:
+  1.6 s → 3.7 s. **When a book matches several missing rows that aren't
+  all one book, it now matches none** (wave C, G211): a graphic novel's
+  Vol. 1 and Vol. 2 against the owned novel, or two books a source filed
+  at "Dune #1", stay listed instead of being marked owned (on the
+  reference library a full sync flips 8 copies instead of 26 rows); a
+  row the filters hid as a comic is never the owned prose book.
+- **A grab's co-authors join your allow list only once the book is
+  delivered, and never from a book with 4 or more authors** (discovery
+  fix pass S20, ADR-0021 amended). Until now every co-author MAM lists
+  was added the moment the filter allowed the announce: before the
+  grab policy, the download and your review. One namesake match ("Chris
+  Harris" on a Kobold Press RPG book) set off 16 RPG grabs that added
+  56 names, publishers among them, some from grabs you then rejected.
+  Now the list is saved on the grab and trained when the book is
+  delivered (an approved review, its timeout, or no review). A rejected
+  review, a grab the policy skips or a failed download adds nobody. A
+  book credited to 4 or more authors (anthologies, RPG books) adds none
+  of them, for the co-author list and the announce's own authors alike.
+  The Filters page now says how the categories work: a torrent passes
+  when any of its tags is allowed, and right-click (on the phone, tap
+  until struck through) blocks a tag outright. **Database migration**: the pipeline
+  database goes to `user_version` 67 (`grabs.coauthors_json`).
 - **A standalone book whose title names its series is filed in it**
   (G171): "Contracts & Cats (Meow: Magical Emporium of Wares #1)" or
   "Splinter Angel: Book 3" from a source that gives no series now lands
   in that series with that number (an existing series of the author's
   first); the title is kept as the source wrote it.
-- **A taken series number no longer makes two books one** (discovery
-  fix pass S24, G215 / G216, ADR-0028 amended). Seshat's start no longer
-  deletes a missing book because another book holds its series number
-  (it had deleted "The Forge of God" for its Spanish edition, and would
-  have deleted 173 rows after the missing-books cleanup); Hygiene's Book
-  deduplication no longer does either. A scan filing a standalone book
-  into the series its title names folds it into the book on that number
-  only when the titles say it's that book ("Remnant Book 3" into
-  "Remnant III"), not "Six of Crows – Chapters 1 and 2" into your
-  "Crooked Kingdom" (half of the 340 such folds so far were wrong).
-  Owned books sharing a number are still logged at start for you to fix
-  in Calibre.
-- **A shared id is checked against the titles** (discovery fix pass S25,
-  G219 / G220, ADR-0028 amended). A scan no longer lists an Amazon book
-  a second time when a co-author's row already has it under the same
-  Amazon id and title ("Severed Wake (Flying Gas Can Book 4)" twice).
-  Hygiene's Book deduplication folds two books sharing an id only when
-  their titles say they're one book: the old merge had copied ids onto
-  the wrong rows (a light novel's Amazon id onto its manga), and Hygiene
-  would have folded about 40 real books into them.
 - **OpenLibrary no longer creates missing books** (D11): it still
   matches and enriches books other sources list (IDs, covers, language).
-- **Hardcover**: "Book 06.0 - Blood Rites" titles come in as "Blood
-  Rites", #6 (every owned Dresden Files novel was listed a second time),
-  and a reading-order / publication-order / chronological series
-  ("Enderverse: Publication Order") is never picked; a book with only
-  such a series comes in standalone.
-- **The Goodreads worker recognises a book it already has by the title
-  identity** (wave-4 trial item (b)): "The Tower Strive: A
-  Tower-Climbing LitRPG Adventure" is the owned "The Tower Strive", and
-  a later volume is no longer "known" because an earlier one is.
-- **Stranded grabs heal themselves** (wave 5a). A grab a restart left
-  mid-pipeline (staged / extracted / metadata_done, not moving for 10
-  minutes) is re-run from the files qBit already has, at most twice; one
-  older than 7 days is closed (`failed`, "interrupted by a restart; too old
-  to re-run") instead. A grab whose qBit submit failed (`failed_unknown`,
-  `duplicate_in_qbit`) but whose torrent qBit has complete goes back to
-  `submitted` and through the pipeline, within 7 days. Nothing is fetched
-  from MAM or re-added to qBit.
-- **Every ebook dropped into Calibre-Web-Automated is checked against
-  Calibre** (wave 5a). CWA reports nothing back, so Seshat looks for the
-  book in Calibre's `metadata.db` (read-only): a record added or changed
-  since the drop with the same title or one of its authors confirms it.
-  Nothing within 15 minutes → a new `pipeline.import_failed` notification
-  (on by default), the review comes back as **Import failed** at the top of
-  the Review page with **Re-drop** and **Mark as imported**, its grab goes
-  back to `processing` and its run to `failed`. The review's files are now
-  kept until the import is confirmed (so a Re-drop has something to send).
-  From 2026-09-29 to 10-09 CWA deleted every patched ebook unimported while
-  Seshat said delivered; this is what would have caught it.
-- **Database migration**: the app database goes to `user_version` 66 (a new
-  `import_checks` table; a `categories_json` column on announces,
-  tentative torrents and grabs). At first start the MAM content tags of
-  announces since 2026-10-08 (when the IRC line started being stored) are
-  read back from their IRC lines.
 - **Settings keys no code knows are removed from settings.json** (wave 5a,
   ADR-0027). On the first start, a long-running install loses its dead keys
   (prod: 26 of 205, e.g. the old per-source `<source>_enabled` / `rate_<source>`
@@ -345,11 +399,16 @@ frontend test suite.
   `settings.json.pre-sweep-<build>`, and each removed key is logged. Nothing
   is removed on an install that hasn't converted to `metadata_sources` yet.
   Downgrading after this restores those keys' defaults, not their values.
-- **Drop mode keeps a grab's .torrent when qBit can't be reached** (wave
-  5a): a qBit login or network failure now saves the bytes and queues the
-  grab in both full-budget modes, as queue mode already did. Before, drop
-  mode kept nothing, and MAM never serves the same torrent twice.
-
+- **A source's Rate on Metadata Sources is now the minimum gap between
+  any two requests to that source, from anything in Seshat** (scans, the
+  cache workers, enrichment, the Goodreads ID resolver, the author-ID
+  backfill, URL import). Before, each part of Seshat kept its own pace or
+  none, and enrichment ignored the setting entirely. Expect scans to take
+  longer while a cache worker is busy with the same source, Kobo to run
+  at a quarter of its old request rate (its concurrency setting no longer
+  speeds it up), and a grab's enrichment to wait when it has to reach
+  Amazon or Goodreads live. Enrichment goes ahead of scans and workers,
+  and the wait no longer counts against its timeouts.
 - **While the Goodreads cache worker is on, a source scan no longer sends
   Goodreads anything** (wave 4b, ADR-0026). Books discovery already has
   still take Goodreads' list-page data (and its stored page, if one was
@@ -427,33 +486,24 @@ frontend test suite.
   pages went out over plain Python HTTP with no block check, and an
   audiobook or pre-order at the top of the search fell through to the next
   result; it now ends there.
-- **Database migration**: the Goodreads cache database
-  (`metadata_cache_goodreads.db`) gains four tables (the detail store and
-  the candidate worker's progress).
-- **Database migration**: each library database goes to `user_version` 91
-  (a `discovered_by` column on books, filled from `source` for books no
-  library owns).
-
-- **A source's Rate on Metadata Sources is now the minimum gap between
-  any two requests to that source, from anything in Seshat** (scans, the
-  cache workers, enrichment, the Goodreads ID resolver, the author-ID
-  backfill, URL import). Before, each part of Seshat kept its own pace or
-  none, and enrichment ignored the setting entirely. Expect scans to take
-  longer while a cache worker is busy with the same source, Kobo to run
-  at a quarter of its old request rate (its concurrency setting no longer
-  speeds it up), and a grab's enrichment to wait when it has to reach
-  Amazon or Goodreads live. Enrichment goes ahead of scans and workers,
-  and the wait no longer counts against its timeouts.
-- Kobo's per-author scan cap goes from 3 to 10 minutes.
-- **Kobo no longer solves Cloudflare challenges.** Both Kobo sources used
-  `cloudscraper`, a challenge solver; they now share one curl_cffi
-  session with Chrome's TLS profile, like Goodreads and Amazon. A
-  challenge is counted as a block, the session is dropped, and Kobo backs
-  off for 2 minutes, then 5, 10, 30 and 60 on repeated challenges (the
-  next success clears it). If kobo.com challenges every plain request,
-  Kobo stops returning results; the Metadata Sources counters show it.
-  `cloudscraper` is removed from the image (`requests` is now pinned
-  directly).
+- **Amazon cools down per request kind** (G181, wave S, ADR-0025
+  amended): a 429 on the cache worker's author-store pages switched
+  Amazon off for every grab's enrichment inside the cooldown (~22 of 72
+  grabs in the trial's last days skipped Amazon). A 429 / 503 now cools
+  down only its own kind: store pages (author store, allbooks, /juvec,
+  the vanity-URL redirect) or search and product pages (`/s`, `/dp/`).
+  A bot / robot-check page, the 202 sensor challenge or a thin page still
+  stops every kind. The worker's escalation (10 → 30 → 60 min) extends
+  the cooldown its scan tripped. Settings gain the runtime key
+  `amazon_blocked_until_by_kind`; Reset cooldown clears both.
+- **The Amazon cache worker refreshes quiet authors less often** (G183,
+  wave S, ADR-0025 amended): a refresh that finds no book the cache
+  didn't have puts the next one 14, then 28 days out; one that finds a
+  new book (or a first scan) brings it back to 7. 65% of the trial's
+  refreshes found nothing, and the worker managed ~55 authors a day
+  against ~100 a 7-day cycle needs. The `[scan]` log line shows
+  `next_days`. **Database migration**: the Amazon cache database goes to
+  `user_version` 16 (a `quiet_refreshes` column on the queue).
 - **The Amazon and Goodreads cache workers no longer re-scan every author
   in one burst each week.** Each author's next refresh lands 7 days out
   give or take up to a day, and each worker stops routine refreshes for
@@ -494,87 +544,20 @@ frontend test suite.
   the book's first author is someone else. Every lookup used to cost a book
   page. A source scan no longer looks the ID up at all (it fetched a book
   page per author without one); the weekly job does.
+- Kobo's per-author scan cap goes from 3 to 10 minutes.
+- **Kobo no longer solves Cloudflare challenges.** Both Kobo sources used
+  `cloudscraper`, a challenge solver; they now share one curl_cffi
+  session with Chrome's TLS profile, like Goodreads and Amazon. A
+  challenge is counted as a block, the session is dropped, and Kobo backs
+  off for 2 minutes, then 5, 10, 30 and 60 on repeated challenges (the
+  next success clears it). If kobo.com challenges every plain request,
+  Kobo stops returning results; the Metadata Sources counters show it.
+  `cloudscraper` is removed from the image.
 - Log lines renamed: `Cloudflare soft-block on …` is now `AWS WAF
   soft-block on …`, the resolver's `soft-blocked … session state flipped`
   lines now say `blocked by AWS WAF … backing off`, and the canary's
   notification text changed. Anything matching the old wording needs
   updating.
-- **Database migration**: the app database goes to `user_version` 61 (a
-  new `source_counters` table). Take a backup before updating, as usual.
-
-### Added
-
-- **One title identity** (discovery fix pass S1, ADR-0028):
-  `app/works/title_identity.same_book` decides whether two titles are the
-  same book: numbers written in either title must agree ("Monster's Mercy"
-  is not "Monster's Mercy 3"), a series index counts only within its own
-  series name, a comic is never the prose book and a dramatised edition
-  never the plain one, a generic subtitle (": A LitRPG Adventure") or an
-  author's franchise label ("Star Wars Legends") never identifies a book,
-  and series position alone decides only when one side has no real title.
-  When unsure it says "different". Its case table is
-  `tests/works/test_title_identity.py`. The grab side and the scan merge
-  use it (above). ADR-0028 and ADR-0029
-  (filtered discovery rows, built later), amendments to ADR-0004, 0013 and
-  0021, and the new terms in CONTEXT.md.
-- **Every MAM content tag is kept** (wave 5a): an announce carries several
-  ("Crime, Mystery, Thriller/Suspense"), the filter already read them all,
-  but announces, tentative torrents and grabs kept only the first (in
-  `category`, "Ebooks - Crime", which stays as it is for every reader).
-  They now also store the list, and the Tentative page, the Announces log
-  and the Review page show it as chips (desktop + mobile).
-  `GET /api/v1/announces`, `GET /api/v1/tentative` and `GET /api/v1/review`
-  rows gain `categories` (a list, or null when only one category is
-  known: grabs from Manual Grab or discovery, rows from before).
-- `POST /api/v1/review/{id}/redrop` and `POST /api/v1/review/{id}/mark-imported`
-  for reviews whose CWA import failed; `GET /api/v1/review` lists those
-  (status `import_failed`, the reason in `decision_note`) ahead of the
-  pending ones (`pending_count` still counts pending only). Re-drop first
-  removes Seshat's earlier drop if it's still in the ingest folder.
-- **Goodreads candidate worker + detail store** (wave 4b, ADR-0026): the
-  Goodreads cache worker checks, between list-page refreshes, the books
-  Goodreads lists that discovery doesn't have, for authors a scan has
-  covered (first fill: authors listing up to 100 books; then any author's
-  newly listed books), one request at a time, and creates the ones that
-  pass. Its progress survives restarts and blocks; a scan puts its author
-  first. The Goodreads cache card shows it (first fill, newly listed,
-  waiting, created, rejected and why, the next book-page slot);
-  `GET /api/v1/metadata-cache/goodreads/status` gains `candidates`.
-  **Phase 2** (fetch the page of every cached list entry) is built and off:
-  a switch on the same card (`PATCH …/goodreads/settings`
-  `{"phase2_enabled": true}`).
-- **Provenance** (wave 4b, audit issue 14): a discovered book remembers
-  which source created it after it becomes owned (`books.discovered_by`;
-  Calibre sync used to overwrite `source` with `calibre`, losing it), and
-  which source wrote each of its fields (`books.field_source_map`, JSON
-  field → source: written when a source creates the book, fills a field a
-  later scan finds empty, wins its series, or when you accept a queued
-  change). A grab's review metadata records which source won each field of
-  its enrichment (`enriched.field_sources`). No merge decision changes.
-- Metadata Sources › Goodreads: **Book-page gap** and **Include
-  non-fiction from Goodreads** (`metadata_sources.goodreads.book_page_gap`,
-  `.include_nonfiction`).
-- ADR-0026 (supersedes ADR-0018 §6).
-- **Per-source traffic counts** (audit issue 15): every request to a
-  metadata source is counted per day, source and caller: requests, OK,
-  blocked, errors, timeouts; scans add the books they created and updated
-  and the times a source hit its scan time cap. Goodreads splits by
-  request kind (book pages, list pages, autocomplete). The Metadata
-  Sources panel shows today by caller and the last 7 days for the
-  selected source (`GET /api/v1/metadata-sources/traffic`). Kept 90 days.
-- ADR-0025: source access stays within tiers 0–1 (no challenge solving,
-  no borrowed browser cookies, no proxies or grey API routes), enforced
-  through one gate per source.
-- **A frontend test suite** (wave 5b): Vitest + jsdom + Testing Library
-  (`npm test` in `frontend/`), run by CI beside pytest and gating the
-  image the same way. Besides unit tests for the shared page hooks, it
-  renders every page wave 5b's refactor touches (desktop and phone, with
-  canned API responses) and snapshots the markup and the requests each
-  page makes while loading, so moving page logic into shared hooks has to
-  leave both unchanged.
-
-### Changed
-
 - **Frontend build toolchain** (wave 5b): Vite 6 → 8 (its bundler is now
   Rolldown, its minifier oxc), `@vitejs/plugin-react` 4 → 6,
   `vite-plugin-pwa` 1 → 2, TypeScript 5.9 → 7 (the native compiler; the
@@ -641,19 +624,67 @@ frontend test suite.
 
 ### Fixed
 
-- **An audiobook that ships a PDF or epub goes to Audiobookshelf**
-  (2026-10-12 hotfix): when a torrent held both audio and ebook files, the
-  ebook format priority put every ebook file ahead of every audio file, so
-  an audiobook torrent's companion (Sanderson's illustrations PDF) became
-  the book: it went to CWA and the audio never reached Audiobookshelf (5
-  grabs since August). An audiobook grab (by its MAM category) now leads
-  with its audio files; the companion isn't delivered. Ebook grabs and
-  adopted torrents without a MAM category rank as before.
-- **The CWA import check recognises a file CWA titled from its name**
-  (2026-10-12 hotfix): CWA titles a file with no usable metadata after its
-  file name, author "Unknown". The check matched only the dropped title or
-  an author, so it reported **Import failed** for a book CWA had imported.
-  The dropped file's name now counts as a title.
+- **Source scans no longer merge one volume into another or drop books
+  as duplicates** (discovery fix pass S2, G170). The scan merge decides
+  "same book?" with the title identity: different volumes, and two real
+  titles a series numbers the same, stay apart; a book is skipped only
+  when it is a book already listed, never because its title merely
+  normalises like another one ("SKIP (norm dup)" is gone). Replayed on
+  Amazon's cache (6,257 books, 2026-10-16 copies): 104 books missing from
+  the library would now be listed, 179 wrong merges are undone and 50
+  move to the right book (all six Monster Hunter International books
+  had landed on their neighbours), 147 books the old merge dropped merge
+  into their own row, and about 36 come in as visible duplicates. The
+  Goodreads worker's merges replay the same way (66 of 188 "existing"
+  ones are real books it lost). A "Title: Series Name" listing is that
+  book, no longer a separate "omnibus" row. Merges are also much faster
+  for big authors (Peter David's Amazon merge 5.9s → 0.5s).
+- **A taken series number no longer makes two books one** (discovery
+  fix pass S24, G215 / G216, ADR-0028 amended). Seshat's start no longer
+  deletes a missing book because another book holds its series number
+  (it had deleted "The Forge of God" for its Spanish edition, and would
+  have deleted 173 rows after the missing-books cleanup); Hygiene's Book
+  deduplication no longer does either. A scan filing a standalone book
+  into the series its title names folds it into the book on that number
+  only when the titles say it's that book ("Remnant Book 3" into
+  "Remnant III"), not "Six of Crows – Chapters 1 and 2" into your
+  "Crooked Kingdom" (half of the 340 such folds so far were wrong).
+  Owned books sharing a number are still logged at start for you to fix
+  in Calibre.
+- **A shared id is checked against the titles** (discovery fix pass S25,
+  G219 / G220, ADR-0028 amended). A scan no longer lists an Amazon book
+  a second time when a co-author's row already has it under the same
+  Amazon id and title ("Severed Wake (Flying Gas Can Book 4)" twice).
+  Hygiene's Book deduplication folds two books sharing an id only when
+  their titles say they're one book: the old merge had copied ids onto
+  the wrong rows (a light novel's Amazon id onto its manga), and Hygiene
+  would have folded about 40 real books into them.
+- **Enrichment never merges another volume or edition of the book**
+  (G189, wave S): a source's fuzzy match could score another volume as
+  the book (Hardcover's "My Dungeon Life: Volume 1" scored 1.00 for "My
+  Dungeon Life Vol 2", on eight grabs). The title identity's
+  format and number rules now veto any text-search match (cache-backed
+  ones included; MAM's and Audnexus's exact-ID lookups untouched). The
+  review's source list shows it as `other_volume`.
+- **Kobo can contribute to enrichment again** (G188, wave S): its record
+  never carried an author, so even a perfect title scored under the
+  0.80 bar and Kobo hadn't merged a field. It now reads each search
+  result's authors to pick the result, never picks another volume, and
+  reads the detail page's authors and subtitle ("Heaven Sent: Soul
+  Lessons from the Afterlife" is not "Heaven Sent an Inquisitor…").
+- **Hardcover**: "Book 06.0 - Blood Rites" titles come in as "Blood
+  Rites", #6 (every owned Dresden Files novel was listed a second time),
+  and a reading-order / publication-order / chronological series
+  ("Enderverse: Publication Order") is never picked; a book with only
+  such a series comes in standalone.
+- **The Goodreads worker recognises a book it already has by the title
+  identity** (wave-4 trial item (b)): "The Tower Strive: A
+  Tower-Climbing LitRPG Adventure" is the owned "The Tower Strive", and
+  a later volume is no longer "known" because an earlier one is.
+- **Drop mode keeps a grab's .torrent when qBit can't be reached** (wave
+  5a): a qBit login or network failure now saves the bytes and queues the
+  grab in both full-budget modes, as queue mode already did. Before, drop
+  mode kept nothing, and MAM never serves the same torrent twice.
 - **The author page says when an author can't be loaded** (wave 5b): on
   desktop a failed load left the spinner up for good, on the phone it left
   a blank page. Both now show "Couldn't load this author: <reason>".
@@ -708,13 +739,6 @@ frontend test suite.
   which was never linked at all) stayed out of the person graph until the
   next restart: mirrored IDs and the weekly author-ID job's copy step
   skipped them. A link that still fails is now logged as a warning.
-- Ebooks delivered to Calibre-Web-Automated never reached the library
-  when Seshat had patched their metadata. The patched epub was written
-  root-only (mode 0600); CWA v4.0.8+ ingests as a non-root user, couldn't
-  read it, deleted it and imported nothing, while Seshat recorded the
-  delivery. A patched epub now keeps the file's own mode, and every file
-  dropped into the CWA ingest folder is made readable (0644) and, when
-  Seshat runs as root, handed to the ingest folder's owner.
 - Hardcover enrichment stored its cover as the whole image object
   (`{"id": …, "url": …}`) instead of its URL, so a cover only Hardcover
   had could never be fetched for a review (audit G100).
@@ -755,31 +779,11 @@ frontend test suite.
 
 ### Security
 
-From the 2026-10-12 triage of the open code-scanning alerts (wave S, S11).
-Everything in this section, along with the 0600 CWA drops, the audiobook
-companion file and the download watcher's every-piece rule, was also
-backported in 3.13.1:
-
-- **The delayed-torrent filename check bounds each number to 20
-  digits**, so no request can make the match backtrack over a long
-  digit run (CodeQL `py/polynomial-redos`, flagged on the 3.13.1 PR).
-- **Error messages no longer carry secret URL values to the UI.** An
-  httpx error's message holds its request URL, and a Google Books one
-  carries `?key=<your API key>`: the URL-import preview showed it on any
-  error but a 404 / 503. Every router that puts an exception's text in a
-  response (86 sites, incl. a grab's failure reason, job rows, worker
-  and IRC errors) now masks `key` / `token` / `api_key` / `apikey` /
-  `passkey` / `mam_id` values and cuts the text to 200 characters
-  (`config.ui_error`), as the logs already did.
-- **Delayed-torrent reinject and delete touch only an exact
-  `<grab>_<torrent>.torrent`** in the delayed folder: the path is rebuilt
-  from its numbers, and a name with a trailing newline or non-ASCII
-  digits is refused (400). It was already confined to one file name.
-- **Manual Grab's cover cache checks the torrent ID itself** (ASCII
-  digits, read as a number) instead of trusting its callers; the cover
-  route refuses non-ASCII digits.
-- **The Tests workflow runs with a read-only token** (`permissions:
-  contents: read`).
+- **Pillow 12.3.0 → 13.0.0**: clears 28 advisories (56 Dependabot
+  alerts), two of them critical JPEG decoder overflows. Seshat decodes
+  remote cover images with Pillow to match MAM covers. A few covers'
+  pHashes can move by a bit or two (well inside the match band); stored
+  hashes are re-fetched after 30 days.
 
 ---
 
