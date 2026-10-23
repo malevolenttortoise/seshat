@@ -107,6 +107,101 @@ def test_the_rules(title, reason):
     assert F.filter_reason(title) == reason
 
 
+# ─── Wave D (2026-10-23): G233 foreign titles, G235 / G236 box sets, C43, C45 ──
+
+@pytest.mark.parametrize("title, reason", [
+    # G233: every word one no English blurb uses, or a function word list
+    ("Gefallene Sonnen", F.FOREIGN),
+    ("Un amore diabolico", F.FOREIGN),
+    ("Vangin valtaistuin", F.FOREIGN),
+    ("Meine Wiedergeburt als Schleim in einer anderen Welt Light Novel 03", F.FOREIGN),
+    ("La scatola magica di Landover", F.FOREIGN),
+    ("Le furie di Calderon", F.FOREIGN),
+    # ...and the English titles the first drafts caught (owned or listed)
+    ("Ready Player One", None),
+    ("All Sin The Family (SinWhisper.com #2)", None),     # "sin" + "com" isn't Spanish + Portuguese
+    ("Hopcross Jilly #2", F.JUNK),                        # invented names: another family first
+    ("Neuropath", None),                                  # one unseen word isn't enough
+    ("Conscientious Objector Returns", None),             # a word English blurbs use
+    ("A Secondhand Spaceman", None),                      # an English function word
+    ("Oathbreaker 2: Goblin's Grotto", None),             # owned: "goblin's" is "goblin"
+    ("Nymph's Nirvana", None),                            # owned
+    # G235: box sets the filter missed
+    ("The Complete Morgaine (Morgaine Cycle Book 1)", F.BOX_SET),
+    ("The Complete Wheel of Time", F.BOX_SET),
+    ("The Complete Guide to Writing Science Fiction", None),
+    ("Heir Chronicles: Books I-V", F.BOX_SET),
+    ("The Captain's Table: Books One Through Six (Star Trek)", F.BOX_SET),
+    ("The Ender Quintet", F.BOX_SET),
+    ("Legends of Shannara Duology", F.BOX_SET),
+    ("Galaxies and Ruins: A Sci-Fi Duology", None),          # owned
+    ("A Dirge For Cascius: Part I of an Epic Space Opera Duology", None),   # owned
+    # G236: a list of titles after the colon
+    ("Mistborn: The Wax & Wayne Series: Alloy of Law, Shadows of Self, Bands of Mourning, The Lost Metal", F.BOX_SET),
+    ("Mass Effect: The Complete Novels: Revelation, Ascension, Retribution, Deception", F.BOX_SET),
+    ("Halo: The Fall of Reach, The Flood, First Strike", F.BOX_SET),
+    ("Alcatraz vs. The Evil Librarians Series: (Alcatraz vs. The Evil Librarians, The Scrivener's Bones, "
+     "The Knights of Crystallia, The Shattered Lens, The Dark ... (Alcatraz Versus the Evil Librarians)", F.BOX_SET),
+    ("Home: Habitat, Range, Niche, Territory", None),                                     # owned
+    ("Wolf & Parchment: New Theory Spice & Wolf, Vol. 7", None),                          # owned
+    ("Petrodor: A Trial of Blood and Steel, Book 2", None),                               # owned
+    ("Honey, I Found a Starship: Honey, I Found a Starship, Book 1", None),               # owned
+    ("Aetherborn: A Paranormal Urban Fantasy Romance with Forced Proximity, Reluctant Allies, and Slow-Burn Heat", None),
+    ("Monster Wrangler 3: A LitRPG Fantasy (Healer, Tamer, Builder, Book 3)", None),      # owned
+    ("Faith is Earned: LitRPG, Progression Fantasy, Divine Advancement", None),
+    ("Cece Loves Science: A STEM Picture Book About a Curious Girl, Her Dog, and Asking Questions", None),
+    ("Flicker and the Forest Rescue: A Tale of Courage from the Sparkling Creatures Series "
+     "(The Sparkling Creatures Series: Tales of Courage, Heart, and Magic)", None),   # the colon in its series
+    ("The Game Master's Book of Astonishing Random Tables: 300+ Unique Roll Tables to Enhance Your "
+     "Worldbuilding, Storytelling, Locations, Magic and More", None),
+    ("86--EIGHTY-SIX Alter.2: Fight, Magical Girl Reina Lena! Go, Starship San Magnolia!", None),
+    ("Earth Afire: Book 2 of the First Formic War by Card, Orson Scott, Johnston, Aaron", None),   # a byline, not titles
+    ("Children of the Night: Stories of Ghosts, Vampires, Werewolves, and Lost Children", F.ANTHOLOGY),
+    # C43
+    ("You Might Be...: Word Search", F.NOT_A_BOOK),
+    ("Kumo Desu ga, Nani ka? Chapter 001-050", F.SPLIT),
+])
+def test_wave_d_rules(title, reason):
+    assert F.filter_reason(title) == reason
+
+
+def test_an_authors_own_name_isnt_a_foreign_word():
+    assert F.filter_reason("Inge Fredriksen") == F.FOREIGN
+    assert F.filter_reason("Inge Fredriksen", authors=["Inge Fredriksen"]) is None
+
+
+def test_a_foreign_blurb_decides_only_beside_an_unseen_title_word():
+    """G233: Hardcover files English titles with a translation's blurb."""
+    spanish = ("El joven hechicero debe enfrentarse a los enemigos de su pueblo y "
+               "descubrir el secreto que su maestro le ocultó durante años para salvar el reino.")
+    german = ("Der junge Held muss sich den Feinden seines Volkes stellen und das Geheimnis "
+              "entdecken, das sein Meister ihm all die Jahre verschwiegen hat, um das Reich zu retten.")
+    assert F.filter_reason("Hechicero", description=spanish) == F.FOREIGN
+    assert F.filter_reason("Preludio a Dune", description=spanish) == F.FOREIGN
+    assert F.filter_reason("The Wrath of Mulgarath", description=german) is None
+
+
+def test_the_vocabulary_ships_and_a_missing_file_turns_its_test_off(monkeypatch, tmp_path):
+    vocab = F.english_vocabulary()
+    assert {"the", "dragon", "starship", "kingdom"} <= vocab and "gefallene" not in vocab
+    monkeypatch.setattr(F, "_ENGLISH_VOCAB_FILE", tmp_path / "missing.txt")
+    F.english_vocabulary.cache_clear()
+    try:
+        assert F.filter_reason("Gefallene Sonnen") is None
+    finally:
+        F.english_vocabulary.cache_clear()
+
+
+def test_a_comic_adaptation_under_its_authors_name():
+    """C45: "Patricia Briggs' Alpha & Omega: Cry Wolf #2" had folded into
+    the owned novel; a prose tie-in carries no issue number."""
+    briggs = ["Patricia Briggs"]
+    assert F.filter_reason("Patricia Briggs' Alpha & Omega: Cry Wolf #2", authors=briggs) == F.COMIC
+    assert F.filter_reason("Jim Butcher's The Dresden Files: Dog Men #5", authors=["Jim Butcher"]) == F.COMIC
+    assert F.filter_reason("Dean Koontz's Frankenstein, Book One: Prodigal Son", authors=["Dean Koontz"]) is None
+    assert F.filter_reason("Patricia Briggs' Alpha & Omega: Cry Wolf #2") is None   # whose name it is matters
+
+
 def test_a_comic_issue_by_its_pages_or_its_run():
     """C24: same shape as a novel ("Organ Donor: Afterlife of Ebon Black #1",
     230 pages); 30 pages is an issue. A run named only in the series."""

@@ -46,6 +46,7 @@ from typing import Any, Optional
 
 from app import state
 from app.config import load_settings
+from app.discovery import filters
 from app.discovery import goodreads_filters, goodreads_store, metadata_cache
 from app.metadata import goodreads_session, source_gate
 from app.metadata.source_config import goodreads_includes_nonfiction
@@ -857,9 +858,17 @@ async def step() -> StepResult:
             if await _author_skip(pending):
                 return StepResult("autocomplete", f"{pending.get('title')!r}: author not scan-eligible, set aside")
             if await _still_unknown(pending):
+                author_name = await _author_name(pending)
+                title = pending.get("title") or ""
+                # G234: a title in another language costs no autocomplete
+                # (one author's German / Spanish / French titles took one
+                # every 3 minutes on the night of the 3.14.0 release).
+                if filters.is_foreign_language_title(title, [author_name] if author_name else []):
+                    await _set_state(pending, SKIPPED, reason=filters.FOREIGN)
+                    return StepResult("autocomplete", f"{title!r}: not English, set aside (no request)")
                 global _last_autocomplete_at
                 _last_autocomplete_at = _now()
-                return await _autocomplete_step(pending, await _author_name(pending))
+                return await _autocomplete_step(pending, author_name)
             return StepResult("autocomplete", f"{pending.get('title')!r}: now known")
         if awaiting is None and pending is None and page_wait <= 0 and page_backoff <= 0:
             done = await phase2_step()

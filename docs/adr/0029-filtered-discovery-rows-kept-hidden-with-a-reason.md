@@ -93,6 +93,34 @@ of what was filtered, and nothing for the next scan or the Goodreads worker to r
   72 filed, 1,158 created by step 6 (700 hidden by the filters; skipped: 4 blacklisted Amazon records, 19 authors
   failing the author check, 62 known Goodreads ids); preview 13 s, the copies and caches unchanged.
 
+## Amendment (2026-10-23, wave D S28: what wave C's filters missed)
+
+- **Foreign titles with no edition marker** (G233): beside the marker and word-list rules (now with more Italian,
+  Spanish, Portuguese, German, Polish and Czech words, held to no owned title), a title is `not_english` when every
+  word of it (author names, possessives and short words left out) is one no English blurb uses, two or more of them
+  ("Gefallene Sonnen", "Un amore diabolico", "Vangin valtaistuin"), or when its blurb is in another language and a
+  word of the title is unseen ("Hechicero", "Preludio a Dune"). The blurb alone isn't enough: Hardcover files English
+  titles with a translation's blurb ("The Wrath of Mulgarath"). The vocabulary is a fixed file,
+  `app/discovery/wordlists/english_words.txt` (~39,000 words from the reference install's 8,700 English blurbs,
+  `tools/build_english_words.py`): built per install it would be empty on a fresh one and every title would look
+  foreign; a missing file turns the test off. The vocabulary test runs last, after every other family, so an English
+  comic issue named with invented words ("Hopcross Jilly #2") keeps its family.
+- **The Goodreads worker checks the title before an autocomplete** (G234): a foreign title is set aside
+  (`not_english`) without the request, and the next candidate's autocomplete isn't held for it.
+- **Box sets:** "The Complete <Name>" (not "Complete Guide / Book of"), word and Roman ranges ("Books I-V", "Books One
+  Through Six"), set names beside "Trilogy" ("Quintet", "Quartet", "Duology"…, not "Part I of an … Duology"), G235;
+  a list of titles after the last colon, three or more, two of them 2+ words or after a set word ("The Wax & Wayne
+  Series: Alloy of Law, Shadows of Self, …"), G236. Not a list: a description's ("A Paranormal Romance with …, …"),
+  genre words ("LitRPG, Progression Fantasy, …"), volume marks ("…, Book 1"), a byline ("by Card, Orson Scott, …"),
+  or a title worded as an anthology, sampler or listing.
+- Also: "Word Search" is not a book; a web novel's "Chapter 001-050" is a split; a comic sold under its author's name
+  with an issue number ("Patricia Briggs' Alpha & Omega: Cry Wolf #2") is a comic (C43, C45).
+- Measured on 2026-10-23 copies, old vs new verdict over every stored title: 0 owned titles change; listed rows newly
+  `not_english` 134 (about 120 real translations, the rest English books with rare or Latin titles, "Sua Sponte",
+  "Secondhand Spaceman", "Tripoint", accepted: recoverable, and a later copy with a fuller title is listed again),
+  `box_set` 23, `comic` 5, `split` 5. The cleanup's preview hides 172 rows in step 3 and creates the Cry Wolf / Moon
+  Called comic issues hidden instead of listed.
+
 ## Related
 
 - [0021](0021-roster-gates-discovery-author-creation.md) — roster and scan eligibility (amended: scan eligibility is

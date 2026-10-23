@@ -28,6 +28,8 @@ a book you'd list. `book_class()` gives a stored row's family for that check.
 from __future__ import annotations
 
 import re
+from functools import lru_cache
+from pathlib import Path
 from typing import Iterable, Optional
 
 # ─── Reasons (stored in books.hidden_reason) ─────────────────
@@ -116,6 +118,8 @@ def genres_say_comic(genres: Iterable[str]) -> bool:
 _RX_BOX_SET = re.compile(
     r"(?i)\bbox(?:ed)?\s*set\b|\bboxset\b|\bomnibus\b|\bcompilation\b"
     r"|\bbooks?\s+#?\d+\s*(?:[-–&+]|to|and|through)\s*#?\d+"   # "Books 1-3", "Book 1 & 2"
+    r"|\bbooks?\s+(?:one|two|three|four|five|six|i{1,3}|iv|v|vi)\s*(?:[-–&+]|to|and|through|thru)\s*(?:books?\s+)?"
+    r"(?:two|three|four|five|six|seven|eight|nine|ten|i{1,3}|iv|v|vi{1,3}|ix|x|\d{1,2})\b"   # "Books I-V", "Books One Through Six"
     r"|#\d+(?:\.\d+)?\s*[-–]\s*\d{1,2}(?:\.\d+)?\b"           # "(Alpha & Omega, #0.5-3)" (not "#2-1976")
     r"|\bvolumes?\s+\d+\s*[-–&]\s*\d+"
     r"|\b\d+[-\s]book\s+(?:collection|set|bundle|omnibus|series)\b"
@@ -126,14 +130,15 @@ _RX_BOX_SET = re.compile(
     r"|\bfull\s+series\b|\bseries\s+set\b|\bbook\s+set\b|\bbooks\s+set\b|\bcollection\s+set\b"
     r"|\bset\s+of\s+\d+\b|\b\d+\s+set\)"
     r"|\bbind-?up\b|\bstarter\s+pack\b|\bbook\s+pack\b|\bbundle\b"
-    r"|\btrilogy\b(?!\s*[,:(]?\s*(?:book|#|vol|volume|part|\d))"
+    r"|\b(?:trilogy|duology|quartet|quintet|tetralogy|pentalogy|hexalogy|septology)\b(?!\s*[,:(]?\s*(?:book|#|vol|volume|part|\d))"
 )
+_SET_NAMES = r"(?:trilogy|duology|quartet|quintet|tetralogy|pentalogy|hexalogy|septology)"
 # "… Conclusion to the Last Cyborg Trilogy", "Book 2 of the X Trilogy": a
 # book in a trilogy, not the set.
 _RX_IN_A_TRILOGY = re.compile(
-    r"(?i)\b(?:of|to|in|from|for)\s+the\s+(?:[\w'-]+\s+){0,5}trilogy\b"
-    r"|\([^)]*trilogy[^)]*$"                       # "(The Land of Nowhere Trilogy)": its series
-    r"|:\s*(?:the\s+)?(?:[\w'-]+\s+){0,5}trilogy\b"  # "Otherlife Dreams: The Selfless Hero Trilogy"
+    r"(?i)\b(?:of|to|in|from|for)\s+(?:the|an?)\s+(?:[\w'-]+\s+){0,5}" + _SET_NAMES + r"\b"   # "Part I of an Epic … Duology"
+    r"|\([^)]*" + _SET_NAMES + r"[^)]*$"                       # "(The Land of Nowhere Trilogy)": its series
+    r"|:\s*(?:the\s+)?(?:[\w'-]+\s+){0,5}" + _SET_NAMES + r"\b"  # "Otherlife Dreams: The Selfless Hero Trilogy"
 )
 # Two or more titles joined by " / " or two ";": several books in one listing.
 _RX_JOINED_TITLES = re.compile(r"\S\s+/\s+\S")
@@ -171,6 +176,7 @@ ANTHOLOGY_MIN_AUTHORS = 4
 _RX_SPLIT = re.compile(
     r"(?i)\bpart\s+\d+\s+of\s+\d+\b|\bvol(?:ume)?\.?\s*\d+\s+of\s+\d+\b"
     r"|[,:]\s*chapters?\s+\d+(?:\s*[-–]\s*\d+)?\s*(?:\([^)]*\)?\s*)?$"
+    r"|\bchapters?\s+\d{1,4}\s*[-–]\s*\d{1,4}\b"                   # "Kumo Desu ga, Nani ka? Chapter 001-050"
     r"|\bseason\s+\d+,?\s+episode\s+\d+\b|\bepisode\s+\d+\s+of\s+\d+\b|\bdisc\s+\d+\b|\bdisk\s+\d+\b"
 )
 _RX_SAMPLER = re.compile(
@@ -197,7 +203,7 @@ _RX_STUDY_GUIDE = re.compile(
 )
 _RX_NOT_A_BOOK = re.compile(
     r"(?i)\bcolou?ring\s+books?\b|\bnotebooks?\b|\bcalendar\b|\bplanner\b|\bposter\s+book\b|\bkeepsake\s+journal\b"
-    r"|\bsticker\s+book\b|\bactivity\s+book\b|\bpuzzle\s+book\b|\bcrossword\b|\bsudoku\b"
+    r"|\bsticker\s+book\b|\bactivity\s+book\b|\bpuzzle\s+book\b|\bcrossword\b|\bsudoku\b|\bword\s*search\b"
     r"|\b(?:blank|lined|guided|dot\s+grid)\s+journal\b|\bjournal\s*(?:\(|:)?\s*(?:blank|lined|notebook)\b"
     r"|\b(?:tarot|oracle)\s+(?:deck|cards)\b|\bdeck\s+and\s+guidebook\b|\bcard\s+game\b|\bboard\s+game\b"
     r"|\b(?:fantasy\s+)?role-?playing\s+game\b|(?<!lit\s)(?<!lit-)\brpg\s+(?:sourcebook|supplement|core\s+rulebook|module|adventure)\b"
@@ -262,6 +268,51 @@ _RX_ACCENTS = re.compile(r"[àáâäåèéêëìíîïòóôöùúûüñçșță
 _ENGLISH_WORDS = frozenset("the of and a an to in on for with from at by is my your his her its our their".split())
 
 
+# G233 (wave D): more languages' words, each checked against the owned
+# titles (none of them may hit). The vocabulary test below catches what no
+# list does ("Gefallene Sonnen", "Vangin valtaistuin").
+_MORE_FOREIGN_WORDS = frozenset("""
+della dello delle sono senza questo quella questa degli fuoco sangue mondo ultimo ultima
+como pero sobre entre hasta desde unos unas
+pelo pela uma umas uns
+meine mein dein deine ihre dieser diese dieses oder nicht ist sind welt alles einer anderen nach
+przez dla przy oraz jest nie
+podle
+""".split())
+_MORE_WEAK = frozenset({"di", "da", "nos", "nas", "sem", "zu", "na", "od", "po"})
+
+# A word the reference library's English blurbs never use (G233):
+# `app/discovery/wordlists/english_words.txt`, built by
+# `tools/build_english_words.py`. A missing file turns the test off.
+_ENGLISH_VOCAB_FILE = Path(__file__).parent / "wordlists" / "english_words.txt"
+_RX_TITLE_WORD = re.compile(r"[^\W\d_]+(?:'[^\W\d_]+)?", re.UNICODE)
+
+
+@lru_cache(maxsize=1)
+def english_vocabulary() -> frozenset:
+    try:
+        lines = _ENGLISH_VOCAB_FILE.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return frozenset()
+    return frozenset(w for w in lines if w and not w.startswith("#"))
+
+
+def _unseen_words(title: str, authors: Iterable[str]) -> tuple[list[str], list[str], int]:
+    """(the title's words no English blurb uses, its words one does, its
+    English function words): parentheticals, author names, possessives and
+    short words left out."""
+    vocab = english_vocabulary()
+    if not vocab:
+        return [], [], 1
+    text = re.sub(r"\([^)]*\)|\[[^\]]*\]", " ", title or "")
+    names = {w.lower() for name in authors or () for w in _RX_TITLE_WORD.findall(name or "")}
+    words = [re.sub(r"'s$", "", w.lower()) for w in _RX_TITLE_WORD.findall(text)]
+    english = sum(1 for w in words if w in _ENGLISH_WORDS)
+    unseen = [w for w in words if len(w) >= 3 and w not in names and w not in _ENGLISH_WORDS and w not in vocab]
+    seen = [w for w in words if len(w) >= 3 and w not in names and w not in _ENGLISH_WORDS and w in vocab]
+    return unseen, seen, english
+
+
 def is_foreign_title(title: str) -> bool:
     t = title or ""
     if _RX_FOREIGN_SCRIPT.search(t) or _RX_FOREIGN_CHARS.search(t):
@@ -269,8 +320,8 @@ def is_foreign_title(title: str) -> bool:
     if _RX_FOREIGN_EDITION.search(t):
         return True
     words = [w.lower() for w in _RX_WORD.findall(t)]
-    hits = [w for w in words if w in _FOREIGN_WORDS]
-    strong = [w for w in hits if w not in _WEAK]
+    hits = [w for w in words if w in _FOREIGN_WORDS or w in _MORE_FOREIGN_WORDS or w in _MORE_WEAK]
+    strong = [w for w in hits if w not in _WEAK and w not in _MORE_WEAK]
     english = sum(1 for w in words if w in _ENGLISH_WORDS)
     if (strong or len(hits) >= 2) and len(hits) > english:
         return True
@@ -279,14 +330,93 @@ def is_foreign_title(title: str) -> bool:
     return bool(_RX_FOREIGN_SHAPES.search(t)) and english == 0 and len(words) <= 6
 
 
+def _unseen_title(title: str, authors: Iterable[str] = ()) -> bool:
+    """G233: every word is one no English blurb uses (two or more of them):
+    "Gefallene Sonnen", "Vangin valtaistuin"."""
+    unseen, seen, english = _unseen_words(title, authors)
+    return len(unseen) >= 2 and not seen and english == 0
+
+
+def is_foreign_language_title(title: str, authors: Iterable[str] = ()) -> bool:
+    """A title in another language by any title rule (the Goodreads worker's
+    check before an autocomplete, G234)."""
+    return is_foreign_title(title) or _unseen_title(title, authors)
+
+
+def _blurb_says_foreign(title: str, description: Optional[str], authors: Iterable[str]) -> bool:
+    """G233: a blurb in another language, and a title with a word no English
+    blurb uses ("Hechicero", "Preludio a Dune"). The blurb alone isn't
+    enough: Hardcover files English titles with a translation's blurb ("The
+    Wrath of Mulgarath")."""
+    if not description:
+        return False
+    from app.discovery.goodreads_filters import snippet_language
+    lang = snippet_language(description)
+    if not lang or lang == "en":
+        return False
+    return bool(_unseen_words(title, authors)[0])
+
+
 # ─── The verdict ─────────────────────────────────────────────
+
+
+# "The Complete Morgaine (Morgaine Cycle Book 1)", "The Complete Wheel of
+# Time" (G235): "Complete" before a name, not a guide or a book of something.
+_RX_COMPLETE_NAME = re.compile(
+    r"^\s*(?:[Tt]he\s+)?[Cc]omplete\s+(?![Bb]ut\b|[Gg]uide\b|[Bb]ook\b|[Hh]andbook\b|[Ii]diot|[Bb]eginner|[Mm]anual\b|[Cc]ourse\b)[A-Z]"
+)
+_RX_LIST_GENRE = re.compile(
+    r"(?i)\b(?:litrpg|gamelit|fantasy|progression|romance|thriller|sci-fi|scifi|science\s+fiction|"
+    r"adventure|mystery|horror|harem|isekai|dystopian|cultivation|urban|paranormal|ya)\b"
+)
+_LIST_HEAD_WORDS = re.compile(r"(?i)\b(?:series|collection|novels|books|set|saga|" + _SET_NAMES[3:-1] + r")\b")
+
+
+def _title_list(t: str) -> bool:
+    """G236: a list of titles after the last colon: "Mistborn: The Wax &
+    Wayne Series: Alloy of Law, Shadows of Self, Bands of Mourning…". Three
+    or more comma-separated titles, two of them 2+ words, or what comes
+    before names a set ("Mass Effect: The Complete Novels: Revelation,
+    Ascension, …"). "Home: Habitat, Range, Niche, Territory" is one book; a
+    description's list ("A Paranormal Romance with Forced Proximity,
+    Reluctant Allies, and …") and volume marks ("…, Book 1") aren't titles."""
+    text = t.strip()
+    while True:                          # "… Series (The X Series: Tales of …)": not this colon
+        trimmed = re.sub(r"\s*\([^()]*\)\s*$", "", text)
+        if trimmed == text or ":" not in trimmed or not trimmed.rsplit(":", 1)[1].strip():
+            break
+        text = trimmed
+    if ":" not in text:
+        return False
+    head, tail = text.rsplit(":", 1)
+    tail = tail.strip()
+    if re.search(r"\bby\b", tail):
+        return False                     # a byline: "… by Card, Orson Scott, Johnston, Aaron"
+    items = [i.strip() for i in re.split(r",\s*(?:and\s+)?", tail) if i.strip()]
+    if items and re.match(r"(?i)(?:a|an)\s", items[0]):
+        return False
+    if any(
+        re.search(r"[!?]|[^.]\.\s*$|^[a-z0-9]|\band\s+more\b", i) or _RX_LIST_GENRE.search(i) for i in items
+    ):
+        return False                     # a description: "LitRPG, Progression Fantasy, …", "Fight, … Lena!"
+    titles = [
+        i for i in items
+        if re.search(r"[A-Za-z]{2}", i)
+        and not re.fullmatch(r"(?i)(?:book|books|vol\.?|volume|part|no\.?)\s*\S+|(?:&\s*|and\s+)?more\W*", i)
+    ]
+    if len(titles) < 3:
+        return False
+    return sum(1 for i in titles if len(i.split()) >= 2) >= 2 or bool(_LIST_HEAD_WORDS.search(head))
 
 
 def _box_set(t: str) -> bool:
     if _RX_JOINED_TITLES.search(t) or t.count(";") >= 2:
         return True
+    if (_RX_COMPLETE_NAME.search(t) or _title_list(t)) and not (
+            _RX_ANTHOLOGY.search(t) or _RX_SAMPLER.search(t) or _RX_LISTING.search(t)):
+        return True
     for m in _RX_BOX_SET.finditer(t):
-        if m.group(0).lower().startswith("trilogy") and _RX_IN_A_TRILOGY.search(t[:m.end()]):
+        if re.fullmatch(_SET_NAMES, m.group(0).lower()) and _RX_IN_A_TRILOGY.search(t[:m.end()]):
             continue
         return True
     return False
@@ -321,6 +451,19 @@ def _byline(title: str, authors: Iterable[str]) -> bool:
         if len(last) > 3 and re.search(r"\bby\s+" + re.escape(last) + r",\s*\w", tl):
             return True                  # "by Asher, Neal"
     return False
+
+
+def _authors_comic_issue(title: str, authors: Iterable[str]) -> bool:
+    """"Patricia Briggs' Alpha & Omega: Cry Wolf #2": a comic adaptation
+    sold under its author's name and numbered by issue (C45). A prose
+    tie-in carries no "#N" ("Dean Koontz's Frankenstein, Book One")."""
+    if not re.search(r"#\d+", title or ""):
+        return False
+    tl = (title or "").lower()
+    return any(
+        len(n.strip()) > 4 and re.match(re.escape(n.strip().lower()) + r"(?:'s|s'|')\s", tl)
+        for n in authors or ()
+    )
 
 
 # A comic issue: "Red Rising: Sons of Ares #2" is 30 pages; "Organ Donor:
@@ -363,6 +506,7 @@ def filter_reason(
             or (_RX_HERO.search(_head(t)) and not _RX_PROSE_TIE_IN.search(t))
             or (series_name and _RX_COMIC.search(series_name) and not _RX_LIGHT_NOVEL.search(series_name))
             or (page_count and 0 < page_count <= COMIC_ISSUE_MAX_PAGES and _RX_ISSUE_NUMBER.search(t))
+            or _authors_comic_issue(t, authors)
             or genres_say_comic(genres)):
         return COMIC
     if series_ref_stem(t) is not None:
@@ -379,6 +523,11 @@ def filter_reason(
         return ANTHOLOGY
     if _RX_LISTING.search(t) or _byline(t, authors):
         return LISTING
+    # G233, last: a title no other family claims, made of words no English
+    # blurb uses, or with a foreign blurb (a comic issue named "Hopcross
+    # Jilly #2" stays a comic).
+    if _unseen_title(t, authors) or _blurb_says_foreign(t, description, authors):
+        return FOREIGN
     return None
 
 

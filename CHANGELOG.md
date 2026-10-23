@@ -23,6 +23,14 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   Evil movie editions and an owned Towerbound re-upload are now
   recognised as books you own.
 
+- **Discovery filters catch more** (ADR-0029, wave D): foreign titles with
+  no edition marker (more languages' words, and a title whose words no
+  English blurb uses), box sets written as "The Complete Wheel of Time",
+  "Books I-V", "The Ender Quintet" or a list of titles, "Word Search", web
+  novel chapter ranges, and comic issues sold under their author's name.
+  The Goodreads worker no longer spends an autocomplete on a title in
+  another language.
+
 ### Fixed
 
 - **"(Complete)" in a series name made a book an omnibus**: Amazon writes
