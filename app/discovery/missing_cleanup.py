@@ -323,7 +323,7 @@ async def _filtered(lib: _Library, report: dict) -> None:
             title, description=row["description"],
             n_authors=lib.n_authors.get(row["id"], 0), authors=[n for _, n in contribs],
             series_name=row["series_name"], page_count=row["page_count"],
-            genres=genres.get(str(row["goodreads_id"] or ""), ()),
+            genres=genres.get(str(row["goodreads_id"] or ""), ()), content_type=lib.content_type,
         )
         if reason == filters.JUNK and filters.series_ref_stem(title) in {
                 s for aid, _ in contribs for s in owned_stems.get(aid, ())}:

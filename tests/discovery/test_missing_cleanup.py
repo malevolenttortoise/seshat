@@ -223,6 +223,20 @@ async def test_a_stored_comic_is_hidden_with_its_reason(env):
     assert rows[shown] == (0, "shown")
 
 
+async def test_a_uk_edition_is_hidden_in_the_ebook_library_only(env):
+    """G252: the ebook "Backyard Dungeon: UK Edition 7" is another cut of
+    the owned Backyard Dungeon 7; the audiobook library's UK Edition
+    audiobooks are the ones Mark collects."""
+    mine = await _author("Logan Jacobs")
+    await _allow("Logan Jacobs")
+    ebook = await _book("Backyard Dungeon: UK Edition 7", [mine])
+    abs_mine = await _author("Logan Jacobs", slug="audio")
+    audio = await _book("Backyard Dungeon: UK Edition 7", [abs_mine], slug="audio")
+    await _apply()
+    assert (await _q("SELECT hidden, hidden_reason FROM books WHERE id = ?", (ebook,)))[0] == (1, "listing")
+    assert (await _q("SELECT hidden, hidden_reason FROM books WHERE id = ?", (audio,), "audio"))[0] == (0, None)
+
+
 async def test_a_family_whose_setting_is_off_keeps_its_reason_and_shows(env):
     env["settings"]["hide_comics"] = False
     mine = await _author("Holly Black")

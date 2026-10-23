@@ -206,6 +206,10 @@ _RX_BYLINE_PART = re.compile(r"(?:\s[-–—:]|:)\s*by\s+[A-Z][\w.'’-]*(?:\s+[
 _RX_ORIENTATION_EDITION = re.compile(
     r"(?i)\b(?:bisexual|bi|gay|lesbian|queer|hetero(?:sexual)?|straight)\s+edition\b"
 )
+# "Backyard Dungeon: UK Edition 7" beside the owned Backyard Dungeon 7 ebook:
+# another cut, in the ebook library only (G252; the audiobook library's UK
+# Edition audiobooks are the ones Mark collects).
+_RX_REGIONAL_EDITION = re.compile(r"(?i)\b(?:uk|u\.k\.|us|u\.s\.)\s+edition\b")
 _RX_STUDY_GUIDE = re.compile(
     r"(?i)\bsummary\s+(?:of|and|&)\b|^summary\b|\bstudy\s+guide\b|\bsparknotes\b|\bcliffs\s*notes\b"
     r"|\banalysis\s+of\b|\bkey\s+takeaways\b|\bquiz\s+book\b|\btrivia\b|\bconversation\s+starters\b"
@@ -508,6 +512,7 @@ def filter_reason(
     series_name: Optional[str] = None,
     page_count: Optional[int] = None,
     genres: Iterable[str] = (),
+    content_type: str = "ebook",
 ) -> Optional[str]:
     """The family a source's book belongs to, or None for a book to list.
 
@@ -515,13 +520,15 @@ def filter_reason(
     anthology has 4+, F7); `authors`: names a seller's listing would put in
     the title; `series_name`: the book's series, a comic's run often named
     only there ("Lucifer, Volume 1: Cold Heaven" in "Lucifer (2015-2017)");
-    `genres`: the source's genres, most-shelved first (Goodreads pages).
+    `genres`: the source's genres, most-shelved first (Goodreads pages);
+    `content_type`: the library's ("ebook" / "audiobook").
     """
     reason = _title_family(
         title, description=description, n_authors=n_authors, authors=authors,
         series_name=series_name, page_count=page_count, genres=genres,
     )
-    if reason is None and _RX_ORIENTATION_EDITION.search(title or ""):
+    if reason is None and (_RX_ORIENTATION_EDITION.search(title or "") or (
+            content_type != "audiobook" and _RX_REGIONAL_EDITION.search(title or ""))):
         return LISTING
     return reason
 

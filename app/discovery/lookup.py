@@ -1401,6 +1401,8 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
             for r in rows
         }
 
+        content_type = state.get_active_library_content_type()
+
         def _filter_reasons(bk, series_name=None) -> tuple[Optional[str], Optional[str]]:
             """(the family the book is created hidden for, the family it
             matches within). Matching reads the title only, as a stored
@@ -1417,7 +1419,7 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                 title, description=bk.description,
                 n_authors=_filters.author_role_count(getattr(bk, "contributors", None)),
                 authors=author_names, series_name=series_name, page_count=bk.page_count,
-                genres=getattr(bk, "genres", None) or (),
+                genres=getattr(bk, "genres", None) or (), content_type=content_type,
             )))
             return reason, match_cls
 

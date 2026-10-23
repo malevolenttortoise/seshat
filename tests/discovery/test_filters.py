@@ -287,6 +287,16 @@ def test_an_orientation_edition_is_hidden_but_matches_as_before():
     assert F.filter_reason("Straight Up Edition Wars") is None
 
 
+def test_a_uk_edition_is_a_listing_in_an_ebook_library():
+    """G252: another cut of a book, ebook library only; matching unchanged."""
+    t = "Backyard Dungeon: UK Edition 7"
+    assert F.filter_reason(t) == F.LISTING
+    assert F.filter_reason(t, content_type="audiobook") is None
+    assert F.book_class(t) is None
+    assert F.filter_reason("The Seven Stages of Drinking Martinis. (US Edition)") == F.LISTING
+    assert F.filter_reason("Save Us") is None
+
+
 def test_an_anthology_by_description_or_four_authors():
     assert F.filter_reason("Dead Man's Hand", description="An anthology of the weird west.") == F.ANTHOLOGY
     assert F.filter_reason("Engineering Infinity", n_authors=4) == F.ANTHOLOGY
@@ -502,6 +512,16 @@ async def test_the_hidden_list_keeps_yours_apart(one_library):
     assert titles(await get_hidden(**args, filtered=False, reason=None)) == ["A Real Novel"]
     assert titles(await get_hidden(**args, filtered=None, reason=F.COMIC)) == ["Lucifer (2015-2017) #1"]
     assert (await get_hidden_reasons(content_type=None))["counts"] == {"comic": 1, "mine": 1}
+
+
+@pytest.mark.parametrize("content_type,hidden", [("ebook", (1, "listing")), ("audiobook", (0, None))])
+async def test_a_uk_edition_is_created_hidden_in_an_ebook_library(library, monkeypatch, content_type, hidden):
+    """G252 at creation: the scan reads the active library's kind."""
+    from app import state
+    monkeypatch.setattr(state, "_discovered_libraries", [{"slug": "test", "content_type": content_type}])
+    await _merge(library, _standalone(_bk("Backyard Dungeon: UK Edition 7")))
+    row = (await _all())["Backyard Dungeon: UK Edition 7"]
+    assert (row["hidden"], row["hidden_reason"]) == hidden
 
 
 async def test_a_foreign_title_is_filtered_only_for_english_readers(library):
