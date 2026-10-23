@@ -239,6 +239,93 @@ def _no_leaked_mam_snatch_summary():
 
 
 @pytest.fixture(autouse=True)
+def _no_source_gate_waits(monkeypatch):
+    """Every request to a metadata source waits its turn in the source
+    gate at the Metadata Sources rate (2026-10 audit wave 4, G71), up to
+    100s for Amazon. Those waits are skipped suite-wide, and each test
+    starts with no remembered turn and no uncounted requests; tests of the
+    gate itself install a fake clock (`tests/metadata/test_source_gate.py`)."""
+    import asyncio
+
+    from app.metadata import kobo_session, source_gate
+
+    async def _no_wait(_seconds: float) -> None:
+        await asyncio.sleep(0)
+
+    def _forget_persisted_kind_starts():
+        # A kind's last start survives a restart through settings.json
+        # (trial item (d)); the suite shares one settings file.
+        from app import config
+        s = config.load_settings()
+        if s.get(source_gate._KIND_START_KEY):
+            s = dict(s)
+            s[source_gate._KIND_START_KEY] = {}
+            config.save_settings(s)
+
+    source_gate.reset()
+    _forget_persisted_kind_starts()
+    kobo_session.reset_for_tests()
+    monkeypatch.setattr(source_gate, "_sleep", _no_wait)
+    yield
+    source_gate.reset()
+    _forget_persisted_kind_starts()
+    kobo_session.reset_for_tests()
+
+
+@pytest.fixture(autouse=True)
+def _no_leaked_goodreads_backoff():
+    """Goodreads' per-kind backoff (2026-10 audit G66) lives in the
+    suite's shared settings.json: one test's recorded block would make a
+    later test's Goodreads requests refuse themselves. Cleared around
+    every test (only written when something is there)."""
+    from app import config
+
+    def _clear():
+        s = config.load_settings()
+        if s.get("goodreads_backoff") or s.get("goodreads_session_state") == "soft_blocked":
+            s = dict(s)
+            s["goodreads_backoff"] = {}
+            s["goodreads_session_state"] = "unknown"
+            config.save_settings(s)
+
+    _clear()
+    yield
+    _clear()
+
+
+@pytest.fixture(autouse=True)
+def _no_leaked_goodreads_autocomplete_spacing():
+    """The candidate worker's last autocomplete time (G187) is module
+    state: one test's check would hold a later test's for 3 minutes."""
+    from app.discovery import goodreads_candidates
+    goodreads_candidates._last_autocomplete_at = 0.0
+    yield
+    goodreads_candidates._last_autocomplete_at = 0.0
+
+
+@pytest.fixture(autouse=True)
+def _no_leaked_amazon_kind_cooldown():
+    """Amazon's per-kind cooldown (G181) is module state beside the
+    every-kind `_blocked_until` the older tests reset by hand: a store-
+    page 429 one test records would stop a later test's store requests.
+    Cleared around every test, in memory and in the shared settings."""
+    from app import config
+    from app.discovery import amazon_author_id_resolver as resolver
+
+    def _clear():
+        resolver._kind_until.clear()
+        s = config.load_settings()
+        if s.get("amazon_blocked_until_by_kind"):
+            s = dict(s)
+            s["amazon_blocked_until_by_kind"] = {}
+            config.save_settings(s)
+
+    _clear()
+    yield
+    _clear()
+
+
+@pytest.fixture(autouse=True)
 def _no_real_mam(monkeypatch):
     """The suite never talks to the real MAM.
 

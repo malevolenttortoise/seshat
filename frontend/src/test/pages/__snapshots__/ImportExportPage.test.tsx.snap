@@ -1,0 +1,706 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Import / Export page (desktop) > a fetched preview > markup 1`] = `
+<DocumentFragment>
+  <div
+    style="display: flex; flex-direction: column; gap: 24px;"
+  >
+    <h1
+      style="font-size: 24px; font-weight: 700; color: rgb(236, 234, 244); margin: 0px;"
+    >
+      Import / Export
+    </h1>
+    <div
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 12px; padding: 24px;"
+    >
+      <h2
+        style="font-size: 18px; font-weight: 600; color: rgb(236, 234, 244); margin: 0px 0px 4px;"
+      >
+        Import Books
+      </h2>
+      <p
+        style="font-size: 13px; color: rgb(150, 148, 172); margin: 0px 0px 16px;"
+      >
+        Paste book URLs below, one per line. Supported sources: Goodreads, Hardcover, Amazon (
+        <code
+          style="background: rgb(30, 32, 52); padding: 1px 4px; border-radius: 3px;"
+        >
+          /dp/{ASIN}
+        </code>
+        ), Open Library (
+        <code
+          style="background: rgb(30, 32, 52); padding: 1px 4px; border-radius: 3px;"
+        >
+          /works
+        </code>
+        , 
+        <code
+          style="background: rgb(30, 32, 52); padding: 1px 4px; border-radius: 3px;"
+        >
+          /books
+        </code>
+        , 
+        <code
+          style="background: rgb(30, 32, 52); padding: 1px 4px; border-radius: 3px;"
+        >
+          /isbn
+        </code>
+        ), Google Books, Kobo, IBDB. Books will be checked against your library before adding.
+      </p>
+      <textarea
+        placeholder="https://www.goodreads.com/book/show/12345
+https://hardcover.app/books/some-book
+https://www.amazon.com/dp/B0CJDP9MNL
+https://openlibrary.org/works/OL15161W
+https://books.google.com/books?id=ABC"
+        rows="6"
+        style="width: 100%; padding: 12px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 8px; color: rgb(214, 212, 224); font-size: 13px; font-family: monospace; resize: vertical;"
+      >
+        https://books.example.invalid/show/1-the-glass-orchard
+https://books.example.invalid/show/2-ninefold-tide
+https://books.example.invalid/show/3-broken
+      </textarea>
+      <div
+        style="display: flex; gap: 10px; align-items: center; margin-top: 12px;"
+      >
+        <button
+          style="background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+        >
+          Fetch & Preview
+        </button>
+      </div>
+    </div>
+    <div
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 12px; padding: 24px;"
+    >
+      <div
+        style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;"
+      >
+        <h2
+          style="font-size: 18px; font-weight: 600; color: rgb(236, 234, 244); margin: 0px;"
+        >
+          Preview (3 books)
+        </h2>
+        <button
+          style="background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+        >
+          Add 1 New Book
+        </button>
+      </div>
+      <div
+        style="display: flex; flex-direction: column; gap: 8px;"
+      >
+        <div
+          style="display: flex; gap: 12px; align-items: center; padding: 10px 14px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 8px;"
+        >
+          <div
+            style="width: 40px; height: 60px; background: rgb(42, 44, 66); border-radius: 4px; flex-shrink: 0;"
+          />
+          <div
+            style="flex: 1 1 0%; min-width: 0px;"
+          >
+            <div
+              style="font-size: 14px; font-weight: 600; color: rgb(214, 212, 224); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"
+            >
+              Rootbound
+            </div>
+            <div
+              style="font-size: 12px; color: rgb(150, 148, 172);"
+            >
+              Ada Quill
+              <span
+                style="margin-left: 6px;"
+              >
+                <select
+                  style="padding: 1px 4px; border-radius: 3px; border: 1px solid rgb(58, 60, 86); background: rgb(34, 36, 56); color: rgb(136, 112, 180); font-size: 11px;"
+                >
+                  <option
+                    value="Orchard Cycle"
+                  >
+                    Orchard Cycle #3
+                  </option>
+                  <option
+                    value="Quill Botanicals"
+                  >
+                    Quill Botanicals #1
+                  </option>
+                  <option
+                    value=""
+                  >
+                    None
+                  </option>
+                </select>
+              </span>
+            </div>
+            <div
+              style="font-size: 11px; color: rgb(98, 96, 122);"
+            >
+              2027-02-02
+            </div>
+          </div>
+          <span
+            style="font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 5px; flex-shrink: 0; background: rgba(58, 148, 104, 0.133); color: rgb(58, 148, 104); border: 1px solid rgba(58, 148, 104, 0.267);"
+          >
+            New — will be added
+          </span>
+        </div>
+        <div
+          style="display: flex; gap: 12px; align-items: center; padding: 10px 14px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 8px;"
+        >
+          <div
+            style="width: 40px; height: 60px; background: rgb(42, 44, 66); border-radius: 4px; flex-shrink: 0;"
+          />
+          <div
+            style="flex: 1 1 0%; min-width: 0px;"
+          >
+            <div
+              style="font-size: 14px; font-weight: 600; color: rgb(214, 212, 224); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"
+            >
+              Ninefold Tide
+            </div>
+            <div
+              style="font-size: 12px; color: rgb(150, 148, 172);"
+            >
+              Ada Quill
+            </div>
+            <div
+              style="font-size: 11px; color: rgb(98, 96, 122);"
+            >
+              2024-05-14
+            </div>
+          </div>
+          <span
+            style="font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 5px; flex-shrink: 0; background: rgba(72, 152, 176, 0.133); color: rgb(72, 152, 176); border: 1px solid rgba(72, 152, 176, 0.267);"
+          >
+            Already in Calibre
+          </span>
+        </div>
+        <div
+          style="display: flex; gap: 12px; align-items: center; padding: 10px 14px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 8px;"
+        >
+          <div
+            style="width: 40px; height: 60px; background: rgb(42, 44, 66); border-radius: 4px; flex-shrink: 0;"
+          />
+          <div
+            style="flex: 1 1 0%; min-width: 0px;"
+          >
+            <div
+              style="font-size: 14px; font-weight: 600; color: rgb(214, 212, 224); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"
+            >
+              Unknown
+            </div>
+            <div
+              style="font-size: 12px; color: rgb(150, 148, 172);"
+            />
+            <div
+              style="font-size: 11px; color: rgb(192, 72, 72);"
+            >
+              Couldn't read the page
+            </div>
+          </div>
+          <span
+            style="font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 5px; flex-shrink: 0; background: rgba(192, 72, 72, 0.133); color: rgb(192, 72, 72); border: 1px solid rgba(192, 72, 72, 0.267);"
+          >
+            Error
+          </span>
+        </div>
+      </div>
+    </div>
+    <div
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 12px; padding: 24px;"
+    >
+      <h2
+        style="font-size: 18px; font-weight: 600; color: rgb(236, 234, 244); margin: 0px 0px 4px;"
+      >
+        Export Books
+      </h2>
+      <p
+        style="font-size: 13px; color: rgb(150, 148, 172); margin: 0px 0px 16px;"
+      >
+        Export your book list as CSV or text file with title, author, dates, and source URLs.
+      </p>
+      <button
+        style="background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+      >
+        Open Export Tool
+      </button>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Import / Export page (desktop) > a fetched preview > requests 1`] = `
+[
+  "POST /discovery/books/import-preview {"urls":["https://books.example.invalid/show/1-the-glass-orchard","https://books.example.invalid/show/2-ninefold-tide","https://books.example.invalid/show/3-broken"]}",
+]
+`;
+
+exports[`Import / Export page (desktop) > empty > markup 1`] = `
+<DocumentFragment>
+  <div
+    style="display: flex; flex-direction: column; gap: 24px;"
+  >
+    <h1
+      style="font-size: 24px; font-weight: 700; color: rgb(236, 234, 244); margin: 0px;"
+    >
+      Import / Export
+    </h1>
+    <div
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 12px; padding: 24px;"
+    >
+      <h2
+        style="font-size: 18px; font-weight: 600; color: rgb(236, 234, 244); margin: 0px 0px 4px;"
+      >
+        Import Books
+      </h2>
+      <p
+        style="font-size: 13px; color: rgb(150, 148, 172); margin: 0px 0px 16px;"
+      >
+        Paste book URLs below, one per line. Supported sources: Goodreads, Hardcover, Amazon (
+        <code
+          style="background: rgb(30, 32, 52); padding: 1px 4px; border-radius: 3px;"
+        >
+          /dp/{ASIN}
+        </code>
+        ), Open Library (
+        <code
+          style="background: rgb(30, 32, 52); padding: 1px 4px; border-radius: 3px;"
+        >
+          /works
+        </code>
+        , 
+        <code
+          style="background: rgb(30, 32, 52); padding: 1px 4px; border-radius: 3px;"
+        >
+          /books
+        </code>
+        , 
+        <code
+          style="background: rgb(30, 32, 52); padding: 1px 4px; border-radius: 3px;"
+        >
+          /isbn
+        </code>
+        ), Google Books, Kobo, IBDB. Books will be checked against your library before adding.
+      </p>
+      <textarea
+        placeholder="https://www.goodreads.com/book/show/12345
+https://hardcover.app/books/some-book
+https://www.amazon.com/dp/B0CJDP9MNL
+https://openlibrary.org/works/OL15161W
+https://books.google.com/books?id=ABC"
+        rows="6"
+        style="width: 100%; padding: 12px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 8px; color: rgb(214, 212, 224); font-size: 13px; font-family: monospace; resize: vertical;"
+      />
+      <div
+        style="display: flex; gap: 10px; align-items: center; margin-top: 12px;"
+      >
+        <button
+          disabled=""
+          style="background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+        >
+          Fetch & Preview
+        </button>
+      </div>
+    </div>
+    <div
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 12px; padding: 24px;"
+    >
+      <h2
+        style="font-size: 18px; font-weight: 600; color: rgb(236, 234, 244); margin: 0px 0px 4px;"
+      >
+        Export Books
+      </h2>
+      <p
+        style="font-size: 13px; color: rgb(150, 148, 172); margin: 0px 0px 16px;"
+      >
+        Export your book list as CSV or text file with title, author, dates, and source URLs.
+      </p>
+      <button
+        style="background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+      >
+        Open Export Tool
+      </button>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Import / Export page (desktop) > empty > requests 1`] = `[]`;
+
+exports[`Import / Export page (phone) > a fetched preview > markup 1`] = `
+<DocumentFragment>
+  <div
+    style="display: flex; flex-direction: column; gap: 12px;"
+  >
+    <button
+      aria-label="Dashboard"
+      style="display: inline-flex; align-items: center; gap: 6px; height: 44px; padding: 0px 14px 0px 10px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 9999px; font-size: 14px; font-weight: 600; cursor: pointer; align-self: flex-start;"
+    >
+      <span
+        style="font-size: 18px; line-height: 1;"
+      >
+        ‹
+      </span>
+      <span>
+        Dashboard
+      </span>
+    </button>
+    <h1
+      style="margin: 0px; font-size: 22px; font-weight: 700; color: rgb(236, 234, 244);"
+    >
+      Import / Export
+    </h1>
+    <section
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
+    >
+      <header
+        style="display: flex; align-items: center; gap: 8px; min-height: 36px; margin-bottom: 12px; cursor: pointer; user-select: none;"
+      >
+        <div
+          style="flex: 1 1 0%; min-width: 0px;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 6px; font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+          >
+            <span
+              style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+            >
+              Import from URLs
+            </span>
+          </div>
+        </div>
+        <span
+          aria-hidden="true"
+          style="display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; font-size: 18px; font-weight: 700; color: rgb(150, 148, 172); background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 9999px; flex-shrink: 0; transform: rotate(0deg); transition: transform 0.15s;"
+        >
+          ▾
+        </span>
+      </header>
+      <div
+        style="display: flex; flex-direction: column; gap: 8px;"
+      >
+        <p
+          style="font-size: 13px; color: rgb(150, 148, 172); margin: 0px;"
+        >
+          Paste book URLs (one per line) from Goodreads, Hardcover, Amazon, Open Library, Google Books, Kobo, or IBDB. Preview then add the new ones to your library as unowned.
+        </p>
+        <textarea
+          placeholder="https://www.goodreads.com/book/show/…"
+          rows="6"
+          style="width: 100%; padding: 10px; background: rgb(34, 36, 56); color: rgb(236, 234, 244); border: 1px solid rgb(58, 60, 86); border-radius: 10px; font-size: 16px; font-family: ui-monospace, monospace; resize: vertical;"
+        >
+          https://books.example.invalid/show/1-the-glass-orchard
+https://books.example.invalid/show/2-ninefold-tide
+https://books.example.invalid/show/3-broken
+        </textarea>
+        <button
+          style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 48px; padding: 0px 16px; width: 100%; cursor: pointer;"
+        >
+          <span>
+            Preview
+          </span>
+        </button>
+      </div>
+    </section>
+    <section
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
+    >
+      <header
+        style="display: flex; align-items: center; gap: 8px; min-height: 36px; margin-bottom: 12px; cursor: pointer; user-select: none;"
+      >
+        <div
+          style="flex: 1 1 0%; min-width: 0px;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 6px; font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+          >
+            <span
+              style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+            >
+              Preview
+            </span>
+            <span
+              style="font-size: 13px; font-weight: 500; color: rgb(150, 148, 172);"
+            >
+              (3)
+            </span>
+          </div>
+        </div>
+        <span
+          aria-hidden="true"
+          style="display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; font-size: 18px; font-weight: 700; color: rgb(150, 148, 172); background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 9999px; flex-shrink: 0; transform: rotate(0deg); transition: transform 0.15s;"
+        >
+          ▾
+        </span>
+      </header>
+      <div
+        style="display: flex; flex-direction: column; gap: 8px;"
+      >
+        <button
+          style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 48px; padding: 0px 16px; width: 100%; cursor: pointer;"
+        >
+          <span>
+            Add 1 new book(s)
+          </span>
+        </button>
+        <div
+          style="display: flex; gap: 10px; padding: 10px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 10px;"
+        >
+          <div
+            style="flex: 1 1 0%; min-width: 0px;"
+          >
+            <div
+              style="font-size: 14px; font-weight: 600; color: rgb(236, 234, 244); line-height: 1.3;"
+            >
+              Rootbound
+            </div>
+            <div
+              style="font-size: 12px; color: rgb(150, 148, 172); margin-top: 2px;"
+            >
+              Ada Quill
+            </div>
+            <div
+              style="font-size: 12px; color: rgb(136, 112, 180); margin-top: 2px;"
+            >
+              Orchard Cycle #3
+            </div>
+            <div
+              style="margin-top: 6px;"
+            >
+              <span
+                style="display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; background: rgba(222, 176, 96, 0.16); color: rgb(228, 184, 104); border: 1px solid rgba(222, 176, 96, 0.32); border-radius: 9999px; font-size: 12px; font-weight: 600; line-height: 1.2; white-space: nowrap;"
+              >
+                new
+              </span>
+            </div>
+          </div>
+        </div>
+        <div
+          style="display: flex; gap: 10px; padding: 10px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 10px;"
+        >
+          <div
+            style="flex: 1 1 0%; min-width: 0px;"
+          >
+            <div
+              style="font-size: 14px; font-weight: 600; color: rgb(236, 234, 244); line-height: 1.3;"
+            >
+              Ninefold Tide
+            </div>
+            <div
+              style="font-size: 12px; color: rgb(150, 148, 172); margin-top: 2px;"
+            >
+              Ada Quill
+            </div>
+            <div
+              style="margin-top: 6px;"
+            >
+              <span
+                style="display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; background: rgba(76, 184, 136, 0.14); color: rgb(76, 184, 136); border: 1px solid rgb(58, 148, 104); border-radius: 9999px; font-size: 12px; font-weight: 600; line-height: 1.2; white-space: nowrap;"
+              >
+                owned
+              </span>
+            </div>
+          </div>
+        </div>
+        <div
+          style="display: flex; gap: 10px; padding: 10px; background: rgb(34, 36, 56); border: 1px solid rgb(58, 60, 86); border-radius: 10px;"
+        >
+          <div
+            style="flex: 1 1 0%; min-width: 0px;"
+          >
+            <div
+              style="font-size: 14px; font-weight: 600; color: rgb(236, 234, 244); line-height: 1.3;"
+            >
+              (unknown)
+            </div>
+            <div
+              style="margin-top: 6px;"
+            >
+              <span
+                style="display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; background: rgba(224, 96, 96, 0.14); color: rgb(224, 96, 96); border: 1px solid rgb(192, 72, 72); border-radius: 9999px; font-size: 12px; font-weight: 600; line-height: 1.2; white-space: nowrap;"
+              >
+                error
+              </span>
+            </div>
+            <div
+              style="font-size: 11px; color: rgb(224, 96, 96); margin-top: 4px;"
+            >
+              Couldn't read the page
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
+    >
+      <header
+        style="display: flex; align-items: center; gap: 8px; min-height: 36px; margin-bottom: 12px; cursor: pointer; user-select: none;"
+      >
+        <div
+          style="flex: 1 1 0%; min-width: 0px;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 6px; font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+          >
+            <span
+              style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+            >
+              Export
+            </span>
+          </div>
+        </div>
+        <span
+          aria-hidden="true"
+          style="display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; font-size: 18px; font-weight: 700; color: rgb(150, 148, 172); background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 9999px; flex-shrink: 0; transform: rotate(0deg); transition: transform 0.15s;"
+        >
+          ▾
+        </span>
+      </header>
+      <div
+        style="display: flex; flex-direction: column; gap: 8px;"
+      >
+        <p
+          style="font-size: 13px; color: rgb(150, 148, 172); margin: 0px;"
+        >
+          Export your library or missing list as CSV / text.
+        </p>
+        <button
+          style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 44px; padding: 0px 16px; width: 100%; cursor: pointer;"
+        >
+          <span>
+            Open export tool
+          </span>
+        </button>
+      </div>
+    </section>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Import / Export page (phone) > a fetched preview > requests 1`] = `
+[
+  "POST /discovery/books/import-preview {"urls":["https://books.example.invalid/show/1-the-glass-orchard","https://books.example.invalid/show/2-ninefold-tide","https://books.example.invalid/show/3-broken"]}",
+]
+`;
+
+exports[`Import / Export page (phone) > empty > markup 1`] = `
+<DocumentFragment>
+  <div
+    style="display: flex; flex-direction: column; gap: 12px;"
+  >
+    <button
+      aria-label="Dashboard"
+      style="display: inline-flex; align-items: center; gap: 6px; height: 44px; padding: 0px 14px 0px 10px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 9999px; font-size: 14px; font-weight: 600; cursor: pointer; align-self: flex-start;"
+    >
+      <span
+        style="font-size: 18px; line-height: 1;"
+      >
+        ‹
+      </span>
+      <span>
+        Dashboard
+      </span>
+    </button>
+    <h1
+      style="margin: 0px; font-size: 22px; font-weight: 700; color: rgb(236, 234, 244);"
+    >
+      Import / Export
+    </h1>
+    <section
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
+    >
+      <header
+        style="display: flex; align-items: center; gap: 8px; min-height: 36px; margin-bottom: 12px; cursor: pointer; user-select: none;"
+      >
+        <div
+          style="flex: 1 1 0%; min-width: 0px;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 6px; font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+          >
+            <span
+              style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+            >
+              Import from URLs
+            </span>
+          </div>
+        </div>
+        <span
+          aria-hidden="true"
+          style="display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; font-size: 18px; font-weight: 700; color: rgb(150, 148, 172); background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 9999px; flex-shrink: 0; transform: rotate(0deg); transition: transform 0.15s;"
+        >
+          ▾
+        </span>
+      </header>
+      <div
+        style="display: flex; flex-direction: column; gap: 8px;"
+      >
+        <p
+          style="font-size: 13px; color: rgb(150, 148, 172); margin: 0px;"
+        >
+          Paste book URLs (one per line) from Goodreads, Hardcover, Amazon, Open Library, Google Books, Kobo, or IBDB. Preview then add the new ones to your library as unowned.
+        </p>
+        <textarea
+          placeholder="https://www.goodreads.com/book/show/…"
+          rows="6"
+          style="width: 100%; padding: 10px; background: rgb(34, 36, 56); color: rgb(236, 234, 244); border: 1px solid rgb(58, 60, 86); border-radius: 10px; font-size: 16px; font-family: ui-monospace, monospace; resize: vertical;"
+        />
+        <button
+          disabled=""
+          style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 48px; padding: 0px 16px; width: 100%; cursor: pointer;"
+        >
+          <span>
+            Preview
+          </span>
+        </button>
+      </div>
+    </section>
+    <section
+      style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 12px; padding: 12px; margin-bottom: 12px;"
+    >
+      <header
+        style="display: flex; align-items: center; gap: 8px; min-height: 36px; margin-bottom: 12px; cursor: pointer; user-select: none;"
+      >
+        <div
+          style="flex: 1 1 0%; min-width: 0px;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 6px; font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+          >
+            <span
+              style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"
+            >
+              Export
+            </span>
+          </div>
+        </div>
+        <span
+          aria-hidden="true"
+          style="display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; font-size: 18px; font-weight: 700; color: rgb(150, 148, 172); background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 9999px; flex-shrink: 0; transform: rotate(0deg); transition: transform 0.15s;"
+        >
+          ▾
+        </span>
+      </header>
+      <div
+        style="display: flex; flex-direction: column; gap: 8px;"
+      >
+        <p
+          style="font-size: 13px; color: rgb(150, 148, 172); margin: 0px;"
+        >
+          Export your library or missing list as CSV / text.
+        </p>
+        <button
+          style="display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 10px; font-size: 16px; font-weight: 600; min-height: 44px; padding: 0px 16px; width: 100%; cursor: pointer;"
+        >
+          <span>
+            Open export tool
+          </span>
+        </button>
+      </div>
+    </section>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Import / Export page (phone) > empty > requests 1`] = `[]`;

@@ -14,6 +14,7 @@ from app.metadata.enricher import (
     EnrichmentConfig,
     MetadataEnricher,
     _clean_audiobook_title,
+    _retry_title,
     _strip_series_decorator,
 )
 from app.metadata.record import MetaRecord
@@ -240,6 +241,31 @@ class TestEnricher:
             "Monster's Mercy 2",
         ]
 
+    async def test_bracketed_series_tail_retries_without_it(self):
+        """Wave 5a: "No One Dies Today (Frontline Zero Book 4)" used to retry
+        as "No One Dies Today (Frontline Zero 4)", missing again on every
+        source (and costing Amazon's second live request). The retry drops
+        the whole bracket. Still one retry."""
+        cfg = EnrichmentConfig(enabled=True, accept_confidence=0.6)
+        hit = MetaRecord(
+            title="No One Dies Today", authors=["Maoyi Zhou"], source="amazon",
+        )
+        source = _TitleAwareSource(
+            name="amazon",
+            title_to_result={"No One Dies Today": hit},
+        )
+        enricher = MetadataEnricher(cfg, sources=[source])
+
+        result = await enricher.enrich(
+            title="No One Dies Today (Frontline Zero Book 4)", author="Maoyi Zhou",
+        )
+
+        assert result is not None and result.title == "No One Dies Today"
+        assert source.titles_seen == [
+            "No One Dies Today (Frontline Zero Book 4)",
+            "No One Dies Today",
+        ]
+
     async def test_no_fallback_when_raw_title_matches(self):
         """Common case: raw title matches on the first try, no
         second HTTP call. Protects against the fallback doubling the
@@ -374,19 +400,17 @@ class TestEnricher:
         assert b.call_count == 1
 
     async def test_goodreads_skipped_when_soft_blocked(self, monkeypatch):
-        """v2.13.0 Stage 6 — when `goodreads_session_state == "soft_blocked"`,
-        the enricher must skip the goodreads source entirely (not call
-        `search_book`). Without this gate every per-book lookup pays the
-        full request → 202 → log → next-source roundtrip even though we
-        already know Goodreads is gated.
+        """While Goodreads book pages are backing off after an AWS WAF
+        block, the enricher skips the goodreads source entirely (not
+        `search_book`): its record needs the book page.
 
-        Patches `is_soft_blocked` directly rather than writing to the
+        Patches `is_backing_off` directly rather than writing to the
         runtime-state file — keeps the test fully isolated from
         sibling tests that use fake sources named "goodreads".
         """
         from app.metadata import goodreads_session as gs
 
-        monkeypatch.setattr(gs, "is_soft_blocked", lambda: True)
+        monkeypatch.setattr(gs, "is_backing_off", lambda kind: kind == "book_page")
 
         cfg = EnrichmentConfig(enabled=True, accept_confidence=0.6)
         rec_from_fallback = MetaRecord(
@@ -565,6 +589,34 @@ class TestStripSeriesDecorator:
         assert _strip_series_decorator(
             "Monster's Mercy: book 2"
         ) == "Monster's Mercy 2"
+
+
+class TestRetryTitle:
+    """`_retry_title`: a trailing bracketed series tail goes whole; without
+    one, the series decorator goes and its number stays."""
+
+    @pytest.mark.parametrize("raw, retry", [
+        ("No One Dies Today (Frontline Zero Book 4)", "No One Dies Today"),
+        ("Lines of Defiance (Frontline Zero, Book 2)", "Lines of Defiance"),
+        ("Griffin Academy 2 (Knights Of War #2)", "Griffin Academy 2"),
+        ("Tumbled Troubles (Book 4)", "Tumbled Troubles"),
+        ("The Triangulum Fold [The Fold 8]", "The Triangulum Fold"),
+        ("Mistborn (Mistborn Vol. 3.5)", "Mistborn"),
+        # no bracket tail: today's decorator strip
+        ("Monster's Mercy: Book 2", "Monster's Mercy 2"),
+        ("Foundation", "Foundation"),
+        # a bracket that isn't a series tail stays
+        ("Leviathan Wakes (Unabridged)", "Leviathan Wakes (Unabridged)"),
+        ("Dune (1965)", "Dune (1965)"),
+        # only a TRAILING tail goes
+        ("Cradle [Wintersteel 8] Omnibus Edition", "Cradle [Wintersteel 8] Omnibus Edition"),
+    ])
+    def test_retry_title(self, raw, retry):
+        assert _retry_title(raw) == retry
+
+    def test_empty_and_none_safe(self):
+        assert _retry_title("") == ""
+        assert _retry_title(None) is None  # type: ignore[arg-type]
 
 
 # ─── F3 — cheap-source short-circuit gate ────────────────────
@@ -803,3 +855,109 @@ class TestF3CheapSourceGate:
 
         assert seen.get("author_amazon_id") == "B0CMJC56GQ"
         assert seen.get("library_slug") == "calibre-library"
+
+
+class _ScopeSpy(MetaSource):
+    """Records the per-book scope each call sees (2026-10 audit wave 4b,
+    S5): Amazon keeps its live budget and session there."""
+    name = "scope_spy"
+
+    def __init__(self):
+        super().__init__(rate_limit=0)
+        self.scopes: list = []
+
+    async def search_book(self, title, author, **_):
+        from app.metadata.sources.base import current_enrichment_scope
+        scope = current_enrichment_scope()
+        self.scopes.append(scope)
+        if scope is not None:
+            scope.setdefault("calls", 0)
+            scope["calls"] += 1
+        return None
+
+
+class TestEnrichmentScope:
+    async def test_one_scope_per_book_shared_by_the_title_retry(self):
+        spy = _ScopeSpy()
+        enricher = MetadataEnricher(EnrichmentConfig(enabled=True), sources=[spy])
+        await enricher.enrich(title="Monster's Mercy: Book 2", author="A")
+        # Raw title, then the cleaned variant: one book, one scope.
+        assert len(spy.scopes) == 2
+        assert spy.scopes[0] is not None and spy.scopes[0] is spy.scopes[1]
+        assert spy.scopes[0]["calls"] == 2
+        await enricher.enrich(title="Another", author="A")
+        assert spy.scopes[2] is not spy.scopes[0]     # a new book, a new scope
+
+    async def test_scope_values_are_closed_when_the_book_is_done(self):
+        from app.metadata.sources.base import enrichment_scope
+
+        class Closable:
+            closed = False
+
+            async def close(self):
+                self.closed = True
+
+        c = Closable()
+        async with enrichment_scope() as scope:
+            scope["session"] = c
+        assert c.closed
+
+
+class TestAnotherVolumeNeverMerges:
+    """G189: grab 4770 'My Dungeon Life Vol 2' — Hardcover returned 'My
+    Dungeon Life: Volume 1', author matching, and score_match gave it 1.00.
+    The identity's format and number rules veto any text-search match."""
+
+    async def _enrich(self, record: MetaRecord, *, title: str, cache: bool = False):
+        cfg = EnrichmentConfig(enabled=True, accept_confidence=0.8)
+        if cache:
+            record._from_cache = True  # type: ignore[attr-defined]
+        src = _FakeSource(name="hardcover", result=record)
+        result = await MetadataEnricher(cfg, sources=[src]).enrich(
+            title=title, author="Whatsawhizzer",
+        )
+        return result, src
+
+    async def test_another_volume_is_not_merged(self):
+        rec = MetaRecord(title="My Dungeon Life: Volume 1", authors=["Whatsawhizzer"],
+                         description="Volume 1's blurb", source="hardcover")
+        result, _ = await self._enrich(rec, title="My Dungeon Life Vol 2")
+        assert result is None      # nothing merged, nothing else ran
+
+    async def test_logged_as_another_volume(self):
+        exact = MetaRecord(title="My Dungeon Life: Volume 2", authors=["Whatsawhizzer"],
+                           source="mam", confidence=1.0)
+        wrong = MetaRecord(title="My Dungeon Life: Volume 1", authors=["Whatsawhizzer"],
+                           description="Volume 1's blurb", source="hardcover")
+        enricher = MetadataEnricher(
+            EnrichmentConfig(enabled=True, accept_confidence=0.8),
+            sources=[_FakeSource(name="mam", result=exact), _FakeSource(name="hardcover", result=wrong)],
+        )
+        result = await enricher.enrich(title="My Dungeon Life Vol 2", author="Whatsawhizzer")
+        assert result.description is None
+        entry = next(e for e in result._source_log if e["source"] == "hardcover")
+        assert entry["status"] == "other_volume"
+
+    async def test_a_cache_backed_match_is_checked_too(self):
+        rec = MetaRecord(title="My Dungeon Life: Volume 1", authors=["Whatsawhizzer"],
+                         cover_url="https://x/vol1.jpg", source="amazon")
+        result, _ = await self._enrich(rec, title="My Dungeon Life Vol 2", cache=True)
+        assert result is None
+
+    async def test_a_dramatised_edition_is_not_the_plain_book(self):
+        rec = MetaRecord(title="Threshing Day [Dramatized Adaptation]", authors=["Whatsawhizzer"],
+                         source="hardcover")
+        result, _ = await self._enrich(rec, title="Threshing Day")
+        assert result is None
+
+    @pytest.mark.parametrize("record_title", [
+        "My Dungeon Life: Volume 2", "Aurora Rises A LitRPG Adventure",
+    ])
+    async def test_the_same_volume_still_merges(self, record_title):
+        """Positive controls: the right volume, and a title the identity's
+        keys would miss (a description with no separator) — only the format
+        and number rules veto."""
+        search = "My Dungeon Life Vol 2" if "Dungeon" in record_title else "Aurora Rises"
+        rec = MetaRecord(title=record_title, authors=["Whatsawhizzer"], source="hardcover")
+        result, _ = await self._enrich(rec, title=search)
+        assert result is not None

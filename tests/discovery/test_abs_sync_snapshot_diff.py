@@ -134,6 +134,28 @@ async def _queue_rows():
         await db.close()
 
 
+class TestNoGoodreadsBackfillAfterAbsSync:
+    async def test_an_abs_sync_no_longer_runs_the_author_id_backfill(
+        self, discovery_db, monkeypatch,
+    ):
+        import asyncio
+        from app.discovery import goodreads_author_backfill
+        from app.discovery.audiobookshelf_sync import sync_audiobookshelf
+
+        calls: list = []
+
+        async def _record(**kw):
+            calls.append(kw)
+            return {}
+        monkeypatch.setattr(
+            goodreads_author_backfill, "backfill_missing_author_ids", _record,
+        )
+        await _stub_sync(monkeypatch, [_abs_book("abs-1", "AudioBookA", "AuthorA")])
+        await sync_audiobookshelf(_fake_library())
+        await asyncio.sleep(0)
+        assert calls == []
+
+
 class TestAbsSnapshotWrite:
     async def test_new_book_creates_snapshot(self, discovery_db, monkeypatch):
         from app.discovery.audiobookshelf_sync import sync_audiobookshelf

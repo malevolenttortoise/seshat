@@ -222,7 +222,7 @@ class TestEndToEndPipeline:
             # 4. The grab row exists in the right state
             db = await get_db()
             try:
-                grab = await grabs_storage.find_grab_by_torrent_id(
+                grab = await grabs_storage.find_blocking_grab(
                     db, "1233592"
                 )
                 assert grab is not None
@@ -307,7 +307,7 @@ class TestEndToEndPipeline:
 
             db = await get_db()
             try:
-                grab = await grabs_storage.find_grab_by_torrent_id(
+                grab = await grabs_storage.find_blocking_grab(
                     db, "1233592"
                 )
                 assert grab is None  # no grab row for skipped announces

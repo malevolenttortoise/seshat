@@ -44,7 +44,7 @@ import time
 import weakref
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Awaitable, Callable, Optional, Protocol
+from typing import Awaitable, Callable, Optional, Protocol, Sequence
 
 import aiosqlite
 
@@ -62,7 +62,7 @@ from app.mam.torrent_info import (
     get_torrent_info,
 )
 from app.mam.user_status import UserStatusError, get_user_status
-from app.orchestrator.auto_train import train_authors_from_torrent_info
+from app.orchestrator.auto_train import coauthor_names
 from app.orchestrator import torrent_store
 from app.orchestrator.delayed import rotate_oldest_to_delayed
 from app.orchestrator.download_folders import (
@@ -579,6 +579,7 @@ async def handle_announce(
             skip_filter=False,
             force_fl_wedge=False,
             apply_format_dedup=True,
+            apply_owned_skip=True,
             lookup=lookup,
         )
 
@@ -602,6 +603,7 @@ async def _hold_for_index(
             author_blob=announce.author_blob,
             decision=decision,
             filetype=(announce.filetype or "").lower().strip(),
+            categories=announce.categories,
         )
         hold_id = await holds_storage.create_index_wait(
             db,
@@ -709,6 +711,7 @@ async def _grab_once_indexed(
                 skip_filter=False,
                 force_fl_wedge=False,
                 apply_format_dedup=True,
+                apply_owned_skip=True,
                 announce_id=announce_id,
                 trust_announce=not indexed,
             )
@@ -870,6 +873,8 @@ async def inject_grab(
     apply_format_dedup: bool = True,
     override_mam_snatched: bool = False,
     apply_claim_for_owned: bool = True,
+    apply_owned_skip: bool = False,
+    categories: Sequence[str] = (),
 ) -> DispatchResult:
     """Manually queue a grab by torrent ID.
 
@@ -906,6 +911,13 @@ async def inject_grab(
     showed the user what they own, so ticking the row is the decision to
     grab anyway (ADR-0023).
 
+    `apply_owned_skip=True` makes an announce of a book already owned
+    in its media type a skip (`owned_same_format`, D7 / ADR-0004
+    amended). Only for grabs that began as an IRC announce: a released
+    format-dedup hold and a tentative author's approve pass it. Grabs
+    the user sends (Send to pipeline, the inject API, Manual Grab) go
+    through.
+
     Live `dry_run` kill-switch (v2.21.2). Unlike the IRC-enabled
     toggle (which doesn't apply here — manual injects are user-
     initiated regardless of the IRC listener state), the live
@@ -933,6 +945,9 @@ async def inject_grab(
         series_name=series_name,
         book_title=book_title,
         filetype=(filetype or "").lower(),
+        # The IRC announce's content tags, when a tentative approve or a
+        # hold release has them (wave 5a, G124).
+        categories=tuple(categories),
     )
     if live["dry_run"] and not deps.dry_run:
         _log.info(
@@ -970,6 +985,7 @@ async def inject_grab(
         apply_format_dedup=apply_format_dedup,
         override_mam_snatched=override_mam_snatched,
         apply_claim_for_owned=apply_claim_for_owned,
+        apply_owned_skip=apply_owned_skip,
     )
 
 
@@ -987,6 +1003,7 @@ async def _dispatch_with_decision(
     apply_format_dedup: bool = True,
     override_mam_snatched: bool = False,
     apply_claim_for_owned: bool = True,
+    apply_owned_skip: bool = False,
     announce_id: Optional[int] = None,
     trust_announce: bool = False,
     lookup: Optional[TorrentLookup] = None,
@@ -1000,8 +1017,10 @@ async def _dispatch_with_decision(
     inject callers can pass False from a UI override checkbox to
     force a grab regardless of in-flight/owned siblings.
 
-    `override_mam_snatched` and `apply_claim_for_owned` — see
-    `inject_grab`.
+    `override_mam_snatched`, `apply_claim_for_owned` and
+    `apply_owned_skip` — see `inject_grab`. The IRC paths
+    (`handle_announce`, a grab held for MAM's index) pass
+    `apply_owned_skip=True`.
 
     `announce_id` and `trust_announce` come from a held grab
     (`_grab_once_indexed`): its announce row already exists, and
@@ -1033,6 +1052,7 @@ async def _dispatch_with_decision(
                 author_blob=announce.author_blob,
                 decision=filter_decision,
                 filetype=book_format,
+                categories=announce.categories,
             )
             _emit(deps, "announce_recorded", {"announce_id": announce_id})
 
@@ -1070,6 +1090,7 @@ async def _dispatch_with_decision(
                         vip=announce.vip,
                         scraped_metadata=None,
                         cover_path=cover_path,
+                        categories=announce.categories,
                     )
                     _emit(deps, "tentative_captured",
                           {"torrent_id": announce.torrent_id})
@@ -1163,6 +1184,42 @@ async def _dispatch_with_decision(
                 announce_id=announce_id,
             )
 
+        # D7 (ADR-0004 amended): an IRC announce of a book already owned
+        # in this media type is never grabbed. Claim-for-owned took the
+        # one unlinked match above; what's left is an owned row already
+        # linked to MAM, or several owned rows (F24: claim nothing, skip).
+        # Steps aside where active replacement is on: there the grab is
+        # how the replacement detector compares editions.
+        if (
+            apply_owned_skip and claim_result is not None and claim_result.owned
+            and not _replacement_wants_grab(claim_result.owned)
+        ):
+            await grabs_storage.update_announce_decision(
+                db, announce_id=announce_id,
+                action="skip", reason="owned_same_format",
+            )
+            owned = claim_result.owned[0]
+            _log.info(
+                "owned skip: tid=%s %r is already owned (%s book %d %r%s); "
+                "not grabbing",
+                announce.torrent_id, announce.torrent_name[:60],
+                owned.library_slug, owned.book_id, owned.title[:60],
+                f", +{len(claim_result.owned) - 1} more"
+                if len(claim_result.owned) > 1 else "",
+            )
+            _emit(deps, "owned_same_format", {
+                "torrent_id": announce.torrent_id,
+                "library_slug": owned.library_slug,
+                "book_id": owned.book_id,
+                "book_title": owned.title,
+                "owned_matches": len(claim_result.owned),
+            })
+            return DispatchResult(
+                action="skip",
+                reason="owned_same_format",
+                announce_id=announce_id,
+            )
+
         # v2.9.0 — format-priority dedup gate. Runs only when the
         # caller asked us to AND the user has any priority list
         # configured. Three possible outcomes:
@@ -1179,6 +1236,9 @@ async def _dispatch_with_decision(
                 siblings = await lookup_dedup_siblings(
                     dedup_key=dedup_key,
                     media_type=media_type_from_category(announce.category) or "",
+                    title=announce.torrent_name or announce.title or "",
+                    author_blob=announce.author_blob or "",
+                    categories=(announce.category or "", *announce.categories),
                 )
             except Exception:
                 _log.exception(
@@ -1337,32 +1397,31 @@ async def _dispatch_with_decision(
                     message="The uploader is on your excluded-uploaders list.",
                 )
 
-        # Co-author auto-train (v3.0.0 Phase 10, ITEM 1): train the
-        # AUTHORITATIVE MAM authorlist for this grab into the allow list, so
-        # future announces by any co-author of a book we acquired pass the
-        # filter. Fires when the filter allowed because a known author
-        # matched, OR for any programmatic/manual grab (skip_filter — covers
-        # inject / tentative-approve / hold-release / delayed / discovery
+        # Co-authors (v3.0.0 Phase 10, ITEM 1): the AUTHORITATIVE MAM
+        # authorlist for this grab, saved on the grab row and trained into
+        # the allow list when the book is DELIVERED (S20, G203: a rejected
+        # review or a skipped grab trains nobody), so future announces by any
+        # co-author of a book we acquired pass the filter. Kept when the
+        # filter allowed because a known author matched, OR for any
+        # programmatic/manual grab (skip_filter — covers inject /
+        # tentative-approve / hold-release / delayed / discovery
         # send-to-pipeline). One cached-or-fetched torrent_info call per grab
         # (grabs are rare + deliberate); the announce blob is the fail-safe
-        # fallback. Trains `authors_allowed` only — the owned book's
-        # book_authors come from Calibre/ABS sync (Phase 2). Best-effort:
-        # never block the grab.
+        # fallback. Best-effort: never block the grab.
+        coauthors: list[str] = []
         if (
             filter_decision.reason == "allowed_author" or skip_filter
         ) and announce.torrent_id:
             try:
-                await train_authors_from_torrent_info(
-                    db,
+                coauthors = await coauthor_names(
                     announce.torrent_id,
                     token=deps.live_mam_token(),
                     fallback_blob=announce.author_blob or "",
-                    source="coauthor_train",
                     looked_up=lookup is not None,
                     info=lookup.info if lookup is not None else None,
                 )
             except Exception:
-                pass  # best-effort, don't block the grab
+                coauthors = []  # best-effort, don't block the grab
 
         # Filter said allow (or we're injecting). Build the economic
         # context for the policy engine. Start with what we already
@@ -1520,6 +1579,11 @@ async def _dispatch_with_decision(
                 book_format=book_format,
                 dedup_key=dedup_key,
                 policy_tier=policy_decision.tier,
+                categories=(
+                    announce.categories
+                    or await grabs_storage.announce_categories(db, announce_id)
+                ),
+                coauthors=coauthors,
             )
 
         # A wedge comes from the policy or from `force_fl_wedge` (a user
@@ -1660,9 +1724,12 @@ async def _place_torrent(
         # grab so it can be retried when the client comes back.
         # We already hold the .torrent — losing it would waste a
         # snatch, and MAM must never serve it twice. Only permanent
-        # failures (rejected, duplicate) stay as failed.
+        # failures (rejected, duplicate) stay as failed. This holds
+        # in drop mode too (wave 5a, G119): "drop" is about a full
+        # budget, and dropping these bytes lost 8 grabs on 2026-07-12
+        # that can never be fetched again.
         retriable = add_result.failure_kind in ("auth_failed", "network_error")
-        if retriable and deps.queue_mode_enabled:
+        if retriable:
             _log.info(
                 "download client unreachable for grab_id=%d — queued for retry (%s)",
                 grab_id, add_result.failure_kind,
@@ -2091,13 +2158,11 @@ async def grab_uploaded_torrent(
                 announce_id=announce_id,
             )
 
+        # Saved on the grab, trained at delivery (S20, G203), as in dispatch.
         try:
-            await train_authors_from_torrent_info(
-                db, tid, token=token, fallback_blob=author_blob,
-                source="coauthor_train",
-            )
+            coauthors = await coauthor_names(tid, token=token, fallback_blob=author_blob)
         except Exception:
-            pass  # best-effort, as in dispatch
+            coauthors = []  # best-effort, as in dispatch
 
         eco_ctx = await _build_economic_context(deps, announce)
         policy_decision = evaluate_policy(eco_ctx, deps.policy_config)
@@ -2154,6 +2219,7 @@ async def grab_uploaded_torrent(
                 book_format=book_format,
                 dedup_key=normalize_dedup_key(announce.torrent_name, author_blob),
                 policy_tier=policy_decision.tier,
+                coauthors=coauthors,
             )
     finally:
         await db.close()
@@ -2545,6 +2611,18 @@ async def _fetch_mam_cover_for_skip(
     except Exception:
         _log.debug("MAM cover fetch failed for tentative tid=%s", torrent_id)
         return None
+
+
+def _replacement_wants_grab(owned) -> bool:
+    """Active replacement is on for a library holding one of the owned
+    matches (read per call, like the kill switches)."""
+    from app.config import load_settings
+    from app.orchestrator.active_replacement import is_replacement_allowed
+
+    settings = load_settings()
+    return any(
+        is_replacement_allowed(m.library_slug, settings) for m in owned
+    )
 
 
 def _emit(deps: DispatcherDeps, event: str, payload: dict) -> None:

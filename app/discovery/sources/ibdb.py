@@ -11,7 +11,7 @@ import re
 from typing import Optional
 
 from app.discovery.sources.base import BaseSource, AuthorResult, SeriesResult, BookResult
-from app.metadata.author_names import authors_match
+from app.metadata.author_names import authors_match, flip_surname_first
 
 logger = logging.getLogger("seshat.discovery.ibdb")
 
@@ -205,18 +205,24 @@ def _strip_role(name: str) -> str:
     return _ROLE_SUFFIX.sub("", name).strip()
 
 
+def _clean_name(name: str) -> str:
+    """No trailing role, and given name first: IBDB gives some bylines as
+    "Dean, Travis", which never matched "Travis Dean" (2026-10 audit, G65)."""
+    return flip_surname_first(_strip_role(name))
+
+
 def _extract_authors(item: dict) -> list[str]:
     """Extract author names from various IBDB response shapes, without a
-    trailing role like "(author)"."""
+    trailing role like "(author)" and given name first."""
     authors = item.get("authors") or item.get("author") or []
     if isinstance(authors, str):
-        return [_strip_role(authors)]
+        return [_clean_name(authors)]
     if isinstance(authors, list):
         out = []
         for a in authors:
             if isinstance(a, str):
-                out.append(_strip_role(a))
+                out.append(_clean_name(a))
             elif isinstance(a, dict):
-                out.append(_strip_role(a.get("name", str(a))))
+                out.append(_clean_name(a.get("name", str(a))))
         return out
     return []

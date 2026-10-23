@@ -652,20 +652,27 @@ async def _insert_hold(
 
 async def _insert_owned_book(
     slug: str, title: str, author: str, formats: str = "EPUB",
+    coauthors: tuple[str, ...] = (),
 ) -> None:
+    from app.metadata.author_names import normalize_author_name
+
     db = await disco_db.get_db(slug)
-    try:
+
+    async def author_id_for(name: str) -> int:
         existing = await (await db.execute(
-            "SELECT id FROM authors WHERE name = ?", (author,),
+            "SELECT id FROM authors WHERE name = ?", (name,),
         )).fetchone()
         if existing:
-            author_id = existing["id"]
-        else:
-            cur = await db.execute(
-                "INSERT INTO authors (name, sort_name) VALUES (?, ?)",
-                (author, author),
-            )
-            author_id = cur.lastrowid
+            return existing["id"]
+        cur = await db.execute(
+            "INSERT INTO authors (name, sort_name, normalized_name) "
+            "VALUES (?, ?, ?)",
+            (name, name, normalize_author_name(name)),
+        )
+        return cur.lastrowid
+
+    try:
+        author_id = await author_id_for(author)
         # v3.0.0: books.author_id dropped; seed book_authors instead.
         cur = await db.execute(
             "INSERT INTO books (title, source, owned, formats, hidden) "
@@ -678,9 +685,23 @@ async def _insert_owned_book(
             "VALUES (?, ?, 0)",
             (book_id, author_id),
         )
+        for pos, name in enumerate(coauthors, start=1):
+            await db.execute(
+                "INSERT OR IGNORE INTO book_authors (book_id, author_id, position) "
+                "VALUES (?, ?, ?)",
+                (book_id, await author_id_for(name), pos),
+            )
         await db.commit()
     finally:
         await db.close()
+
+
+async def _owned_siblings(title: str, author: str, media_type: str = "ebook"):
+    result = await lookup_dedup_siblings(
+        dedup_key=normalize_dedup_key(title, author), media_type=media_type,
+        title=title, author_blob=author,
+    )
+    return [s for s in result if s.where == "owned"]
 
 
 class TestLookupDedupSiblings:
@@ -759,16 +780,40 @@ class TestLookupDedupSiblings:
         await _insert_owned_book(
             "calibre-main", "The Delves", "Keleros", formats="EPUB,AZW3",
         )
-        key = normalize_dedup_key("The Delves", "Keleros")
-
-        result = await lookup_dedup_siblings(
-            dedup_key=key, media_type="ebook",
-        )
-        owned = [s for s in result if s.where == "owned"]
+        owned = await _owned_siblings("The Delves", "Keleros")
         assert len(owned) == 1
         # First listed format is what surfaces — see SiblingMatch docs.
         assert owned[0].book_format == "epub"
         assert owned[0].library_slug == "calibre-main"
+
+    async def test_owned_by_title_identity_not_key(self, ebook_library):
+        """G172: 'Dragon Bound' is owned 'Dragon Bound: A Legacy Building
+        Fantasy' (grab 4683 spent a wedge on it); `match_key` kept the
+        subtitle and missed it (ADR-0004 amended, ADR-0028)."""
+        await _insert_owned_book(
+            "calibre-main", "Dragon Bound: A Legacy Building Fantasy", "Some Author",
+        )
+        assert len(await _owned_siblings("Dragon Bound", "Some Author")) == 1
+
+    async def test_another_volume_is_not_owned(self, ebook_library):
+        await _insert_owned_book("calibre-main", "Monster's Mercy", "Some Author")
+        assert await _owned_siblings("Monster's Mercy 3", "Some Author") == []
+
+    async def test_announce_primary_may_be_an_owned_coauthor(self, ebook_library):
+        """Contributor-aware like claim-for-owned (ADR-0013); the old
+        lookup read the owned book's position-0 author only."""
+        await _insert_owned_book(
+            "calibre-main", "Galaxy's Edge: Legionnaire", "J.N. Chaney",
+            coauthors=("Jason Anspach",),
+        )
+        assert len(await _owned_siblings("Galaxy's Edge: Legionnaire", "Jason Anspach")) == 1
+
+    async def test_no_title_no_owned_lookup(self, ebook_library):
+        await _insert_owned_book("calibre-main", "The Delves", "Keleros")
+        result = await lookup_dedup_siblings(
+            dedup_key=normalize_dedup_key("The Delves", "Keleros"), media_type="ebook",
+        )
+        assert [s for s in result if s.where == "owned"] == []
 
     async def test_owned_filtered_by_content_type(
         self, tmp_path, monkeypatch, temp_db,
@@ -794,12 +839,7 @@ class TestLookupDedupSiblings:
         await _insert_owned_book(
             "abs-audio", "The Delves", "Keleros", formats="M4B",
         )
-        key = normalize_dedup_key("The Delves", "Keleros")
-
-        result = await lookup_dedup_siblings(
-            dedup_key=key, media_type="ebook",
-        )
-        assert [s for s in result if s.where == "owned"] == []
+        assert await _owned_siblings("The Delves", "Keleros") == []
 
     async def test_combined_three_way_match(self, ebook_library):
         """In-flight + held + owned for the same key — all three surface."""
@@ -818,6 +858,7 @@ class TestLookupDedupSiblings:
 
         result = await lookup_dedup_siblings(
             dedup_key=key, media_type="ebook",
+            title="The Delves", author_blob="Keleros",
         )
         wheres = sorted(s.where for s in result)
         assert wheres == ["held", "in_flight", "owned"]

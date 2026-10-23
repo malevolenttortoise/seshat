@@ -15,6 +15,7 @@
 // the fetch + the author back-links to the right library.
 import { useCallback, useEffect, useState } from "react";
 import { useTheme } from "../theme";
+import { useBookSidebar } from "../hooks/useBookSidebar";
 import { api, slugQuery } from "../api";
 import { Load } from "../components/Load";
 import { Btn } from "../components/Btn";
@@ -48,8 +49,7 @@ export default function DiscSeriesDetailPage({
   const t = useTheme();
   const [data, setData] = useState<SeriesDetail | null>(null);
   const [ld, setLd] = useState(true);
-  const [sb, setSb] = useState<Book | null>(null);
-  const [sbClosing, setSbClosing] = useState(false);
+  const { sb, sbClosing, closeSb, openSb } = useBookSidebar();
 
   // Nav arg may be "slug:id" (cross-library) or a bare id.
   const { sid, slug } = (() => {
@@ -83,15 +83,6 @@ export default function DiscSeriesDetailPage({
     load(c.signal);
     return () => c.abort();
   }, [load]);
-
-  const closeSb = () => {
-    if (!sb) return;
-    setSbClosing(true);
-    setTimeout(() => {
-      setSb(null);
-      setSbClosing(false);
-    }, 200);
-  };
 
   const onAction = async (act: BookAction, id: number, s?: string) => {
     if (act === "hide") await api.post(`/discovery/books/${id}/hide${slugQuery(s)}`);
@@ -234,10 +225,7 @@ export default function DiscSeriesDetailPage({
       {books.length > 0 ? (
         <BGrid
           books={books}
-          onBookClick={(b) => {
-            setSbClosing(false);
-            setSb(b);
-          }}
+          onBookClick={openSb}
           showAuthor
           onAuthorClick={(aid) => onNav("disc-author-detail", authorArg(aid))}
         />

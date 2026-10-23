@@ -28,6 +28,9 @@ STATUS_FAILED = "failed"
 # Sink delivery was attempted but the sink was unreachable. The book
 # stays in staging and the review-timeout job retries on its next tick.
 STATUS_SINK_PENDING = "sink_pending"
+# Dropped into CWA, but the book never appeared in Calibre (wave 5a,
+# G121): the review's files are kept for a Re-drop or "Mark as imported".
+STATUS_IMPORT_FAILED = "import_failed"
 
 
 @dataclass(frozen=True)
@@ -133,6 +136,15 @@ async def list_pending(
     return [_row_to_review(r) for r in rows]
 
 
+async def list_import_failed(db: aiosqlite.Connection) -> list[ReviewRow]:
+    """Reviews whose CWA import never reached Calibre (wave 5a, G121)."""
+    cursor = await db.execute(
+        "SELECT * FROM book_review_queue WHERE status = ? ORDER BY decided_at",
+        (STATUS_IMPORT_FAILED,),
+    )
+    return [_row_to_review(r) for r in await cursor.fetchall()]
+
+
 async def list_sink_pending(
     db: aiosqlite.Connection,
 ) -> list[ReviewRow]:
@@ -187,6 +199,23 @@ async def set_status(
         f"UPDATE book_review_queue SET {', '.join(sets)} WHERE id = ?",
         params,
     )
+    await db.commit()
+
+
+async def list_for_run(
+    db: aiosqlite.Connection, pipeline_run_id: int,
+) -> list[ReviewRow]:
+    """Every review row a pipeline run staged (one per bundle group)."""
+    cursor = await db.execute(
+        "SELECT * FROM book_review_queue WHERE pipeline_run_id = ? "
+        "ORDER BY bundle_index",
+        (pipeline_run_id,),
+    )
+    return [_row_to_review(r) for r in await cursor.fetchall()]
+
+
+async def delete_entry(db: aiosqlite.Connection, entry_id: int) -> None:
+    await db.execute("DELETE FROM book_review_queue WHERE id = ?", (entry_id,))
     await db.commit()
 
 

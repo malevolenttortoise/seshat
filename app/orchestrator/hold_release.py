@@ -35,9 +35,21 @@ from app.orchestrator.format_dedup import (
     evaluate_format_dedup,
     lookup_dedup_siblings,
 )
+from app.storage import grabs as grabs_storage
 from app.storage import holds as holds_storage
 
 _log = logging.getLogger("seshat.orchestrator.hold_release")
+
+
+async def _announce_categories(announce_id) -> list[str]:
+    """The held announce's content tags, for the grab it turns into."""
+    if not announce_id:
+        return []
+    db = await get_db()
+    try:
+        return await grabs_storage.announce_categories(db, announce_id)
+    finally:
+        await db.close()
 
 
 async def tick(deps: DispatcherDeps) -> int:
@@ -72,6 +84,12 @@ async def tick(deps: DispatcherDeps) -> int:
             siblings_raw = await lookup_dedup_siblings(
                 dedup_key=hold.dedup_key,
                 media_type=hold.media_type,
+                title=hold.torrent_name or "",
+                author_blob=hold.author_blob or "",
+                categories=(
+                    hold.category or "",
+                    *await _announce_categories(hold.announce_id),
+                ),
             )
         except Exception:
             _log.exception(
@@ -141,6 +159,10 @@ async def tick(deps: DispatcherDeps) -> int:
                 filetype=hold.book_format,
                 raw_line=f"hold_release:{hold.id}",
                 apply_format_dedup=False,
+                # Still the IRC announce it was: an owned book isn't
+                # grabbed (D7), whatever arrived during the hold.
+                apply_owned_skip=True,
+                categories=await _announce_categories(hold.announce_id),
             )
         except Exception:
             _log.exception(

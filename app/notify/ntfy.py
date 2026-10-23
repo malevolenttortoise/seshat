@@ -254,53 +254,7 @@ async def send(
         return False
 
 
-# ─── Per-event gate (v2.11.1 N1) ────────────────────────────
-
-
-def is_event_enabled(event_key: str) -> bool:
-    """Per-event ntfy gate. True iff both the master
-    `per_event_notifications` setting is on AND the per-event
-    `notify_on_{event_key}` setting is on (default True).
-
-    Centralizes the gate logic so every call site stays in sync.
-    Pre-v2.11.1 the master gate was checked at each call site but
-    the per-event sub-toggle was NOT — so ntfy events fired even
-    when the user had explicitly disabled them in Settings →
-    Notifications. UAT-confirmed bug; this helper closes that gap.
-
-    Recognised `event_key` values map to the existing config.py
-    settings (default True if missing):
-      - "grab"               → notify_on_grab
-      - "download_complete"  → notify_on_download_complete
-      - "pipeline_error"     → notify_on_pipeline_error
-      - "review_queued"      → notify_on_review_queued       (v2.12.0)
-      - "library_ingest"     → notify_on_library_ingest      (v2.12.0)
-      - "buffer_gate_block"  → notify_on_buffer_gate_block   (v2.12.0)
-
-    Settings are mtime-cached in `app.config.load_settings`, so a
-    per-event call is effectively free.
-    """
-    from app.config import load_settings
-    s = load_settings()
-    if not s.get("per_event_notifications", False):
-        return False
-    return bool(s.get(f"notify_on_{event_key}", True))
-
-
 # ─── Convenience senders ────────────────────────────────────
-
-
-async def notify_grab(
-    url: str, topic: str, torrent_name: str, author: str, category: str
-) -> bool:
-    """Notify that a new book was grabbed."""
-    return await send(
-        url=url,
-        topic=topic,
-        title="New book grabbed",
-        message=f"{torrent_name}\nby {author}\n{category}",
-        tags=["books"],
-    )
 
 
 async def notify_buffer_gate_block(
@@ -329,19 +283,6 @@ async def notify_buffer_gate_block(
     )
 
 
-async def notify_download_complete(
-    url: str, topic: str, torrent_name: str, author: str
-) -> bool:
-    """Notify that a download completed."""
-    return await send(
-        url=url,
-        topic=topic,
-        title="Download complete",
-        message=f"{torrent_name}\nby {author}",
-        tags=["white_check_mark"],
-    )
-
-
 async def notify_pipeline_complete(
     url: str, topic: str, torrent_name: str, sink: str
 ) -> bool:
@@ -352,18 +293,4 @@ async def notify_pipeline_complete(
         title=f"Added to {sink}",
         message=torrent_name,
         tags=["books", "white_check_mark"],
-    )
-
-
-async def notify_error(
-    url: str, topic: str, torrent_name: str, error: str
-) -> bool:
-    """Notify of a pipeline error."""
-    return await send(
-        url=url,
-        topic=topic,
-        title="Pipeline error",
-        message=f"{torrent_name}\n{error}",
-        priority=4,
-        tags=["warning"],
     )

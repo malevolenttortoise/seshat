@@ -4,7 +4,7 @@ Unit tests for the pending grabs queue.
 Coverage targets:
   - enqueue: insert + idempotent re-insert with priority change
   - size: empty + non-empty
-  - peek_next vs pop_next: read-only vs destructive
+  - peek_next + take: the budget watcher's drain (peek, check, take)
   - Pop ordering: priority desc first, then queued_at asc (FIFO
     among same-priority entries)
   - remove: explicit cancel
@@ -15,6 +15,14 @@ import asyncio
 from app.database import get_db
 from app.rate_limit import queue
 from tests.rate_limit._helpers import insert_dummy_grab
+
+
+async def _drain_one(db):
+    """What the budget watcher does per pop: peek, then take that grab."""
+    head = await queue.peek_next(db)
+    if head is not None:
+        assert await queue.take(db, head.grab_id)
+    return head
 
 
 class TestEnqueue:
@@ -94,7 +102,7 @@ class TestPopOrdering:
 
             popped = []
             for _ in range(3):
-                q = await queue.pop_next(db)
+                q = await _drain_one(db)
                 assert q is not None
                 popped.append(q.grab_id)
 
@@ -113,11 +121,11 @@ class TestPopOrdering:
             await queue.enqueue(db, new_high_id, priority=10)
 
             # The newer high-priority entry should pop first.
-            first = await queue.pop_next(db)
+            first = await _drain_one(db)
             assert first is not None
             assert first.grab_id == new_high_id
 
-            second = await queue.pop_next(db)
+            second = await _drain_one(db)
             assert second is not None
             assert second.grab_id == old_id
         finally:
@@ -126,7 +134,7 @@ class TestPopOrdering:
     async def test_pop_empty_returns_none(self, temp_db):
         db = await get_db()
         try:
-            assert await queue.pop_next(db) is None
+            assert await _drain_one(db) is None
         finally:
             await db.close()
 
@@ -142,13 +150,14 @@ class TestPopOrdering:
         finally:
             await db.close()
 
-    async def test_pop_removes(self, temp_db):
+    async def test_take_removes(self, temp_db):
         db = await get_db()
         try:
             grab_id = await insert_dummy_grab(db)
             await queue.enqueue(db, grab_id)
 
-            await queue.pop_next(db)
+            assert await queue.take(db, grab_id) is True
+            assert await queue.take(db, grab_id) is False  # already gone
             assert await queue.size(db) == 0
             assert await queue.peek_next(db) is None
         finally:

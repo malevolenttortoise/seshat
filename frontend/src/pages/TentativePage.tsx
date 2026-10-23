@@ -13,7 +13,9 @@
 // tentative approvals, not for the initial capture. Phase 6b work.
 import { useEffect, useState } from "react";
 import { Btn } from "../components/Btn";
+import { CategoryChips } from "../components/CategoryChips";
 import { useVisibleInterval } from "../hooks/useVisibleInterval";
+import { useBulkSelection } from "../hooks/useBulkSelection";
 import { Section } from "../components/Section";
 import { Spin } from "../components/Spin";
 import { api } from "../api";
@@ -37,6 +39,9 @@ interface TentativeItem {
   cover_path: string | null;
   status: string;
   created_at: string;
+  // Every MAM content tag the announce carried (wave 5a); null when
+  // only `category` is known.
+  categories?: string[] | null;
 }
 
 interface TentativeListResponse {
@@ -54,8 +59,9 @@ function DesktopTentativePage() {
   const [items, setItems] = useState<TentativeItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
-  const [selMode, setSelMode] = useState(false);
-  const [sel, setSel] = useState<Set<number>>(new Set());
+  const {
+    selMode, setSelMode, sel, toggle: toggleSel, selectOnly, clear: clearSel,
+  } = useBulkSelection();
   const [bulkBusy, setBulkBusy] = useState(false);
 
   async function refresh() {
@@ -71,21 +77,8 @@ function DesktopTentativePage() {
   useEffect(() => { refresh(); }, []);
   useVisibleInterval(refresh, 30_000);
 
-  function toggleSel(id: number) {
-    setSel(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
   function selectAllVisible() {
-    setSel(new Set((items || []).map(i => i.id)));
-  }
-
-  function clearSel() {
-    setSel(new Set());
+    selectOnly((items || []).map(i => i.id));
   }
 
   async function approve(id: number) {
@@ -442,6 +435,9 @@ function TentativeCard({
           }}
         >
           {item.category && <Field label="Category">{item.category}</Field>}
+          {item.categories && item.categories.length > 0 && (
+            <Field label="Tags"><CategoryChips categories={item.categories} /></Field>
+          )}
           {item.language && <Field label="Language">{item.language}</Field>}
           {item.format && <Field label="Format">{item.format}</Field>}
           <Field label="MAM ID">

@@ -39,6 +39,8 @@ PIPELINE_DOWNLOAD_COMPLETE = "pipeline.download_complete"
 PIPELINE_REVIEW_QUEUED = "pipeline.review_queued"
 PIPELINE_LIBRARY_INGEST = "pipeline.library_ingest"
 PIPELINE_ERROR = "pipeline.error"
+# An ebook dropped into CWA never appeared in Calibre (wave 5a, G121).
+PIPELINE_IMPORT_FAILED = "pipeline.import_failed"
 
 # Discovery events (source scanning, MAM matching).
 DISCOVERY_SCAN_COMPLETE = "discovery.scan_complete"
@@ -46,9 +48,8 @@ DISCOVERY_NEW_BOOKS = "discovery.new_books"
 DISCOVERY_MAM_COMPLETE = "discovery.mam_complete"
 DISCOVERY_PIPELINE_SENT = "discovery.pipeline_sent"
 
-# Sync events (library / cookie maintenance).
+# Sync events (library maintenance).
 SYNC_LIBRARY = "sync.library"
-SYNC_MAM_COOKIE_ROTATED = "sync.mam_cookie_rotated"
 
 # Source-health events (Goodreads canary, metadata-cache worker).
 SOURCE_GOODREADS_CANARY_FAILED = "source.goodreads_canary_failed"
@@ -150,6 +151,16 @@ _REGISTRY_ENTRIES: tuple[EventMeta, ...] = (
         legacy_setting_key="notify_on_pipeline_error",
         legacy_requires_master=True,
     ),
+    EventMeta(
+        name=PIPELINE_IMPORT_FAILED,
+        description=(
+            "An ebook Seshat dropped into Calibre-Web-Automated never "
+            "showed up in Calibre."
+        ),
+        default_priority=4,
+        default_tags=("warning",),
+        suppressible_during_quiet_hours=False,
+    ),
     # ── Discovery ───────────────────────────────────────────
     EventMeta(
         name=DISCOVERY_SCAN_COMPLETE,
@@ -183,18 +194,10 @@ _REGISTRY_ENTRIES: tuple[EventMeta, ...] = (
         legacy_setting_key="ntfy_on_library_sync",
         legacy_default_enabled=False,
     ),
-    EventMeta(
-        name=SYNC_MAM_COOKIE_ROTATED,
-        description="The MAM session cookie was automatically refreshed.",
-        default_priority=2,
-        default_tags=("key",),
-        legacy_setting_key="ntfy_on_mam_cookie_rotated",
-        legacy_default_enabled=False,
-    ),
     # ── Source health ───────────────────────────────────────
     EventMeta(
         name=SOURCE_GOODREADS_CANARY_FAILED,
-        description="The weekly Goodreads canary detected a Cloudflare soft-block.",
+        description="The weekly Goodreads canary was blocked by Goodreads' bot protection (AWS WAF).",
         default_priority=4,
         default_tags=("warning",),
         suppressible_during_quiet_hours=False,

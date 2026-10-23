@@ -55,6 +55,22 @@ _TTL_S = 60.0
 _CACHE: dict[str, tuple[float, "Roster"]] = {}
 
 
+# Allow-list entries grab auto-train added on its own (a co-author of a
+# grabbed book, or the legacy name-only train): they let announces through
+# and link as contributors, but don't make an author worth scanning (D1 /
+# C5, discovery fix pass S5). Everything else was the operator's doing
+# (autobrr import, manual, manual move, tentative approve).
+SCAN_EXCLUDED_SOURCES = ("coauthor_train", "auto_train")
+
+# Why a scan skipped an author (F15: the UI says so).
+SKIP_NOT_ELIGIBLE = "not_scan_eligible"
+SKIP_LIST_MISSING_OFF = "list_missing_off"
+SKIP_MESSAGES = {
+    SKIP_NOT_ELIGIBLE: "not on your allow list and owns nothing; add them to scan",
+    SKIP_LIST_MISSING_OFF: "List missing books is off for this author",
+}
+
+
 @dataclass(frozen=True)
 class Roster:
     """Snapshot of a library's roster. Immutable; rebuilt on TTL expiry."""
@@ -63,6 +79,11 @@ class Roster:
     allowed_names: frozenset[str]
     #: Per-library `authors.id` values owning >=1 book in ANY position.
     owned_author_ids: frozenset[int]
+    #: Allow-list names the operator put there (not grab auto-train): the
+    #: allow-list half of scan eligibility.
+    scan_allowed_names: frozenset[str] = frozenset()
+    #: Authors whose "list missing books" switch is off (D6).
+    listing_off_ids: frozenset[int] = frozenset()
 
     def may_mint(self, name: str) -> bool:
         """True when a source-reported name may CREATE an author row.
@@ -84,13 +105,23 @@ class Roster:
             return True
         return author_id is not None and author_id in self.owned_author_ids
 
-    def is_scan_eligible(self, name: str, author_id: Optional[int]) -> bool:
-        """Alias of `admits` for the scan-eligibility call sites.
+    def scan_skip_reason(self, name: str, author_id: Optional[int]) -> Optional[str]:
+        """Why a source scan may not visit this author, or None (D1 / D6 /
+        F15, ADR-0021 amended): its "list missing books" switch is off, or it
+        neither owns a book here nor was allow-listed by the operator.
+        Narrower than `admits`: an author grab auto-train added as a
+        co-author is still linked on discovered books, but not scanned."""
+        if author_id is not None and author_id in self.listing_off_ids:
+            return SKIP_LIST_MISSING_OFF
+        if author_id is not None and author_id in self.owned_author_ids:
+            return None
+        norm = normalize_author(name or "")
+        if norm and norm in self.scan_allowed_names:
+            return None
+        return SKIP_NOT_ELIGIBLE
 
-        Same predicate by design (ADR-0021: "one predicate, two call sites");
-        named separately so the intent reads correctly at the scan gate.
-        """
-        return self.admits(name, author_id)
+    def is_scan_eligible(self, name: str, author_id: Optional[int]) -> bool:
+        return self.scan_skip_reason(name, author_id) is None
 
     @property
     def is_empty(self) -> bool:
@@ -133,6 +164,7 @@ async def load_roster(
     # Opened read-only (`mode=ro`) so a missing file errors instead of being
     # created.
     allowed: frozenset[str] = frozenset()
+    scan_allowed: frozenset[str] = frozenset()
     try:
         import aiosqlite
         from app import config as _config
@@ -148,6 +180,14 @@ async def load_roster(
         try:
             pdb.row_factory = aiosqlite.Row
             allowed, _ignored = await load_normalized_sets(pdb)
+            ph = ",".join("?" * len(SCAN_EXCLUDED_SOURCES))
+            scan_allowed = frozenset(
+                str(r[0]) for r in await (await pdb.execute(
+                    f"SELECT normalized FROM authors_allowed "
+                    f"WHERE COALESCE(source, '') NOT IN ({ph})",
+                    SCAN_EXCLUDED_SOURCES,
+                )).fetchall() if r[0]
+            )
         finally:
             await pdb.close()
     except FileNotFoundError:
@@ -170,7 +210,17 @@ async def load_roster(
     )).fetchall()
     owned = frozenset(int(r[0]) for r in rows)
 
-    roster = Roster(allowed_names=allowed, owned_author_ids=owned)
+    try:
+        off = frozenset(int(r[0]) for r in await (await db.execute(
+            "SELECT id FROM authors WHERE list_missing = 0"
+        )).fetchall())
+    except Exception:          # a library DB not migrated yet
+        off = frozenset()
+
+    roster = Roster(
+        allowed_names=allowed, owned_author_ids=owned,
+        scan_allowed_names=scan_allowed, listing_off_ids=off,
+    )
     _CACHE[slug] = (now, roster)
     logger.debug(
         "roster[%s]: %d allow-listed names, %d owned author ids",
@@ -179,8 +229,17 @@ async def load_roster(
     return roster
 
 
+async def author_scan_skip_reason(
+    db, author_id: int, name: str, slug: Optional[str] = None,
+) -> Optional[str]:
+    """`Roster.scan_skip_reason` for one author of the library `db` is."""
+    roster = await load_roster(db, slug)
+    return roster.scan_skip_reason(name, author_id)
+
+
 async def scan_eligible_authors(
     db, cutoff: float, slug: Optional[str] = None,
+    *, skips: Optional[list] = None,
 ) -> list:
     """Authors due for a source scan AND in the roster, oldest-first.
 
@@ -199,6 +258,7 @@ async def scan_eligible_authors(
 
     The roster filter is what stops a pre-ADR-0021 install from continuing
     to cascade: junk rows already on disk stay on disk, but go inert.
+    `skips`, when given, collects each skipped author and why (F15).
     """
     roster = await load_roster(db, slug)
     rows = await (await db.execute(
@@ -208,7 +268,13 @@ async def scan_eligible_authors(
         "ORDER BY COALESCE(last_lookup_at,0) ASC",
         (cutoff,),
     )).fetchall()
-    eligible = [r for r in rows if roster.is_scan_eligible(r["name"], r["id"])]
+    eligible = []
+    for r in rows:
+        reason = roster.scan_skip_reason(r["name"], r["id"])
+        if reason is None:
+            eligible.append(r)
+        elif skips is not None:
+            skips.append({"name": r["name"], "reason": reason})
     if len(eligible) != len(rows):
         logger.info(
             "roster: %d of %d due authors are scan-eligible (%d non-roster "

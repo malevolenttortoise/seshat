@@ -32,6 +32,7 @@ from fastapi import APIRouter, Body, HTTPException, Query
 from fastapi.responses import Response
 
 from app.config import load_settings, ui_error
+from app.metadata import source_gate
 from app.discovery.database import get_db, HF
 
 logger = logging.getLogger("seshat.discovery")
@@ -120,27 +121,31 @@ async def _fetch_goodreads_book(book_id: str) -> dict:
     `/search` endpoint that's disallowed for `*` user-agents) so
     this user-initiated paste-URL import path is policy-clean.
 
-    v2.13.0 Stage 6 Phase A: routes through `app.metadata.goodreads_session`
-    so curl_cffi Chrome120 TLS impersonation + uniform soft-block
-    detection + runtime-state flag write all happen here too. Soft-blocks
-    surface as 503 with the existing user-facing message.
+    Routes through `app.metadata.goodreads_session` so curl_cffi
+    Chrome120 TLS impersonation, pacing, block detection and the
+    book-page backoff all happen here too. A block, or book pages backing
+    off, surfaces as 503 with a user-facing message.
     """
     from app.metadata import goodreads_session
 
     session = await goodreads_session.get_session()
-    r = await session.get(f"https://www.goodreads.com/book/show/{book_id}")
-    if goodreads_session.is_cloudflare_soft_block(r):
+    busy = (
+        "Goodreads' bot protection (AWS WAF) is blocking this server's "
+        "book-page requests for now; Seshat backs off and retries by "
+        "itself. Try again later, or paste a Hardcover URL instead."
+    )
+    try:
+        with source_gate.caller(source_gate.CALLER_URL_IMPORT):
+            r = await session.get(f"https://www.goodreads.com/book/show/{book_id}")
+    except goodreads_session.GoodreadsBackingOff as e:
+        raise HTTPException(503, f"{busy} ({ui_error(e)})")
+    if goodreads_session.is_soft_block(r):
         logger.info(
-            "Goodreads paste-URL import: soft-blocked at network layer "
+            "Goodreads paste-URL import: blocked by AWS WAF "
             "(status=%d, empty=%s) for book_id=%s",
             r.status_code, not bool(r.content), book_id,
         )
-        raise HTTPException(
-            503,
-            "Goodreads is currently soft-blocking this server's IP "
-            "(Cloudflare gate). Try again in a few minutes, or paste "
-            "a Hardcover URL instead.",
-        )
+        raise HTTPException(503, busy)
     if r.status_code >= 400:
         raise HTTPException(r.status_code, f"Goodreads returned {r.status_code}")
     soup = BeautifulSoup(r.text, "lxml")
@@ -201,8 +206,11 @@ async def _fetch_hardcover_book(slug: str) -> dict:
         search(query: $q, query_type: "Book", per_page: 10, page: 1) { ids }
     }"""
     async with httpx.AsyncClient(timeout=30, headers=headers) as client:
-        r = await client.post("https://api.hardcover.app/v1/graphql",
-            json={"query": search_query, "variables": {"q": search_term}})
+        with source_gate.caller(source_gate.CALLER_URL_IMPORT):
+            r = await source_gate.request("hardcover", lambda: client.post(
+                "https://api.hardcover.app/v1/graphql",
+                json={"query": search_query, "variables": {"q": search_term}},
+            ))
         r.raise_for_status()
 
     data = r.json()
@@ -224,8 +232,11 @@ async def _fetch_hardcover_book(slug: str) -> dict:
         }
     }}"""
     async with httpx.AsyncClient(timeout=30, headers=headers) as client:
-        r = await client.post("https://api.hardcover.app/v1/graphql",
-            json={"query": detail_query, "variables": {"ids": [int(i) for i in ids_list[:10]]}})
+        with source_gate.caller(source_gate.CALLER_URL_IMPORT):
+            r = await source_gate.request("hardcover", lambda: client.post(
+                "https://api.hardcover.app/v1/graphql",
+                json={"query": detail_query, "variables": {"ids": [int(i) for i in ids_list[:10]]}},
+            ))
         r.raise_for_status()
 
     bdata = r.json()

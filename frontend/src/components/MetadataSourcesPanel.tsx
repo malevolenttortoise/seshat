@@ -18,11 +18,12 @@
 // Everything is buffered client-side until the user clicks Save —
 // PUT /v1/metadata-sources replaces the whole state atomically and
 // rebuilds the dispatcher so changes apply live without a restart.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Btn } from "./Btn";
 import { Spin } from "./Spin";
 import { api } from "../api";
 import { useTheme } from "../theme";
+import { useMetadataCacheStatus } from "../hooks/useMetadataCacheStatus";
 
 interface SourceEntry {
   rate_limit: number;
@@ -48,6 +49,12 @@ interface SourceEntry {
   // Effective request rate is ~concurrency/rate_limit. Null for
   // every other source.
   concurrency?: number | null;
+  // 2026-10 audit wave 4b — Goodreads-specific. `book_page_gap`: seconds
+  // between two book-page requests on top of the Rate (G89);
+  // `include_nonfiction`: let non-fiction into discovery (G96 / G98).
+  // Null for every other source.
+  book_page_gap?: number | null;
+  include_nonfiction?: boolean | null;
 }
 
 // Amazon Author-Store format options (matches FILTER_TO_BINDING in
@@ -245,7 +252,7 @@ export function MetadataSourcesPanel() {
           <strong style={{ color: t.text2 }}>Scan</strong> — sources run during library-side author scanning to find books you don't have yet.
         </div>
         <div>
-          <strong style={{ color: t.text2 }}>Rate (s)</strong> — seconds to wait between requests to this source. Higher = gentler on the upstream, slower scans. Leave at default if unsure.
+          <strong style={{ color: t.text2 }}>Rate (s)</strong> — the minimum gap between any two requests to this source, from anything in Seshat (scans, the cache workers, enrichment). Higher = gentler on the upstream, slower scans. Leave at default if unsure.
         </div>
         <div style={{ marginTop: 6, color: t.textDim }}>
           Priority is top-to-bottom; drag rows to reorder. MAM is always first and free — its row is locked.
@@ -257,9 +264,9 @@ export function MetadataSourcesPanel() {
 
       {/* v2.13.0 migration prompt — existing users whose saved
           goodreads rate is still on the pre-v2.13.0 default (2.0s)
-          should consider bumping to the new 5.0s default for the
-          Phase-A Cloudflare bypass. One-click bump avoids forcing
-          them through the full "Reset to defaults" workflow. */}
+          should consider bumping to the new 5.0s default. One-click
+          bump avoids forcing them through the full "Reset to
+          defaults" workflow. */}
       {draft.sources.goodreads && Number(draft.sources.goodreads.rate_limit ?? 5) < 5 && (
         <div style={{
           background: t.accent + "18",
@@ -270,8 +277,9 @@ export function MetadataSourcesPanel() {
         }}>
           <span style={{ flex: 1 }}>
             <b>v2.13.0:</b> Goodreads's default rate limit is now <b>5.0s</b>{" "}
-            (was 2.0s). The slower pace lets the new Cloudflare bypass run
-            cleanly under burst load. Your current setting is{" "}
+            (was 2.0s). Goodreads' bot protection (AWS WAF) scores request
+            density, so the slower pace keeps scans from being blocked. Your
+            current setting is{" "}
             <b>{draft.sources.goodreads.rate_limit}s</b>.
           </span>
           <Btn
@@ -696,7 +704,7 @@ function SourceDetailPane({
           }}
         />
         <span style={{ fontSize: 11, color: t.textDim, fontStyle: "italic" }}>
-          Seconds to wait between requests. Higher = gentler upstream.
+          Minimum gap between any two requests to this source, from any part of Seshat.
         </span>
       </div>
 
@@ -760,6 +768,8 @@ function SourceDetailPane({
         })}
       </div>
 
+      {!locked && <SourceTrafficCard sourceName={sourceName} display={meta.display} />}
+
       {/* Source-specific sub-sections */}
       {sourceName === "amazon" && (
         <>
@@ -779,6 +789,10 @@ function SourceDetailPane({
       )}
       {sourceName === "goodreads" && (
         <>
+          <GoodreadsExtrasRow
+            entry={entry}
+            onChange={(key, value) => setToggle(key, value)}
+          />
           <GoodreadsStatusCard />
           {/* v3.4.0 slice 06 — list-page cache worker card; mirrors
               the Amazon Phase-I layout via the same parameterized
@@ -919,11 +933,9 @@ function AmazonExtrasRow({
 // `metadata_sources.kobo.concurrency` and flows through reload_sources
 // to the live KoboSource singleton.
 //
-// Effective request rate = ~concurrency/rate_limit. At ship-defaults
-// (4 / 3.0 = 1.33 req/s) Kobo stays below the Cloudflare-fronted
-// soft-block threshold. Raising concurrency without also raising
-// rate_limit will trigger soft-blocks — call out the multiplication
-// in the help text so power users don't shoot themselves in the foot.
+// Since the 2026-10 audit (G71/G72) every Kobo request waits Kobo's
+// turn in the source gate, so the request rate is one per Rate seconds
+// whatever the concurrency; concurrency only overlaps the parsing.
 
 function KoboExtrasRow({
   entry, onChange,
@@ -934,7 +946,7 @@ function KoboExtrasRow({
   const t = useTheme();
   const concurrency = entry.concurrency ?? 4;
   const rateLimit = entry.rate_limit ?? 3.0;
-  const effectiveRate = rateLimit > 0 ? concurrency / rateLimit : 0;
+  const effectiveRate = rateLimit > 0 ? 1 / rateLimit : 0;
   return (
     <div style={{
       display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap",
@@ -959,10 +971,72 @@ function KoboExtrasRow({
       </label>
       <span
         style={{ color: t.textDim, fontSize: 11, fontStyle: "italic" }}
-        title="Raising concurrency without raising Rate triggers Cloudflare soft-blocks."
+        title="Every Kobo request waits the Rate above since the last one, whatever the concurrency."
       >
-        Effective rate ≈ {effectiveRate.toFixed(2)} req/s ({concurrency} workers ÷ {rateLimit}s each).
+        Effective rate ≈ {effectiveRate.toFixed(2)} req/s (one request every {rateLimit}s; concurrency doesn't raise it).
       </span>
+    </div>
+  );
+}
+
+
+// ─── Goodreads-specific sub-row (2026-10 audit wave 4b) ──────────
+//
+// The book-page gap (G89): AWS WAF blocks a cluster of Goodreads book
+// pages from one IP, so pages wait their own gap on top of the Rate,
+// whoever asks (the candidate worker, enrichment, a live scan). And the
+// non-fiction option (G96 / G98), off by default.
+
+function GoodreadsExtrasRow({
+  entry, onChange,
+}: {
+  entry: SourceEntry;
+  onChange: (key: keyof SourceEntry, value: number | boolean) => void;
+}) {
+  const t = useTheme();
+  const gap = entry.book_page_gap ?? 400;
+  return (
+    <div style={{
+      display: "flex", flexDirection: "column", gap: 6,
+      padding: "2px 0", fontSize: 12,
+    }}>
+      <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ color: t.textDim, fontWeight: 600 }}>Book-page gap</span>
+          <input
+            type="number"
+            min={0}
+            max={3600}
+            step={10}
+            value={gap}
+            onChange={e => onChange("book_page_gap", Math.max(0, parseFloat(e.target.value) || 0))}
+            style={{
+              width: 70, padding: "4px 8px", textAlign: "center",
+              borderRadius: 6,
+              border: `1px solid ${t.border}`, background: t.inp,
+              color: t.text2, fontSize: 12, outline: "none",
+            }}
+          />
+          <span style={{ color: t.textDim }}>s</span>
+        </label>
+        <span style={{ color: t.textDim, fontSize: 11, fontStyle: "italic" }}>
+          Book pages wait this long after the last one, on top of the Rate: Goodreads blocks a run of book pages from one address.
+        </span>
+      </div>
+      <label style={{ display: "flex", alignItems: "flex-start", gap: 8, cursor: "pointer" }}>
+        <input
+          type="checkbox"
+          checked={!!entry.include_nonfiction}
+          onChange={e => onChange("include_nonfiction", e.target.checked)}
+          style={{ marginTop: 2 }}
+        />
+        <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          <span style={{ color: t.text2, fontWeight: 600 }}>Include non-fiction from Goodreads</span>
+          <span style={{ color: t.textDim, fontSize: 11 }}>
+            Off: books Goodreads files under Nonfiction, Self Help, Sports, Puzzles, Cookbooks, Reference or Picture Books aren't added to discovery. Turn on if you collect non-fiction.
+          </span>
+        </span>
+      </label>
     </div>
   );
 }
@@ -971,21 +1045,39 @@ function KoboExtrasRow({
 // ─── Goodreads status + probe panel (v2.13.0 Stage 6 Phase A) ───
 //
 // Renders directly below the Goodreads row in both tabs. Provides:
-//   - Status pill: Active / Soft-blocked / Unknown
-//   - Run probe button — single GET to /book/show/237832459
+//   - Status pill: Active / Backing off / Unknown
+//   - Per request kind (book pages / list pages / autocomplete): its
+//     backoff after an AWS WAF block (2026-10 audit G66) — "backing off
+//     until hh:mm", ending by itself or on the next success
+//   - Run probe button — single GET to a book page (always goes out)
 //   - Run burst button — 10 GETs against the canonical pool
-//   - Mark as active — manual flag reset after investigation
+//   - Mark as active — end every backoff now
 //
-// Phase A: NO cookie input fields. The probe is the diagnostic for
-// "is the Chrome120 fingerprint alone enough?" — if Phase A UAT
-// shows 202s under burst, v2.13.1 adds the encrypted cookie panel
-// here.
+// No cookie fields: pasting browser cookies was rejected (ADR-0025).
+
+type GoodreadsBackoff = {
+  level: number;
+  until: number;
+  last_block_at: number | null;
+  backing_off: boolean;
+};
 
 type GoodreadsState = {
   state: "active" | "soft_blocked" | "unknown";
   since: number | null;
   last_status: number | null;
+  backoff?: Record<string, GoodreadsBackoff>;
 };
+
+const GOODREADS_KIND_LABELS: Array<[string, string]> = [
+  ["book_page", "Book pages"],
+  ["list_page", "List pages"],
+  ["autocomplete", "Autocomplete"],
+];
+
+function _clock(epochS: number): string {
+  return new Date(epochS * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+}
 
 type ProbeRequestResult = {
   goodreads_id: string;
@@ -1061,7 +1153,7 @@ function GoodreadsStatusCard() {
     state?.state === "soft_blocked" ? t.err : t.textDim;
   const pillLabel =
     state?.state === "active" ? "Active" :
-    state?.state === "soft_blocked" ? "Soft-blocked" : "Unknown";
+    state?.state === "soft_blocked" ? "Backing off" : "Unknown";
   const sinceText = state?.since
     ? new Date(state.since * 1000).toLocaleString()
     : null;
@@ -1093,6 +1185,37 @@ function GoodreadsStatusCard() {
         )}
       </div>
 
+      {/* Per request kind: each backs off on its own after a block. */}
+      {state?.backoff && (
+        <div style={{
+          display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "4px 12px",
+          background: t.bg3, border: `1px solid ${t.borderL}`,
+          borderRadius: 6, padding: "6px 10px",
+        }}>
+          {GOODREADS_KIND_LABELS.map(([kind, label]) => {
+            const b = state.backoff?.[kind];
+            const off = Boolean(b?.backing_off);
+            return (
+              <div key={kind} style={{ display: "flex", flexDirection: "column", gap: 1 }}
+                title={b?.last_block_at ? `Last blocked ${new Date(b.last_block_at * 1000).toLocaleString()}` : undefined}>
+                <span style={{
+                  color: t.textDim, fontSize: 10, fontWeight: 700,
+                  textTransform: "uppercase", letterSpacing: 0.4,
+                }}>{label}</span>
+                <span style={{ color: off ? t.err : t.ok, fontSize: 12, fontWeight: 600 }}>
+                  {off ? `Backing off until ${_clock(b!.until)}` : "OK"}
+                </span>
+                {off && (b?.level ?? 0) > 1 && (
+                  <span style={{ color: t.textDim, fontSize: 10 }}>
+                    {b!.level} blocks in a row
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {/* Action buttons */}
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
         <Btn
@@ -1114,7 +1237,7 @@ function GoodreadsStatusCard() {
         )}
         {running === "burst" && (
           <span style={{ color: t.textDim, fontSize: 11, fontStyle: "italic" }}>
-            ~50s with default 5s rate-limit
+            about 10 × the Rate above
           </span>
         )}
       </div>
@@ -1169,12 +1292,12 @@ function GoodreadsStatusCard() {
 
       {/* Help text */}
       <div style={{ color: t.textDim, fontSize: 11, fontStyle: "italic", lineHeight: 1.4 }}>
-        Phase A bypass: curl_cffi Chrome120 TLS impersonation. Run probe
-        for a quick connectivity check; run burst to verify density holds
-        under realistic scan load. Soft-block during the burst means
-        Cloudflare is rejecting on request density — try raising the rate
-        limit above (8s+ is conservative) or wait a few hours for the
-        bot-score to decay, then re-test.
+        Goodreads sits behind AWS WAF bot protection, which turns away book
+        pages far sooner than list pages. After a block, that kind of request
+        backs off for 2 minutes, then 5, 10, 30 and 60 on repeated blocks,
+        and clears on the next success; the others carry on. Run probe for a
+        quick check (it goes out even while book pages back off); run burst
+        to see how density holds. Mark as active ends every backoff now.
       </div>
     </div>
   );
@@ -1214,6 +1337,8 @@ type CacheQueueStats = {
   // v2.22.0 — split-pending fields for the "Queue" tile.
   due_now?: number;
   scheduled_later?: number;
+  refreshed_today?: number;
+  daily_cap?: number;
 };
 
 type CacheStats = {
@@ -1244,6 +1369,22 @@ type CacheSchedule = {
 
 type CacheMode = "continuous" | "scheduled" | "disabled";
 
+// Goodreads candidate worker progress (2026-10 audit wave 4b, S4).
+type GoodreadsCandidates = {
+  first_fill: { candidates: number; decided: number; authors: number; authors_left: number };
+  weekly: { candidates: number; decided: number };
+  pending: number;
+  awaiting_page: number;
+  accepted_waiting_merge: number;
+  created: number;
+  rejected: number;
+  rejected_by_reason: Record<string, number>;
+  tracked_authors: number;
+  last: { title: string; state: string; author_id: string } | null;
+  book_page_next_at: number | null;
+  phase2: { enabled: boolean; fetched: number; left: number; gone: number; failed: number };
+};
+
 type CacheStatusResponse = {
   source: string;
   enabled: boolean;
@@ -1255,6 +1396,7 @@ type CacheStatusResponse = {
   worker: CacheWorkerStatus;
   queue: CacheQueueStats;
   cache: CacheStats;
+  candidates?: GoodreadsCandidates | null;
 };
 
 type CacheSettingsResponse = {
@@ -1263,6 +1405,7 @@ type CacheSettingsResponse = {
   enabled: boolean;
   mode: CacheMode;
   schedule: CacheSchedule;
+  phase2_enabled?: boolean | null;
 };
 
 type ResetCooldownResponse = {
@@ -1297,8 +1440,7 @@ function _formatCooldown(s: number): string {
 // tile + no cooldown UI (no IP-level penalty box, ADR-0018 §1).
 function CacheStatusCard({ sourceKey }: { sourceKey: "amazon" | "goodreads" }) {
   const t = useTheme();
-  const [status, setStatus] = useState<CacheStatusResponse | null>(null);
-  const [busy, setBusy] = useState<null | "mode" | "schedule" | "reset">(null);
+  const [busy, setBusy] = useState<null | "mode" | "schedule" | "reset" | "phase2">(null);
   const [err, setErr] = useState<string>("");
   // Local-edit buffer for the active-hours field — committed via the
   // Save button rather than every keystroke so we don't ping the
@@ -1311,43 +1453,27 @@ function CacheStatusCard({ sourceKey }: { sourceKey: "amazon" | "goodreads" }) {
 
   const isGr = sourceKey === "goodreads";
   const sourceLabel = isGr ? "Goodreads" : "Amazon";
-  const statusUrl = `/v1/metadata-cache/${sourceKey}/status`;
   const settingsUrl = `/v1/metadata-cache/${sourceKey}/settings`;
   const resetCooldownUrl = `/v1/metadata-cache/${sourceKey}/reset-cooldown`;
 
-  // Poll every 30s while mounted. Heartbeat-staleness checks rely on
-  // a recent reading; faster polling burns CPU for no real-world
-  // benefit (worker iterations are ≥30s by design).
-  useEffect(() => {
-    let cancelled = false;
-    let timer: ReturnType<typeof setInterval> | null = null;
-    const fetchStatus = async () => {
-      try {
-        const r = await api.get<CacheStatusResponse>(statusUrl);
-        if (cancelled) return;
-        setStatus(r);
-        // Seed the local edit buffer on first load — and on every
-        // subsequent poll where the user hasn't started editing
-        // (dirty flag stays false until they touch an input). This
-        // way a remote change (e.g. via PATCH from another tab)
-        // surfaces in the inputs.
-        setPendingHours((prev) =>
-          scheduleDirty ? prev : r.schedule.active_hours,
-        );
-        setPendingTz((prev) => (scheduleDirty ? prev : r.schedule.timezone));
-      } catch (e) {
-        if (!cancelled && !api.isAbort(e)) {
-          setErr(e instanceof Error ? e.message : "Status fetch failed");
-        }
-      }
-    };
-    fetchStatus();
-    timer = setInterval(fetchStatus, 30_000);
-    return () => {
-      cancelled = true;
-      if (timer) clearInterval(timer);
-    };
-  }, [scheduleDirty, statusUrl]);
+  // Poll every 30s while mounted, through the shared poller (the navbar
+  // icon and the Dashboard rail read the same requests). Heartbeat-
+  // staleness checks rely on a recent reading; faster polling burns CPU
+  // for no real-world benefit (worker iterations are ≥30s by design).
+  const scheduleDirtyRef = useRef(scheduleDirty);
+  scheduleDirtyRef.current = scheduleDirty;
+  const { status, setStatus, refresh } = useMetadataCacheStatus<CacheStatusResponse>(sourceKey, {
+    paceMs: 30_000,
+    // Seed the local edit buffer on the first status — and on every
+    // later one while the user hasn't started editing (dirty stays false
+    // until they touch an input). This way a remote change (e.g. via
+    // PATCH from another tab) surfaces in the inputs.
+    onData: (r) => {
+      setPendingHours((prev) => (scheduleDirtyRef.current ? prev : r.schedule.active_hours));
+      setPendingTz((prev) => (scheduleDirtyRef.current ? prev : r.schedule.timezone));
+    },
+    onError: (message) => setErr(message),
+  });
 
   async function setMode(nextMode: CacheMode) {
     if (status === null || nextMode === status.mode) return;
@@ -1388,9 +1514,31 @@ function CacheStatusCard({ sourceKey }: { sourceKey: "amazon" | "goodreads" }) {
       );
       setStatus({ ...status, schedule: r.schedule });
       setScheduleDirty(false);
+      // Re-read it so the inputs show the schedule as the server stored it.
+      void refresh();
     } catch (e) {
       // Backend returns 400 with detail on invalid spec — surface it.
       setErr(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function setPhase2(on: boolean) {
+    if (status === null || !status.candidates) return;
+    setBusy("phase2");
+    setErr("");
+    try {
+      const r = await api.patch<CacheSettingsResponse>(settingsUrl, { phase2_enabled: on });
+      setStatus({
+        ...status,
+        candidates: {
+          ...status.candidates,
+          phase2: { ...status.candidates.phase2, enabled: !!r.phase2_enabled },
+        },
+      });
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Phase 2 update failed");
     } finally {
       setBusy(null);
     }
@@ -1402,8 +1550,7 @@ function CacheStatusCard({ sourceKey }: { sourceKey: "amazon" | "goodreads" }) {
     try {
       await api.post<ResetCooldownResponse>(resetCooldownUrl);
       // Force-refresh status so the cooldown banner clears.
-      const r = await api.get<CacheStatusResponse>(statusUrl);
-      setStatus(r);
+      await refresh();
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Reset failed");
     } finally {
@@ -1571,6 +1718,9 @@ function CacheStatusCard({ sourceKey }: { sourceKey: "amazon" | "goodreads" }) {
         <StatTile
           label="Scans today"
           value={status.worker.today_scan_count.toLocaleString()}
+          hint={status.queue.daily_cap
+            ? `${(status.queue.refreshed_today ?? 0).toLocaleString()} authors attempted since midnight; routine refreshes stop at ${status.queue.daily_cap.toLocaleString()} a day (new authors skip the cap)`
+            : undefined}
         />
         <StatTile
           label="Blocks today"
@@ -1658,6 +1808,15 @@ function CacheStatusCard({ sourceKey }: { sourceKey: "amazon" | "goodreads" }) {
         </div>
       )}
 
+      {isGr && status.candidates && (
+        <GoodreadsCandidatesBlock
+          c={status.candidates}
+          busy={busy === "phase2"}
+          disabled={busy !== null}
+          onPhase2={setPhase2}
+        />
+      )}
+
       {/* Cooldown banner + reset button — Amazon only. GR has no
           IP-level penalty box (no Akamai layer; soft-blocks defer
           per-queue-row via the lighter 300s cooldown — ADR-0018 §1).
@@ -1687,6 +1846,273 @@ function CacheStatusCard({ sourceKey }: { sourceKey: "amazon" | "goodreads" }) {
         }}>
           {err}
         </div>
+      )}
+    </div>
+  );
+}
+
+
+// ─── Goodreads candidate worker (2026-10 audit wave 4b, S4) ──────
+//
+// Books Goodreads lists that discovery doesn't have, for authors a scan
+// has covered: each gets an autocomplete check and its book page before
+// it's created. The first fill covers authors listing up to 100 books;
+// later list refreshes add any author's new books. Phase 2 (off unless
+// switched on) fetches every cached list entry's page.
+
+const CANDIDATE_STATE_LABELS: Record<string, string> = {
+  pending: "waiting for a check", awaiting_page: "waiting for its page",
+  accepted: "accepted", created: "created", rejected: "rejected",
+};
+
+function GoodreadsCandidatesBlock({
+  c, busy, disabled, onPhase2,
+}: {
+  c: GoodreadsCandidates;
+  busy: boolean;
+  disabled: boolean;
+  onPhase2: (on: boolean) => void;
+}) {
+  const t = useTheme();
+  const reasons = Object.entries(c.rejected_by_reason)
+    .slice(0, 6).map(([r, n]) => `${r} ${n}`).join(", ");
+  const nextPage = c.book_page_next_at
+    ? new Date(c.book_page_next_at * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : "now";
+  return (
+    <div style={{
+      display: "flex", flexDirection: "column", gap: 6,
+      background: t.bg3, border: `1px solid ${t.borderL}`,
+      borderRadius: 6, padding: "6px 10px",
+    }}>
+      <span style={{
+        fontSize: 11, color: t.textDim, fontWeight: 700,
+        textTransform: "uppercase", letterSpacing: 0.5,
+      }}>Candidate worker</span>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "4px 12px" }}>
+        <StatTile
+          label="First fill"
+          value={`${c.first_fill.decided.toLocaleString()} / ${c.first_fill.candidates.toLocaleString()}`}
+          hint={`${c.first_fill.authors_left.toLocaleString()} of ${c.first_fill.authors.toLocaleString()} authors left (authors listing up to 100 books)`}
+        />
+        <StatTile
+          label="New on lists"
+          value={`${c.weekly.decided.toLocaleString()} / ${c.weekly.candidates.toLocaleString()}`}
+          hint="books added to an author's Goodreads list since it was first checked"
+        />
+        <StatTile
+          label="Waiting"
+          value={`${c.pending.toLocaleString()} · ${c.awaiting_page.toLocaleString()}`}
+          hint={`${c.pending} waiting for an autocomplete check, ${c.awaiting_page} for their book page${c.accepted_waiting_merge ? `, ${c.accepted_waiting_merge} accepted and waiting for a scan to finish` : ""}`}
+        />
+        <StatTile
+          label="Next book page"
+          value={nextPage}
+          hint="book pages wait the book-page gap after the last one"
+        />
+        <StatTile
+          label="Created"
+          value={c.created.toLocaleString()}
+        />
+        <StatTile
+          label="Rejected"
+          value={c.rejected.toLocaleString()}
+          hint={reasons || undefined}
+        />
+        <StatTile
+          label="Last checked"
+          value={c.last ? (c.last.title || "—") : "—"}
+          hint={c.last ? CANDIDATE_STATE_LABELS[c.last.state] ?? c.last.state : undefined}
+        />
+        <StatTile
+          label="Authors"
+          value={c.tracked_authors.toLocaleString()}
+          hint="authors a scan has covered, with a cached Goodreads list"
+        />
+      </div>
+      <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, cursor: disabled ? "default" : "pointer" }}>
+        <input
+          type="checkbox"
+          checked={c.phase2.enabled}
+          disabled={disabled}
+          onChange={e => onPhase2(e.target.checked)}
+        />
+        <span style={{ color: t.text2, fontWeight: 600 }}>Phase 2: fetch every listed book's page</span>
+        {busy && <Spin />}
+        <span style={{ color: t.textDim, fontSize: 11 }}>
+          {c.phase2.fetched.toLocaleString()} fetched, {c.phase2.left.toLocaleString()} left
+          {c.phase2.gone ? `, ${c.phase2.gone.toLocaleString()} gone` : ""}
+          {c.phase2.failed ? `, ${c.phase2.failed.toLocaleString()} failed` : ""}
+          {" "}— runs only when no candidate is waiting
+        </span>
+      </label>
+    </div>
+  );
+}
+
+
+// ─── Source traffic (2026-10 audit, issue 15) ────────────────────
+//
+// What every request to this source came back with, whoever sent it
+// (scan, cache worker, enrichment, resolver, backfill, probe, URL
+// import): today by caller, and the daily totals for the last 7 days.
+// Goodreads' rows split by request kind. Counts are written once a
+// minute; the endpoint writes the pending ones before answering.
+
+interface TrafficCounts {
+  requests: number; ok: number; blocks: number; errors: number;
+  timeouts: number; created: number; updated: number; capped: number;
+}
+interface TrafficRow extends TrafficCounts { caller: string; kind: string }
+interface TrafficDay extends TrafficCounts { day: string }
+interface TrafficSource {
+  today: TrafficCounts;
+  today_rows: TrafficRow[];
+  daily: TrafficDay[];
+}
+interface TrafficResponse {
+  today: string;
+  days: string[];
+  sources: Record<string, TrafficSource>;
+}
+
+const CALLER_LABELS: Record<string, string> = {
+  scan: "Scans", worker: "Cache worker", enrichment: "Enrichment",
+  resolver: "ID resolver", backfill: "Author-ID backfill",
+  probe: "Probe / canary", url_import: "URL import", other: "Other",
+};
+const KIND_LABELS: Record<string, string> = {
+  book_page: "book pages", list_page: "list pages",
+  autocomplete: "autocomplete", other: "other pages",
+};
+
+function _dayLabel(day: string, today: string): string {
+  if (day === today) return "Today";
+  const d = new Date(`${day}T12:00:00`);
+  return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+}
+
+function SourceTrafficCard({ sourceName, display }: { sourceName: string; display: string }) {
+  const t = useTheme();
+  const [data, setData] = useState<TrafficResponse | null>(null);
+  const [err, setErr] = useState<string>("");
+
+  useEffect(() => {
+    let cancelled = false;
+    const fetchTraffic = async () => {
+      try {
+        const r = await api.get<TrafficResponse>("/v1/metadata-sources/traffic?days=8");
+        if (!cancelled) { setData(r); setErr(""); }
+      } catch (e) {
+        if (!cancelled && !api.isAbort(e)) {
+          setErr(e instanceof Error ? e.message : "Traffic fetch failed");
+        }
+      }
+    };
+    fetchTraffic();
+    const timer = setInterval(fetchTraffic, 60_000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [sourceName]);
+
+  const src = data?.sources[sourceName];
+  const cell = { padding: "3px 8px", textAlign: "right" as const, fontVariantNumeric: "tabular-nums" as const };
+  const head = {
+    ...cell, color: t.textDim, fontSize: 10, fontWeight: 700,
+    textTransform: "uppercase" as const, letterSpacing: 0.4,
+  };
+  const num = (n: number, tone?: "warn" | "err") => (
+    <td style={{ ...cell, color: n > 0 && tone ? (tone === "err" ? t.err : t.warn) : t.text2 }}>
+      {n > 0 ? n.toLocaleString() : "·"}
+    </td>
+  );
+  const outcomeCells = (c: TrafficCounts) => (
+    <>
+      {num(c.requests)}{num(c.ok)}{num(c.blocks, "err")}{num(c.errors, "warn")}{num(c.timeouts, "warn")}
+    </>
+  );
+  const outcomeHeads = (
+    <>
+      <th style={head}>Requests</th><th style={head}>OK</th><th style={head}>Blocked</th>
+      <th style={head}>Errors</th><th style={head}>Timeouts</th>
+    </>
+  );
+  const table = {
+    width: "100%", borderCollapse: "collapse" as const, fontSize: 12,
+    background: t.bg3, border: `1px solid ${t.borderL}`, borderRadius: 6,
+  };
+  const label = { ...cell, textAlign: "left" as const, color: t.text };
+  const rows = (src?.today_rows ?? []).filter(r => r.requests > 0);
+  const scanBooks = src?.today ?? null;
+
+  return (
+    <div style={{
+      display: "flex", flexDirection: "column", gap: 8,
+      padding: "10px 4px 12px 0",
+      borderTop: `1px solid ${t.borderL}`, marginTop: 4, fontSize: 12,
+    }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+        <span style={{ color: t.textDim, fontWeight: 600 }}>{display} traffic</span>
+        <span style={{ color: t.textDim, fontSize: 11 }}>
+          every request Seshat sent, by who sent it
+        </span>
+      </div>
+      {err && <span style={{ color: t.err }}>{err}</span>}
+      {!data && !err && <span style={{ color: t.textDim }}>Loading…</span>}
+      {data && (
+        <>
+          {rows.length === 0 ? (
+            <span style={{ color: t.textDim }}>No requests to {display} yet today.</span>
+          ) : (
+            <table style={table}>
+              <thead>
+                <tr><th style={{ ...head, textAlign: "left" }}>Today</th>{outcomeHeads}</tr>
+              </thead>
+              <tbody>
+                {rows.map(r => (
+                  <tr key={`${r.caller}/${r.kind}`}>
+                    <td style={label}>
+                      {CALLER_LABELS[r.caller] ?? r.caller}
+                      {r.kind && <span style={{ color: t.textDim }}> · {KIND_LABELS[r.kind] ?? r.kind}</span>}
+                    </td>
+                    {outcomeCells(r)}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {scanBooks && (scanBooks.created + scanBooks.updated + scanBooks.capped) > 0 && (
+            <span style={{ color: t.textDim }}>
+              Scans today: <b style={{ color: t.text2 }}>{scanBooks.created}</b> new,{" "}
+              <b style={{ color: t.text2 }}>{scanBooks.updated}</b> updated
+              {scanBooks.capped > 0 && (
+                <>, hit the time cap <b style={{ color: t.warn }}>{scanBooks.capped}</b>×</>
+              )}
+            </span>
+          )}
+          <table style={table}>
+            <thead>
+              <tr>
+                <th style={{ ...head, textAlign: "left" }}>Last 7 days</th>{outcomeHeads}
+                <th style={head}>New</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.days.map(day => {
+                const d = src?.daily.find(x => x.day === day);
+                const c: TrafficCounts = d ?? {
+                  requests: 0, ok: 0, blocks: 0, errors: 0, timeouts: 0,
+                  created: 0, updated: 0, capped: 0,
+                };
+                return (
+                  <tr key={day}>
+                    <td style={label}>{_dayLabel(day, data.today)}</td>
+                    {outcomeCells(c)}{num(c.created)}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </>
       )}
     </div>
   );

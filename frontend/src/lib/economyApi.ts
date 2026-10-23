@@ -24,7 +24,6 @@ export interface EconomyConfig {
   mam_economy_buffer_gate_enabled: boolean;
   mam_economy_buffer_gate_safety_margin_gb: number;
   mam_economy_manual_wedge_offer_enabled: boolean;
-  mam_economy_fl_wedge_offer_enabled: boolean;
   mam_economy_intro_dismissed: boolean;
   mam_economy_dry_run: boolean;
   // Read-only timestamps.

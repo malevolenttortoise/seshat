@@ -271,6 +271,64 @@ class TestSearchAuthorEndToEnd:
         assert series_names == {"The Dresden Files", "Codex Alera"}
         await src.close()
 
+    @staticmethod
+    def _one_book(title: str, *series: tuple[str, object]) -> dict:
+        return {
+            "SearchAuthor": {"search": {"ids": [42], "results": ""}},
+            "AuthorBooks": {"authors": [{
+                "id": 42, "name": "Test Author", "books_count": 1,
+                "contributions": [{"book": {
+                    "id": 1001, "title": title, "slug": "b",
+                    "contributions": [{"author": {"id": 42, "name": "Test Author"}}],
+                    "book_series": [
+                        {"position": pos, "series": {"id": i, "name": name}}
+                        for i, (name, pos) in enumerate(series)
+                    ],
+                    "editions": [{"language": {"code3": "eng"}}],
+                }}],
+            }]},
+        }
+
+    async def test_book_number_prefix_becomes_the_position(self):
+        """F9: "Book 06.0 - Blood Rites" listed every owned Dresden Files
+        novel a second time."""
+        src = _make_source()
+        _patch_query(src, self._one_book("Book 06.0 - Blood Rites", ("The Dresden Files", None)))
+
+        result = await src.search_author("Test Author")
+
+        (series,) = result.series
+        (book,) = series.books
+        assert (book.title, book.series_index) == ("Blood Rites", 6.0)
+        await src.close()
+
+    async def test_a_reading_order_series_is_never_picked(self):
+        """F9: "Enderverse: Publication Order" scored up (+10 for a colon)
+        over the real series."""
+        src = _make_source()
+        _patch_query(src, self._one_book(
+            "Shadow Puppets",
+            ("Enderverse: Publication Order", 7), ("The Shadow Saga", 3),
+        ))
+
+        result = await src.search_author("Test Author")
+
+        (series,) = result.series
+        assert (series.name, series.books[0].series_index) == ("The Shadow Saga", 3)
+        await src.close()
+
+    async def test_only_a_reading_order_series_comes_in_standalone(self):
+        src = _make_source()
+        _patch_query(src, self._one_book(
+            "Chain of Gold", ("The Shadowhunter Chronicles: Publication Order", 17),
+        ))
+
+        result = await src.search_author("Test Author")
+
+        assert result.series == []
+        assert [b.title for b in result.books] == ["Chain of Gold"]
+        await src.close()
+
     async def test_empty_title_book_skipped(self):
         """v2.11.0 — Hardcover occasionally returns book records with
         null/empty `title` (data-quality misses in their catalog).

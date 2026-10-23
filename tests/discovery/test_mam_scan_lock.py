@@ -235,6 +235,18 @@ class TestTheClaimEnds:
         assert r.status_code == 404
         assert state._mam_scan_claim is None
 
+    async def test_an_unknown_library_slug_is_404_and_opens_no_db(
+        self, temp_db, library, mam_scans, tmp_path,
+    ):
+        # The slug was passed to get_db unchecked: an empty seshat_nope.db
+        # appeared in DATA_DIR before the author lookup 404'd (CodeQL #69).
+        for slug in ("nope", "..%2Fescape"):
+            r = await _post(f"/api/discovery/mam/scan-author/{library['author_id']}?slug={slug}")
+            assert r.status_code == 404
+            assert "not found" in r.json()["detail"]
+            assert state._mam_scan_claim is None
+        assert not (tmp_path / "seshat_nope.db").exists()
+
     async def test_released_after_a_single_book_scan(self, temp_db, library, mam_scans):
         r = await _post(f"/api/discovery/mam/scan-book/{library['book_ids'][0]}?slug=ebooks")
         assert r.json()["status"] == "not_found"

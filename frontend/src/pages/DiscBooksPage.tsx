@@ -6,10 +6,10 @@
 // shared search/sort/grouping/view-mode controls, the BookSidebar
 // drawer for inspecting a single book, and the bulk-select bar for
 // running scans against a chosen subset.
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTheme } from "../theme";
 import type { Theme } from "../theme";
-import { api, slugQuery } from "../api";
+import { api } from "../api";
 import { usePersist } from "../hooks/usePersist";
 import { Btn } from "../components/Btn";
 import { Load } from "../components/Load";
@@ -23,13 +23,15 @@ import { ClearMenu } from "../components/ClearMenu";
 import { toast } from "../lib/toast";
 import { ExportModal } from "../components/ExportModal";
 import { useViewport } from "../hooks/useViewport";
+import { useBookSidebar } from "../hooks/useBookSidebar";
+import { useMamEnabled } from "../hooks/useMamEnabled";
+import { useBooksList, type HiddenTab } from "../hooks/useBooksList";
+import { REASON_GROUPS, SHORT_UNDER_PAGES } from "../lib/bookFilters";
 import { useMobileCodepath } from "../components/mobile";
 import MobileBooksPage from "./MobileBooksPage";
 import type {
   Book,
   BookAction,
-  BooksResponse,
-  MamStatusResponse,
 } from "../types";
 
 interface BooksPageProps {
@@ -96,30 +98,29 @@ function DesktopBooksPage({
   showOwnedFilter = false,
 }: BooksPageProps) {
   const t = useTheme();
-  const [bks, setBks] = useState<Book[]>([]);
-  const [total, setTotal] = useState(0);
-  const [pg, setPg] = useState(1);
-  const [ld, setLd] = useState(true);
-  const [q, setQ] = usePersist<string>(`bp_${title}_q`, "");
   const [vm, setVm] = usePersist<ViewMode>(`bp_${title}_vm`, "grid");
   const [grp, setGrp] = usePersist<string>(`bp_${title}_grp`, "all");
-  const [sort, setSort] = usePersist<string>(`bp_${title}_sort`, "title");
   // v2.11.1 N3: sort direction is a separate state. Persisted alongside
   // the sort field so toggling between fields keeps the user's chosen
   // direction. Defaults asc; the chevron toggle below flips it.
   const [sortDir, setSortDir] = usePersist<string>(`bp_${title}_sort_dir`, "asc");
-  const [fmt, setFmt] = usePersist<string>(`bp_${title}_fmt`, "all");
-  const [sb, setSb] = useState<Book | null>(null);
-  const [sbClosing, setSbClosing] = useState(false);
+  const isGrouped = grp !== "all";
+  // The list, its filters and actions (shared with the phone page);
+  // grouping fetches everything and sorts by the group.
+  const {
+    bks, total, totalPages, pg, setPg, ld, load, onAction: onBookAction,
+    q, setQ, sort, setSort, fmt, setFmt, mamFilter, setMamFilter, ownedFilter, setOwnedFilter,
+    hiddenTabs, hiddenTab, setHiddenTab, reasonGroup, setReasonGroup, hiddenCounts,
+    showShortFilter, hideShort, setHideShort,
+  } = useBooksList({
+    title, apiPath, extraParams, showFormatTabs, showOwnedFilter, sortDir,
+    sortOverride: grp === "author" ? "author" : grp === "series" ? "series" : undefined,
+    perPage: isGrouped ? 5000 : 60,
+  });
+  const { sb, sbClosing, closeSb, openSb, toggleSb } = useBookSidebar();
   const [allCollapsed, setAllCollapsed] = useState(false);
   const [showExp, setShowExp] = useState(false);
-  const [mamFilter, setMamFilter] = usePersist<string>(`bp_${title}_mam`, "");
-  // v2.3.4.3: owned filter for the Hidden page. "all" → no
-  // owned param; "owned" / "discovered" → owned=true / false.
-  const [ownedFilter, setOwnedFilter] = usePersist<string>(
-    `bp_${title}_owned`, "all",
-  );
-  const [mamOn, setMamOn] = useState(false);
+  const mamOn = useMamEnabled();
   const [selMode, setSelMode] = useState(false);
   const [sel, setSel] = useState<Set<number>>(new Set());
   // v2.4.x: live MAM scan progress for the in-page banner. Polled
@@ -150,71 +151,7 @@ function DesktopBooksPage({
   // wiping cross-page selections — click on each page to accumulate.
   const selectAllVisible = () =>
     setSel((p) => new Set([...p, ...bks.map((b) => b.id)]));
-  const closeSb = () => {
-    if (!sb) return;
-    setSbClosing(true);
-    setTimeout(() => {
-      setSb(null);
-      setSbClosing(false);
-    }, 200);
-  };
-  const toggleSb = (b: Book) => {
-    if (sb && sb.id === b.id) closeSb();
-    else {
-      setSbClosing(false);
-      setSb(b);
-    }
-  };
 
-  const isGrouped = grp !== "all";
-  const perPage = isGrouped ? 5000 : 60;
-  const sortParam =
-    grp === "author" ? "author" : grp === "series" ? "series" : sort;
-
-  const load = useCallback(
-    (page: number = 1, signal?: AbortSignal) => {
-      setLd(true);
-      const init: Record<string, string> = {
-        search: q,
-        sort: sortParam,
-        sort_dir: sortDir,
-        per_page: String(perPage),
-        page: String(page),
-      };
-      for (const [k, v] of Object.entries(extraParams)) init[k] = String(v);
-      const p = new URLSearchParams(init);
-      if (mamFilter) p.set("mam_status", mamFilter);
-      if (showFormatTabs) p.set("content_type", fmt);
-      if (showOwnedFilter && ownedFilter === "owned") p.set("owned", "true");
-      else if (showOwnedFilter && ownedFilter === "discovered") p.set("owned", "false");
-      return api
-        .get<BooksResponse>(`${apiPath}?${p}`, signal)
-        .then((d) => {
-          setBks(d.books);
-          setTotal(d.total ?? d.books.length);
-          setPg(page);
-          setLd(false);
-        })
-        .catch((e) => {
-          if (!api.isAbort(e)) setLd(false);
-        });
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [q, sortParam, sortDir, apiPath, grp, mamFilter, fmt, showFormatTabs, showOwnedFilter, ownedFilter, perPage],
-  );
-
-  useEffect(() => {
-    const c = new AbortController();
-    load(1, c.signal);
-    return () => c.abort();
-  }, [load]);
-
-  useEffect(() => {
-    api
-      .get<MamStatusResponse>("/discovery/mam/status")
-      .then((r) => setMamOn(!!r.enabled))
-      .catch(() => {});
-  }, []);
 
   // v2.15.1 — listen for `seshat:focus` events with kind=book from
   // the global navbar search. When a user clicks a book result in
@@ -232,8 +169,7 @@ function DesktopBooksPage({
       api
         .get<Book>(`/discovery/books/${detail.book_id}${qs}`)
         .then((book) => {
-          setSbClosing(false);
-          setSb(book);
+          openSb(book);
         })
         .catch(() => { /* book not reachable — silently skip */ });
     }
@@ -280,15 +216,10 @@ function DesktopBooksPage({
     };
   }, [load, pg]);
 
-  const totalPages = Math.max(1, Math.ceil(total / perPage));
 
   const onAction = async (act: BookAction, id: number, slug?: string) => {
     const scrollY = window.scrollY;
-    if (act === "hide") await api.post(`/discovery/books/${id}/hide${slugQuery(slug)}`);
-    if (act === "unhide") await api.post(`/discovery/books/${id}/unhide${slugQuery(slug)}`);
-    if (act === "dismiss") await api.post(`/discovery/books/${id}/dismiss${slugQuery(slug)}`);
-    if (act === "delete") await api.del(`/discovery/books/${id}${slugQuery(slug)}`);
-    await load(pg);
+    await onBookAction(act, id, slug);
     setTimeout(() => window.scrollTo(0, scrollY), 100);
   };
 
@@ -600,6 +531,21 @@ function DesktopBooksPage({
             }}
           />
         ) : null}
+        {hiddenTabs ? (
+          <HiddenTabs
+            tab={hiddenTab}
+            counts={hiddenCounts}
+            onTab={(v) => {
+              setHiddenTab(v);
+              setPg(1);
+            }}
+            group={reasonGroup}
+            onGroup={(v) => {
+              setReasonGroup(v);
+              setPg(1);
+            }}
+          />
+        ) : null}
         {showOwnedFilter ? (
           <OwnedFilterTabs
             value={ownedFilter}
@@ -722,6 +668,26 @@ function DesktopBooksPage({
                 <option value="not_applicable">MAM: N/A</option>
                 <option value="unscanned">MAM: Unscanned</option>
               </select>
+            ) : null}
+            {showShortFilter ? (
+              <button
+                onClick={() => {
+                  setHideShort(!hideShort);
+                  setPg(1);
+                }}
+                title={`Leave out books under ${SHORT_UNDER_PAGES} pages (books with no page count stay)`}
+                style={{
+                  padding: "6px 10px",
+                  borderRadius: 6,
+                  border: `1px solid ${hideShort ? t.abr : t.border}`,
+                  background: hideShort ? t.accent + "22" : t.inp,
+                  color: hideShort ? t.accent : t.text2,
+                  fontSize: 12,
+                  cursor: "pointer",
+                }}
+              >
+                {hideShort ? "✓ Hide short" : "Hide short"}
+              </button>
             ) : null}
             <select
               value={grp}
@@ -1040,6 +1006,86 @@ function FormatTabs({
           <span>{tab.label}</span>
         </button>
       ))}
+    </div>
+  );
+}
+
+// ─── Hidden tabs (Hidden by you / Filtered + reason chips) ──
+// F19: the books you hid, and the books Seshat hid with the reason it
+// hid them. "Unhide" on a filtered book is for good: later scans and the
+// filter settings leave it listed.
+function HiddenTabs({
+  tab,
+  counts,
+  onTab,
+  group,
+  onGroup,
+}: {
+  tab: HiddenTab;
+  counts: { mine: number; filtered: number; byGroup: Record<string, number> };
+  onTab: (v: HiddenTab) => void;
+  group: string;
+  onGroup: (v: string) => void;
+}) {
+  const t = useTheme();
+  const tabs: { id: HiddenTab; label: string; n: number }[] = [
+    { id: "mine", label: "Hidden by you", n: counts.mine },
+    { id: "filtered", label: "Filtered", n: counts.filtered },
+  ];
+  const chip = (id: string, label: string, n: number) => (
+    <button
+      key={id || "all"}
+      onClick={() => onGroup(id)}
+      style={{
+        background: group === id ? t.abg : t.bg2,
+        color: group === id ? t.accent : t.text2,
+        border: `1px solid ${group === id ? t.abr : t.borderL}`,
+        borderRadius: 12,
+        padding: "2px 10px",
+        fontSize: 12,
+        fontWeight: group === id ? 600 : 500,
+        cursor: "pointer",
+      }}
+    >
+      {label} <span style={{ color: t.tg }}>{n.toLocaleString()}</span>
+    </button>
+  );
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 8 }}>
+      <div style={{ display: "flex", gap: 4 }}>
+        {tabs.map((x) => (
+          <button
+            key={x.id}
+            onClick={() => onTab(x.id)}
+            style={{
+              background: tab === x.id ? t.abg : "transparent",
+              color: tab === x.id ? t.accent : t.tm,
+              border: `1px solid ${tab === x.id ? t.abr : "transparent"}`,
+              borderRadius: 6,
+              padding: "4px 12px",
+              fontSize: 13,
+              fontWeight: tab === x.id ? 600 : 500,
+              cursor: "pointer",
+            }}
+          >
+            {x.label} <span style={{ color: t.tg }}>{x.n.toLocaleString()}</span>
+          </button>
+        ))}
+      </div>
+      {tab === "filtered" ? (
+        <>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {chip("", "All", counts.filtered)}
+            {REASON_GROUPS.filter((g) => counts.byGroup[g.id] > 0 || g.id === group).map((g) =>
+              chip(g.id, g.label, counts.byGroup[g.id] ?? 0),
+            )}
+          </div>
+          <div style={{ fontSize: 12, color: t.tg }}>
+            Books Seshat keeps hidden, with the reason. Unhide one and it stays listed: later scans and
+            the filter settings leave it alone.
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }

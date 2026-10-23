@@ -17,9 +17,11 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 import aiosqlite
+
+from app.storage.grabs import categories_json, parse_categories
 
 _log = logging.getLogger("seshat.storage.tentative")
 
@@ -53,6 +55,9 @@ class TentativeRow:
     status: str
     created_at: str
     decided_at: Optional[str]
+    # Every MAM content tag the announce carried (wave 5a, G124); None
+    # when only `category` is known.
+    categories: Optional[list[str]] = None
 
 
 async def upsert_tentative(
@@ -67,6 +72,7 @@ async def upsert_tentative(
     vip: bool = False,
     scraped_metadata: Optional[dict] = None,
     cover_path: Optional[str] = None,
+    categories: Sequence[str] = (),
 ) -> int:
     """Insert a tentative torrent row, or return the existing id.
 
@@ -91,13 +97,14 @@ async def upsert_tentative(
         """
         INSERT INTO tentative_torrents
             (mam_torrent_id, torrent_name, author_blob, category,
-             language, format, vip, scraped_metadata_json, cover_path, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             language, format, vip, scraped_metadata_json, cover_path, status,
+             categories_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             mam_torrent_id, torrent_name, author_blob, category,
             language, format, 1 if vip else 0, meta_json, cover_path,
-            TENTATIVE_PENDING,
+            TENTATIVE_PENDING, categories_json(categories),
         ),
     )
     await db.commit()
@@ -178,6 +185,9 @@ def _row_to_tentative(row) -> TentativeRow:
         status=str(row["status"] or ""),
         created_at=str(row["created_at"] or ""),
         decided_at=row["decided_at"],
+        categories=parse_categories(
+            row["categories_json"] if "categories_json" in row.keys() else None
+        ),
     )
 
 

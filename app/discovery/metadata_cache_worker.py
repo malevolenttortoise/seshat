@@ -43,9 +43,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import random
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Optional
 
@@ -53,9 +54,12 @@ import aiosqlite
 
 from app import config as app_config
 from app import state
+from app.metadata import source_gate
 from app.discovery import metadata_cache
 from app.discovery.amazon_author_id_resolver import (
+    KIND_STORE,
     amazon_block_remaining_s,
+    every_kind_blocked,
     is_amazon_blocked,
 )
 from app.config import ui_error
@@ -251,6 +255,19 @@ _COOLDOWN_MAX_SLEEP_S = 3600.0
 # recent author. ~7 days matches the plan's "normal cadence" tier.
 _NORMAL_RESCAN_CADENCE_S = 7 * 24 * 3600.0
 
+# Refresh spread (2026-10 audit wave 4, A-B / G70). Authors scanned
+# together came due together: every 7 days each worker re-swept its
+# whole queue in one burst (Amazon: 335 + 354 authors on 2026-10-06/07,
+# ending in Akamai blocks; both queues due again 10-13/14). Two parts:
+#   - each reschedule lands 7 days out ± up to a day at random, so a
+#     clump spreads a little more every cycle instead of repeating;
+#   - routine refreshes stop for the day once the queue's daily cap
+#     (rows ÷ 7 × 1.25, rounded up) have been attempted since local
+#     midnight; authors the worker has never attempted (new to the
+#     queue, e.g. a scan's cache miss) skip the cap.
+_REFRESH_SPREAD_S = 24 * 3600.0
+_DAILY_CAP_HEADROOM = 1.25
+
 # Cooldown escalation tiers (seconds). Applied when the worker
 # observes consecutive soft-blocks within a 1h window. Index 0 is
 # the first block, index 1 the second, etc. Past the last index the
@@ -313,6 +330,9 @@ class TickResult:
       - "ok_empty"         — scan succeeded but returned no books
       - "cooldown"         — skipped, cooldown engaged
       - "queue_empty"      — no work to do this tick
+      - "daily_cap"        — today's routine refreshes are used up and
+                             no never-attempted author is due (refresh
+                             spread, G70)
       - "disabled"         — operator set mode=disabled
       - "outside_schedule" — mode=scheduled but the current time is
                              outside the configured active-hours
@@ -545,57 +565,7 @@ def _seconds_until_next_window_open(source_name: str) -> float:
     return float(delta)
 
 
-def _library_content_type(library_slug: str) -> str:
-    """Map a library slug to its `content_type` (`"ebook"` /
-    `"audiobook"`). Reads from `state._discovered_libraries`; falls
-    back to `"ebook"` for unknown slugs so the worker keeps moving
-    instead of crashing on a stale queue row."""
-    for lib in state._discovered_libraries:
-        if lib.get("slug") == library_slug:
-            return lib.get("content_type") or "ebook"
-    return "ebook"
-
-
-def _amazon_filters_for_content_type(content_type: str) -> tuple[str, str]:
-    """Pick (format_filter, language) for an Amazon scan based on
-    the library's content_type. Reads settings on every call so a
-    panel change applies to the next worker iteration."""
-    s = app_config.load_settings()
-    amz = (s.get("metadata_sources") or {}).get("amazon") or {}
-    language = amz.get("language") or "English"
-    if content_type == "audiobook":
-        fmt = amz.get("audiobook_format") or "audible_audiobook"
-    else:
-        fmt = amz.get("format") or "kindle"
-    return fmt, language
-
-
 # ─── Worker-state row helpers ──────────────────────────────────
-
-
-async def _read_worker_state(
-    db: aiosqlite.Connection, source_name: str,
-) -> dict[str, Any]:
-    """Read the singleton worker_state row. Always exists (Phase B's
-    init seeds it with id=1 + default columns)."""
-    table = metadata_cache.worker_state_table(source_name)
-    cur = await db.execute(f"SELECT * FROM {table} WHERE id = 1")
-    row = await cur.fetchone()
-    if row is None:
-        # Defensive — Phase B init seeds the row. Re-seed silently.
-        await db.execute(f"INSERT OR IGNORE INTO {table} (id) VALUES (1)")
-        await db.commit()
-        return {
-            "id": 1,
-            "last_block_at": 0.0,
-            "block_cooldown_s": 600.0,
-            "consecutive_blocks": 0,
-            "last_heartbeat_at": None,
-            "last_scan_completed_at": None,
-            "today_scan_count": 0,
-            "today_block_count": 0,
-        }
-    return dict(row)
 
 
 async def _stamp_heartbeat(
@@ -934,6 +904,24 @@ async def send_daily_summary(
     )
 
 
+def worker_heartbeat(source_name: str, stored: Optional[float]) -> Optional[float]:
+    """The worker's last sign of life: its stamped heartbeat (once a tick),
+    the start of its last request through the source gate (G193), or now
+    while it waits at the gate for its turn (G207), whichever is later. A
+    tick that waits its turn for every request of a big author is alive;
+    "stalled" is no request and no wait at all. A wait counts only for as
+    long as a working gate can make it last; past that it's stuck."""
+    live = source_gate.last_request_at(source_name, source_gate.CALLER_WORKER)
+    seen = [float(v) for v in (stored, live) if v is not None]
+    since = source_gate.waiting_since(source_name, source_gate.CALLER_WORKER)
+    if since is not None:
+        seen.append(min(
+            time.time(),
+            since + source_gate.longest_healthy_wait_seconds(source_name),
+        ))
+    return max(seen) if seen else None
+
+
 async def check_stall(
     source_name: str = metadata_cache.SOURCE_AMAZON,
     *,
@@ -958,8 +946,12 @@ async def check_stall(
         threshold_s = float(
             s.get("metadata_cache_stall_threshold_s", 300)
         )
+        # One tick can wait on the source gate for many turns: an Amazon
+        # author scan under a 100s gate took 858s (trial item (g): 68 false
+        # "stalled" warnings). At least 12 of the source's gaps.
+        threshold_s = max(threshold_s, 12.0 * source_gate.gap_seconds(source_name))
     snapshot = await _read_state_for_summary(source_name)
-    heartbeat = snapshot["last_heartbeat_at"]
+    heartbeat = worker_heartbeat(source_name, snapshot["last_heartbeat_at"])
     if heartbeat is None:
         # Worker enabled but has never ticked. That's a stall.
         age_s = float("inf")
@@ -995,13 +987,13 @@ async def check_stall(
         )
     age_repr = f"{age_s:.0f}s" if age_s != float("inf") else "never"
     logger.warning(
-        "metadata_cache_worker: stall detected — last heartbeat %s ago "
-        "(threshold %.0fs)",
-        age_repr, threshold_s,
+        "metadata_cache_worker[%s]: stall detected — no heartbeat or request "
+        "for %s (threshold %.0fs)",
+        source_name, age_repr, threshold_s,
     )
     await _send_ntfy(
         event_key="metadata_cache_error",
-        title="Amazon worker — stalled",
+        title=f"{source_name.title()} worker — stalled",
         message=(
             f"No heartbeat for {age_repr}. Worker may have crashed "
             "or be stuck in a long-running call. Check container "
@@ -1083,6 +1075,59 @@ def _pick_escalation_cooldown(consecutive_blocks: int) -> float:
 # ─── Queue helpers ─────────────────────────────────────────────
 
 
+# G183: an Amazon author whose refreshes keep finding nothing new is
+# refreshed less often: 7, then 14, then 28 days.
+_MAX_QUIET_STEPS = 2
+
+
+def _next_refresh_due(now: float, quiet_refreshes: int = 0) -> float:
+    """When an author scanned now is next due: 7 days ± up to a day,
+    doubled for each refresh in a row that found nothing new (up to 28
+    days, G183)."""
+    steps = max(0, min(int(quiet_refreshes or 0), _MAX_QUIET_STEPS))
+    return now + _NORMAL_RESCAN_CADENCE_S * (2 ** steps) + random.uniform(
+        -_REFRESH_SPREAD_S, _REFRESH_SPREAD_S,
+    )
+
+
+def _local_day_start(source_name: str, now: float) -> float:
+    """Epoch seconds of the local midnight starting `now`'s day, in the
+    worker's schedule timezone (system local when unset or invalid)."""
+    tz_name = ((_source_settings(source_name).get("schedule") or {})
+               .get("timezone") or "")
+    tz = None
+    if tz_name:
+        try:
+            from zoneinfo import ZoneInfo
+            tz = ZoneInfo(tz_name)
+        except Exception:
+            tz = None
+    dt = datetime.fromtimestamp(now, tz)
+    return dt.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+
+
+async def refresh_cap_state(
+    db: aiosqlite.Connection, source_name: str, now: float,
+) -> tuple[int, int]:
+    """(authors attempted since local midnight, today's routine cap)."""
+    queue = metadata_cache.queue_table(source_name)
+    cur = await db.execute(
+        f"SELECT COUNT(*) FROM {queue} WHERE status != 'failed_permanent'"
+    )
+    total = int((await cur.fetchone())[0] or 0)
+    cap = max(1, math.ceil(total / 7 * _DAILY_CAP_HEADROOM))
+    cur = await db.execute(
+        f"SELECT COUNT(*) FROM {queue} WHERE last_attempt_at >= ?",
+        (_local_day_start(source_name, now),),
+    )
+    attempted = int((await cur.fetchone())[0] or 0)
+    return attempted, cap
+
+
+# Day each source last logged reaching its cap (one line a day).
+_cap_logged_day: dict[str, float] = {}
+
+
 async def _pop_next_queue_row(
     db: aiosqlite.Connection, source_name: str, now: float,
 ) -> Optional[dict[str, Any]]:
@@ -1090,22 +1135,51 @@ async def _pop_next_queue_row(
     `next_scan_due_at <= now` and mark it `status='in_progress'` +
     stamp `last_attempt_at`.
 
+    Once today's refresh cap is used up, only authors the worker has
+    never attempted can be popped (refresh spread, G70); returns
+    `{"capped": True}` when the cap holds back a due author and no new
+    one is waiting.
+
     Schema-v2: queue PK is `author_id` only. Worker reads per-library
     rows from the discovery DBs at scan time to partition results.
     """
     queue = metadata_cache.queue_table(source_name)
     await db.execute("BEGIN IMMEDIATE")
     try:
+        attempted, cap = await refresh_cap_state(db, source_name, now)
+        capped = attempted >= cap
         cur = await db.execute(
             f"SELECT author_id, priority, status, next_scan_due_at, "
-            f"last_attempt_at, consecutive_failures, enqueued_reason "
-            f"FROM {queue} "
+            f"last_attempt_at, consecutive_failures, enqueued_reason"
+            + (", quiet_refreshes " if source_name == metadata_cache.SOURCE_AMAZON else " ")
+            + f"FROM {queue} "
             f"WHERE status = 'pending' AND next_scan_due_at <= ? "
-            f"ORDER BY priority DESC, next_scan_due_at ASC "
+            + ("AND last_attempt_at IS NULL " if capped else "")
+            + f"ORDER BY priority DESC, next_scan_due_at ASC "
             f"LIMIT 1",
             (now,),
         )
         row = await cur.fetchone()
+        held_back = 0
+        if row is None and capped:
+            cur = await db.execute(
+                f"SELECT COUNT(*) FROM {queue} "
+                f"WHERE status = 'pending' AND next_scan_due_at <= ?",
+                (now,),
+            )
+            held_back = int((await cur.fetchone())[0] or 0)
+        if held_back:
+            await db.execute("COMMIT")
+            day = _local_day_start(source_name, now)
+            if _cap_logged_day.get(source_name) != day:
+                _cap_logged_day[source_name] = day
+                logger.info(
+                    "metadata_cache_worker: %s reached today's refresh cap "
+                    "(%d of %d authors); %d due author(s) wait for tomorrow, "
+                    "new authors still go",
+                    source_name, attempted, cap, held_back,
+                )
+            return {"capped": True}
         if row is None:
             await db.execute("COMMIT")
             return None
@@ -1124,6 +1198,7 @@ async def _pop_next_queue_row(
             "last_attempt_at": now,
             "consecutive_failures": row[5],
             "enqueued_reason": row[6],
+            "quiet_refreshes": row[7] if len(row) > 7 else 0,
         }
     except Exception:
         await db.execute("ROLLBACK")
@@ -1135,10 +1210,17 @@ async def _mark_queue_row_pending(
     author_id: str,
     next_scan_due_at: float,
     reset_failures: bool = True,
+    quiet_refreshes: Optional[int] = None,
 ) -> None:
     """Return a popped row to the pending state with a forward due-time.
-    Used after a successful scan or a soft-block deferral."""
+    Used after a successful scan or a soft-block deferral. A scan that
+    read the author's books passes `quiet_refreshes` (G183)."""
     queue = metadata_cache.queue_table(source_name)
+    if quiet_refreshes is not None:
+        await db.execute(
+            f"UPDATE {queue} SET quiet_refreshes = ? WHERE author_id = ?",
+            (quiet_refreshes, author_id),
+        )
     if reset_failures:
         await db.execute(
             f"UPDATE {queue} SET status = 'pending', "
@@ -1560,7 +1642,9 @@ async def _run_warmup(session: Any) -> None:
     /stores/author hit. Research-supported humanizer; failures are
     non-fatal — we proceed even if the warmup didn't complete."""
     try:
-        resp = await session.get(_WARMUP_URL, timeout=15.0)
+        resp = await source_gate.request(
+            "amazon", lambda: session.get(_WARMUP_URL, timeout=15.0),
+        )
         status = getattr(resp, "status_code", None)
         logger.debug(
             "metadata_cache_worker: warmup %s → %s",
@@ -1625,9 +1709,9 @@ async def _perform_goodreads_scan(
     """v3.4.0 slice 03 — Goodreads list-only scan for the cache
     worker (ADR-0018 §1).
 
-    Builds a one-shot `GoodreadsSource` (NO curl_cffi, NO warmup —
-    GR has no Akamai layer; the existing httpx-based GR session is
-    sufficient) and calls `list_page_inventory(author_id)`.
+    Builds a one-shot `GoodreadsSource` (no warmup; its requests go
+    through the shared Goodreads session) and calls
+    `list_page_inventory(author_id)`.
 
     Returns `(pages_dict, error_msg, is_soft_block, is_hard_404)`:
       - `(pages, None, False, False)` on success — pages is
@@ -1651,10 +1735,15 @@ async def _perform_goodreads_scan(
     gr_cfg = (s.get("metadata_sources") or {}).get("goodreads") or {}
     rate_limit = float(gr_cfg.get("rate_limit", 5.0))
     source = GoodreadsSource(rate_limit=rate_limit)
+    from app.metadata.goodreads_session import GoodreadsBackingOff
     try:
         pages = await source.list_page_inventory(author_id)
     except GoodreadsAuthorNotFound as exc:
         return None, str(exc), False, True
+    except GoodreadsBackingOff as exc:
+        # Refused without sending: list pages are backing off. A
+        # soft-block deferral, never a failure toward failed_permanent.
+        return None, str(exc), True, False
     except Exception as exc:
         logger.exception(
             "metadata_cache_worker: goodreads list-page scan raised "
@@ -1711,6 +1800,7 @@ async def recover_stuck_in_progress(source_name: str) -> int:
 # ─── Tick ──────────────────────────────────────────────────────
 
 
+@source_gate.as_caller(source_gate.CALLER_WORKER)
 async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
     """One worker iteration. Never raises — every error path returns
     a TickResult with `outcome=...` so `run_loop` can decide the next
@@ -1782,9 +1872,11 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
 
     # Cooldown gate — shared with the resolver / live AmazonSource. If
     # `record_amazon_soft_block` was triggered by anything in this
-    # process (or persisted across restart in v2.20.3), we honor it.
-    if is_amazon_blocked():
-        remaining = amazon_block_remaining_s()
+    # process (or persisted across restart in v2.20.3), we honor it —
+    # for the store pages the worker reads (G181: a search / product
+    # page 429 in enrichment doesn't stop it).
+    if is_amazon_blocked(KIND_STORE):
+        remaining = amazon_block_remaining_s(KIND_STORE)
         sleep_s = min(remaining + 1.0, _COOLDOWN_MAX_SLEEP_S)
         return TickResult(
             source_name=source_name, outcome="cooldown",
@@ -1798,6 +1890,11 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
             return TickResult(
                 source_name=source_name, outcome="queue_empty",
                 queue_size=0, next_sleep_s=_IDLE_SLEEP_S,
+            )
+        if queue_row.get("capped"):
+            return TickResult(
+                source_name=source_name, outcome="daily_cap",
+                next_sleep_s=_IDLE_SLEEP_S,
             )
         queue_size = await _count_pending_queue_rows(db, source_name)
     finally:
@@ -1818,7 +1915,7 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
             await _mark_queue_row_pending(
                 db, source_name,
                 author_id=author_id,
-                next_scan_due_at=now + _NORMAL_RESCAN_CADENCE_S,
+                next_scan_due_at=_next_refresh_due(now),
                 reset_failures=True,
             )
         finally:
@@ -1868,8 +1965,11 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
 
     # The scan may have tripped the IP-level penalty box via
     # `record_amazon_soft_block`; treat that as a soft-block outcome.
-    if is_amazon_blocked():
-        cooldown_s = amazon_block_remaining_s()
+    # Escalation extends the cooldown the scan tripped: the store pages'
+    # (a 429), or every kind's (a bot page) — G181.
+    if is_amazon_blocked(KIND_STORE):
+        cooldown_s = amazon_block_remaining_s(KIND_STORE)
+        escalate_kind = None if every_kind_blocked() else KIND_STORE
         mode = get_worker_mode(source_name)
         # Filled inside the transaction so the post-commit logging /
         # ntfy / return can branch on whether the breaker tripped.
@@ -1893,6 +1993,7 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
                     f"worker escalation (block #{consecutive} within "
                     f"{_ESCALATION_RESET_WINDOW_S:.0f}s)",
                     retry_after_s=escalated_s,
+                    kind=escalate_kind,
                 )
                 cooldown_s = escalated_s
 
@@ -2016,7 +2117,7 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
             new_count, became_permanent = await _mark_queue_row_failure(
                 db, source_name,
                 author_id=author_id,
-                next_scan_due_at=now + _NORMAL_RESCAN_CADENCE_S,
+                next_scan_due_at=_next_refresh_due(now),
             )
             # Record a per-library state row for each library so the
             # reader knows we tried. Cache reader keeps returning
@@ -2108,6 +2209,15 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
         )
         prior_asins = set()
 
+    # G183: a refresh that found no book the cache didn't have steps the
+    # next one out (14, then 28 days); finding one, or a first scan,
+    # brings it back to 7.
+    scanned_asins = {row[2] for _lib, rows in per_library_rows for row in rows}
+    found_new = not prior_asins or bool(scanned_asins - prior_asins)
+    quiet_refreshes = 0 if found_new else min(
+        int(queue_row.get("quiet_refreshes") or 0) + 1, _MAX_QUIET_STEPS,
+    )
+
     # Single try/except for the whole multi-library cache-write so any
     # failure mid-fan-out cleanly unwinds via the failure path.
     try:
@@ -2128,8 +2238,9 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
             await _mark_queue_row_pending(
                 db, source_name,
                 author_id=author_id,
-                next_scan_due_at=now + _NORMAL_RESCAN_CADENCE_S,
+                next_scan_due_at=_next_refresh_due(now, quiet_refreshes),
                 reset_failures=True,
+                quiet_refreshes=quiet_refreshes,
             )
             await _record_scan_completed(db, source_name, now)
             # A successful scan = the IP recovered. Disarm the circuit
@@ -2150,7 +2261,7 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
                 await _mark_queue_row_failure(
                     db, source_name,
                     author_id=author_id,
-                    next_scan_due_at=now + _NORMAL_RESCAN_CADENCE_S,
+                    next_scan_due_at=_next_refresh_due(now),
                 )
             finally:
                 await db.close()
@@ -2221,6 +2332,7 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
             author=author_id, outcome=outcome,
             books=total_cache_rows, new=new_count,
             libraries=len(libraries), elapsed_ms=elapsed_ms,
+            next_days=7 * 2 ** quiet_refreshes,
         ),
         per_lib_summary,
     )
@@ -2261,7 +2373,54 @@ async def tick(source_name: str = metadata_cache.SOURCE_AMAZON) -> TickResult:
 # intentionally from Amazon's 600s/1800s/3600s tier).
 _GR_SOFT_BLOCK_COOLDOWN_S = 300.0
 
+# Seed authors with Goodreads candidates at most this often (S4).
+_GR_CANDIDATE_SEED_EVERY_S = 300.0
+_gr_candidates_seeded_at = 0.0
 
+
+async def _seed_goodreads_candidates(now: float) -> None:
+    global _gr_candidates_seeded_at
+    if now - _gr_candidates_seeded_at < _GR_CANDIDATE_SEED_EVERY_S:
+        return
+    _gr_candidates_seeded_at = now
+    try:
+        from app.discovery import goodreads_candidates
+        await goodreads_candidates.seed_new_authors(now=now)
+        await goodreads_candidates.widen_first_fill(now=now)
+    except Exception:
+        logger.exception(
+            "metadata_cache_worker[goodreads]: candidate seeding failed (non-fatal)"
+        )
+
+
+async def _goodreads_candidate_tick(idle: "TickResult") -> "TickResult":
+    """One step of the Goodreads candidate worker (2026-10 audit wave 4b,
+    S4, ADR-0026) when no list page is due. `idle` is what the tick
+    returns when there's no candidate work either."""
+    from app.discovery import goodreads_candidates
+    res = await goodreads_candidates.step()
+    if res.outcome == "idle":
+        if res.retry_in_s > 0:
+            # Candidate work waits for the book-page gap or a backoff.
+            idle = replace(
+                idle, next_sleep_s=min(idle.next_sleep_s, max(1.0, res.retry_in_s)),
+            )
+        return idle
+    if res.detail:
+        _scan_logger(metadata_cache.SOURCE_GOODREADS).info(
+            "[candidate] %s", _format_fields(step=res.outcome, detail=res.detail),
+        )
+    return TickResult(
+        source_name=metadata_cache.SOURCE_GOODREADS,
+        outcome=f"candidate_{res.outcome}",
+        # The source gate paces the requests. A book-page block no longer
+        # sleeps the loop through its backoff (G108, trial item (a)): list
+        # pages and autocomplete carry on; the next candidate step waits.
+        next_sleep_s=1.0,
+    )
+
+
+@source_gate.as_caller(source_gate.CALLER_WORKER)
 async def tick_goodreads() -> TickResult:
     """v3.4.0 slice 03 — Goodreads cache worker tick (ADR-0018).
 
@@ -2316,17 +2475,62 @@ async def tick_goodreads() -> TickResult:
             next_sleep_s=sleep_s,
         )
 
+    # Authors a scan has covered get their Goodreads candidates (2026-10
+    # audit wave 4b, S4); a few at a time, at most every few minutes.
+    await _seed_goodreads_candidates(now)
+
+    # List pages backing off after an AWS WAF block (G66): wait it out
+    # without popping a row. Until the 2026-10 audit the worker never
+    # checked Goodreads' block state before a request. The candidate work
+    # below carries on (other request kinds).
+    from app.metadata import goodreads_session as _gr
+    lp_until = _gr.backoff_until(source_gate.KIND_LIST_PAGE)
+    if lp_until:
+        remaining = lp_until - now
+        return await _goodreads_candidate_tick(TickResult(
+            source_name=source_name, outcome="cooldown",
+            cooldown_remaining_s=remaining,
+            next_sleep_s=min(remaining + 1.0, _COOLDOWN_MAX_SLEEP_S),
+        ))
+
+    # A book page whose turn has come goes before a due list page (trial
+    # item (f)): the daily list refresh (150 authors, 10:00 → ~13:00) used
+    # to hold every page turn for 2-3 hours.
+    from app.discovery import goodreads_candidates as _candidates
+    if await _candidates.page_turn_ready():
+        return await _goodreads_candidate_tick(TickResult(
+            source_name=source_name, outcome="page_turn", next_sleep_s=1.0,
+        ))
+    # G199: a page's turn is near; no list page inside its quiet (a list
+    # scan already running finishes, and the gate holds the page after it).
+    page_due = await _candidates.page_due_in()
+    if page_due is not None and page_due <= source_gate.GOODREADS_PAGE_QUIET_S:
+        return await _goodreads_candidate_tick(TickResult(
+            source_name=source_name, outcome="page_quiet",
+            next_sleep_s=max(1.0, page_due),
+        ))
+
     db = await metadata_cache.get_db(source_name)
     try:
         queue_row = await _pop_next_queue_row(db, source_name, now)
         if queue_row is None:
-            return TickResult(
+            idle = TickResult(
                 source_name=source_name, outcome="queue_empty",
                 queue_size=0, next_sleep_s=_IDLE_SLEEP_S,
             )
-        queue_size = await _count_pending_queue_rows(db, source_name)
+        elif queue_row.get("capped"):
+            idle = TickResult(
+                source_name=source_name, outcome="daily_cap",
+                next_sleep_s=_IDLE_SLEEP_S,
+            )
+        else:
+            idle = None
+            queue_size = await _count_pending_queue_rows(db, source_name)
     finally:
         await db.close()
+    if idle is not None:
+        # No list page due: the candidate worker's turn (S4).
+        return await _goodreads_candidate_tick(idle)
 
     author_id = queue_row["author_id"]
     libraries = await _libraries_for_author(author_id, source_name)
@@ -2336,7 +2540,7 @@ async def tick_goodreads() -> TickResult:
             await _mark_queue_row_pending(
                 db, source_name,
                 author_id=author_id,
-                next_scan_due_at=now + _NORMAL_RESCAN_CADENCE_S,
+                next_scan_due_at=_next_refresh_due(now),
                 reset_failures=True,
             )
         finally:
@@ -2365,7 +2569,7 @@ async def tick_goodreads() -> TickResult:
             await _mark_queue_row_permanent_404(
                 db, source_name,
                 author_id=author_id,
-                next_scan_due_at=now + _NORMAL_RESCAN_CADENCE_S,
+                next_scan_due_at=_next_refresh_due(now),
             )
             for lib in libraries:
                 await _upsert_state_row(
@@ -2445,7 +2649,7 @@ async def tick_goodreads() -> TickResult:
             new_count, became_permanent = await _mark_queue_row_failure(
                 db, source_name,
                 author_id=author_id,
-                next_scan_due_at=now + _NORMAL_RESCAN_CADENCE_S,
+                next_scan_due_at=_next_refresh_due(now),
             )
             for lib in libraries:
                 await _upsert_state_row(
@@ -2513,7 +2717,7 @@ async def tick_goodreads() -> TickResult:
             await _mark_queue_row_pending(
                 db, source_name,
                 author_id=author_id,
-                next_scan_due_at=now + _NORMAL_RESCAN_CADENCE_S,
+                next_scan_due_at=_next_refresh_due(now),
                 reset_failures=True,
             )
             await _record_scan_completed(db, source_name, now)
@@ -2530,7 +2734,7 @@ async def tick_goodreads() -> TickResult:
                 await _mark_queue_row_failure(
                     db, source_name,
                     author_id=author_id,
-                    next_scan_due_at=now + _NORMAL_RESCAN_CADENCE_S,
+                    next_scan_due_at=_next_refresh_due(now),
                 )
             finally:
                 await db.close()
@@ -2568,6 +2772,18 @@ async def tick_goodreads() -> TickResult:
             elapsed_ms=elapsed_ms,
         )
 
+    # New entries on a refreshed list become candidates (weekly new IDs,
+    # G94); an author seen for the first time is seeded (S4).
+    for lib in libraries:
+        try:
+            from app.discovery import goodreads_candidates
+            await goodreads_candidates.refresh_author(author_id, lib["slug"], now=now)
+        except Exception:
+            logger.exception(
+                "metadata_cache_worker[goodreads]: candidate refresh for %s "
+                "in %s failed (non-fatal)", author_id, lib["slug"],
+            )
+
     elapsed_ms = (time.time() - started_at) * 1000.0
     outcome = "ok" if book_count_total else "ok_empty"
     per_lib_summary = ", ".join(
@@ -2592,6 +2808,20 @@ async def tick_goodreads() -> TickResult:
 
 
 # ─── Run loop ──────────────────────────────────────────────────
+
+
+_CRASH_NTFY_EVERY_S = 3600.0
+_crash_ntfy_sent_at: dict[str, float] = {}
+
+
+def _crash_ntfy_due(source_name: str) -> bool:
+    """A "tick crashed" ntfy may go now (at most one an hour per source);
+    taking it starts the hour."""
+    now = time.time()
+    if now - _crash_ntfy_sent_at.get(source_name, 0.0) < _CRASH_NTFY_EVERY_S:
+        return False
+    _crash_ntfy_sent_at[source_name] = now
+    return True
 
 
 async def run_loop(
@@ -2649,23 +2879,26 @@ async def run_loop(
             )
             # Phase G: surface tick crashes to the operator. We rely
             # on the supervised-task restart to bring the loop back —
-            # this ntfy is purely so the user knows it happened.
-            try:
-                await _send_ntfy(
-                    event_key="metadata_cache_error",
-                    title=f"{source_name.title()} worker — tick crashed",
-                    message=(
-                        f"{type(exc).__name__}: {exc}. "
-                        "Worker loop is recovering automatically; "
-                        "check container logs for traceback."
-                    ),
-                    priority=5,
-                    tags=["rotating_light"],
-                )
-            except Exception:
-                logger.exception(
-                    "metadata_cache_worker: post-crash ntfy emit failed"
-                )
+            # this ntfy is purely so the user knows it happened. At most
+            # one an hour per source (trial item (e): 2026-10-11 sent 78
+            # in 45 minutes, one per failing tick).
+            if _crash_ntfy_due(source_name):
+                try:
+                    await _send_ntfy(
+                        event_key="metadata_cache_error",
+                        title=f"{source_name.title()} worker — tick crashed",
+                        message=(
+                            f"{type(exc).__name__}: {exc}. "
+                            "Worker loop is recovering automatically; "
+                            "check container logs for traceback."
+                        ),
+                        priority=5,
+                        tags=["rotating_light"],
+                    )
+                except Exception:
+                    logger.exception(
+                        "metadata_cache_worker: post-crash ntfy emit failed"
+                    )
             # Belt-and-suspenders: if tick() raised before reaching
             # its own internal queue-row-recovery (the post-scan
             # cache-write try/except), any popped row would stay

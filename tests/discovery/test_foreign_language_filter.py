@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import pytest
 
-from app.discovery.lookup import _looks_foreign, _lang_ok
+from app.discovery.filters import is_foreign_title as _looks_foreign
+from app.discovery.lookup import _lang_ok
 
 
 # ─── 1. non-Latin script detection ───────────────────────────

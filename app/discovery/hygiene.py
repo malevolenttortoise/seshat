@@ -11,9 +11,9 @@ configured library:
   3. Phase-2 author goodreads_id backfill (reverse-lookup from any
      book carrying a resolvable identifier — reuses
      `backfill_missing_author_ids`)
-  4. Book deduplication pass (identifier-keyed + same-series-position
-     — reuses `_dedupe_same_series_position` plus an explicit
-     identifier-grouping sweep that calls `merge_books` per pair)
+  4. Book deduplication pass (identifier-keyed sweep; the
+     same-series-position pass B was retired in the 2026-10 fix pass,
+     G215: a taken series number isn't a match)
   5. Series consolidation (intra-author canonical-form merge —
      reuses `_dedupe_intra_author_series`)
   6. ABS author name-match cross-stamp (cheap cross-library copy of
@@ -56,7 +56,6 @@ from app.config import load_settings
 from app.discovery import cross_library
 from app.discovery.database import (
     _dedupe_intra_author_series,
-    _dedupe_same_series_position,
     cleanup_empty_series,
     get_active_library,
     get_db as get_library_db,
@@ -849,7 +848,35 @@ async def _dedupe_by_identifier(
     by the user; merging silently would surface the unwanted row's
     metadata under the kept id. Same reason MAM / source scans
     skip hidden during fuzzy match.
+
+    A shared id alone isn't a match (G220): the old merge copied ids onto
+    rows that weren't the book (a light novel's Amazon id onto its manga),
+    so a loser folds only when the title identity, read in each row's
+    series, calls it the winner's book, in one filter family.
     """
+    from app.discovery import filters
+    from app.works.title_identity import TitleRef, author_labels, same_book
+
+    labels_by_author: dict = {}
+
+    async def _labels(book_id: int) -> frozenset:
+        row = await (await db.execute(
+            "SELECT author_id FROM book_authors WHERE book_id = ? ORDER BY position LIMIT 1", (book_id,),
+        )).fetchone()
+        aid = row[0] if row else None
+        if aid not in labels_by_author:
+            labels_by_author[aid] = author_labels(r[0] or "" for r in await (await db.execute(
+                "SELECT title FROM books WHERE id IN (SELECT book_id FROM book_authors WHERE author_id = ?)",
+                (aid,),
+            )).fetchall()) if aid is not None else frozenset()
+        return labels_by_author[aid]
+
+    def _family(m) -> Optional[str]:
+        stored = m["hidden_reason"]
+        return stored if stored in filters.FILTER_REASONS else filters.book_class(m["title"] or "")
+
+    def _ref(m) -> TitleRef:
+        return TitleRef(m["title"] or "", m["series_name"], m["series_index"])
     cur = await db.execute(
         f"SELECT {col}, COUNT(*) AS c FROM books "
         f"WHERE {col} IS NOT NULL AND {col} != '' AND hidden = 0 "
@@ -860,20 +887,29 @@ async def _dedupe_by_identifier(
     for grp in groups:
         ident = grp[col]
         cur2 = await db.execute(
-            f"SELECT id, owned, title FROM books WHERE {col} = ? "
-            f"AND hidden = 0 ORDER BY owned DESC, id ASC",
+            f"SELECT b.id, b.owned, b.title, b.hidden_reason, s.name AS series_name, b.series_index "
+            f"FROM books b LEFT JOIN series s ON s.id = b.series_id WHERE b.{col} = ? "
+            f"AND b.hidden = 0 ORDER BY b.owned DESC, b.id ASC",
             (ident,),
         )
         members = await cur2.fetchall()
         if len(members) < 2:
             continue
-        winner_id = int(members[0]["id"])
-        loser_ids = [int(m["id"]) for m in members[1:]]
+        winner = members[0]
+        winner_id = int(winner["id"])
+        labels = await _labels(winner_id)
+        loser_ids = []
+        for m in members[1:]:
+            if _family(m) == _family(winner) and same_book(_ref(winner), _ref(m), labels):
+                loser_ids.append(int(m["id"]))
+            else:
+                logger.debug(
+                    "hygiene[%s] dedup-by-%s: kept id=%d %r beside id=%d %r (shared %r, not one book)",
+                    slug, col, m["id"], m["title"], winner_id, winner["title"], ident,
+                )
         # Local fold: copy identity columns COALESCE-style from the
         # losers onto the winner, then delete the loser rows. We
-        # stay inside the per-library DB transaction, matching the
-        # pattern `_dedupe_same_series_position` uses one section
-        # over.
+        # stay inside the per-library DB transaction.
         IDENT_COLS = (
             "isbn", "hardcover_id", "goodreads_id", "fictiondb_id",
             "kobo_id", "amazon_id", "google_books_id", "ibdb_id",
@@ -916,24 +952,19 @@ async def _dedupe_by_identifier(
 
 
 async def job_book_dedup(slug: str, stats: dict[str, Any]) -> None:
-    """Two-pass book dedup.
+    """Identifier-keyed book dedup: any two books sharing a non-null
+    `goodreads_id` / `hardcover_id` / `isbn` / etc. are the same book
+    (Hardcover-stamped Goodreads ids from Job 2 are what make this
+    newly productive).
 
-    Pass A — identifier-keyed merge. Any two books sharing a non-
-    null `goodreads_id` / `hardcover_id` / `isbn` / etc. are the
-    same book (Hardcover-stamped Goodreads ids from Job 2 are what
-    make this newly productive). Conservative; identifier matches
-    are extremely high-precision.
-
-    Pass B — `_dedupe_same_series_position`. Catches the
-    "Remnant II" vs "Remnant Book 2" case where two rows share
-    `(series_id, series_index)` even though titles don't fuzzy-
-    match. Existing helper, runs at init_db too.
+    The same-series-position pass B is gone (G215, 2026-10): it
+    deleted any unowned book on a taken series number, whatever its
+    title.
     """
     db = await get_library_db(slug)
     try:
-        # Pass A — identifier-keyed. Order matters: stronger
-        # identifiers first so the winning row keeps the most
-        # canonical id slot.
+        # Identifier-keyed. Order matters: stronger identifiers first so
+        # the winning row keeps the most canonical id slot.
         for col in (
             "goodreads_id", "hardcover_id", "isbn",
             "amazon_id", "audible_id", "asin",
@@ -941,14 +972,7 @@ async def job_book_dedup(slug: str, stats: dict[str, Any]) -> None:
             stats["books_merged"] += await _dedupe_by_identifier(
                 db, col, stats, slug,
             )
-
-        # Pass B — same-series-position.
-        deleted = await _dedupe_same_series_position(db) or 0
-        stats["books_merged"] += deleted
-        logger.info(
-            "hygiene[%s] book-dedup: total merged=%d (last-pass same-position=%d)",
-            slug, stats["books_merged"], deleted,
-        )
+        logger.info("hygiene[%s] book-dedup: total merged=%d", slug, stats["books_merged"])
     except Exception as e:
         msg = f"book-dedup ({slug}): {type(e).__name__}: {e}"
         logger.exception(msg)
@@ -969,7 +993,7 @@ async def job_series_consolidate(slug: str, stats: dict[str, Any]) -> None:
     try:
         collapsed = await _dedupe_intra_author_series(db) or 0
         stats["series_merged"] += collapsed
-        # And re-run empty-series cleanup in case Pass A + B
+        # And re-run empty-series cleanup in case the book dedup
         # orphaned anything.
         empty = await cleanup_empty_series(db) or 0
         stats["deleted_series"] += empty

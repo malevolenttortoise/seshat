@@ -20,7 +20,11 @@ Tables cover the full pipeline: author lists, announce audit log,
 grabs + snatch ledger, book review queue, tentative/ignored capture,
 calibre additions counter, and metadata enrichment support.
 """
+import contextlib
+import contextvars
 import logging
+from pathlib import Path
+from typing import Iterator, Optional
 
 import aiosqlite
 
@@ -69,7 +73,12 @@ CREATE TABLE IF NOT EXISTS announces (
     -- v2.9.0 format-priority dedup: persist the IRC announce's
     -- `Filetype: ( xxx )` field so we can audit dedup decisions
     -- after the fact. Pre-v2.9.0 announces have this NULL.
-    filetype          TEXT
+    filetype          TEXT,
+    -- 2026-10 audit wave 5a (G124): every MAM content tag the announce
+    -- carried, as a JSON list (`category` keeps the first, synthesized
+    -- "Ebooks - Fantasy" form every reader parses). NULL when only one
+    -- category was known (search-API paths, rows before the change).
+    categories_json   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS grabs (
@@ -106,7 +115,12 @@ CREATE TABLE IF NOT EXISTS grabs (
     -- The grab policy's tier when the grab went through (`vip`, `free`,
     -- `normal`, ...). NULL for grabs that never met the policy and for
     -- rows from before the 2026-10 audit (issue 11).
-    policy_tier       TEXT
+    policy_tier       TEXT,
+    -- MAM content tags, JSON list (wave 5a, G124; see announces).
+    categories_json   TEXT,
+    -- MAM's co-author list for the grab, JSON list, trained into the allow
+    -- list when the book is delivered (S20, G203). NULL: nothing to train.
+    coauthors_json    TEXT
 );
 
 CREATE TABLE IF NOT EXISTS snatch_ledger (
@@ -208,7 +222,9 @@ CREATE TABLE IF NOT EXISTS tentative_torrents (
     cover_path          TEXT,
     status              TEXT NOT NULL DEFAULT 'pending',
     created_at          TEXT NOT NULL DEFAULT (datetime('now')),
-    decided_at          TEXT
+    decided_at          TEXT,
+    -- MAM content tags, JSON list (wave 5a, G124; see announces).
+    categories_json     TEXT
 );
 
 -- Tier 2: 3-tier author taxonomy. When a tentative torrent is
@@ -689,6 +705,50 @@ CREATE INDEX IF NOT EXISTS idx_replacement_enactments_opp
 CREATE INDEX IF NOT EXISTS idx_replacement_enactments_active
     ON replacement_enactments(library_slug, restored_at)
     WHERE failed_at IS NULL;
+
+-- 2026-10 audit wave 4 (issue 15, G62 / G79 / G81) — what every request to
+-- a metadata source came back with, per local day × source × caller
+-- (scan, worker, enrichment, resolver, backfill, probe, url_import) ×
+-- kind (Goodreads only: book_page / list_page / autocomplete / other).
+-- `created` / `updated` / `capped` are scan results: books a scan made or
+-- changed from that source, and the times it hit its scan time cap.
+-- Written by `app.metadata.source_gate` (in-memory, flushed every
+-- minute); rows older than 90 days are pruned there.
+CREATE TABLE IF NOT EXISTS source_counters (
+    day       TEXT NOT NULL,
+    source    TEXT NOT NULL,
+    caller    TEXT NOT NULL,
+    kind      TEXT NOT NULL DEFAULT '',
+    requests  INTEGER NOT NULL DEFAULT 0,
+    ok        INTEGER NOT NULL DEFAULT 0,
+    blocks    INTEGER NOT NULL DEFAULT 0,
+    errors    INTEGER NOT NULL DEFAULT 0,
+    timeouts  INTEGER NOT NULL DEFAULT 0,
+    created   INTEGER NOT NULL DEFAULT 0,
+    updated   INTEGER NOT NULL DEFAULT 0,
+    capped    INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, source, caller, kind)
+);
+-- 2026-10 audit wave 5a (G121): every ebook dropped into CWA's ingest
+-- folder is checked against Calibre's metadata.db. `state`: pending →
+-- confirmed (a matching record appeared; `calibre_book_id`) or failed at
+-- 15 min (`reason`). Written and read by `app.orchestrator.import_check`.
+CREATE TABLE IF NOT EXISTS import_checks (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    review_id       INTEGER,
+    grab_id         INTEGER NOT NULL,
+    pipeline_run_id INTEGER,
+    library_slug    TEXT,
+    drop_path       TEXT NOT NULL,
+    title           TEXT,
+    authors_json    TEXT,
+    dropped_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    state           TEXT NOT NULL DEFAULT 'pending',
+    calibre_book_id INTEGER,
+    reason          TEXT,
+    checked_at      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_import_checks_state ON import_checks(state);
 """
 
 
@@ -1082,17 +1142,118 @@ MIGRATIONS: list[str] = [
           AND NOT EXISTS (SELECT 1 FROM book_review_queue r
                            WHERE r.grab_id = grabs.id
                              AND r.status NOT IN ('delivered', 'rejected', 'failed'))""",
+    # ── 2026-10 audit wave 4, issue 15: per-source request counters ──
+    """CREATE TABLE IF NOT EXISTS source_counters (
+        day       TEXT NOT NULL,
+        source    TEXT NOT NULL,
+        caller    TEXT NOT NULL,
+        kind      TEXT NOT NULL DEFAULT '',
+        requests  INTEGER NOT NULL DEFAULT 0,
+        ok        INTEGER NOT NULL DEFAULT 0,
+        blocks    INTEGER NOT NULL DEFAULT 0,
+        errors    INTEGER NOT NULL DEFAULT 0,
+        timeouts  INTEGER NOT NULL DEFAULT 0,
+        created   INTEGER NOT NULL DEFAULT 0,
+        updated   INTEGER NOT NULL DEFAULT 0,
+        capped    INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (day, source, caller, kind)
+    )""",
+    # ── 2026-10 audit wave 5a, G121: CWA import checks ──
+    """CREATE TABLE IF NOT EXISTS import_checks (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        review_id       INTEGER,
+        grab_id         INTEGER NOT NULL,
+        pipeline_run_id INTEGER,
+        library_slug    TEXT,
+        drop_path       TEXT NOT NULL,
+        title           TEXT,
+        authors_json    TEXT,
+        dropped_at      TEXT NOT NULL DEFAULT (datetime('now')),
+        state           TEXT NOT NULL DEFAULT 'pending',
+        calibre_book_id INTEGER,
+        reason          TEXT,
+        checked_at      TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_import_checks_state ON import_checks(state)",
+    # ── 2026-10 audit wave 5a, G124: every MAM content tag ──
+    "ALTER TABLE announces ADD COLUMN categories_json TEXT",
+    "ALTER TABLE tentative_torrents ADD COLUMN categories_json TEXT",
+    "ALTER TABLE grabs ADD COLUMN categories_json TEXT",
+    # ── 2026-10 discovery fix pass S20, G203: MAM's co-author list, saved
+    # at grab and trained at delivery ──
+    "ALTER TABLE grabs ADD COLUMN coauthors_json TEXT",
 ]
+
+
+# The missing-books cleanup's preview writes to a copy of this DB (merge
+# redirects grab links); this points its own task's connections there
+# (discovery fix pass S8, C27).
+_path_override: contextvars.ContextVar[Optional[Path]] = contextvars.ContextVar(
+    "pipeline_db_path_override", default=None,
+)
+
+
+@contextlib.contextmanager
+def using_copy(path: Path) -> Iterator[None]:
+    """Inside this block (this task and the tasks it starts), `get_db`
+    opens `path`."""
+    token = _path_override.set(Path(path))
+    try:
+        yield
+    finally:
+        _path_override.reset(token)
 
 
 async def get_db() -> aiosqlite.Connection:
     """Open a connection with the standard pragmas applied."""
-    db = await aiosqlite.connect(str(APP_DB_PATH))
+    db = await aiosqlite.connect(str(_path_override.get() or APP_DB_PATH))
     db.row_factory = aiosqlite.Row
     await db.execute("PRAGMA journal_mode=WAL")
     await db.execute("PRAGMA foreign_keys=ON")
     await db.execute("PRAGMA busy_timeout=30000")
     return db
+
+
+async def _backfill_content_tags(db) -> int:
+    """Fill `categories_json` from the stored IRC line (2026-10 audit wave
+    5a, G124), then copy it to the tentative and grab rows of the same
+    torrent that have none.
+
+    `announces.raw` holds the IRC line only since the 2026-10-08 update
+    (G9), so older rows stay NULL. Only IRC lines are parsed (an
+    `… By: …` line with a `/t/<id>` link; the other `raw` tags are
+    `discovery:…`, `tentative_approve:…` and the like); a line that parses
+    to no tags gets `[]` so it isn't parsed again. A no-op once done.
+    """
+    import json as _json
+
+    from app.mam.announce import parse_announce
+
+    rows = await (await db.execute(
+        "SELECT id, torrent_id, raw FROM announces "
+        "WHERE categories_json IS NULL AND raw LIKE '% By:%' AND raw LIKE '%/t/%'"
+    )).fetchall()
+    if not rows:
+        return 0
+    by_torrent: dict[str, str] = {}
+    for row_id, torrent_id, raw in rows:
+        parsed = parse_announce(raw)
+        tags = [c for c in (parsed.categories if parsed else ()) if c]
+        stored = _json.dumps(tags, ensure_ascii=False)
+        await db.execute(
+            "UPDATE announces SET categories_json = ? WHERE id = ?", (stored, row_id),
+        )
+        if tags and torrent_id:
+            by_torrent[str(torrent_id)] = stored
+    for torrent_id, stored in by_torrent.items():
+        for table in ("tentative_torrents", "grabs"):
+            await db.execute(
+                f"UPDATE {table} SET categories_json = ? "  # nosec B608 — fixed names
+                f"WHERE mam_torrent_id = ? AND categories_json IS NULL",
+                (stored, torrent_id),
+            )
+    await db.commit()
+    return len(rows)
 
 
 async def _backfill_numeric_grab_categories(db) -> int:
@@ -1182,6 +1343,12 @@ async def init_db():
         if fixed:
             _log.info(
                 f"Backfilled numeric category IDs on {fixed} grab row(s)"
+            )
+        tagged = await _backfill_content_tags(db)
+        if tagged:
+            _log.info(
+                f"Backfilled MAM content tags on {tagged} announce row(s) "
+                f"from their IRC lines"
             )
     finally:
         await db.close()

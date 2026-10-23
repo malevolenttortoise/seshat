@@ -104,6 +104,10 @@ _metadata_cache_amazon_worker_task: Optional[asyncio.Task] = None
 # no escalation tiers (GR has no Akamai-class IP-level cooldown).
 _metadata_cache_goodreads_worker_task: Optional[asyncio.Task] = None
 
+# 2026-10 audit wave 4 — writes the per-source request counters
+# (`app.metadata.source_gate`) to the app DB once a minute.
+_source_counter_flush_task: Optional[asyncio.Task] = None
+
 
 # ─── Cookie keep-alive state ────────────────────────────────
 # Long-running background loop that hits MAM's search endpoint on a
@@ -125,6 +129,7 @@ _review_timeout_task: Optional[asyncio.Task] = None
 
 # Format-priority dedup hold release (v2.9.0): wakes due `pending_holds`.
 _hold_release_task: Optional[asyncio.Task] = None
+_import_check_task: Optional[asyncio.Task] = None
 
 
 # ─── APScheduler ────────────────────────────────────────────
@@ -384,6 +389,8 @@ def release_mam_scan_unless_handed_off(claim: MamScanClaim) -> None:
 # stats so the Command Center banner can render both the overall
 # 1-of-6 sub-step and the in-flight job's own count.
 _hygiene_task: Optional[asyncio.Task] = None
+# The missing-books cleanup (discovery fix pass S8): preview or apply.
+_missing_cleanup_task: Optional[asyncio.Task] = None
 _hygiene_progress: Dict[str, Any] = {
     "running": False,
     "current_job_idx": 0,

@@ -36,9 +36,10 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
+from app.metadata import source_gate
 from app.metadata.record import MetaRecord
 from app.metadata.scoring import score_match
-from app.metadata.sources.base import MetaSource
+from app.metadata.sources.base import MetaSource, enrichment_scope
 from app.metadata.sources.goodreads import GoodreadsSource
 from app.metadata.sources.amazon import AmazonSource
 from app.metadata.sources.audible import AudibleSource
@@ -48,6 +49,7 @@ from app.metadata.sources.ibdb import IbdbSource
 from app.metadata.sources.kobo import KoboSource
 from app.metadata.sources.mam_search import MamSearchSource
 from app.metadata.sources.openlibrary import OpenLibrarySource
+from app.works.title_identity import TitleRef, different_edition_or_volume
 
 _log = logging.getLogger("seshat.metadata.enricher")
 
@@ -118,6 +120,16 @@ _SERIES_DECORATOR_RX = re.compile(
 )
 
 
+def _hook(src, name: str) -> bool:
+    """A source's optional yes/no hook (`MetaSource.backing_off` /
+    `skipped_for_backoff`); False for a source without it."""
+    fn = getattr(src, name, None)
+    try:
+        return bool(fn()) if callable(fn) else False
+    except Exception:
+        return False
+
+
 def _strip_series_decorator(title: str) -> str:
     r"""Strip series-decorator words but keep the number they introduce.
 
@@ -135,6 +147,36 @@ def _strip_series_decorator(title: str) -> str:
     result = _SERIES_DECORATOR_RX.sub(r" \1", title)
     result = re.sub(r"\s+", " ", result).strip()
     return result
+
+
+# A trailing bracketed series tail: "(Frontline Zero Book 4)", "(Series #2)",
+# "(Series, Book 2)", "(Book 4)", "[The Fold 8]". MAM torrent names carry
+# it; sources' canonical titles don't.
+_SERIES_TAIL_RX = re.compile(
+    r"\s*(?:"
+    r"\([^()]*?(?:\b(?:book|volume|vol\.?|tome|part|episode)\s+#?|#)\s*\d+(?:\.\d+)?\s*\)"
+    r"|\[[^\[\]]*?\s#?\d+(?:\.\d+)?\s*\]"
+    r")\s*$",
+    re.IGNORECASE,
+)
+
+
+def _retry_title(title: str) -> str:
+    """The title the enricher retries with after a source misses.
+
+    A trailing bracketed series tail goes whole: "No One Dies Today
+    (Frontline Zero Book 4)" → "No One Dies Today". Stripping only its
+    "Book" word ("… (Frontline Zero 4)") missed again on every source and,
+    under Amazon's pacing, cost its second live request (2026-10-09).
+    Without such a tail, the series decorator goes and its number stays
+    (`_strip_series_decorator`). Returns the input when neither applies.
+    """
+    if not title:
+        return title
+    without_tail = _SERIES_TAIL_RX.sub("", title).strip()
+    if without_tail and without_tail != title.strip():
+        return without_tail
+    return _strip_series_decorator(title)
 
 
 def _clean_audiobook_title(title: str) -> str:
@@ -235,6 +277,7 @@ class MetadataEnricher:
         audiobook_sources: Optional[list[MetaSource]] = None,
         hardcover_api_key: str = "",
         audible_region: str = "us",
+        google_books_api_key: str = "",
     ):
         self.config = config
         if sources is not None:
@@ -245,6 +288,7 @@ class MetadataEnricher:
                 config.priority, config,
                 hardcover_api_key=hardcover_api_key,
                 audible_region=audible_region,
+                google_books_api_key=google_books_api_key,
             )
         if audiobook_sources is not None:
             self._audiobook_sources = audiobook_sources
@@ -253,6 +297,7 @@ class MetadataEnricher:
                 config.audiobook_priority, config,
                 hardcover_api_key=hardcover_api_key,
                 audible_region=audible_region,
+                google_books_api_key=google_books_api_key,
             )
 
     async def enrich(
@@ -315,7 +360,31 @@ class MetadataEnricher:
             return None
         if not title and not author:
             return None
+        # G78: enrichment's requests go ahead of scans and the cache
+        # workers in each source's queue, and time spent waiting for a
+        # source's turn (up to its Metadata Sources rate: 30s for
+        # Goodreads, 100s for Amazon on one install) doesn't count against
+        # the per-book budget or a source's timeout.
+        # One scope per book: Amazon keeps its live-request budget and its
+        # fresh session there across the title-variant retry (G92).
+        with source_gate.caller(source_gate.CALLER_ENRICHMENT), \
+                source_gate.measure_turn_waits() as turn_waits:
+            async with enrichment_scope():
+                return await self._enrich(
+                    title=title, author=author, isbn=isbn, asin=asin,
+                    mam_torrent_id=mam_torrent_id, mam_token=mam_token,
+                    audiobook=audiobook, skip_mam=skip_mam,
+                    author_goodreads_id=author_goodreads_id,
+                    author_amazon_id=author_amazon_id,
+                    library_slug=library_slug, turn_waits=turn_waits,
+                )
 
+    async def _enrich(
+        self, *, title: str, author: str, isbn: str, asin: str,
+        mam_torrent_id: str, mam_token: str, audiobook: bool,
+        skip_mam: bool, author_goodreads_id: str, author_amazon_id: str,
+        library_slug: str, turn_waits: source_gate.TurnWaits,
+    ) -> Optional[MetaRecord]:
         # Audiobook title cleanup. Publisher decorations on MAM
         # filenames ("Halo: Empty Throne [Halo 36]", "(Unabridged)")
         # don't match Audible's catalog title. Strip them before the
@@ -370,11 +439,14 @@ class MetadataEnricher:
         # Wall-clock start for the global per-book budget. Enforced
         # before each source so a stuck source can't blow the cap and
         # threaded into _safe_search so each per-source timeout is
-        # clamped to the remaining budget.
+        # clamped to the remaining budget. Turn waits don't count (G78).
         budget_started_at = asyncio.get_event_loop().time()
 
         for src in sources:
-            elapsed = asyncio.get_event_loop().time() - budget_started_at
+            elapsed = (
+                asyncio.get_event_loop().time() - budget_started_at
+                - turn_waits.seconds()
+            )
             remaining = self.config.per_book_budget - elapsed
             if remaining <= 0:
                 _log.info(
@@ -414,18 +486,17 @@ class MetadataEnricher:
                         "status": "skipped_cheap_gate",
                     })
                     continue
-            # v2.13.0 Stage 6 — skip Goodreads when its session state is
-            # `soft_blocked`. Without this gate every per-book lookup
-            # pays the full request → soft-block detect → next-source
-            # roundtrip even though we already know the answer.
-            # `mark_active()` flips state back when a probe (Settings
-            # "Run probe" button or the weekly canary) returns 200.
+            # Skip Goodreads while its book pages are backing off after an
+            # AWS WAF block (G66): its record needs the book page, so the
+            # lookup could only spend autocomplete requests for nothing.
+            # The backoff ends by itself (2 → 60 min) or on a success.
             if src.name == "goodreads":
                 from app.metadata import goodreads_session
-                if goodreads_session.is_soft_blocked():
+                from app.metadata.source_gate import KIND_BOOK_PAGE
+                if goodreads_session.is_backing_off(KIND_BOOK_PAGE):
                     _log.debug(
-                        "enricher: goodreads skipped (session state = "
-                        "soft_blocked) for %r", title,
+                        "enricher: goodreads skipped (book pages backing "
+                        "off) for %r", title,
                     )
                     source_log.append({
                         "source": "goodreads",
@@ -433,6 +504,15 @@ class MetadataEnricher:
                         "status": "soft_blocked",
                     })
                     continue
+            elif _hook(src, "backing_off"):
+                # Any other source refusing requests after a block (Kobo):
+                # skipped, and retried for a pending review once the
+                # backoff ends (G182).
+                _log.debug("enricher: %s skipped (backing off) for %r", src.name, title)
+                source_log.append({
+                    "source": src.name, "confidence": None, "status": "soft_blocked",
+                })
+                continue
             # Pull whatever identifiers prior sources have populated on
             # the in-progress merged record so Goodreads' resolver
             # tiers (T1-T5) can use them. Falls back to the seed
@@ -457,11 +537,12 @@ class MetadataEnricher:
             # suffix) matched cleanly. Only costs a second HTTP call
             # when the first whiffed, never pays the fallback cost on
             # already-clean titles.
-            if result is None:
-                cleaned = _strip_series_decorator(title)
+            if result is None and not _hook(src, "skipped_for_backoff"):
+                cleaned = _retry_title(title)
                 if cleaned and cleaned != title:
                     elapsed_after = (
                         asyncio.get_event_loop().time() - budget_started_at
+                        - turn_waits.seconds()
                     )
                     remaining_after = (
                         self.config.per_book_budget - elapsed_after
@@ -481,6 +562,17 @@ class MetadataEnricher:
                             library_slug=library_slug,
                         )
             if result is None:
+                if _hook(src, "skipped_for_backoff"):
+                    # Refused by a cooldown, not a miss (Amazon's search /
+                    # product pages): retried before review (G182).
+                    _log.info(
+                        "enricher: %s → skipped, backing off (title=%r)",
+                        src.name, title,
+                    )
+                    source_log.append({
+                        "source": src.name, "confidence": None, "status": "soft_blocked",
+                    })
+                    continue
                 # Emit at INFO so the log stream shows the full chain —
                 # otherwise sources that fail to match for a given book
                 # are invisible and the user can't tell whether they
@@ -540,6 +632,21 @@ class MetadataEnricher:
             # searched "Monster's Mercy 2", and its junk description
             # leaked into the review record because the merge fired
             # unconditionally.
+            # G189: another volume or edition of the title never merges,
+            # whatever the score: the score gave Hardcover's "My Dungeon
+            # Life: Volume 1" 1.00 for "My Dungeon Life Vol 2" (grab 4770).
+            # Exact-ID lookups are the right book by definition; a
+            # cache-backed match is checked too (its title is fuzzy).
+            if not is_exact and different_edition_or_volume(
+                TitleRef(title),
+                TitleRef(result.title or "", result.series, result.series_index),
+            ):
+                _log.info(
+                    "enricher: %s → skip merge (another volume or edition: %r)",
+                    src.name, result.title,
+                )
+                source_log[-1]["status"] = "other_volume"
+                continue
             is_cache_backed = getattr(result, "_from_cache", False)
             if (
                 not is_exact
@@ -554,6 +661,8 @@ class MetadataEnricher:
                 )
                 source_log[-1]["status"] = "below_threshold"
                 continue
+            if not result.source:
+                result.source = src.name
             merged = _merge_records(merged, result)
             if is_exact:
                 have_exact_id = True
@@ -569,6 +678,9 @@ class MetadataEnricher:
 
         if merged is not None:
             merged._source_log = source_log  # type: ignore[attr-defined]
+        # The last book's per-source outcomes, also when nothing merged
+        # (G182's retry reads why a source came back empty).
+        self.last_source_log = source_log
         return merged
 
     async def _safe_search(
@@ -587,7 +699,8 @@ class MetadataEnricher:
         if max_wait is not None:
             timeout = min(timeout, max(0.5, max_wait))
         try:
-            return await asyncio.wait_for(
+            # Time spent waiting for the source's turn isn't counted (G78).
+            return await source_gate.wait_for_excluding_turns(
                 source.search_book(
                     title, author,
                     isbn=isbn, asin=asin,
@@ -628,6 +741,7 @@ def _build_default_sources(
     *,
     hardcover_api_key: str = "",
     audible_region: str = "us",
+    google_books_api_key: str = "",
 ) -> list[MetaSource]:
     """Instantiate the priority-ordered source list.
 
@@ -687,7 +801,14 @@ def _build_default_sources(
             out.append(cls(api_key=hardcover_api_key))
         elif name == "audible":
             out.append(cls(region=audible_region))
+        elif name == "google_books":
+            # Without the key Google bills the call to its shared
+            # anonymous project, which is out of quota (429s): the 2026-10
+            # audit found enrichment had never sent it.
+            out.append(cls(api_key=google_books_api_key))
         else:
+            # Pacing isn't the source's: every request waits its turn in
+            # the source gate at the Metadata Sources rate (G71).
             out.append(cls())
     return out
 
@@ -716,9 +837,18 @@ def _merge_records(
 
     Confidence takes the max so the threshold gate above can decide
     when to stop.
+
+    Which source each field came from is kept in `_field_sources`
+    (2026-10 audit wave 4b, S8 / G63), stored with the review metadata as
+    `enriched.field_sources`.
     """
     if into is None:
+        new._field_sources = {  # type: ignore[attr-defined]
+            f: new.source for f in _RECORD_FIELDS
+            if not _empty_value(getattr(new, f, None))
+        }
         return new
+    before = {f: getattr(into, f, None) for f in _RECORD_FIELDS}
 
     def _pick(a, b):
         return a if a not in (None, "", []) else b
@@ -760,4 +890,22 @@ def _merge_records(
     # Confidence is a max over all sources — any strong match boosts
     # our belief that the merged record is correct.
     into.confidence = max(into.confidence, new.confidence)
+    sources = dict(getattr(into, "_field_sources", None) or {})
+    for f in _RECORD_FIELDS:
+        now = getattr(into, f, None)
+        if not _empty_value(now) and now is not before[f] and now == getattr(new, f, None):
+            sources[f] = new.source
+    into._field_sources = sources  # type: ignore[attr-defined]
     return into
+
+
+# The record fields `_merge_records` merges (and keeps the source of).
+_RECORD_FIELDS = (
+    "title", "authors", "series", "series_index", "description", "isbn",
+    "publisher", "pub_date", "page_count", "language", "tags", "cover_url",
+    "narrator", "duration_sec", "asin", "abridged",
+)
+
+
+def _empty_value(v) -> bool:
+    return v is None or v == "" or v == []

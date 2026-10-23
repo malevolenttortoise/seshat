@@ -72,11 +72,35 @@ def test_empty_name_never_admitted():
         assert r.may_mint(bad) is False
 
 
-def test_scan_eligibility_is_the_same_predicate():
-    """ADR-0021: one predicate, two call sites."""
-    r = _roster(names={"brandon sanderson"}, ids={42})
-    for name, aid in (("Brandon Sanderson", None), ("X", 42), ("X", None)):
-        assert r.is_scan_eligible(name, aid) == r.admits(name, aid)
+def test_scan_eligibility_is_narrower_than_admits():
+    """ADR-0021 amended (D1 / F15): an allow-list name grab auto-train put
+    there is linked (`admits`) but not scanned; the operator's own entries
+    and owned authors are both."""
+    from app.discovery.roster import SKIP_NOT_ELIGIBLE
+    r = Roster(
+        allowed_names=frozenset({"brandon sanderson", "co trained"}),
+        owned_author_ids=frozenset({42}),
+        scan_allowed_names=frozenset({"brandon sanderson"}),
+    )
+    assert r.admits("Co Trained", None) is True
+    assert r.is_scan_eligible("Co Trained", None) is False
+    assert r.scan_skip_reason("Co Trained", 7) == SKIP_NOT_ELIGIBLE
+    assert r.is_scan_eligible("Brandon Sanderson", None) is True
+    assert r.is_scan_eligible("Co Trained", 42) is True       # owns a book
+    assert r.is_scan_eligible("X", None) is False
+
+
+def test_list_missing_off_wins_over_owned_and_allow_listed():
+    """D6: the switch off skips the author even when it owns books or Mark
+    allow-listed it."""
+    from app.discovery.roster import SKIP_LIST_MISSING_OFF
+    r = Roster(
+        allowed_names=frozenset({"tom clancy"}), owned_author_ids=frozenset({42}),
+        scan_allowed_names=frozenset({"tom clancy"}), listing_off_ids=frozenset({42, 43}),
+    )
+    assert r.scan_skip_reason("Tom Clancy", 43) == SKIP_LIST_MISSING_OFF
+    assert r.scan_skip_reason("Owner", 42) == SKIP_LIST_MISSING_OFF
+    assert r.scan_skip_reason("Tom Clancy", 44) is None
 
 
 def test_uses_the_filter_normalizer_not_the_author_row_one():

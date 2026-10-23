@@ -40,12 +40,16 @@ from typing import Any, Optional
 
 from app.discovery.amazon_author_id_resolver import (
     _AMAZON_SOFT_BLOCK_THIN_BODY_BYTES,
+    KIND_CATALOG,
+    KIND_STORE,
     amazon_block_remaining_s,
+    block_kind,
     is_amazon_blocked,
     record_amazon_soft_block,
     resolve_amazon_author_id,
     parse_retry_after,
 )
+from app.metadata import source_gate
 from app.discovery.sources.base import (
     AuthorResult,
     BaseSource,
@@ -215,8 +219,9 @@ class AmazonSource(BaseSource):
         """
         # v2.19.0 — penalty box: if amazon.com is in soft-block
         # cooldown, every downstream HTTP call would just walk into
-        # the same wall. Bail early; the cascade stops here.
-        if is_amazon_blocked():
+        # the same wall. Bail early; the cascade stops here. The
+        # resolver uses both kinds (G181): one cooling down leaves the other.
+        if is_amazon_blocked(KIND_STORE) and is_amazon_blocked(KIND_CATALOG):
             logger.info(
                 "amazon: search_author %r SKIPPED — soft-block cooldown "
                 "(%.0fs remaining)",
@@ -286,13 +291,13 @@ class AmazonSource(BaseSource):
         # layer dedupes downstream.
         del existing_titles, owned_titles, owned_only
 
-        # v2.19.0 — penalty box: bail early if amazon.com is in
-        # soft-block cooldown.
-        if is_amazon_blocked():
+        # v2.19.0 — penalty box: bail early if amazon.com's store pages
+        # are in soft-block cooldown.
+        if is_amazon_blocked(KIND_STORE):
             logger.info(
                 "amazon: get_author_books %r SKIPPED — soft-block cooldown "
                 "(%.0fs remaining)",
-                author_id, amazon_block_remaining_s(),
+                author_id, amazon_block_remaining_s(KIND_STORE),
             )
             return None
 
@@ -352,6 +357,7 @@ class AmazonSource(BaseSource):
                 record_amazon_soft_block(
                     f"/juvec for {amazon_author_id}: {exc}",
                     retry_after_s=exc.retry_after_s,
+                    kind=block_kind(KIND_STORE, exc.status_code),
                 )
             # Fall back to whatever the SSR populated
             products = list(page_data.products)
@@ -403,7 +409,9 @@ class AmazonSource(BaseSource):
     ) -> AllBooksPageData:
         url = _ALLBOOKS_URL_TEMPLATE.format(author_id=author_id)
         try:
-            resp = await session.get(url, timeout=30.0)
+            resp = await source_gate.request(
+                "amazon", lambda: session.get(url, timeout=30.0),
+            )
         except Exception as exc:
             raise _AllBooksFetchError(f"transport error: {exc}") from exc
 
@@ -433,6 +441,7 @@ class AmazonSource(BaseSource):
                     f"{len(body)}-byte body"
                     + (" (Akamai sensor challenge)" if status == 202 else ""),
                     retry_after_s=parse_retry_after(raw_ra),
+                    kind=block_kind(KIND_STORE, status),
                 )
             raise _AllBooksFetchError(
                 f"HTTP {status} (body {len(body)} bytes)"

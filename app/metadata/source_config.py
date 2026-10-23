@@ -70,13 +70,12 @@ _log = logging.getLogger("seshat.metadata.source_config")
 # whole Audible+Audnexus chain.
 KNOWN_SOURCES: dict[str, dict[str, Any]] = {
     "mam":         {"display": "MyAnonamouse",  "available_for": ("ebook", "audiobook"), "default_rate": 2.0, "mam_only": True},
-    # Goodreads — v2.13.0 Stage 6: 5s ±1s jitter default (was 2.0s).
-    # Conservative phased-rollout pace lets curl_cffi Chrome120 TLS
-    # impersonation clear Cloudflare without tripping density-based
-    # 202s. Existing installs keep their saved value; only fresh
-    # installs get 5.0s. Power users can dial up to 8s+ for extra
-    # margin or down for faster scans once Phase-A UAT confirms the
-    # bypass holds.
+    # Goodreads — v2.13.0 Stage 6: 5s (+0-1s jitter) default (was
+    # 2.0s). Goodreads sits behind AWS WAF Bot Control, which scores
+    # request density; curl_cffi Chrome120 impersonation gets the TLS
+    # handshake past it, the pace does the rest (book pages are
+    # challenged far sooner than list pages). Existing installs keep
+    # their saved value; only fresh installs get 5.0s.
     "goodreads":   {"display": "Goodreads",     "available_for": ("ebook", "audiobook"), "default_rate": 5.0},
     # Amazon: 30s default rate (was 2.0 through v2.10.x). v2.11.0
     # confirmed via single-shot probe that Amazon's bot detection
@@ -113,7 +112,10 @@ KNOWN_SOURCES: dict[str, dict[str, Any]] = {
 # Hardcover for ebook; Audible for audiobook), False elsewhere.
 _DEFAULT_NEW_INSTALL_STATE: dict[str, dict[str, Any]] = {
     "mam":         {"ebook_enrich": True,  "ebook_scan": True,  "audiobook_enrich": True,  "audiobook_scan": True,  "mandatory": False},
-    "goodreads":   {"ebook_enrich": True,  "ebook_scan": True,  "audiobook_enrich": True,  "audiobook_scan": True,  "mandatory": True},
+    # Goodreads — `book_page_gap` (seconds) paces book pages on top of the
+    # source rate; `include_nonfiction` lets non-fiction through the
+    # candidate worker's page filter (2026-10 audit wave 4b, G89 / G96).
+    "goodreads":   {"ebook_enrich": True,  "ebook_scan": True,  "audiobook_enrich": True,  "audiobook_scan": True,  "mandatory": True, "book_page_gap": 400.0, "include_nonfiction": False},
     # Amazon — v2.11.0 Stage 5++: Author-Store discovery re-enabled.
     # The pre-Stage-5++ density problem (45 detail GETs per author tripped
     # Akamai after 6-10 requests) is solved by the Author-Store flow:
@@ -169,10 +171,11 @@ _DEFAULT_NEW_INSTALL_STATE: dict[str, dict[str, Any]] = {
 # it's free and authoritative.
 #
 # v2.13.1 reshuffle — Goodreads restored to #2 (ebook) / #3 (audiobook)
-# after the v2.13.0 Stage-6 Cloudflare bypass + Phase-1/2 author-id
+# after the v2.13.0 Stage-6 TLS impersonation + Phase-1/2 author-id
 # backfill landed. The v2.11.0 demotion was based on Goodreads being
-# Cloudflare-blocked; with curl_cffi Chrome120 impersonation that
-# constraint is gone, and live UAT 2026-05-14 confirmed 0 soft-blocks
+# bot-blocked (AWS WAF; the code called it Cloudflare until 2026-10);
+# with curl_cffi Chrome120 impersonation that eased, and live UAT
+# 2026-05-14 confirmed 0 soft-blocks
 # across ~24 minutes of sustained burst traffic + 88% author
 # `goodreads_id` coverage across Mark's 740-author library.
 #
@@ -545,6 +548,36 @@ def get_source_rate_limit(settings: dict, name: str) -> float:
     except (TypeError, ValueError):
         meta = KNOWN_SOURCES.get(name, {})
         return float(meta.get("default_rate", 1.0))
+
+
+# Goodreads book pages wait their own gap in the source gate, on top of
+# the source rate (2026-10 audit wave 4b, G89): AWS WAF blocks a cluster
+# of book pages from one IP while list pages and autocomplete pass.
+GOODREADS_BOOK_PAGE_GAP_DEFAULT_S = 400.0
+GOODREADS_BOOK_PAGE_GAP_MAX_S = 3600.0
+
+
+def get_goodreads_book_page_gap(settings: dict) -> float:
+    """Seconds between the starts of two Goodreads book-page requests
+    (`metadata_sources.goodreads.book_page_gap`, default 400s: the wave-4
+    trial, G176 / G179)."""
+    entry = (settings.get("metadata_sources") or {}).get("goodreads") or {}
+    raw = entry.get("book_page_gap")
+    if raw is None:
+        return GOODREADS_BOOK_PAGE_GAP_DEFAULT_S
+    try:
+        return min(max(0.0, float(raw)), GOODREADS_BOOK_PAGE_GAP_MAX_S)
+    except (TypeError, ValueError):
+        return GOODREADS_BOOK_PAGE_GAP_DEFAULT_S
+
+
+def goodreads_includes_nonfiction(settings: dict) -> bool:
+    """Whether Goodreads may add non-fiction to discovery
+    (`metadata_sources.goodreads.include_nonfiction`, default off; G96 /
+    G98). Off: a book Goodreads files under a non-fiction genre, or whose
+    title names a non-book product, isn't created."""
+    entry = (settings.get("metadata_sources") or {}).get("goodreads") or {}
+    return bool(entry.get("include_nonfiction", False))
 
 
 def is_source_mandatory(settings: dict, name: str) -> bool:

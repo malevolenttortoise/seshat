@@ -49,7 +49,7 @@ from app.metadata.extract import BookMetadata, extract as extract_metadata
 from app.metadata.enricher import MetadataEnricher
 from app.metadata.record import MetaRecord
 from app.metadata.writer import patch_epub_metadata
-from app.orchestrator.auto_train import train_authors_from_blob
+from app.orchestrator.auto_train import train_authors_from_blob, train_coauthors
 from app.orchestrator.download_watcher import CompletionEvent
 from app.orchestrator.file_copier import copy_to_staging, find_book_files
 from app.sinks.base import SinkResult
@@ -59,10 +59,18 @@ from app.sinks.cwa import CWASink
 from app.sinks.folder import FolderSink
 from app.storage import calibre_adds as calibre_adds_storage
 from app.storage import grabs as grabs_storage
+from app.storage import import_checks as import_checks_storage
 from app.storage import pipeline as pipe_storage
 from app.storage import review_queue as review_storage
 
 _log = logging.getLogger("seshat.orchestrator.pipeline")
+
+# Review statuses `deliver_reviewed` will deliver from.
+_DELIVERABLE_STATUSES = frozenset({
+    review_storage.STATUS_PENDING,
+    review_storage.STATUS_SINK_PENDING,
+    review_storage.STATUS_IMPORT_FAILED,
+})
 
 # Book extensions used for single-file torrent matching.
 _BOOK_EXTS = (".epub", ".mobi", ".azw", ".azw3", ".pdf", ".m4b", ".mp3", ".m4a", ".cbz", ".cbr")
@@ -260,6 +268,17 @@ def _find_torrent_file(parent: Path, torrent_name: str) -> Optional[Path]:
     return None
 
 
+# Pipeline runs `process_completion` is driving in this process right now.
+# The self-heal sweep (`orchestrator.self_heal`) leaves these alone: a run
+# in staged / extracted / metadata_done that ISN'T here was left behind by
+# a restart or a cancelled task, and nothing else will resume it.
+_RUNS_IN_FLIGHT: set[int] = set()
+
+
+def runs_in_flight() -> frozenset[int]:
+    return frozenset(_RUNS_IN_FLIGHT)
+
+
 def _get_mam_token() -> str:
     """Read the current MAM token from the cookie module's in-memory cache."""
     try:
@@ -311,6 +330,7 @@ async def process_completion(
     `_fail()` and end up on the pipeline_run row.
     """
     run_id = event.pipeline_run_id
+    _RUNS_IN_FLIGHT.add(run_id)
 
     try:
         preps = await _prepare_book(
@@ -384,6 +404,8 @@ async def process_completion(
         except Exception:
             pass
         return False
+    finally:
+        _RUNS_IN_FLIGHT.discard(run_id)
 
 
 # ─── Phase halves ───────────────────────────────────────────────
@@ -1166,6 +1188,10 @@ async def _stage_for_review(
             title=prep.metadata.title or "",
             author_blob=prep.metadata.author or "",
             category=(grab.category if grab else "") or "",
+            categories=(
+                await grabs_storage.announce_categories(db, grab.announce_id)
+                if grab else ()
+            ),
         )
         if owned_matches:
             metadata_dict["duplicate_of_owned"] = [
@@ -1287,6 +1313,22 @@ async def _deliver_prepared(
         sink_name=sink_result.sink_name,
         sink_result=sink_result.detail,
     )
+    # CWA imports on its own and reports nothing back: look for the book
+    # in Calibre afterwards (wave 5a, G121; `orchestrator.import_check`).
+    if sink_result.sink_name == "cwa" and sink_result.detail:
+        await import_checks_storage.create(
+            db,
+            review_id=review_id,
+            grab_id=event.grab_id,
+            pipeline_run_id=run_id or None,
+            library_slug=prep.library_slug,
+            drop_path=sink_result.detail,
+            title=prep.metadata.title or "",
+            authors=[
+                a.strip() for a in (prep.metadata.author or "").split(",")
+                if a.strip()
+            ],
+        )
 
     if auto_train_enabled:
         author_blob = prep.announce_author or prep.metadata.author or ""
@@ -1297,6 +1339,18 @@ async def _deliver_prepared(
                     "pipeline: auto-trained %d author(s) from %s",
                     added, event.torrent_name,
                 )
+    # MAM's co-author list, saved when the dispatcher grabbed: trained now
+    # the book is delivered (S20, G203), not at grab, so a rejected review
+    # or a skipped grab trains nobody; 4+ credited authors train nobody
+    # (G204). Not gated by auto-train, as when it trained at grab.
+    coauthors = await grabs_storage.grab_coauthors(db, event.grab_id)
+    if coauthors:
+        added = await train_coauthors(db, coauthors, what=repr(event.torrent_name))
+        if added:
+            _log.info(
+                "pipeline: trained %d co-author(s) of %r on delivery",
+                added, event.torrent_name,
+            )
 
     await pipe_storage.set_state(db, run_id, pipe_storage.PIPE_COMPLETE)
     await grabs_storage.set_state(
@@ -1450,7 +1504,10 @@ async def deliver_reviewed(
     if entry is None:
         _log.warning("deliver_reviewed: review_id=%d not found", review_id)
         return False
-    if entry.status != review_storage.STATUS_PENDING:
+    # `sink_pending` = the review-timeout job's retry of a failed drop;
+    # `import_failed` = a Re-drop after CWA didn't import (wave 5a, G131 /
+    # G121). Before, only `pending` passed, so the sink retry never ran.
+    if entry.status not in _DELIVERABLE_STATUSES:
         _log.info(
             "deliver_reviewed: review_id=%d already in status %s",
             review_id, entry.status,
@@ -1577,6 +1634,7 @@ async def deliver_reviewed(
         delivery_source=delivery_source,
         temp_dir=patch_temp_dir,
         cleanup_temp=patch_temp_dir is not None,
+        library_slug=entry.library_slug,
     )
 
     # Synthesize a CompletionEvent so _deliver_prepared can reuse
@@ -1614,13 +1672,17 @@ async def deliver_reviewed(
             decision_note="timeout auto-add" if was_timeout else "approved",
         )
         # Clean up the review staging dir now that the book has
-        # been delivered.
-        try:
-            review_dir = Path(entry.staged_path)
-            if review_dir.exists():
-                shutil.rmtree(str(review_dir), ignore_errors=True)
-        except Exception:
-            pass
+        # been delivered, unless a CWA import check is still waiting:
+        # its files are what a Re-drop sends (wave 5a, G121). The check
+        # removes them once Calibre has the book.
+        check = await import_checks_storage.latest_for_review(db, review_id)
+        if check is None or check.state != import_checks_storage.STATE_PENDING:
+            try:
+                review_dir = Path(entry.staged_path)
+                if review_dir.exists():
+                    shutil.rmtree(str(review_dir), ignore_errors=True)
+            except Exception:
+                pass
     else:
         # Sink failed. Track the attempt count and either queue for
         # retry or dump to the emergency export folder.

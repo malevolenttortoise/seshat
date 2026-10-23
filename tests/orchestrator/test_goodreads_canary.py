@@ -52,7 +52,7 @@ def stub_session(monkeypatch):
     from app.metadata import goodreads_session as gr
 
     def factory(responses: list[tuple[int, bytes]]):
-        session = gr.GoodreadsSession(rate_limit=0)
+        session = gr.GoodreadsSession()
         monkeypatch.setattr(session, "_get_curl", lambda: None)
 
         class FakeClient:

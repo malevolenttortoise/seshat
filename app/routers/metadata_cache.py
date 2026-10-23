@@ -82,6 +82,10 @@ class QueueStatsModel(BaseModel):
     other: int  # any unknown status — defensive, should be 0 in practice
     due_now: int = 0          # pending AND next_scan_due_at <= now()
     scheduled_later: int = 0  # pending AND next_scan_due_at > now()
+    # Refresh spread (2026-10 audit wave 4, G70): authors attempted since
+    # local midnight, and the daily cap on routine refreshes.
+    refreshed_today: int = 0
+    daily_cap: int = 0
 
 
 class CacheStatsModel(BaseModel):
@@ -145,6 +149,10 @@ class StatusResponse(BaseModel):
     worker: WorkerStatusModel
     queue: QueueStatsModel
     cache: CacheStatsModel
+    # Goodreads only (2026-10 audit wave 4b, S4): the candidate worker's
+    # progress — first fill, weekly new IDs, created / rejected, the next
+    # book-page slot, phase 2. None for Amazon.
+    candidates: Optional[dict] = None
 
 
 class SettingsPatchRequest(BaseModel):
@@ -158,6 +166,8 @@ class SettingsPatchRequest(BaseModel):
     enabled: Optional[bool] = Field(default=None)
     mode: Optional[str] = Field(default=None)  # continuous|scheduled|disabled
     schedule: Optional[ScheduleModel] = Field(default=None)
+    # Goodreads only (G88): phase 2 of the candidate worker on / off.
+    phase2_enabled: Optional[bool] = Field(default=None)
 
 
 class SettingsPatchResponse(BaseModel):
@@ -166,6 +176,7 @@ class SettingsPatchResponse(BaseModel):
     enabled: bool
     mode: str
     schedule: ScheduleModel
+    phase2_enabled: Optional[bool] = None
 
 
 class ResetCooldownResponse(BaseModel):
@@ -337,6 +348,10 @@ async def get_status(source: str) -> StatusResponse:
             (now_for_queue,),
         )
         due_now = int((await cur.fetchone())[0])
+        from app.discovery.metadata_cache_worker import refresh_cap_state
+        refreshed_today, daily_cap = await refresh_cap_state(
+            db, source, now_for_queue,
+        )
 
         # Cache state + per-source-shape detail counts.
         st_table = metadata_cache.state_table(source)
@@ -380,7 +395,8 @@ async def get_status(source: str) -> StatusResponse:
         await db.close()
 
     now = time.time()
-    hb = wrow["last_heartbeat_at"] if wrow else None
+    from app.discovery.metadata_cache_worker import worker_heartbeat
+    hb = worker_heartbeat(source, wrow["last_heartbeat_at"] if wrow else None)
     scan_completed = wrow["last_scan_completed_at"] if wrow else None
     worker_model = WorkerStatusModel(
         last_block_at=float(wrow["last_block_at"]) if wrow else 0.0,
@@ -424,6 +440,8 @@ async def get_status(source: str) -> StatusResponse:
         other=other,
         due_now=due_now,
         scheduled_later=scheduled_later,
+        refreshed_today=refreshed_today,
+        daily_cap=daily_cap,
     )
 
     cache_model = CacheStatsModel(
@@ -450,6 +468,14 @@ async def get_status(source: str) -> StatusResponse:
     inside = metadata_cache_worker.is_inside_schedule_window(source)
     wait_s = metadata_cache_worker.seconds_until_window_open(source)
 
+    candidates = None
+    if is_gr:
+        try:
+            from app.discovery import goodreads_candidates
+            candidates = await goodreads_candidates.status()
+        except Exception:
+            _log.exception("metadata_cache status: candidate progress failed")
+
     return StatusResponse(
         source=source,
         enabled=enabled,
@@ -461,6 +487,7 @@ async def get_status(source: str) -> StatusResponse:
         worker=worker_model,
         queue=queue_model,
         cache=cache_model,
+        candidates=candidates,
     )
 
 
@@ -540,6 +567,15 @@ async def patch_settings(
             source, body.schedule.active_hours, body.schedule.timezone,
         )
 
+    if body.phase2_enabled is not None:
+        if source != metadata_cache.SOURCE_GOODREADS:
+            raise HTTPException(400, "phase2_enabled applies to goodreads only")
+        _cache_settings_set(source, key="phase2_enabled", value=bool(body.phase2_enabled))
+        _log.info(
+            "metadata_cache settings: goodreads phase 2 → %s",
+            "on" if body.phase2_enabled else "off",
+        )
+
     from app.discovery import metadata_cache_worker
     new_enabled = bool(_cache_settings_get(source).get("enabled", False))
     new_mode = metadata_cache_worker.get_worker_mode(source)
@@ -569,6 +605,10 @@ async def patch_settings(
         schedule=ScheduleModel(
             active_hours=str(sched_now.get("active_hours") or "10:00-22:00"),
             timezone=str(sched_now.get("timezone") or ""),
+        ),
+        phase2_enabled=(
+            bool(_cache_settings_get(source).get("phase2_enabled", True))
+            if source == metadata_cache.SOURCE_GOODREADS else None
         ),
     )
 
@@ -773,12 +813,14 @@ async def reset_cooldown(source: str) -> ResetCooldownResponse:
     previously_blocked = is_amazon_blocked()
     previous_remaining = amazon_block_remaining_s()
     r._blocked_until = 0.0          # type: ignore[attr-defined]
+    r._kind_until.clear()           # type: ignore[attr-defined]
     r._block_reason = ""            # type: ignore[attr-defined]
     # Persist the clear so a container restart doesn't restore the
     # cooldown via v2.20.3's `_load_persisted_block_state`.
     try:
         s = dict(load_settings())
         s["amazon_blocked_until"] = 0.0
+        s["amazon_blocked_until_by_kind"] = {}
         s["amazon_block_reason"] = ""
         s["amazon_blocked_since"] = None
         save_settings(s)

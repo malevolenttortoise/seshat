@@ -657,10 +657,11 @@ class TestCachedSourceGoodreads:
         async def _fake_get_author_books(
             self, author_id, existing_titles=None,
             owned_titles=None, owned_only=False, start_at=0,
-            cached_raw_books=None,
+            cached_raw_books=None, cache_only=False,
         ):
             observed["author_id"] = author_id
             observed["cached_raw_books"] = cached_raw_books
+            observed["cache_only"] = cache_only
             return AuthorResult(
                 name=author_id, external_id=author_id,
                 books=[], series=[],
@@ -683,6 +684,8 @@ class TestCachedSourceGoodreads:
         assert [r["book_id"] for r in observed["cached_raw_books"]] == [
             "h1", "h2",
         ]
+        # A cache-hit scan is cache-only (2026-10 audit wave 4b, G-C).
+        assert observed["cache_only"] is True
 
     async def test_no_active_library_skips_silently(
         self, gr_reader_under, monkeypatch,
@@ -727,6 +730,7 @@ class TestGoodreadsResumeThroughTheCacheReader:
         async def slow_get_author_books(
             self, author_id, existing_titles=None, owned_titles=None,
             owned_only=False, start_at=0, cached_raw_books=None,
+            cache_only=False,
         ):
             seen.append((start_at, self._partial_state, set(self._known_titles)))
             if start_at == 0:

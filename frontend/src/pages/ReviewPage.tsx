@@ -14,17 +14,18 @@
 //
 // Polling cadence: 30s. Approval/rejection refreshes immediately so
 // the list shrinks on user action without waiting for the next tick.
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Btn } from "../components/Btn";
 import { Section } from "../components/Section";
 import { Spin } from "../components/Spin";
-import { api } from "../api";
 import { useTheme } from "../theme";
-import { useVisibleInterval } from "../hooks/useVisibleInterval";
+import { useReviewQueue } from "../hooks/useReviewQueue";
 import { useViewport } from "../hooks/useViewport";
 import { useMobileCodepath } from "../components/mobile";
 import MobileReviewPage from "./MobileReviewPage";
 import { storedCoverUrl } from "../lib/covers";
+import { ImportFailedCard } from "../components/review/ImportFailedCard";
+import { CategoryChips } from "../components/CategoryChips";
 
 interface ReviewItem {
   id: number;
@@ -87,11 +88,10 @@ interface ReviewItem {
   cover_path: string | null;
   status: string;
   created_at: string;
-}
-
-interface ReviewListResponse {
-  items: ReviewItem[];
-  pending_count: number;
+  // Why the CWA import failed, for status "import_failed" (wave 5a).
+  decision_note?: string | null;
+  // The grab's MAM content tags (wave 5a); null when only one is known.
+  categories?: string[] | null;
 }
 
 export default function ReviewPage() {
@@ -102,139 +102,26 @@ export default function ReviewPage() {
 
 function DesktopReviewPage() {
   const theme = useTheme();
-  const [items, setItems] = useState<ReviewItem[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busyId, setBusyId] = useState<number | null>(null);
+  const {
+    items, error, busyId, bulkBusy, failed, pending,
+    approve, saveEdits, reEnrich, reject, claimForOwned: claim, redrop, markImported, bulk,
+  } = useReviewQueue<ReviewItem>();
 
-  async function refresh() {
-    try {
-      const r = await api.get<ReviewListResponse>("/v1/review");
-      setItems(r.items);
-      setError(null);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  useEffect(() => { refresh(); }, []);
-  useVisibleInterval(refresh, 30_000);
-
-  async function approve(id: number, metadata?: Record<string, unknown>) {
-    setBusyId(id);
-    try {
-      await api.post(`/v1/review/${id}/approve`, {
-        metadata: metadata || null,
-      });
-      await refresh();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusyId(null);
-    }
-  }
-
-  async function saveEdits(id: number, metadata: Record<string, unknown>) {
-    setBusyId(id);
-    try {
-      await api.post(`/v1/review/${id}/save`, { metadata });
-      await refresh();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusyId(null);
-    }
-  }
-
-  async function reEnrich(id: number, metadata: Record<string, unknown>): Promise<boolean> {
-    setBusyId(id);
-    setError(null);
-    try {
-      await api.post(`/v1/review/${id}/re-enrich`, { metadata });
-      await refresh();
-      return true;
-    } catch (e) {
-      setError(String(e));
-      return false;
-    } finally {
-      setBusyId(null);
-    }
-  }
-
-  async function reject(id: number) {
-    setBusyId(id);
-    try {
-      await api.post(`/v1/review/${id}/reject`, { note: "rejected via UI" });
-      await refresh();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusyId(null);
-    }
-  }
-
-  async function claimForOwned(
-    id: number, library_slug: string, book_id: number,
-  ) {
-    setBusyId(id);
-    try {
-      await api.post(`/v1/review/${id}/claim-for-owned`, {
-        library_slug, book_id,
-        note: "claimed for owned via UI",
-      });
-      await refresh();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusyId(null);
-    }
-  }
-
-  const [bulkBusy, setBulkBusy] = useState(false);
+  const claimForOwned = (id: number, library_slug: string, book_id: number) =>
+    claim(id, library_slug, book_id, "claimed for owned via UI");
 
   async function bulkApprove() {
-    const count = items?.length ?? 0;
+    const count = pending.length;
     if (count === 0) return;
     if (!confirm(`Approve all ${count} pending review(s)? Each one will go to its configured sink.`)) return;
-    setBulkBusy(true);
-    setError(null);
-    try {
-      const r = await api.post<{ processed: number; failed: number; errors: string[] }>(
-        `/v1/review/bulk/approve`,
-      );
-      if (r.failed > 0) {
-        setError(
-          `Approved ${r.processed}, ${r.failed} failed. First errors: ${r.errors.slice(0, 3).join("; ")}`,
-        );
-      }
-      await refresh();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBulkBusy(false);
-    }
+    await bulk("approve");
   }
 
   async function bulkReject() {
-    const count = items?.length ?? 0;
+    const count = pending.length;
     if (count === 0) return;
     if (!confirm(`Reject all ${count} pending review(s)? Staged files will be deleted; seeding originals untouched.`)) return;
-    setBulkBusy(true);
-    setError(null);
-    try {
-      const r = await api.post<{ processed: number; failed: number; errors: string[] }>(
-        `/v1/review/bulk/reject`, { note: "bulk rejected via UI" },
-      );
-      if (r.failed > 0) {
-        setError(
-          `Rejected ${r.processed}, ${r.failed} failed. First errors: ${r.errors.slice(0, 3).join("; ")}`,
-        );
-      }
-      await refresh();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBulkBusy(false);
-    }
+    await bulk("reject", "bulk rejected via UI");
   }
 
   return (
@@ -254,7 +141,7 @@ function DesktopReviewPage() {
             Books waiting on your approval before delivery to Calibre.
           </p>
         </div>
-        {items !== null && items.length > 0 && (
+        {pending.length > 0 && (
           <div style={{ display: "flex", gap: 8 }}>
             <Btn
               variant="primary"
@@ -262,7 +149,7 @@ function DesktopReviewPage() {
               onClick={bulkApprove}
               disabled={bulkBusy || busyId !== null}
             >
-              {bulkBusy ? <Spin size={14} /> : `Approve All (${items.length})`}
+              {bulkBusy ? <Spin size={14} /> : `Approve All (${pending.length})`}
             </Btn>
             <Btn
               variant="danger"
@@ -305,7 +192,16 @@ function DesktopReviewPage() {
         </Section>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {groupBundles(items).map((group) =>
+          {failed.map((item) => (
+            <ImportFailedCard
+              key={item.id}
+              item={item}
+              busy={busyId === item.id}
+              onRedrop={() => redrop(item.id)}
+              onMarkImported={() => markImported(item.id)}
+            />
+          ))}
+          {groupBundles(pending).map((group) =>
             group.length === 1 ? (
               <ReviewCard
                 key={group[0].id}
@@ -637,6 +533,9 @@ function ReviewCard({
           <EditInput value={editAuthors} onChange={setEditAuthors} placeholder="Author(s)" style={{ fontSize: 14 }} />
         ) : (
           <div style={{ fontSize: 14, color: theme.text2, marginTop: 2 }}>{authors}</div>
+        )}
+        {item.categories && item.categories.length > 0 && (
+          <div style={{ marginTop: 4 }}><CategoryChips categories={item.categories} /></div>
         )}
         {editing ? (
           <div style={{ display: "flex", gap: 8, marginTop: 4 }}>

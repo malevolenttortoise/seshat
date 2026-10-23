@@ -7,44 +7,36 @@ the `search_author` policy lock makes Goodreads inert for that
 author's source-scans), this module resolves the author's
 goodreads_id from one of their books.
 
-Strategy (cheapest-first):
+Strategy (Phase 1; autocomplete first since the 2026-10 audit, G90):
 
   1. Pick a book for this author with the strongest available
-     identifier:
+     identifier (its Goodreads book ID, ISBN or ASIN).
 
-       a. `books.goodreads_id` already stored on the book
-          → derive directly, zero resolver hops
-       b. `books.isbn` populated
-          → resolver chain (auto_complete / hardcover book_mappings /
-            openlibrary) returns the goodreads_book_id
-       c. `books.asin` populated
-          → same resolver chain
+  2. One Goodreads autocomplete for it — by ISBN / ASIN, or by title
+     matched on the book's Goodreads ID — and, when that finds nothing,
+     one more with the author's name added. A hit names the book's
+     author: when it's our author (normalised name), that's the ID, with
+     no book page at all.
 
-  2. With a goodreads_book_id in hand, fetch `/book/show/{id}` via
-     the v2.13.0 `goodreads_session` (curl_cffi Chrome120 bypass).
+  3. Only when the hit names someone else first (a co-authored book),
+     fetch `/book/show/{id}` and look for our author among every
+     JSON-LD author on the page.
 
-  3. Parse the response's JSON-LD `author[].url` (or `sameAs`) for
-     the `/author/show/{id}` pattern. That's the author's
-     goodreads_id.
+  4. Persist to `authors.goodreads_id` (mirrored to the same person's
+     author in the other libraries).
 
-  4. Persist to `authors.goodreads_id`. Future source-scans pick it
-     up via the existing `_try_source` short-circuit and fan out
-     `/author/list/{id}` + per-book detail fetches.
-
-  5. Return the resolved id, or `None` on any failure (no book with
-     resolvable identifier, resolver chain dry, /book/show 4xx, no
-     parseable author URL, etc.).
+Book pages are the kind of Goodreads request AWS WAF blocks; until the
+2026-10 audit every author cost one.
 
 Used by:
 
-  - `_try_source` in `app/discovery/lookup.py` — fallback when
-    Goodreads's stored author_id is missing, BEFORE letting
-    `search_author` no-op.
-  - The async backfill task that runs after Calibre sync (sweeps
-    every author missing a goodreads_id, populates whatever it can).
+  - Hygiene's author-ID job (`hygiene.job_author_id_backfill`).
+  - The weekly job (`weekly_author_id_backfill`, G84 / G104): first an ID
+    copied from the same person's author in another library, then Phase
+    1, then Phase 2 for authors with books Phase 1 couldn't resolve.
 
-Both callers share the same code path so the rate-limit + soft-block
-detection + caching come along for free.
+Scans no longer call it (G84 / call 5): a new author gets its Goodreads
+ID from the weekly job, then its list page from the cache worker.
 """
 from __future__ import annotations
 
@@ -56,13 +48,12 @@ from typing import Optional
 
 from bs4 import BeautifulSoup
 
+from app import state
 from app.config import CALIBRE_DB_PATH
 from app.discovery.database import get_db
 from app.metadata import goodreads_session
+from app.metadata import source_gate
 from app.metadata.author_names import normalize_author_name
-from app.metadata.goodreads_id_resolver import (
-    ResolveQuery, resolve_goodreads_id,
-)
 
 _log = logging.getLogger("seshat.discovery.goodreads_author_backfill")
 
@@ -223,29 +214,6 @@ def _parse_author_id_from_html(html: str) -> Optional[str]:
     return None
 
 
-async def _derive_goodreads_book_id(book: dict) -> Optional[str]:
-    """Given a book row from `_pick_seed_book`, return the
-    goodreads_book_id we should fetch /book/show for.
-
-    Direct path: book.goodreads_id is already populated → use it.
-    Resolver path: derive via the v2.13.0 resolver chain from ISBN /
-    ASIN. The resolver itself caches outcomes (30-day TTL on hits)
-    so a repeat call is free.
-    """
-    if book.get("goodreads_id"):
-        return str(book["goodreads_id"])
-
-    asin = book.get("asin") or book.get("amazon_id") or ""
-    isbn = book.get("isbn") or ""
-    if not isbn and not asin:
-        return None
-
-    result = await resolve_goodreads_id(ResolveQuery(isbn=isbn, asin=asin))
-    if result and result.goodreads_book_id:
-        return result.goodreads_book_id
-    return None
-
-
 async def _persist_author_goodreads_id(author_id: int, goodreads_id: str) -> None:
     """Write authors.goodreads_id. Idempotent — no-op if already set
     to the same value (cheap optimization for repeat backfill runs).
@@ -396,7 +364,7 @@ async def resolve_author_via_calibre_coauthor(
             )
             return None
 
-        if goodreads_session.is_cloudflare_soft_block(resp):
+        if goodreads_session.is_soft_block(resp):
             _log.info(
                 "backfill-phase2: soft-blocked fetching %s — abort.", url,
             )
@@ -450,32 +418,62 @@ async def resolve_author_via_calibre_coauthor(
         return None
 
 
-async def backfill_missing_author_ids(*, limit: Optional[int] = None) -> dict:
+# Authors this process has already tried to resolve, per phase and
+# library (ADR-0005): an author whose books resolve to nothing is not
+# retried by the same phase until the next restart (Phase 2's Calibre
+# lookup still gets its own try). Until the 2026-10 audit every library
+# sync re-tried every unresolvable author.
+_attempted: set[tuple[str, str, int]] = set()
+
+
+def _book_pages_backing_off() -> bool:
+    return goodreads_session.is_backing_off(source_gate.KIND_BOOK_PAGE)
+
+
+def _autocomplete_backing_off() -> bool:
+    """Phase 1 is autocomplete first (G90): it stops on an autocomplete
+    backoff; a book-page one only stops its co-author fallback."""
+    return goodreads_session.is_backing_off(source_gate.KIND_AUTOCOMPLETE)
+
+
+def _library_key() -> str:
+    from app.discovery.database import get_active_library
+    return str(get_active_library() or "")
+
+
+def reset_attempted_for_tests() -> None:
+    _attempted.clear()
+
+
+@source_gate.as_caller(source_gate.CALLER_BACKFILL)
+async def backfill_missing_author_ids(
+    *, limit: Optional[int] = None,
+    attempted: Optional[set] = None,
+    phase2_with_books_only: bool = False,
+) -> dict:
     """Sweep every author missing `goodreads_id` whose books have at
     least one resolvable identifier, and resolve via
     `resolve_author_goodreads_id`.
 
-    Intended to run as a fire-and-forget background task after each
-    Calibre sync completes — Calibre may have just freshly mined a
-    pile of new identifiers that the previous backfill pass couldn't
-    use.
+    Runs from Hygiene (`hygiene.job_author_id_backfill`). Until the
+    2026-10 audit it also ran fire-and-forget after every Calibre and
+    Audiobookshelf sync (every two hours on one install).
 
-    Rate-limit comes for free from `goodreads_session` (5s + 0–1s
-    jitter per /book/show fetch). On a fresh install with ~200 authors
-    to backfill, expect ~17 minutes wall time. Non-blocking — caller
-    fires this via `asyncio.create_task`.
-
-    Per the Phase-A bypass dispatcher gate: if any single backfill
-    fetch returns a soft-block, the session module flips state to
-    `soft_blocked` and the next iteration's `goodreads_session.get`
-    call will... still fire (the dispatcher skip lives in the
-    enricher/source-scan path, not at the session layer). To avoid
-    pounding Cloudflare during a soft-block window, we short-circuit
-    on `is_soft_blocked()` and abort the sweep early. Picks up on
-    the next Calibre sync.
+    Each request waits Goodreads' turn at the Metadata Sources rate (the
+    source gate). Authors already tried in this process are skipped
+    (`_attempted`, ADR-0005), and the sweep stops once book pages are
+    backing off after an AWS WAF block; the next run picks up the rest.
 
     `limit` caps the number of authors processed per call (None =
     no cap). Test hook + lever for cautious rollouts.
+
+    `attempted` is the set of authors already tried: Hygiene shares the
+    process-wide one (an author is tried once until a restart, so a
+    200-author Hygiene run moves on to the next batch); the weekly job
+    passes a fresh set, so each run tries every unresolved author once
+    (G91). `phase2_with_books_only` limits Phase 2 to authors with books
+    that Phase 1 couldn't resolve (the weekly job, G104); bookless
+    co-authors / pen names are left to Hygiene.
 
     Returns a stats dict suitable for logging:
       {"considered": int, "resolved": int, "missed": int,
@@ -513,12 +511,21 @@ async def backfill_missing_author_ids(*, limit: Optional[int] = None) -> dict:
     finally:
         await db.close()
 
+    tried = _attempted if attempted is None else attempted
     candidates = [(int(r[0]), str(r[1])) for r in rows]
     if not candidates:
         _log.info(
             "backfill: no Phase-1 candidates (no author needs a "
             "books-table reverse-lookup) — proceeding to Phase 2"
         )
+    slug = _library_key()
+    fresh = [(a, n) for a, n in candidates if ("p1", slug, a) not in tried]
+    if candidates and not fresh:
+        _log.info(
+            "backfill: only previously-attempted authors remain (%d) — "
+            "skipping Phase 1 until the next restart", len(candidates),
+        )
+    candidates = fresh
     if limit is not None:
         candidates = candidates[:limit]
 
@@ -529,17 +536,18 @@ async def backfill_missing_author_ids(*, limit: Optional[int] = None) -> dict:
     )
 
     for author_id, name in candidates:
-        # Bail early if a previous iteration tripped Cloudflare.
-        if goodreads_session.is_soft_blocked():
+        # Stop once autocomplete is backing off after a block.
+        if _autocomplete_backing_off():
             stats["skipped_soft_blocked"] = len(candidates) - stats["considered"]
             _log.info(
-                "backfill: aborting sweep — session state is "
-                "soft_blocked. %d author(s) deferred to next Calibre "
-                "sync (already resolved: %d, missed: %d).",
+                "backfill: stopping — Goodreads autocomplete is backing "
+                "off. %d author(s) left for the next run (already "
+                "resolved: %d, missed: %d).",
                 stats["skipped_soft_blocked"],
                 stats["resolved"], stats["missed"],
             )
             break
+        tried.add(("p1", slug, author_id))
         stats["considered"] += 1
         try:
             resolved = await resolve_author_goodreads_id(author_id)
@@ -570,10 +578,9 @@ async def backfill_missing_author_ids(*, limit: Optional[int] = None) -> dict:
     # query Calibre's metadata.db directly for any book they
     # contributed to that carries a `goodreads` identifier, fetch
     # /book/show, and match by normalized name.
-    if goodreads_session.is_soft_blocked():
+    if _book_pages_backing_off():
         _log.info(
-            "backfill-phase2: skipping (session state is soft_blocked "
-            "from Phase 1)"
+            "backfill-phase2: skipping (Goodreads book pages are backing off)"
         )
         return stats
 
@@ -585,6 +592,10 @@ async def backfill_missing_author_ids(*, limit: Optional[int] = None) -> dict:
             """
             SELECT a.id, a.name FROM authors a
             WHERE (a.goodreads_id IS NULL OR a.goodreads_id = '')
+            """ + (
+                "AND a.id IN (SELECT author_id FROM book_authors) "
+                if phase2_with_books_only else ""
+            ) + """
             ORDER BY a.id
             """
         )
@@ -592,7 +603,10 @@ async def backfill_missing_author_ids(*, limit: Optional[int] = None) -> dict:
     finally:
         await db.close()
 
-    phase2_candidates = [(int(r[0]), str(r[1])) for r in phase2_rows]
+    phase2_candidates = [
+        (int(r[0]), str(r[1])) for r in phase2_rows
+        if ("p2", slug, int(r[0])) not in tried
+    ]
     if limit is not None:
         # Honor the same limit across both phases combined (best-effort).
         remaining = max(0, limit - stats["considered"])
@@ -605,16 +619,17 @@ async def backfill_missing_author_ids(*, limit: Optional[int] = None) -> dict:
             len(phase2_candidates),
         )
         for author_id, name in phase2_candidates:
-            if goodreads_session.is_soft_blocked():
+            if _book_pages_backing_off():
                 phase2_stats["skipped_soft_blocked"] = (
                     len(phase2_candidates) - phase2_stats["considered"]
                 )
                 _log.info(
-                    "backfill-phase2: aborting — session state is "
-                    "soft_blocked. %d deferred.",
+                    "backfill-phase2: stopping — Goodreads book pages are "
+                    "backing off. %d left for the next run.",
                     phase2_stats["skipped_soft_blocked"],
                 )
                 break
+            tried.add(("p2", slug, author_id))
             phase2_stats["considered"] += 1
             try:
                 resolved = await resolve_author_via_calibre_coauthor(
@@ -647,6 +662,79 @@ async def backfill_missing_author_ids(*, limit: Optional[int] = None) -> dict:
     return stats
 
 
+_AUTOCOMPLETE = "https://www.goodreads.com/book/auto_complete?format=json&q="
+
+
+async def _autocomplete_hits(query: str) -> tuple[str, list]:
+    """('ok', hits) | ('blocked', []) | ('error', [])."""
+    import urllib.parse
+    session = await goodreads_session.get_session()
+    try:
+        resp = await session.get(_AUTOCOMPLETE + urllib.parse.quote(query))
+    except goodreads_session.GoodreadsBackingOff:
+        return "blocked", []
+    except Exception as e:
+        _log.debug("backfill: autocomplete error for %r: %s", query, e)
+        return "error", []
+    if goodreads_session.is_soft_block(resp):
+        return "blocked", []
+    if getattr(resp, "status_code", None) != 200:
+        return "error", []
+    try:
+        data = resp.json()
+    except Exception:
+        return "error", []
+    return "ok", [h for h in data if isinstance(h, dict)] if isinstance(data, list) else []
+
+
+async def _author_via_autocomplete(
+    book: dict, author_name: str, target_norm: str,
+) -> tuple[str, Optional[str], Optional[str]]:
+    """G90: the author's Goodreads ID from autocomplete. Returns
+    ('match', author_id, book_id) when the hit's author is ours,
+    ('other_author', None, book_id) when the book's hit names someone
+    else first (a co-authored book: its page lists every author),
+    ('blocked', None, None) or ('miss', None, None)."""
+    title = str(book.get("title") or "")
+    gr_book = str(book.get("goodreads_id") or "")
+    ident = str(book.get("isbn") or book.get("asin") or book.get("amazon_id") or "")
+    queries: list[tuple[str, Optional[str]]] = []
+    if gr_book and title:
+        queries.append((title, gr_book))
+    elif ident:
+        queries.append((ident, None))
+    if title and author_name:
+        queries.append((f"{title} {author_name}", gr_book or None))
+    for i, (query, want) in enumerate(queries[:2]):
+        status, hits = await _autocomplete_hits(query)
+        if status == "blocked":
+            return "blocked", None, None
+        if status != "ok" or not hits:
+            continue
+        if want:
+            hit = next((h for h in hits if str(h.get("bookId")) == want), None)
+        elif i == 0:
+            hit = hits[0]            # an ISBN / ASIN query: that edition
+        else:
+            hit = next((
+                h for h in hits
+                if normalize_author_name(str((h.get("author") or {}).get("name") or ""))
+                == target_norm
+            ), None)
+        if hit is None:
+            continue
+        try:
+            from app.discovery import goodreads_store
+            await goodreads_store.save_hit(hit)
+        except Exception:
+            _log.debug("backfill: storing the hit failed", exc_info=True)
+        author = hit.get("author") or {}
+        if author.get("id") and normalize_author_name(str(author.get("name") or "")) == target_norm:
+            return "match", str(author["id"]), str(hit.get("bookId") or "")
+        return "other_author", None, str(hit.get("bookId") or "") or None
+    return "miss", None, None
+
+
 async def resolve_author_goodreads_id(author_id: int) -> Optional[str]:
     """Top-level helper. Resolves an author's goodreads_id from
     their books and persists it.
@@ -654,6 +742,10 @@ async def resolve_author_goodreads_id(author_id: int) -> Optional[str]:
     Returns the goodreads_id string on success, None on any failure.
     Never raises — author-resolution failures are non-fatal everywhere
     this is called from.
+
+    Autocomplete first (2026-10 audit, G90): one or two autocompletes
+    for a seed book, and the book page only when the hit names a
+    co-author first.
 
     v3.6.2 — name-verification guard. Before this fix, Phase 1 stamped
     whichever author appeared FIRST in the seed book's JSON-LD `author[]`
@@ -663,11 +755,10 @@ async def resolve_author_goodreads_id(author_id: int) -> Optional[str]:
     wrong persons — produced the Chohokiteki Kaeru → Roy Colt and
     Fehu Kazuno → Matt Waid wrong-merges observed live 2026-06-02.
     Mirrors Phase 2's existing match-by-normalized-name pattern at
-    `_resolve_via_calibre_coauthor`.
+    `_resolve_via_calibre_coauthor`. Autocomplete hits pass the same
+    name check.
     """
     try:
-        # Read the author's name first so we can verify the GR
-        # resolution by normalized-name match below.
         db = await get_db()
         try:
             row = await (await db.execute(
@@ -692,15 +783,39 @@ async def resolve_author_goodreads_id(author_id: int) -> Optional[str]:
             )
             return None
 
-        book_id = await _derive_goodreads_book_id(book)
-        if not book_id:
-            _log.debug(
-                "backfill: could not derive goodreads_book_id for author_id=%d "
-                "from seed book id=%s (resolver chain dry)",
-                author_id, book.get("id"),
+        status, match, book_id = await _author_via_autocomplete(
+            book, author_name, target_norm,
+        )
+        if status == "match" and match:
+            await _persist_author_goodreads_id(author_id, match)
+            _log.info(
+                "backfill: author_id=%d %r ← goodreads_id=%s (autocomplete, "
+                "seed book id=%s, goodreads book %s)",
+                author_id, author_name, match, book.get("id"), book_id,
+            )
+            return match
+        if status != "other_author" or not book_id:
+            _log.info(
+                "backfill: author_id=%d %r — autocomplete %s (seed book id=%s); "
+                "tried again next run",
+                author_id, author_name, status, book.get("id"),
             )
             return None
+        return await _author_from_book_page(author_id, author_name, target_norm, book, book_id)
+    except Exception:
+        _log.exception(
+            "backfill: unexpected error resolving author_id=%d (non-fatal)",
+            author_id,
+        )
+        return None
 
+
+async def _author_from_book_page(
+    author_id: int, author_name: str, target_norm: str, book: dict, book_id: str,
+) -> Optional[str]:
+    """The co-authored case (G90): our author among every JSON-LD author on
+    the book's page."""
+    try:
         session = await goodreads_session.get_session()
         url = f"https://www.goodreads.com/book/show/{book_id}"
         try:
@@ -712,10 +827,10 @@ async def resolve_author_goodreads_id(author_id: int) -> Optional[str]:
             )
             return None
 
-        if goodreads_session.is_cloudflare_soft_block(resp):
+        if goodreads_session.is_soft_block(resp):
             _log.info(
-                "backfill: soft-blocked fetching %s — abort, dispatcher "
-                "skip will gate further attempts", url,
+                "backfill: blocked by AWS WAF fetching %s — book pages "
+                "backing off", url,
             )
             return None
         status = getattr(resp, "status_code", 0)
@@ -775,3 +890,116 @@ async def resolve_author_goodreads_id(author_id: int) -> Optional[str]:
             author_id,
         )
         return None
+
+
+
+# ─── The weekly job (2026-10 audit wave 4b, G84 / G91 / G104) ──────────
+
+
+async def copy_goodreads_ids_from_twins() -> int:
+    """Give an author without a Goodreads ID the one the same person's
+    author in another library has (G104; no request). Audiobook-library
+    authors are mostly twins of ebook authors. Returns how many were
+    filled."""
+    from app.discovery.author_identity import linked_authors, person_id_for
+    from app.discovery import metadata_cache
+    copied = 0
+    for lib in state._discovered_libraries:
+        slug = lib.get("slug")
+        if not slug:
+            continue
+        db = await get_db(slug=slug)
+        try:
+            missing = [int(r[0]) for r in await (await db.execute(
+                "SELECT id FROM authors WHERE goodreads_id IS NULL OR goodreads_id = ''"
+            )).fetchall()]
+        finally:
+            await db.close()
+        for aid in missing:
+            try:
+                pid = await person_id_for(slug, aid)
+                if pid is None:
+                    continue
+                found = None
+                for other_slug, other_aid in await linked_authors(pid):
+                    if other_slug == slug:
+                        continue
+                    odb = await get_db(slug=other_slug)
+                    try:
+                        r = await (await odb.execute(
+                            "SELECT goodreads_id FROM authors WHERE id = ?", (other_aid,),
+                        )).fetchone()
+                    finally:
+                        await odb.close()
+                    if r and r[0]:
+                        found = str(r[0])
+                        break
+                if not found or await metadata_cache.is_goodreads_id_known_unavailable(found):
+                    continue
+                db = await get_db(slug=slug)
+                try:
+                    cur = await db.execute(
+                        "UPDATE authors SET goodreads_id = ? WHERE id = ? "
+                        "AND (goodreads_id IS NULL OR goodreads_id = '')",
+                        (found, aid),
+                    )
+                    await db.commit()
+                    copied += cur.rowcount or 0
+                finally:
+                    await db.close()
+            except Exception:
+                _log.exception(
+                    "backfill: copying a Goodreads ID to %s/%d failed (non-fatal)",
+                    slug, aid,
+                )
+    if copied:
+        _log.info("backfill: copied %d Goodreads author ID(s) from another library", copied)
+    return copied
+
+
+# The job switches the process-wide active library, so it waits while a
+# scan, a library sync or Hygiene runs (they switch it too).
+_WEEKLY_WAIT_STEP_S = 60.0
+_WEEKLY_WAIT_MAX_S = 2 * 3600.0
+
+
+@source_gate.as_caller(source_gate.CALLER_BACKFILL)
+async def weekly_author_id_backfill() -> dict:
+    """G84 / G104: copy IDs from twins, then Phase 1 and (for authors with
+    books Phase 1 couldn't resolve) Phase 2 on each ebook library, with a
+    fresh attempted set (G91)."""
+    import asyncio
+    from app.discovery import goodreads_candidates
+    from app.discovery.database import get_active_library, set_active_library
+    waited = 0.0
+    while goodreads_candidates.merge_blocked_by() and waited < _WEEKLY_WAIT_MAX_S:
+        await asyncio.sleep(_WEEKLY_WAIT_STEP_S)
+        waited += _WEEKLY_WAIT_STEP_S
+    blocker = goodreads_candidates.merge_blocked_by()
+    if blocker:
+        _log.info("backfill (weekly): skipped — %s still running after 2h", blocker)
+        return {"skipped": blocker}
+    totals = {"copied": await copy_goodreads_ids_from_twins(),
+              "considered": 0, "resolved": 0, "missed": 0, "skipped_soft_blocked": 0}
+    attempted: set = set()
+    previous = get_active_library()
+    try:
+        for lib in state._discovered_libraries:
+            slug = lib.get("slug")
+            if not slug or (lib.get("content_type") or "ebook") != "ebook":
+                continue
+            set_active_library(slug)
+            stats = await backfill_missing_author_ids(
+                attempted=attempted, phase2_with_books_only=True,
+            )
+            for k in ("considered", "resolved", "missed", "skipped_soft_blocked"):
+                totals[k] += int(stats.get(k, 0) or 0)
+    finally:
+        set_active_library(previous)
+    _log.info(
+        "backfill (weekly): copied=%d considered=%d resolved=%d missed=%d "
+        "left_for_next_run=%d",
+        totals["copied"], totals["considered"], totals["resolved"],
+        totals["missed"], totals["skipped_soft_blocked"],
+    )
+    return totals

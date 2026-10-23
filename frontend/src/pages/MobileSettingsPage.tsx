@@ -12,23 +12,16 @@
 //     source reordering: simplified read-only views with a "manage
 //     on desktop" hint — these flows have UX needs (drag-reorder,
 //     multi-step wizards) that don't translate cleanly to a phone.
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { api } from "../api";
 import { useTheme } from "../theme";
+import { useSettingsDraft, type CredItem } from "../hooks/useSettingsDraft";
 import {
   MobileBtn,
   MobileSection,
   MobileBackButton,
   MobileBadge,
 } from "../components/mobile";
-
-type S = Record<string, unknown>;
-
-interface CredItem {
-  key: string;
-  label: string;
-  configured: boolean;
-}
 
 // ─── Reusable mobile field components ───────────────────────────
 
@@ -432,29 +425,9 @@ function MobileCredField({
 
 export default function MobileSettingsPage() {
   const t = useTheme();
-  const [s, setS] = useState<S | null>(null);
-  const [creds, setCreds] = useState<CredItem[]>([]);
-  const [saving, setSaving] = useState(false);
-  const [msg, setMsg] = useState("");
+  const { s, creds, loadCreds, upd, save, saving, msg } = useSettingsDraft();
   const [testNtfyResult, setTestNtfyResult] = useState<string | null>(null);
   const [testQbitResult, setTestQbitResult] = useState<string | null>(null);
-
-  useEffect(() => {
-    api
-      .get<S>("/v1/settings")
-      .then(setS)
-      .catch((e) => setMsg(`Error: ${e}`));
-  }, []);
-
-  const loadCreds = () => {
-    api
-      .get<{ items: CredItem[] }>("/v1/credentials")
-      .then((r) => setCreds(r.items))
-      .catch(() => {});
-  };
-  useEffect(() => {
-    loadCreds();
-  }, []);
 
   if (!s) {
     return (
@@ -463,25 +436,6 @@ export default function MobileSettingsPage() {
       </div>
     );
   }
-
-  const upd = (k: string, v: unknown) =>
-    setS((o) => (o ? { ...o, [k]: v } : o));
-
-  const save = async () => {
-    setSaving(true);
-    setMsg("");
-    try {
-      await api.patch("/v1/settings", s);
-      setMsg("Saved!");
-      const fresh = await api.get<S>("/v1/settings");
-      setS(fresh);
-      setTimeout(() => setMsg(""), 3000);
-    } catch {
-      setMsg("Error saving");
-    } finally {
-      setSaving(false);
-    }
-  };
 
   const testQbit = async () => {
     setTestQbitResult(null);
@@ -938,30 +892,48 @@ export default function MobileSettingsPage() {
 
       {/* ─── Author Scanning ────────────────────────────────── */}
       <MobileSection title="Author Scanning" defaultOpen={false}>
+        {/* G201: the settings desktop and the backend use (these saved
+            author_autoscan_* names nothing read). */}
         <ToggleRow
           label="Auto-scan enabled"
-          on={!!s.author_autoscan_enabled}
+          desc="Periodically scan all authors against enabled sources."
+          on={(s.author_scanning_enabled as boolean) ?? true}
           onToggle={() =>
-            upd("author_autoscan_enabled", !s.author_autoscan_enabled)
+            upd("author_scanning_enabled", !(s.author_scanning_enabled ?? true))
           }
         />
         <ToggleRow
           label="Owned books only"
-          desc="Skip authors with no owned books."
-          on={!!s.author_autoscan_owned_only}
+          desc="Only enrich metadata on books already in Calibre."
+          on={(s.author_scan_owned_only as boolean) ?? false}
           onToggle={() =>
-            upd(
-              "author_autoscan_owned_only",
-              !s.author_autoscan_owned_only,
-            )
+            upd("author_scan_owned_only", !(s.author_scan_owned_only ?? false))
           }
+        />
+        <ToggleRow
+          label="Skip audiobook editions"
+          desc="In ebook scans, leave out audiobook-only editions (Audible, Audio CD, narrator credits). Audiobooks are found by scanning the audiobook library."
+          on={(s.exclude_audiobooks as boolean) ?? true}
+          onToggle={() => upd("exclude_audiobooks", !(s.exclude_audiobooks ?? true))}
+        />
+        <ToggleRow
+          label="Hide comics and manga"
+          desc="Comics, manga, graphic novels and comic issues found by scans are kept hidden (Hidden → Filtered). Light novels are always listed."
+          on={(s.hide_comics as boolean) ?? true}
+          onToggle={() => upd("hide_comics", !(s.hide_comics ?? true))}
+        />
+        <ToggleRow
+          label="Hide box sets and omnibuses"
+          desc={'Box sets, omnibuses and "Books 1–3" collections are kept hidden (Hidden → Filtered).'}
+          on={(s.hide_box_sets as boolean) ?? true}
+          onToggle={() => upd("hide_box_sets", !(s.hide_box_sets ?? true))}
         />
         <FieldRow label="Lookup interval (days)">
           <MobileNumberInput
-            value={(s.author_lookup_interval_days as number) ?? 7}
-            min={1}
+            value={(s.lookup_interval_days as number) ?? 3}
+            min={0}
             suffix="days"
-            onChange={(v) => upd("author_lookup_interval_days", v)}
+            onChange={(v) => upd("lookup_interval_days", v)}
           />
         </FieldRow>
       </MobileSection>

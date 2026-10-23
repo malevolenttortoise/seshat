@@ -189,26 +189,6 @@ class TestSend:
 
 
 class TestConvenienceSenders:
-    async def test_notify_grab(self, _mock_ntfy_client):
-        result = await ntfy.notify_grab(
-            "https://ntfy.example.com", "seshat",
-            "The Way of Kings", "Brandon Sanderson", "Ebooks - Fantasy",
-        )
-        assert result is True
-        req = _mock_ntfy_client["requests"][0]
-        assert req.headers["title"] == "New book grabbed"
-        assert b"The Way of Kings" in req.content
-        assert b"Brandon Sanderson" in req.content
-
-    async def test_notify_download_complete(self, _mock_ntfy_client):
-        result = await ntfy.notify_download_complete(
-            "https://ntfy.example.com", "seshat",
-            "The Way of Kings", "Brandon Sanderson",
-        )
-        assert result is True
-        req = _mock_ntfy_client["requests"][0]
-        assert req.headers["title"] == "Download complete"
-
     async def test_notify_pipeline_complete(self, _mock_ntfy_client):
         result = await ntfy.notify_pipeline_complete(
             "https://ntfy.example.com", "seshat",
@@ -217,75 +197,6 @@ class TestConvenienceSenders:
         assert result is True
         req = _mock_ntfy_client["requests"][0]
         assert "Calibre" in req.headers["title"]
-
-    async def test_notify_error(self, _mock_ntfy_client):
-        result = await ntfy.notify_error(
-            "https://ntfy.example.com", "seshat",
-            "The Way of Kings", "Calibre rejected the file",
-        )
-        assert result is True
-        req = _mock_ntfy_client["requests"][0]
-        assert req.headers["priority"] == "4"
-
-
-class TestIsEventEnabled:
-    """v2.11.1 N1 — the per-event ntfy gate. Pre-v2.11.1 the master
-    `per_event_notifications` toggle was checked at each call site
-    but the per-event sub-toggles (`notify_on_grab`,
-    `notify_on_download_complete`, `notify_on_pipeline_error`) were
-    not. UAT-confirmed bug: users who disabled specific events in
-    Settings still received them. This helper centralizes the gate
-    so every call site stays in sync."""
-
-    def _seed_settings(self, tmp_path, monkeypatch, payload: str) -> None:
-        from app import config
-        p = tmp_path / "settings.json"
-        p.write_text(payload)
-        monkeypatch.setattr(config, "SETTINGS_PATH", p)
-        config._settings_cache["data"] = None
-        config._settings_cache["mtime"] = object()
-
-    def test_master_off_returns_false(self, tmp_path, monkeypatch):
-        self._seed_settings(tmp_path, monkeypatch,
-            '{"per_event_notifications": false, "notify_on_grab": true}')
-        assert ntfy.is_event_enabled("grab") is False
-
-    def test_master_on_subtoggle_off_returns_false(
-        self, tmp_path, monkeypatch,
-    ):
-        self._seed_settings(tmp_path, monkeypatch,
-            '{"per_event_notifications": true, "notify_on_grab": false}')
-        assert ntfy.is_event_enabled("grab") is False
-
-    def test_master_on_subtoggle_on_returns_true(
-        self, tmp_path, monkeypatch,
-    ):
-        self._seed_settings(tmp_path, monkeypatch,
-            '{"per_event_notifications": true, "notify_on_grab": true}')
-        assert ntfy.is_event_enabled("grab") is True
-
-    def test_master_on_subtoggle_missing_defaults_true(
-        self, tmp_path, monkeypatch,
-    ):
-        """Upgraded settings.json may pre-date the per-event toggle
-        keys. Missing → True (ship-default — matches the
-        DEFAULT_SETTINGS shape in app/config.py)."""
-        self._seed_settings(tmp_path, monkeypatch,
-            '{"per_event_notifications": true}')
-        assert ntfy.is_event_enabled("grab") is True
-        assert ntfy.is_event_enabled("download_complete") is True
-        assert ntfy.is_event_enabled("pipeline_error") is True
-
-    def test_per_event_keys_independent(self, tmp_path, monkeypatch):
-        """Disabling one sub-toggle doesn't affect the others."""
-        self._seed_settings(tmp_path, monkeypatch,
-            '{"per_event_notifications": true,'
-            '"notify_on_grab": false,'
-            '"notify_on_download_complete": true,'
-            '"notify_on_pipeline_error": true}')
-        assert ntfy.is_event_enabled("grab") is False
-        assert ntfy.is_event_enabled("download_complete") is True
-        assert ntfy.is_event_enabled("pipeline_error") is True
 
 
 # ─── v2.24.0 — BasicAuth credential split ────────────────────

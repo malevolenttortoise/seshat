@@ -136,106 +136,71 @@ class _FakeResponse:
 
 class TestRetryOn503NotOn429:
     """v2.10.10: 503 (transient server error) retries with backoff;
-    429 (quota exhausted) still fails fast. Pre-v2.10.10 google_books
-    set `retries=0` for ALL failures, so 503 transients (seen 3× in
-    the 2026-05-12 validation harness) bubbled as terminal failures."""
+    429 (quota exhausted) still fails fast. Since the 2026-10 audit each
+    attempt goes through the source gate and the retry wait is 3s / 6s
+    plus jitter (G55)."""
 
-    async def test_429_fails_fast_no_retry(self, monkeypatch):
-        src = GoogleBooksSource(rate_limit=0)
+    @staticmethod
+    def _src(monkeypatch, answers):
+        """A source whose client answers from `answers` (statuses or
+        exceptions, in order); returns (source, calls)."""
+        import asyncio
+        from app.discovery.sources import google_books as gb_mod
+
         calls = {"n": 0}
 
-        async def fake_super_get(self, url, retries=0, **kwargs):
+        def handler(req):
+            a = answers[min(calls["n"], len(answers) - 1)]
             calls["n"] += 1
-            req = httpx.Request("GET", url)
-            resp = httpx.Response(429, request=req)
-            raise httpx.HTTPStatusError("429 Too Many Requests", request=req, response=resp)
+            if isinstance(a, Exception):
+                raise a
+            return httpx.Response(a, json={"items": []}, request=req)
 
-        # Patch BaseSource._get (what super()._get resolves to)
-        from app.discovery.sources.base import BaseSource
-        monkeypatch.setattr(BaseSource, "_get", fake_super_get)
+        async def no_sleep(_):
+            return None
+        monkeypatch.setattr(gb_mod.asyncio, "sleep", no_sleep)
+        src = GoogleBooksSource(rate_limit=0)
+        src._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        return src, calls
 
+    async def test_429_fails_fast_no_retry(self, monkeypatch):
+        src, calls = self._src(monkeypatch, [429])
         with pytest.raises(httpx.HTTPStatusError):
-            await src._get("https://example.com/api")
+            await src._get("https://www.googleapis.com/books/v1/volumes")
         assert calls["n"] == 1, "429 should not be retried"
         assert src._consecutive_429s == 1
 
     async def test_503_retried_then_succeeds(self, monkeypatch):
-        src = GoogleBooksSource(rate_limit=0)
-        calls = {"n": 0}
-
-        async def fake_super_get(self, url, retries=0, **kwargs):
-            calls["n"] += 1
-            if calls["n"] < 3:
-                req = httpx.Request("GET", url)
-                resp = httpx.Response(503, request=req)
-                raise httpx.HTTPStatusError("503 Service Unavailable", request=req, response=resp)
-            return _FakeResponse(200)
-
-        from app.discovery.sources.base import BaseSource
-        monkeypatch.setattr(BaseSource, "_get", fake_super_get)
-        # Skip actual sleep so the test is fast
-        import asyncio
-        async def no_sleep(_):
-            return None
-        monkeypatch.setattr(asyncio, "sleep", no_sleep)
-
-        resp = await src._get("https://example.com/api")
+        src, calls = self._src(monkeypatch, [503, 503, 200])
+        resp = await src._get("https://www.googleapis.com/books/v1/volumes")
         assert calls["n"] == 3, "503 should retry up to 2× before success"
         assert resp.status_code == 200
-        # Success must reset the 429 counter
         assert src._consecutive_429s == 0
 
     async def test_503_exhausts_retries_then_raises(self, monkeypatch):
-        src = GoogleBooksSource(rate_limit=0)
-        calls = {"n": 0}
-
-        async def fake_super_get(self, url, retries=0, **kwargs):
-            calls["n"] += 1
-            req = httpx.Request("GET", url)
-            resp = httpx.Response(503, request=req)
-            raise httpx.HTTPStatusError("503 Service Unavailable", request=req, response=resp)
-
-        from app.discovery.sources.base import BaseSource
-        monkeypatch.setattr(BaseSource, "_get", fake_super_get)
-        import asyncio
-        async def no_sleep(_):
-            return None
-        monkeypatch.setattr(asyncio, "sleep", no_sleep)
-
+        src, calls = self._src(monkeypatch, [503])
         with pytest.raises(httpx.HTTPStatusError):
-            await src._get("https://example.com/api")
+            await src._get("https://www.googleapis.com/books/v1/volumes")
         assert calls["n"] == 3, "should try 3 times total (1 initial + 2 retries)"
 
     async def test_429_counter_resets_on_success(self, monkeypatch):
-        src = GoogleBooksSource(rate_limit=0)
+        src, _ = self._src(monkeypatch, [200])
         src._consecutive_429s = 3  # primed from prior failures
-
-        async def fake_super_get(self, url, retries=0, **kwargs):
-            return _FakeResponse(200)
-
-        from app.discovery.sources.base import BaseSource
-        monkeypatch.setattr(BaseSource, "_get", fake_super_get)
-
-        await src._get("https://example.com/api")
+        await src._get("https://www.googleapis.com/books/v1/volumes")
         assert src._consecutive_429s == 0, "success must reset the counter"
 
     async def test_network_error_retried(self, monkeypatch):
-        src = GoogleBooksSource(rate_limit=0)
-        calls = {"n": 0}
-
-        async def fake_super_get(self, url, retries=0, **kwargs):
-            calls["n"] += 1
-            if calls["n"] < 2:
-                raise httpx.ConnectError("connection refused")
-            return _FakeResponse(200)
-
-        from app.discovery.sources.base import BaseSource
-        monkeypatch.setattr(BaseSource, "_get", fake_super_get)
-        import asyncio
-        async def no_sleep(_):
-            return None
-        monkeypatch.setattr(asyncio, "sleep", no_sleep)
-
-        resp = await src._get("https://example.com/api")
+        src, calls = self._src(monkeypatch, [httpx.ConnectError("connection refused"), 200])
+        resp = await src._get("https://www.googleapis.com/books/v1/volumes")
         assert calls["n"] == 2
         assert resp.status_code == 200
+
+    async def test_a_retried_503_logs_no_warning(self, monkeypatch, caplog):
+        """The base class logged "GIVING UP … after 1 attempts" on every
+        503 before the retry that succeeded (G55)."""
+        import logging
+        src, _ = self._src(monkeypatch, [503, 200])
+        with caplog.at_level(logging.WARNING, logger="seshat.discovery"):
+            await src._get("https://www.googleapis.com/books/v1/volumes")
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+

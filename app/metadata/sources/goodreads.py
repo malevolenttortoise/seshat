@@ -13,9 +13,9 @@ Book-centric, two-pass:
        T5  /author/list/{author_id} bibliography walk   (v2.13.2)
 
   2. **Fetch `/book/show/{book_id}`** through `GoodreadsSession`
-     (curl_cffi chrome120 impersonation + 5s+jitter rate limit +
-     Cloudflare soft-block detection) and parse the HTML via
-     `_merge_detail_page()` for the rich fields.
+     (curl_cffi chrome120 impersonation, Goodreads' turn in the source
+     gate, and the book-page backoff after an AWS WAF block) and parse
+     the HTML via `_merge_detail_page()` for the rich fields.
 
 `/search` is **never** hit — robots.txt disallows it for `*`
 user-agents. We hold a higher standard than the Calibre kiwidude
@@ -36,7 +36,7 @@ from typing import Optional
 from bs4 import BeautifulSoup
 
 from app.metadata.record import MetaRecord
-from app.metadata.sources.base import MetaSource
+from app.metadata.sources.base import MetaSource, current_enrichment_scope
 from app.metadata.text_clean import description_to_plain_text
 
 _log = logging.getLogger("seshat.metadata.goodreads")
@@ -67,26 +67,23 @@ _GOODREADS_BOILERPLATE = frozenset({
 })
 
 
-def _is_cloudflare_soft_block(resp) -> bool:
-    """Detect Goodreads' Cloudflare 202-with-empty-body interstitial.
-
-    The cps gate returns `HTTP 202 Accepted` with a 0-byte body when
-    it wants the client to solve a JS challenge. Browsers do; httpx
-    doesn't. Either status 202 OR a 2xx with empty body counts.
-    """
-    if resp is None:
-        return False
-    if resp.status_code == 202:
-        return True
-    if 200 <= resp.status_code < 300 and not (resp.content or b""):
-        return True
-    return False
+def _mark_backoff_skip() -> None:
+    """This book's lookup ended on a block or the book-page backoff, not a
+    miss: the enricher records Goodreads `soft_blocked` and G182 retries it
+    once the backoff ends (G192)."""
+    scope = current_enrichment_scope()
+    if scope is not None:
+        scope["goodreads_backoff_skip"] = True
 
 
 class GoodreadsSource(MetaSource):
     name = "goodreads"
     default_headers = _DEFAULT_HEADERS
     default_timeout = 45.0
+
+    def skipped_for_backoff(self) -> bool:
+        scope = current_enrichment_scope()
+        return bool(scope and scope.get("goodreads_backoff_skip"))
 
     async def search_book(
         self,
@@ -105,10 +102,8 @@ class GoodreadsSource(MetaSource):
           - the resolver returned no goodreads_book_id (insufficient
             identifiers — no ISBN/ASIN matched T1-T3 and no author
             goodreads_id was supplied to anchor T4/T5)
-          - the resolver flagged a Cloudflare soft-block (the
-            session-state flip is already done by the resolver; the
-            enricher's dispatcher gate at the next call will skip
-            Goodreads cleanly)
+          - the resolver was blocked by Goodreads' bot protection (the
+            session has already backed that request kind off)
           - the /book/show/{id} fetch failed
         """
         if not title:
@@ -133,6 +128,7 @@ class GoodreadsSource(MetaSource):
                 "title=%r — returning None (session state already flipped)",
                 title,
             )
+            _mark_backoff_skip()
             return None
 
         if not result.goodreads_book_id:
@@ -176,22 +172,34 @@ async def _fetch_and_parse_book(
 
     record = MetaRecord(title=title, authors=[author] if author else [])
 
+    # A page the detail store holds serves enrichment when it's under 90
+    # days old and the book wasn't unreleased (2026-10 audit wave 4b, G93):
+    # one book page less, the kind AWS WAF blocks.
+    stored = await _stored_record(book_id)
+    if stored is not None:
+        _fill_record(record, stored)
+        _log.info("goodreads: /book/show/%s served from the detail store", book_id)
+        return record
+
     url = f"{_BASE}/book/show/{book_id}"
     session = await goodreads_session.get_session()
     try:
         resp = await session.get(url)
+    except goodreads_session.GoodreadsBackingOff:
+        _mark_backoff_skip()
+        return None
     except Exception as e:
         _log.debug("goodreads: /book/show fetch error for %s: %s", book_id, e)
         return None
 
-    if goodreads_session.is_cloudflare_soft_block(resp):
-        # `session.get()` already flipped the state flag; this path is
-        # an informational log only.
+    if goodreads_session.is_soft_block(resp):
+        # `session.get()` has already backed book pages off.
         _log.info(
-            "goodreads: /book/show/%s soft-blocked — Goodreads session "
-            "state flipped to soft_blocked",
+            "goodreads: /book/show/%s blocked by AWS WAF — book pages "
+            "backing off",
             book_id,
         )
+        _mark_backoff_skip()
         return None
 
     status = getattr(resp, "status_code", None)
@@ -211,7 +219,37 @@ async def _fetch_and_parse_book(
         _log.exception("goodreads: failed to parse /book/show/%s", book_id)
         return None
 
+    # Every page enrichment loads goes into the detail store (G93).
+    try:
+        from app.discovery import goodreads_store
+        await goodreads_store.save_page(str(book_id), body)
+    except Exception:
+        _log.debug("goodreads: storing /book/show/%s failed", book_id, exc_info=True)
+
     return record
+
+
+async def _stored_record(book_id: str) -> Optional[MetaRecord]:
+    try:
+        from app.discovery import goodreads_store
+        return await goodreads_store.stored_record(str(book_id))
+    except Exception:
+        _log.debug("goodreads: detail store read failed for %s", book_id, exc_info=True)
+        return None
+
+
+def _fill_record(record: MetaRecord, stored: MetaRecord) -> None:
+    """What a page parse would add to `record`, from a stored page: the
+    caller's title stays, the page's authors replace a lone search author,
+    empty fields fill, the longer description wins."""
+    if stored.authors and len(record.authors) <= 1:
+        record.authors = list(stored.authors)
+    for f in ("series", "series_index", "isbn", "publisher", "pub_date",
+              "page_count", "language", "cover_url"):
+        if getattr(record, f) in (None, "", []) and getattr(stored, f) not in (None, "", []):
+            setattr(record, f, getattr(stored, f))
+    if len(stored.description or "") > len(record.description or ""):
+        record.description = stored.description
 
 
 # ─── HTML parser for /book/show/{id} (robots-permitted) ────────

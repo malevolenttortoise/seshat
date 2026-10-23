@@ -10,15 +10,17 @@ Calibre is the user's curated source of truth. Everything this module
 imports is flagged `owned=1`, and the merge layer in `lookup.py`
 protects calibre-sourced rows with field-level rules so source scans
 can enrich metadata without ever clobbering curated content. The
-"match external books by title" pass at the end of book upsert is the
-inverse: a book the user just added to Calibre may already exist in
-the DB as an unowned discovery from a previous source scan, and we
-flip its `owned` bit instead of creating a duplicate.
+absorb at book upsert is the inverse: a book the user just added to
+Calibre may already exist in the DB as an unowned discovery from a
+previous source scan (under any of its authors or an author linked to
+one, and the title identity calls it the same book: `_absorb_matches`),
+and we merge it or flip its `owned` bit instead of creating a duplicate.
 
 Sync surfaces progress via `state._library_sync_progress` so the
 unified Dashboard widget can show "Syncing 142/675 — The Final Empire"
 the same way it shows MAM/source scan progress.
 """
+import functools
 import json
 import sqlite3
 import time
@@ -225,6 +227,12 @@ async def _apply_calibre_diff(db, book_id: int, book: dict) -> tuple[int, int]:
     return (auto_flowed, queued)
 
 
+def _calibre_name(name):
+    """Calibre stores a comma inside an author name as `|` ("Harrow| Alix
+    E."): read it back as the comma (C10)."""
+    return name.replace("|", ",") if isinstance(name, str) else name
+
+
 def _read_calibre_db(
     calibre_path: str,
     library_path: str = None,
@@ -426,7 +434,10 @@ def _read_calibre_db(
                 # `books.{source}_id` columns. None values are
                 # ignored (no clobber of already-set IDs).
                 "calibre_ids": calibre_ids,
-                "authors": [{"id": a["id"], "name": a["name"], "sort": a["sort"]} for a in authors],
+                "authors": [
+                    {"id": a["id"], "name": _calibre_name(a["name"]), "sort": _calibre_name(a["sort"])}
+                    for a in authors
+                ],
                 "series": [{"id": s["id"], "name": s["name"]} for s in series_list],
                 "tags": ", ".join(t["name"] for t in tags) if tags else None,
                 "rating": (rating_row["rating"] / 2.0) if rating_row and rating_row["rating"] else None,
@@ -518,6 +529,122 @@ def _read_calibre_series_authors(calibre_path: str) -> list[dict]:
     return list(by_book.values())
 
 
+@functools.lru_cache(maxsize=65536)
+def _title_tokens(title: str, series_name, series_index) -> frozenset:
+    """`TitleIndex`'s prefilter: `same_book` can only call two titles the
+    same when they share one of these."""
+    from app.works.title_identity import TitleIndex, TitleRef
+    return frozenset(TitleIndex._tokens(TitleRef(title, series_name, series_index)))
+
+
+@functools.lru_cache(maxsize=4096)
+def _labels_for(titles: tuple) -> frozenset:
+    from app.works.title_identity import author_labels
+    return author_labels(titles)
+
+
+def _one_book(rows, series_name=None, series_index=None) -> bool:
+    """Every pair of these rows is the same book by the title identity. Each
+    already matched the book (`series_name` / `series_index`), so a row a
+    source gave no series is read in that one ("Truthwitch: The Witchlands"
+    and "Truthwitch: A Witchlands Novel" are one book in The Witchlands)."""
+    from app.works.title_identity import TitleRef, same_book
+
+    def ref(r):
+        if r["series_name"]:
+            return TitleRef(r["title"] or "", r["series_name"], r["series_index"])
+        return TitleRef(r["title"] or "", series_name, series_index)
+
+    refs = [ref(r) for r in rows]
+    return all(same_book(a, b) for i, a in enumerate(refs) for b in refs[i + 1:])
+
+
+async def _absorb_matches(
+    db, author_ids, title: str, series_name, series_index, *, exclude_id=None,
+    ambiguous: list | None = None,
+) -> list:
+    """The discovery rows this Calibre book is (F10, ADR-0028): books any of
+    its contributors, or an author linked to one (pen name or co-author,
+    the links a scan's dedup reads), is credited on in any position, that
+    the title identity calls the same book, within the book's filter
+    family (G197: a row's stored filter reason first, else its title's).
+    Rows already holding a Calibre book are never candidates (the
+    missing-books cleanup also uses this for Audiobookshelf books, whose
+    owned rows it never folds, S8). Several rows that aren't all one book match nothing (G211): a
+    graphic novel's Vol. 1 and Vol. 2 against the owned novel, two books a
+    source filed at "Dune #1"; they go to `ambiguous` when given. Rows: id,
+    title, owned, hidden, series_name, series_index."""
+    from app.discovery import filters
+    from app.works.title_identity import TitleRef, same_book
+
+    ids = {int(a) for a in author_ids if a is not None}
+    if not ids or not title:
+        return []
+    ph = ",".join("?" * len(ids))
+    for r in await (await db.execute(
+        f"SELECT canonical_author_id, alias_author_id FROM pen_name_links "
+        f"WHERE canonical_author_id IN ({ph}) OR alias_author_id IN ({ph})",
+        [*ids, *ids],
+    )).fetchall():
+        ids.update((int(r[0]), int(r[1])))
+    ph = ",".join("?" * len(ids))
+    rows = await (await db.execute(
+        f"SELECT b.id, b.title, b.owned, b.hidden, b.hidden_reason, b.calibre_id, "
+        f"b.source, b.series_index, s.name AS series_name FROM books b "
+        f"LEFT JOIN series s ON s.id = b.series_id WHERE b.id IN "
+        f"(SELECT book_id FROM book_authors WHERE author_id IN ({ph}))",
+        list(ids),
+    )).fetchall()
+    names = [r[0] for r in await (await db.execute(
+        f"SELECT name FROM authors WHERE id IN ({ph})", list(ids),
+    )).fetchall() if r[0]]
+    labels = _labels_for(tuple(sorted({r["title"] or "" for r in rows} | {title})))
+    owned_stems = {
+        stem for t in [title] + [r["title"] or "" for r in rows if r["owned"]]
+        for stem in [filters.series_ref_stem(t)] if stem
+    }
+
+    def _cls(t: str):
+        reason = filters.book_class(t, authors=names)
+        if reason == filters.JUNK and filters.series_ref_stem(t) in owned_stems:
+            return None
+        return reason
+
+    mine = TitleRef(title, series_name, series_index)
+    tokens = _title_tokens(title, series_name, series_index)
+    hits = [
+        r for r in rows
+        if r["id"] != exclude_id and r["calibre_id"] is None and r["source"] != "calibre"
+        and tokens & _title_tokens(r["title"] or "", r["series_name"], r["series_index"])
+        and same_book(mine, TitleRef(r["title"] or "", r["series_name"], r["series_index"]), labels)
+    ]
+    if not hits:
+        return []
+    if len(hits) > 1 and not _one_book(hits, series_name, series_index):
+        if ambiguous is not None:
+            ambiguous.extend(hits)
+        return []
+    cls = _cls(title)
+
+    def _row_cls(r):
+        stored = r["hidden_reason"]
+        return stored if stored in filters.FILTER_REASONS else _cls(r["title"] or "")
+
+    return [r for r in hits if _row_cls(r) == cls]
+
+
+async def _calibre_ref(db, book_id: int):
+    """(contributor ids, title, series name, series index) of a stored row."""
+    row = await (await db.execute(
+        "SELECT b.title, b.series_index, s.name AS series_name FROM books b "
+        "LEFT JOIN series s ON s.id = b.series_id WHERE b.id = ?", (book_id,),
+    )).fetchone()
+    ids = [r[0] for r in await (await db.execute(
+        "SELECT author_id FROM book_authors WHERE book_id = ? ORDER BY position", (book_id,),
+    )).fetchall()]
+    return ids, row["title"] or "", row["series_name"], row["series_index"]
+
+
 async def _heal_legacy_duplicates(db, pipeline_db, slug):
     """End-of-sync sweep across every Calibre row in the discovery DB.
 
@@ -525,10 +652,9 @@ async def _heal_legacy_duplicates(db, pipeline_db, slug):
     legacy pairs whose title was fixed in Calibre BEFORE v2.10.0
     shipped, where the corresponding UPDATE event already fired
     (without sweeping) and the next sync runs incrementally with
-    nothing to UPDATE. The query shape mirrors the per-UPDATE
-    sweep and the INSERT-path merge: exact-title match with
-    article-stripping for "The X" vs "X", same author, only when
-    EXACTLY one unowned non-Calibre candidate exists.
+    nothing to UPDATE. The match is the per-UPDATE sweep's and the
+    INSERT-path merge's (`_absorb_matches`), merging only when
+    EXACTLY one non-Calibre candidate exists.
 
     Idempotent — a re-run after all candidates have been merged
     finds nothing and is a no-op.
@@ -538,29 +664,19 @@ async def _heal_legacy_duplicates(db, pipeline_db, slug):
     """
     from app.discovery.book_merge import merge_books, MergeError
 
-    # v3.0.0 Phase 9 (ADR-0012): primary author = book_authors position 0.
-    # The legacy heal is a destructive dedup, so it stays primary-only
-    # (behavior-preserving) rather than widening to any-contributor.
+    # The same match as the sweep and the INSERT-path merge (F10): any
+    # contributor or linked author + the title identity, not position 0 +
+    # an exact title.
     cal_rows = await (await db.execute(
-        "SELECT id, "
-        "(SELECT author_id FROM book_authors WHERE book_id=books.id AND position=0) AS author_id, "
-        "title FROM books "
+        "SELECT id, title FROM books "
         "WHERE source = 'calibre' AND calibre_id IS NOT NULL",
     )).fetchall()
     healed = 0
     for row in cal_rows:
-        candidates = await (await db.execute("""
-            SELECT id FROM books
-            WHERE id IN (SELECT book_id FROM book_authors WHERE author_id = ? AND position = 0)
-            AND calibre_id IS NULL AND source != 'calibre'
-            AND id != ?
-            AND (
-                LOWER(TRIM(title)) = LOWER(TRIM(?))
-                OR REPLACE(LOWER(TRIM(title)), 'the ', '') =
-                   REPLACE(LOWER(TRIM(?)), 'the ', '')
-            )
-        """, (row["author_id"], row["id"], row["title"], row["title"]))
-        ).fetchall()
+        author_ids, title, series_name, series_index = await _calibre_ref(db, row["id"])
+        candidates = await _absorb_matches(
+            db, author_ids, title, series_name, series_index, exclude_id=row["id"],
+        )
         if len(candidates) != 1:
             continue
         loser_id = candidates[0]["id"]
@@ -578,6 +694,9 @@ async def _heal_legacy_duplicates(db, pipeline_db, slug):
                 row["id"], (row["title"] or "")[:60], exc,
             )
             continue
+        # The merge unions the absorbed row's contributors in; Calibre's
+        # own list stays the byline (ADR-0021).
+        await write_book_authors(db, row["id"], author_ids)
         healed += 1
         logger.info(
             "calibre_sync: legacy heal merged unowned id=%d into "
@@ -588,37 +707,24 @@ async def _heal_legacy_duplicates(db, pipeline_db, slug):
 
 
 async def _post_update_merge_sweep(
-    db, pipeline_db, slug, our_author_id, calibre_title, calibre_row_id,
+    db, pipeline_db, slug, candidates, calibre_title, calibre_row_id,
 ):
-    """If a Calibre-row UPDATE just landed and the title now matches an
-    unowned discovery row, fold the discovery row into the Calibre row.
+    """If a Calibre-row UPDATE just landed and the book is an unowned
+    discovery row, fold the discovery row into the Calibre row.
 
-    Runs the same exact-title-match (with article-stripping for
-    "The X" vs "X") that the INSERT path uses, so the sweep's behavior
-    is symmetric: the Calibre row is the canonical "this book is in
-    the library" record, and a single unambiguous discovery match
-    gets merged in. Multi-match (2+) or zero-match cases are no-ops —
-    the same conservative semantics that prevent the INSERT path
-    from merging a book into the wrong row.
+    `candidates` are `_absorb_matches` for the book, the same match the
+    INSERT path uses, so the sweep's behavior is symmetric: the Calibre
+    row is the canonical "this book is in the library" record, and a
+    single unambiguous discovery match gets merged in. Multi-match (2+)
+    or zero-match cases are no-ops — the same conservative semantics
+    that prevent the INSERT path from merging a book into the wrong row.
 
-    Returns True if a merge happened, False otherwise.
+    Returns the merged row's id, or None.
     """
     from app.discovery.book_merge import merge_books, MergeError
 
-    candidates = await (await db.execute("""
-        SELECT id FROM books
-        WHERE id IN (SELECT book_id FROM book_authors WHERE author_id = ? AND position = 0)
-        AND calibre_id IS NULL AND source != 'calibre'
-        AND id != ?
-        AND (
-            LOWER(TRIM(title)) = LOWER(TRIM(?))
-            OR REPLACE(LOWER(TRIM(title)), 'the ', '') =
-               REPLACE(LOWER(TRIM(?)), 'the ', '')
-        )
-    """, (our_author_id, calibre_row_id, calibre_title, calibre_title))
-    ).fetchall()
     if len(candidates) != 1:
-        return False
+        return None
     loser_id = candidates[0]["id"]
     try:
         await merge_books(
@@ -638,12 +744,130 @@ async def _post_update_merge_sweep(
             "calibre_sync: post-update merge sweep skipped for "
             f"book_id={calibre_row_id} ('{calibre_title[:60]}'): {exc}"
         )
-        return False
+        return None
     logger.info(
         f"calibre_sync: post-update merged unowned id={loser_id} into "
         f"Calibre row id={calibre_row_id} ('{calibre_title[:60]}')"
     )
-    return True
+    return loser_id
+
+
+async def _retire_gone_authors(db, slug: str, calibre_author_ids: set, author_map: dict) -> int:
+    """Delete author rows whose Calibre author is gone (C10): the row's
+    `calibre_id` is no longer a Calibre author with a book, or Calibre's
+    author now maps to another row, and the row lists no book at all. Its
+    bookless mirror rows of the same name in the other libraries go with it,
+    and their person links. Rows that still list missing books stay (wave
+    C's cleanup removes those books, the next full sync the row). Kept: a
+    name on the allow list, or one with books in any library (the dual-row
+    pattern's mirrors). Full syncs only: `author_map` then covers every
+    Calibre author."""
+    from app.discovery.database import get_db as get_lib_db
+    from app.discovery.roster import load_roster
+    from app.filter.normalize import normalize_author
+
+    if not calibre_author_ids:
+        return 0          # a read that found no authors is an error, not "all gone"
+    rows = await (await db.execute(
+        "SELECT a.id, a.name, a.normalized_name, a.calibre_id FROM authors a "
+        "WHERE a.calibre_id IS NOT NULL "
+        "AND NOT EXISTS (SELECT 1 FROM book_authors ba WHERE ba.author_id = a.id)"
+    )).fetchall()
+    gone = [
+        r for r in rows
+        if r["calibre_id"] not in calibre_author_ids or author_map.get(r["calibre_id"]) != r["id"]
+    ]
+    if not gone:
+        return 0
+    roster = await load_roster(db, slug, force=True)
+    gone = [r for r in gone if normalize_author(r["name"] or "") not in roster.allowed_names]
+
+    # Every library: rows of these names, and whether any has a book.
+    names = {r["normalized_name"] for r in gone if r["normalized_name"]}
+    others: dict[str, list[tuple[int, str]]] = {}
+    with_books: set[str] = set()
+    for lib in state._discovered_libraries or []:
+        other = lib.get("slug")
+        if not other or not names:
+            continue
+        ldb = db if other == slug else await get_lib_db(other)
+        try:
+            ph = ",".join("?" * len(names))
+            for r in await (await ldb.execute(
+                f"SELECT a.id, a.normalized_name, a.calibre_id, a.audiobookshelf_id, "
+                f"EXISTS (SELECT 1 FROM book_authors ba WHERE ba.author_id = a.id) AS has_books "
+                f"FROM authors a WHERE a.normalized_name IN ({ph})", list(names),
+            )).fetchall():
+                if r["has_books"]:
+                    with_books.add(r["normalized_name"])
+                elif other != slug and r["calibre_id"] is None and r["audiobookshelf_id"] is None:
+                    others.setdefault(other, []).append((r["id"], r["normalized_name"]))
+        finally:
+            if ldb is not db:
+                await ldb.close()
+    gone = [r for r in gone if r["normalized_name"] not in with_books]
+    if not gone:
+        return 0
+    doomed = {slug: [r["id"] for r in gone]}
+    keep_names = {r["normalized_name"] for r in gone}
+    for other, pairs in others.items():
+        ids = [i for i, n in pairs if n in keep_names]
+        if ids:
+            doomed[other] = ids
+
+    async def _delete(ldb, ids):
+        ph = ",".join("?" * len(ids))
+        await ldb.execute(
+            f"DELETE FROM pen_name_links WHERE canonical_author_id IN ({ph}) "
+            f"OR alias_author_id IN ({ph})", [*ids, *ids])
+        await ldb.execute(
+            f"DELETE FROM series WHERE author_id IN ({ph}) AND id NOT IN "
+            f"(SELECT series_id FROM books WHERE series_id IS NOT NULL)", ids)
+        await ldb.execute(f"UPDATE series SET author_id = NULL WHERE author_id IN ({ph})", ids)
+        await ldb.execute(f"DELETE FROM authors WHERE id IN ({ph})", ids)
+
+    for lib_slug, ids in doomed.items():
+        if lib_slug == slug:
+            await _delete(db, ids)
+            await db.commit()
+            continue
+        ldb = await get_lib_db(lib_slug)
+        try:
+            await _delete(ldb, ids)
+            await ldb.commit()
+        finally:
+            await ldb.close()
+    try:
+        from app.database import get_db as get_global_db
+        gdb = await get_global_db()
+        try:
+            persons: set[int] = set()
+            for lib_slug, ids in doomed.items():
+                ph = ",".join("?" * len(ids))
+                persons.update(r[0] for r in await (await gdb.execute(
+                    f"SELECT person_id FROM author_links WHERE library_slug = ? "
+                    f"AND author_id IN ({ph})", [lib_slug, *ids])).fetchall())
+                await gdb.execute(
+                    f"DELETE FROM author_links WHERE library_slug = ? AND author_id IN ({ph})",
+                    [lib_slug, *ids])
+            if persons:
+                ph = ",".join("?" * len(persons))
+                await gdb.execute(
+                    f"DELETE FROM persons WHERE id IN ({ph}) AND id NOT IN "
+                    f"(SELECT DISTINCT person_id FROM author_links)", list(persons))
+            await gdb.commit()
+        finally:
+            await gdb.close()
+    except Exception:
+        logger.warning("Calibre sync: person links of retired authors not removed "
+                       "(Hygiene's orphan-link sweep catches them)", exc_info=True)
+    logger.info(
+        "Calibre sync: retired %d author row(s) whose Calibre author is gone "
+        "(no books): %s%s", len(gone), ", ".join(repr(r["name"]) for r in gone[:10]),
+        f" (+ {sum(len(v) for k, v in doomed.items() if k != slug)} mirror row(s))"
+        if len(doomed) > 1 else "",
+    )
+    return len(gone)
 
 
 async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
@@ -657,8 +881,8 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
                    series collapse to one row.
       3. Books   — upsert by (calibre_id, source='calibre'), then run
                    a "flip ownership" pass that marks pre-existing
-                   discovery rows as owned when they title-match the
-                   book we just imported.
+                   discovery rows as owned when they are the book we
+                   just imported (`_absorb_matches`).
 
     Mode is decided by `sync_state.resolve_threshold` against the
     persisted per-slug state. Incremental mode reads only books whose
@@ -775,6 +999,9 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
         # with any newly-upserted authors. Full mode keeps the empty
         # start so existing re-canonicalization behavior is preserved.
         author_map = {}  # calibre_author_id -> our_id
+        # New author rows, linked into the person graph once this sync
+        # commits (`author_identity` reads them on another connection).
+        new_authors: list[tuple[int, str]] = []
         if mode == "incremental":
             existing = await (await db.execute(
                 "SELECT id, calibre_id FROM authors WHERE calibre_id IS NOT NULL"
@@ -832,27 +1059,11 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
                             "calibre_sync: stub-mirror failed for '%s' "
                             "(non-fatal)", incoming_name, exc_info=True,
                         )
-                    # v2.20.0 — link the new author into the cross-library
-                    # identity graph so subsequent source-ID writes (and
-                    # the unified author detail page) see them. The
-                    # `mirror_new_author_to_other_type_libs` call above
-                    # may have inserted matching stub rows in other
-                    # libraries; those stubs get their own
-                    # get_or_create_person() at INSERT time below.
-                    try:
-                        from app.discovery import author_identity
-                        from app.discovery.database import get_active_library
-                        active_slug = get_active_library()
-                        if active_slug:
-                            await author_identity.get_or_create_person(
-                                active_slug, author_map[cal_id],
-                                name=incoming_name,
-                            )
-                    except Exception:
-                        logger.debug(
-                            "calibre_sync: identity-link failed for '%s' "
-                            "(non-fatal)", incoming_name, exc_info=True,
-                        )
+                    # v2.20.0 — the new author joins the cross-library
+                    # identity graph after this sync commits (see
+                    # `link_new_authors`); the stub mirror above links
+                    # its own stubs.
+                    new_authors.append((author_map[cal_id], incoming_name))
 
         # Pass 2: upsert series
         #
@@ -1048,6 +1259,14 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
                 for a in book["authors"]
                 if a.get("id") in author_map
             ]
+            # F10: the discovery rows this book is — any contributor or a
+            # linked author, plus the title identity — for the merge (one
+            # match) and the ownership flip below (the rest).
+            matches = await _absorb_matches(
+                db, resolved_author_ids, book["title"], cal_series_name,
+                series_index, exclude_id=row["id"] if row else None,
+            )
+            absorbed_id = None
 
             if row:
                 # v2.3: structural fields (identity-tier) are written
@@ -1095,9 +1314,13 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
                 # path uses).
                 merged = await _post_update_merge_sweep(
                     db, pipeline_db, slug,
-                    our_author_id, book["title"], row["id"],
+                    matches, book["title"], row["id"],
                 )
+                absorbed_id = merged
                 if merged:
+                    # The merge unions the absorbed row's contributors in;
+                    # Calibre's own list stays the byline (ADR-0021).
+                    await write_book_authors(db, row["id"], resolved_author_ids)
                     progress["books_merged_post_update"] = (
                         progress.get("books_merged_post_update", 0) + 1
                     )
@@ -1111,26 +1334,14 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
                 # without a calibre_id, and the new Calibre row sits next
                 # to it carrying the series + tags + rating + formats.
                 #
-                # Match shape mirrors the ownership-flip pass: same author,
-                # no calibre_id, title match (with article-stripping for
-                # "The X" vs "X"). Only merge if EXACTLY one candidate —
-                # ambiguity falls back to INSERT so we never merge a book
-                # into the wrong row.
-                # Pull `hidden` alongside id so we can log when an
-                # auto-unhide fires (see UPDATE below).
-                merge_candidates = await (await db.execute("""
-                    SELECT id, hidden FROM books
-                    WHERE id IN (SELECT book_id FROM book_authors WHERE author_id = ? AND position = 0)
-                    AND calibre_id IS NULL AND source != 'calibre'
-                    AND (
-                        LOWER(TRIM(title)) = LOWER(TRIM(?))
-                        OR REPLACE(LOWER(TRIM(title)), 'the ', '') =
-                           REPLACE(LOWER(TRIM(?)), 'the ', '')
-                    )
-                """, (our_author_id, book["title"], book["title"]))).fetchall()
+                # Match shape is the ownership-flip pass's (`matches`, F10).
+                # Only merge if EXACTLY one candidate — ambiguity falls back
+                # to INSERT so we never merge a book into the wrong row.
+                merge_candidates = matches
 
                 if len(merge_candidates) == 1:
                     target_id = merge_candidates[0]["id"]
+                    absorbed_id = target_id
                     was_hidden = bool(merge_candidates[0]["hidden"])
                     # v2.3 merge path: convert the Missing/source-discovered
                     # row into a Calibre row by setting structural fields
@@ -1158,8 +1369,11 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
                     # language, etc.) keeps that hide.
                     # v3.0.0 Phase 9 (ADR-0012): no books.author_id —
                     # authorship is the book_authors set written below.
+                    # `discovered_by` keeps the source that found it
+                    # (2026-10 audit S8, G63): `source` becomes 'calibre'.
                     await db.execute("""
                         UPDATE books SET series_id=?,
+                        discovered_by=COALESCE(discovered_by, source),
                         owned=1, calibre_id=?, source='calibre', hidden=0
                         WHERE id=?
                     """, (our_series_id, book["book_id"], target_id))
@@ -1245,23 +1459,17 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
                     progress["books_new"] += 1
                     logger.debug(f"  Calibre: NEW '{book['title']}' by {book['authors'][0]['name']} (tags={book['tags']}, lang={book['language']})")
 
-            # Flip ownership on any pre-existing discovery row that
-            # matches this book's title for the same author. The
-            # `REPLACE(...,'the ',...)` half handles articles — "The
-            # Final Empire" and "Final Empire" should collapse onto
-            # the same row. Without this pass, importing a book the
-            # user already owned would leave the original discovery
+            # Flip ownership on any other pre-existing discovery row this
+            # book is (`matches`: a contributor or linked author + the
+            # title identity, F10). Without this pass, importing a book
+            # the user already owned would leave the original discovery
             # row sitting around as an unowned duplicate.
-            await db.execute("""
-                UPDATE books SET owned = 1
-                WHERE id IN (SELECT book_id FROM book_authors WHERE author_id = ? AND position = 0)
-                AND owned = 0 AND source != 'calibre'
-                AND (
-                    LOWER(TRIM(title)) = LOWER(TRIM(?))
-                    OR REPLACE(LOWER(TRIM(title)), 'the ', '') =
-                       REPLACE(LOWER(TRIM(?)), 'the ', '')
+            flip = [m["id"] for m in matches if not m["owned"] and m["id"] != absorbed_id]
+            if flip:
+                ph = ",".join("?" * len(flip))
+                await db.execute(
+                    f"UPDATE books SET owned = 1 WHERE id IN ({ph}) AND owned = 0", flip,
                 )
-            """, (our_author_id, book["title"], book["title"]))
 
         # Pass 4: reconcile. Books previously imported from Calibre but
         # no longer in metadata.db (user removed them in Calibre, or
@@ -1335,6 +1543,15 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
         progress["books_linkage_transferred"] = books_linkage_transferred
 
         await db.commit()
+        from app.discovery.author_identity import link_new_authors
+        from app.discovery.database import get_active_library
+        await link_new_authors(get_active_library(), new_authors, context="Calibre sync")
+        if mode == "full":
+            progress["authors_retired"] = await _retire_gone_authors(
+                db, slug,
+                {a["id"] for b in calibre_data["books"] for a in b["authors"]},
+                author_map,
+            )
 
         # v2.10.1 end-of-sync legacy-duplicate heal pass. The per-UPDATE
         # sweep added in v2.10.0 only fires for books Calibre touched
@@ -1375,24 +1592,9 @@ async def sync_calibre(calibre_db_path=None, calibre_library_path=None):
             "sync_mode": mode,
         })
 
-        # v2.13.0 — fire-and-forget Goodreads author-id backfill.
-        # Sweeps every author missing `authors.goodreads_id` whose
-        # books have at least one resolvable identifier (Calibre may
-        # have just freshly mined some). One /book/show fetch per
-        # author at the 5s+jitter rate; results cached forever to
-        # `authors.goodreads_id` so future Goodreads source-scans
-        # short-circuit. Non-blocking — sync returns immediately.
-        try:
-            import asyncio
-            from app.discovery.goodreads_author_backfill import (
-                backfill_missing_author_ids,
-            )
-            asyncio.create_task(backfill_missing_author_ids())
-        except Exception:
-            logger.exception(
-                "Calibre sync: failed to spawn Goodreads author-id "
-                "backfill task (non-fatal)"
-            )
+        # The Goodreads author-ID backfill no longer runs after every
+        # sync (2026-10 audit, wave 4 S3): it re-tried every unresolvable
+        # author each time, two-hourly on one install. Hygiene runs it.
 
         # v3.6.2 — enqueue newly-resolved Amazon + GR author IDs into
         # the metadata-cache worker queues. Pre-v3.6.2 this only ran

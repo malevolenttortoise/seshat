@@ -18,10 +18,12 @@ INVARIANT for adding a new setting:
      MUST use the same FALLBACK as the entry here. Mismatched defaults
      silently diverge for users whose settings.json predates the key.
 """
+import fnmatch as _fnmatch
 import json
 import logging
 import os
 import re as _re
+import shutil as _shutil
 from pathlib import Path
 
 from app.runtime import IS_DOCKER, get_data_dir
@@ -647,6 +649,10 @@ DEFAULT_SETTINGS = {
                 "active_hours": "10:00-22:00",
                 "timezone": "",
             },
+            # Phase 2 of the candidate worker (2026-10 audit wave 4b, G88):
+            # fetch the page of every cached list entry. On (G178); it runs
+            # only while the worker runs and no candidate waits.
+            "phase2_enabled": True,
         },
     },
     "notify_daily_accepted": True,
@@ -742,11 +748,10 @@ DEFAULT_SETTINGS = {
     # `manual_wedge_offer_enabled` controls the "use a wedge for
     # this one" checkbox (drains pool, overrides global
     # policy_use_wedge=False on a per-grab basis).
-    # `fl_wedge_offer_enabled` is retired (2026-10-07): it showed a
-    # "buy personal FL" checkbox, but MAM refuses spendtype=personalFL
-    # via the API. Kept so existing settings files still load.
+    # (`mam_economy_fl_wedge_offer_enabled`, its "buy personal FL"
+    # sibling, is gone: MAM refuses spendtype=personalFL via the API;
+    # retired 2026-10-07, removed with issue 25 / ADR-0027.)
     "mam_economy_manual_wedge_offer_enabled": False,
-    "mam_economy_fl_wedge_offer_enabled": False,
 
     # First-run intro banner on MamPage — dismissed once via the
     # Settings UI and never shown again.
@@ -795,11 +800,12 @@ DEFAULT_SETTINGS = {
     # retired once lookup.py started reading from `metadata_sources`
     # directly via the derivation helpers in app.metadata.source_config.
     "google_books_auto_disabled_at": None,
-    # v2.13.0 — Goodreads Cloudflare soft-block state. Written by
-    # `app/metadata/goodreads_session.py` on every response. Read by
-    # the enricher dispatcher (skip Goodreads when soft_blocked) and
-    # by the Settings GoodreadsStatusCard. Protected from PATCH via
-    # `_RUNTIME_STATE_KEYS` in app/routers/settings.py.
+    # v2.13.0 — Goodreads bot-protection (AWS WAF) state. Written by
+    # `app/metadata/goodreads_session.py` on every response; the
+    # per-kind backoff (`goodreads_backoff`, 2026-10 audit G66) decides
+    # what is skipped. Read by the Settings GoodreadsStatusCard.
+    # Protected from PATCH via `_RUNTIME_STATE_KEYS` in
+    # app/routers/settings.py.
     "goodreads_session_state": "unknown",
     "goodreads_session_state_since": None,
     "goodreads_session_last_status": None,
@@ -817,6 +823,10 @@ DEFAULT_SETTINGS = {
     "author_scanning_enabled": True,
     "author_scan_owned_only": False,
     "exclude_audiobooks": True,
+    # Discovery filters with a setting (D2 / D10, ADR-0029): comics and box
+    # sets a scan finds are created hidden (Hidden → Filtered) while on.
+    "hide_comics": True,
+    "hide_box_sets": True,
     "calibre_url": "",
     # Discovery-side MAM scanning (search for missing books on MAM).
     "mam_enabled": False,
@@ -843,7 +853,6 @@ DEFAULT_SETTINGS = {
     "ntfy_on_mam_complete": True,
     "ntfy_on_pipeline_sent": True,
     "ntfy_on_library_sync": False,
-    "ntfy_on_mam_cookie_rotated": False,
     "ntfy_digest_enabled": False,
     "ntfy_digest_schedule": "daily",
 
@@ -942,6 +951,116 @@ def apply_logging(verbose: bool = False):
     logging.getLogger("seshat").info(
         f"Logging set to {'VERBOSE (DEBUG)' if verbose else 'NORMAL (INFO)'}"
     )
+    global _logging_ready
+    _logging_ready = True
+    while _pending_info:
+        _log.info(_pending_info.pop(0))
+
+
+# ─── Settings keys the code knows (2026-10 audit issue 25) ───
+# `load_settings` drops every top-level key that isn't in DEFAULT_SETTINGS
+# or below (G10): retired keys stop lingering in settings.json forever.
+# "Known" has to cover every key any code reads or writes, or the sweep
+# deletes live state, so tests/test_settings_registry.py scans `app/` and
+# fails CI on a key that isn't registered here (G127).
+
+# Written by background code, never by the user, absent from the defaults.
+RUNTIME_SETTINGS_KEYS: frozenset[str] = frozenset({
+    "goodreads_backoff",               # goodreads_session (per-kind backoff)
+    "amazon_blocked_until",            # amazon_author_id_resolver
+    "amazon_block_reason",
+    "amazon_blocked_since",
+    "amazon_blocked_until_by_kind",    # G181: one cooldown per request kind
+    "source_gate_kind_last_start",     # source_gate: a kind gap survives a restart
+    "v2_12_1_dual_row_backfill_done",  # main: one-time backfill sentinel
+    "goodreads_phase2_on_applied",     # G194: phase 2's one-time switch-on
+})
+# Read with a default, written by nothing: a value set by hand survives.
+READ_ONLY_SETTINGS_KEYS: frozenset[str] = frozenset({
+    "format_dedup_release_tick_seconds",  # main: hold-release tick
+})
+# Plaintext copies `app.secrets.migrate_from_settings` moves into the
+# encrypted store at boot (mirrors `app.secrets.SECRET_KEYS`; a test
+# keeps the two equal).
+SECRET_SETTINGS_KEYS: frozenset[str] = frozenset({
+    "mam_session_id", "mam_irc_password", "qbit_password", "ntfy_password",
+    "hardcover_api_key", "google_books_api_key", "abs_api_key", "cwa_password",
+})
+# Read by `_apply_legacy_settings_migrations`, which runs before the sweep.
+MIGRATED_SETTINGS_KEYS: frozenset[str] = frozenset({
+    "accept_audiobook_announces",
+})
+# Keys built at run time; fnmatch patterns.
+SETTINGS_KEY_PATTERNS: tuple[str, ...] = (
+    "metadata_cache.*.stall_notified_at",  # metadata_cache_worker stall debounce
+)
+
+
+def is_known_settings_key(key: str) -> bool:
+    """True when some code reads or writes `key` (it survives the sweep)."""
+    if (
+        key in DEFAULT_SETTINGS
+        or key in RUNTIME_SETTINGS_KEYS
+        or key in READ_ONLY_SETTINGS_KEYS
+        or key in SECRET_SETTINGS_KEYS
+        or key in MIGRATED_SETTINGS_KEYS
+    ):
+        return True
+    return any(_fnmatch.fnmatchcase(key, p) for p in SETTINGS_KEY_PATTERNS)
+
+
+def _build_label() -> str:
+    """The running build, for the one-time pre-sweep backup's name: the
+    image's git SHA (`/app/VERSION`), else today's date."""
+    try:
+        sha = (Path(__file__).resolve().parent.parent / "VERSION").read_text().strip()
+    except OSError:
+        sha = ""
+    if sha and sha != "unknown":
+        return sha[:7]
+    import datetime as _dt
+    return _dt.date.today().strftime("%Y%m%d")
+
+
+def _sweep_unknown_keys(saved: dict, merged: dict) -> list[str]:
+    """Drop top-level keys no code knows from `merged` (in place); returns
+    them. Nothing happens before the per-source settings were folded into
+    `metadata_sources` (an install that old still needs its legacy
+    `<source>_enabled` / `rate_<source>` keys for that migration, which
+    runs at startup, after the first load)."""
+    if "metadata_sources" not in saved:
+        return []
+    dropped = sorted(k for k in merged if not is_known_settings_key(k))
+    for key in dropped:
+        del merged[key]
+    return dropped
+
+
+# The first `load_settings()` can run before `apply_logging` has set
+# levels (an import-time read), when INFO lines are dropped: the sweep's
+# lines wait here and `apply_logging` writes them (G13: every drop logged).
+_logging_ready = False
+_pending_info: list[str] = []
+
+
+def _info_once_logging_is_up(message: str) -> None:
+    if _logging_ready:
+        _log.info(message)
+    else:
+        _pending_info.append(message)
+
+
+def _backup_before_sweep() -> None:
+    """Copy settings.json aside once per build before a sweep rewrites it
+    (G13): `settings.json.pre-sweep-<build>`."""
+    backup = SETTINGS_PATH.with_name(f"{SETTINGS_PATH.name}.pre-sweep-{_build_label()}")
+    if backup.exists():
+        return
+    try:
+        _shutil.copy2(SETTINGS_PATH, backup)
+        _info_once_logging_is_up(f"settings sweep: backed up settings.json to {backup.name}")
+    except OSError as e:
+        _log.warning("settings sweep: couldn't back up settings.json: %s", e)
 
 
 # ─── Settings cache ──────────────────────────────────────────
@@ -1024,6 +1143,16 @@ def _apply_legacy_settings_migrations(settings: dict) -> bool:
                         if sub_k not in cur_src[key]:
                             cur_src[key][sub_k] = sub_v
                             changed = True
+    # G194 (2026-10-21): phase 2 went on by default (G178), but every
+    # install had the old default `phase2_enabled: false` stored, so it
+    # never ran. Switch a stored false on once; switching it off after
+    # that sticks.
+    if not settings.get("goodreads_phase2_on_applied"):
+        gr = (settings.get("metadata_cache") or {}).get("goodreads")
+        if isinstance(gr, dict) and gr.get("phase2_enabled") is False:
+            gr["phase2_enabled"] = True
+        settings["goodreads_phase2_on_applied"] = True
+        changed = True
     return changed
 
 
@@ -1045,13 +1174,22 @@ def load_settings() -> dict:
             # Apply legacy-shape migrations BEFORE caching so callers
             # see only the current shape. If anything changed, persist
             # so the file on disk matches what the running process holds.
-            if _apply_legacy_settings_migrations(merged):
+            migrated = _apply_legacy_settings_migrations(merged)
+            # Then drop keys no code knows (issue 25), after the
+            # migrations have read theirs.
+            dropped = _sweep_unknown_keys(saved, merged)
+            if dropped:
+                _backup_before_sweep()
+                for key in dropped:
+                    _info_once_logging_is_up(f"settings sweep: dropped {key!r} (no code reads it)")
+            if migrated or dropped:
                 try:
                     save_settings(merged)
-                    _log.info(
-                        "Applied legacy settings migrations and resaved "
-                        "settings.json"
-                    )
+                    if migrated:
+                        _log.info(
+                            "Applied legacy settings migrations and resaved "
+                            "settings.json"
+                        )
                 except Exception:
                     _log.exception(
                         "Failed to persist migrated settings; in-memory "
@@ -1070,6 +1208,7 @@ def load_settings() -> dict:
     # First run — start from defaults and seed from env vars.
     settings = dict(DEFAULT_SETTINGS)
     _apply_env_overrides(settings)
+    _apply_legacy_settings_migrations(settings)    # marks the one-time ones done
     save_settings(settings)
     try:
         _settings_cache["mtime"] = SETTINGS_PATH.stat().st_mtime

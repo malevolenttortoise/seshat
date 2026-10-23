@@ -84,7 +84,6 @@ _CONFIG_KEYS = (
     "mam_economy_buffer_gate_enabled",
     "mam_economy_buffer_gate_safety_margin_gb",
     "mam_economy_manual_wedge_offer_enabled",
-    "mam_economy_fl_wedge_offer_enabled",
     "mam_economy_intro_dismissed",
     "mam_economy_dry_run",
 )

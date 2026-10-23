@@ -57,6 +57,8 @@ from app.orchestrator.dispatch import DispatcherDeps, handle_announce
 from app.orchestrator.review_timeout import run_loop as review_timeout_loop
 from app.orchestrator.scheduler import (
     register_digest_jobs,
+    register_enrich_retry,
+    register_goodreads_author_backfill,
     register_goodreads_canary,
     register_metadata_cache_health,
 )
@@ -110,6 +112,7 @@ from app.discovery.routers.config import router as disc_config_router
 from app.discovery.routers.pipeline_send import router as disc_pipeline_send_router
 from app.discovery.routers.reingest import router as disc_reingest_router
 from app.discovery.routers.hygiene import router as disc_hygiene_router
+from app.discovery.routers.missing_cleanup import router as disc_missing_cleanup_router
 
 # Configure logging once at import time. The verbose toggle gets re-applied
 # from settings.json after load_settings() runs in the lifespan.
@@ -282,11 +285,15 @@ def _build_metadata_enricher(
     )
     rs = resolved_secrets or {}
     hardcover_key = rs.get("hardcover_api_key") or ""
+    google_books_key = (
+        rs.get("google_books_api_key") or settings.get("google_books_api_key") or ""
+    )
     audible_region = (settings.get("audible_region") or "us").lower()
     return MetadataEnricher(
         cfg,
         hardcover_api_key=hardcover_key,
         audible_region=audible_region,
+        google_books_api_key=google_books_key,
     )
 
 
@@ -770,6 +777,18 @@ async def lifespan(app: FastAPI):
         f"Hold-release loop started (interval={hold_release_interval}s)"
     )
 
+    # Wave 5a (G121): look for every CWA drop in Calibre's metadata.db; a
+    # drop that never shows up fails its review as "import failed". Idle
+    # (one indexed query a minute) when nothing is pending.
+    from app.orchestrator.import_check import run_loop as import_check_loop
+
+    async def _import_check_factory():
+        await import_check_loop(interval_seconds=60)
+
+    state._import_check_task = state.supervised_task(
+        _import_check_factory, name="import-check",
+    )
+
     # APScheduler: always construct so discovery-domain interval jobs
     # (library sync + scheduled author lookup) have somewhere to land.
     # Digest jobs only register when daily_digest_enabled + ntfy_url are
@@ -804,6 +823,12 @@ async def lifespan(app: FastAPI):
     # `notify_on_goodreads_canary_failed` (default True).
     register_goodreads_canary(scheduler)
     _log.info("Goodreads canary registered (Mon 03:00)")
+    # 2026-10 audit wave 4b (G84): the Goodreads author-ID job, weekly.
+    register_goodreads_author_backfill(scheduler)
+    _log.info("Goodreads author-ID job registered (Sun 15:00)")
+    # Wave S (G182): sources skipped while backing off are retried for
+    # pending reviews once the backoff ends.
+    register_enrich_retry(scheduler)
 
     # v2.21.0 Phase G — metadata-cache worker health + daily summary.
     # Stall watchdog runs every 2 min and fires a Tier-1 ntfy if the
@@ -1263,6 +1288,12 @@ async def lifespan(app: FastAPI):
     state._economy_upload_task = state.supervised_task(
         upload_autobuy_loop, name="economy-upload-autobuy"
     )
+    # Per-source request counters (audit issue 15): collected in memory
+    # by the source gate, written to the app DB every minute.
+    from app.metadata import source_gate
+    state._source_counter_flush_task = state.supervised_task(
+        source_gate.flush_loop, name="source-counter-flush"
+    )
     _log.info(
         "MAM scheduler + digest scheduler + economy auto-buy tasks started"
     )
@@ -1339,6 +1370,7 @@ async def lifespan(app: FastAPI):
             "_cookie_retry_task",
             "_review_timeout_task",
             "_hold_release_task",
+            "_import_check_task",
             "_mam_scheduler_task",
             "_digest_scheduler_task",
             "_economy_vip_task",
@@ -1348,6 +1380,7 @@ async def lifespan(app: FastAPI):
             "_metadata_cache_amazon_worker_task",
             # v3.4.0 slice 03 — Goodreads list-page cache worker.
             "_metadata_cache_goodreads_worker_task",
+            "_source_counter_flush_task",
         ):
             task = getattr(state, task_attr, None)
             if task is not None and not task.done():
@@ -1357,6 +1390,13 @@ async def lifespan(app: FastAPI):
                 except (asyncio.CancelledError, Exception):
                     pass
                 setattr(state, task_attr, None)
+
+        # Write the source counts the flush loop hadn't reached yet.
+        try:
+            from app.metadata import source_gate
+            await source_gate.flush()
+        except Exception:
+            _log.exception("error writing source counters during shutdown")
 
         # Tear down whatever the dispatcher owns. The qBit client
         # holds an httpx.AsyncClient; the cookie module holds
@@ -1391,6 +1431,13 @@ async def lifespan(app: FastAPI):
             await ntfy_aclose()
         except Exception:
             _log.exception("error closing ntfy client during shutdown")
+        # And Goodreads' shared curl_cffi session (never closed before
+        # the 2026-10 audit, issue 24).
+        try:
+            from app.metadata.goodreads_session import close_session
+            await close_session()
+        except Exception:
+            _log.exception("error closing the Goodreads session during shutdown")
         state.dispatcher = None
         state.irc_client = None
 
@@ -1499,6 +1546,7 @@ app.include_router(disc_config_router)
 app.include_router(disc_pipeline_send_router)
 app.include_router(disc_reingest_router)
 app.include_router(disc_hygiene_router)
+app.include_router(disc_missing_cleanup_router)
 
 
 @app.get("/api/health")

@@ -1901,14 +1901,20 @@ async def _trigger_single_author_scan(
     from app.discovery.database import set_active_library as _set_active
     original_slug = get_active_library()
     target_slug = slug or original_slug
+    from app.discovery.roster import SKIP_MESSAGES, author_scan_skip_reason
     db = await get_db(target_slug)
     try:
         r = await (await db.execute("SELECT * FROM authors WHERE id=?", (aid,))).fetchone()
         if not r:
             raise HTTPException(404)
+        name = dict(r)["name"]
+        skip = None if content_type else await author_scan_skip_reason(db, aid, name, target_slug)
     finally:
         await db.close()
-    name = dict(r)["name"]
+    if skip:
+        # F15: the scan would stop at `lookup_author`'s gate; say why now.
+        return {"status": "skipped", "author": name, "total": 0,
+                "reason": skip, "message": f"{name}: {SKIP_MESSAGES[skip]}"}
 
     if content_type:
         # Cross-library mode — iterate every library of the requested
@@ -1919,6 +1925,7 @@ async def _trigger_single_author_scan(
                     "author": name,
                     "message": f"No {content_type} libraries found."}
         pre_resolved: list[tuple[dict, list]] = []
+        skipped: list[str] = []
         for lib in target_libs:
             tslug = lib.get("slug")
             if not tslug:
@@ -1932,11 +1939,22 @@ async def _trigger_single_author_scan(
                 rows = await ldb.execute_fetchall(
                     "SELECT id, name FROM authors WHERE name = ?", (name,),
                 )
+                eligible = []
+                for row in rows:
+                    why = await author_scan_skip_reason(ldb, row[0], row[1], tslug)
+                    if why:
+                        skipped.append(why)
+                    else:
+                        eligible.append(row)
             finally:
                 await ldb.close()
-            if rows:
-                pre_resolved.append((lib, list(rows)))
+            if eligible:
+                pre_resolved.append((lib, eligible))
         total_tasks = sum(len(rows) for _, rows in pre_resolved)
+        if total_tasks == 0 and skipped:
+            return {"status": "skipped", "author": name, "total": 0,
+                    "reason": skipped[0],
+                    "message": f"{name}: {SKIP_MESSAGES[skipped[0]]}"}
         if total_tasks == 0:
             return {"status": "ok", "total": 0,
                     "author": name,
@@ -2046,6 +2064,31 @@ async def trigger_author_full_rescan(
         scan_type_single="single_author_full",
         scan_type_cross="single_author_full_cross",
     )
+
+
+@router.get("/authors/{aid}/list-missing")
+async def get_author_list_missing(aid: int, slug: Optional[str] = None):
+    """D6's switch (F18): `on`, and `missing` = the books turning it off
+    would hide (on) or that it hid (off)."""
+    from app.discovery import list_missing
+    r = await list_missing.status(aid, slug or get_active_library())
+    if not r.pop("found"):
+        raise HTTPException(404)
+    return r
+
+
+@router.put("/authors/{aid}/list-missing")
+async def put_author_list_missing(aid: int, data: dict = Body(...), slug: Optional[str] = None):
+    """Turn "List missing books" on or off for one author (D6 / F8):
+    off hides the author's missing books (`author_off`) and scans skip
+    them; on shows those books again at once."""
+    if not isinstance(data.get("on"), bool):
+        raise HTTPException(400, "body must be {\"on\": true | false}")
+    from app.discovery import list_missing
+    r = await list_missing.set_list_missing(aid, data["on"], slug or get_active_library())
+    if not r.pop("found"):
+        raise HTTPException(404)
+    return r
 
 
 async def _clear_authors_in_library(

@@ -535,7 +535,7 @@ class TestFatalConfigErrors:
             fake_irc.feed_line(":server CAP * ACK :sasl")
             # Server returns 433 instead of accepting our nick.
             # Use the same shape MAM IRC really emits:
-            #   :server 433 * Turtles81_arrbot :Nickname is already in use.
+            #   :server 433 * ExampleMouse_arrbot :Nickname is already in use.
             fake_irc.feed_line(
                 ":server 433 * testbot :Nickname is already in use."
             )

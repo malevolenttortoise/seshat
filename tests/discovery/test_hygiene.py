@@ -479,13 +479,13 @@ class TestIdentifierDedup:
         a = await _insert_author(db, "X")
         # Winner is the lowest id row with owned=1.
         winner = await _insert_book(
-            db, author_id=a, title="Winner",
+            db, author_id=a, title="The Way of Kings",
             goodreads_id="42", owned=1, isbn=None,
         )
         # Loser has a non-null ISBN the winner is missing — the
         # COALESCE-fill should carry it onto the winner.
         loser = await _insert_book(
-            db, author_id=a, title="Loser",
+            db, author_id=a, title="The Way of Kings: The Stormlight Archive, Book 1",
             goodreads_id="42", owned=0,
             isbn="9999",
         )
@@ -505,6 +505,48 @@ class TestIdentifierDedup:
             "SELECT id FROM books WHERE id = ?", (loser,),
         )).fetchone()
         assert gone is None
+
+    async def test_a_shared_id_on_another_book_folds_nothing(self, hygiene_dbs):
+        """G220: the old merge copied a light novel's Amazon id onto its
+        manga row; the two stay apart, and so do a box set and the book."""
+        db = hygiene_dbs
+        a = await _insert_author(db, "Kuji Furumiya")
+        manga = await _insert_book(db, author_id=a, title="A Pale Moon Reverie (Manga) Volume 1",
+                                   amazon_id="B0NOVEL", owned=0)
+        novel = await _insert_book(db, author_id=a, title="A Pale Moon Reverie: Volume 1",
+                                   amazon_id="B0NOVEL", owned=0)
+        book = await _insert_book(db, author_id=a, title="Ashes Fall", goodreads_id="7", owned=1)
+        arc = await _insert_book(db, author_id=a, title="Hollow Earth Apocalypse: Arc 1",
+                                 goodreads_id="7", owned=0)
+        stats = hygiene._zero_stats()
+        for col in ("amazon_id", "goodreads_id"):
+            assert await hygiene._dedupe_by_identifier(db, col, stats, "testlib") == 0
+        rows = {r["id"] for r in await (await db.execute("SELECT id FROM books")).fetchall()}
+        assert {manga, novel, book, arc} <= rows
+
+    async def test_one_book_in_two_families_stays_apart(self, hygiene_dbs):
+        db = hygiene_dbs
+        a = await _insert_author(db, "Matt Dinniman")
+        book = await _insert_book(db, author_id=a, title="Dungeon Crawler Carl", amazon_id="B0DCC", owned=1)
+        comic = await _insert_book(db, author_id=a, title="Dungeon Crawler Carl, Vol. 1 (Graphic Novel)",
+                                   amazon_id="B0DCC", owned=0)
+        stats = hygiene._zero_stats()
+        assert await hygiene._dedupe_by_identifier(db, "amazon_id", stats, "testlib") == 0
+        rows = {r["id"] for r in await (await db.execute("SELECT id FROM books")).fetchall()}
+        assert {book, comic} <= rows
+
+    async def test_one_title_in_two_families_stays_apart(self, hygiene_dbs):
+        db = hygiene_dbs
+        a = await _insert_author(db, "John Birmingham")
+        novel = await _insert_book(db, author_id=a, title="He Died with a Felafel in His Hand",
+                                   amazon_id="B0FELAFEL", owned=1)
+        listing = await _insert_book(db, author_id=a,
+                                     title="He Died With A Felafel In His Hand: 30th Anniversary Edition",
+                                     amazon_id="B0FELAFEL", owned=0)
+        stats = hygiene._zero_stats()
+        assert await hygiene._dedupe_by_identifier(db, "amazon_id", stats, "testlib") == 0
+        rows = {r["id"] for r in await (await db.execute("SELECT id FROM books")).fetchall()}
+        assert {novel, listing} <= rows
 
     async def test_skips_hidden_books(self, hygiene_dbs):
         """A hidden row sharing an identifier with an active row must

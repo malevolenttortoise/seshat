@@ -86,6 +86,10 @@ _METADATA_FIELDS = (
     "audio_formats",
     "series_id",
     "series_index",
+    # 2026-10 audit S8 (G63): the source that found the book. The loser
+    # is usually the discovered row merged into an owned one, so coalesce
+    # keeps its discoverer on the survivor (both merge paths).
+    "discovered_by",
 )
 
 

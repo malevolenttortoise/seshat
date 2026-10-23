@@ -9,7 +9,7 @@ injected on `self._client`).
 Coverage:
   - Series-from-title extractor edge cases
   - `_resolve_author_keys` disambiguation (single, multi w/ name match,
-    multi w/ work_count tiebreak, no match → fallback to top hit,
+    multi w/ work_count tiebreak, no match → no key (G65),
     variant-query recovery, cross-script aggregation)
   - `_fetch_all_author_works` pagination (single page, multi-page,
     partial-page stop)
@@ -308,9 +308,10 @@ class TestResolveAuthorKeys:
         assert result == ["/authors/OL20A", "/authors/OL10A", "/authors/OL30A"]
         await src.close()
 
-    async def test_no_strict_match_falls_back_to_top_hit(self):
-        # No name passes strict gate AND no substring match either.
-        # Fall back to OL's top-ranked hit (single-element list).
+    async def test_no_name_match_means_no_author(self):
+        # No name passes strict gate AND no substring match either: not
+        # this author (2026-10 audit G65; OL's top hit used to be taken,
+        # live "Travis Dean" -> "Dean Travis Clarke").
         src = _make_source()
         _patch_get(src, {
             "search/authors.json": {
@@ -323,7 +324,18 @@ class TestResolveAuthorKeys:
 
         result = await src._resolve_author_keys("Brandon Sanderson")
 
-        assert result == ["/authors/OL99A"]
+        assert result == []
+        await src.close()
+
+    async def test_a_reordered_name_is_not_the_author(self):
+        src = _make_source()
+        _patch_get(src, {
+            "search/authors.json": {
+                "docs": [{"key": "/authors/OL2932265A", "name": "Dean Travis Clarke",
+                          "work_count": 12}],
+            },
+        })
+        assert await src._resolve_author_keys("Travis Dean") == []
         await src.close()
 
     async def test_no_results_returns_empty_list(self):

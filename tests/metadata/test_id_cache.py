@@ -155,13 +155,37 @@ class TestClearAll:
         assert id_cache.get_author_bib("123") is None
 
 
+@pytest.fixture
+def gr_box(monkeypatch):
+    """The resolver's autocomplete tiers go through the Goodreads session
+    (2026-10 audit): the real session over a fake transport answering
+    through `box["handler"]`, which each test points at its handler."""
+    import httpx
+    from app.metadata import goodreads_session
+
+    box: dict = {"handler": lambda req: httpx.Response(404)}
+
+    class _FakeCurl:
+        async def get(self, url, headers=None, **kwargs):
+            return box["handler"](httpx.Request("GET", url, params=kwargs.get("params")))
+
+    session = goodreads_session.GoodreadsSession()
+    session._curl = _FakeCurl()
+
+    async def fake_get_session():
+        return session
+
+    monkeypatch.setattr(goodreads_session, "get_session", fake_get_session)
+    return box
+
+
 class TestResolverCacheIntegration:
     """Resolver chain end-to-end with cache:
       - First call hits HTTP and writes to cache
       - Second call with same query returns cached result without HTTP
     """
 
-    async def test_second_call_short_circuits_via_cache(self):
+    async def test_second_call_short_circuits_via_cache(self, gr_box):
         import httpx
         from app.metadata.goodreads_id_resolver import (
             ResolveQuery, resolve_goodreads_id,
@@ -173,6 +197,7 @@ class TestResolverCacheIntegration:
             calls.append(str(req.url))
             return httpx.Response(200, json=[{"bookId": "8134945"}])
 
+        gr_box["handler"] = handler
         transport = httpx.MockTransport(handler)
         async with httpx.AsyncClient(transport=transport, timeout=5.0) as client:
             first = await resolve_goodreads_id(
@@ -187,7 +212,7 @@ class TestResolverCacheIntegration:
         # CRITICAL: only ONE HTTP call — the second resolve hit the cache.
         assert len(calls) == 1
 
-    async def test_use_cache_false_bypasses_cache(self):
+    async def test_use_cache_false_bypasses_cache(self, gr_box):
         """The canary will pass `use_cache=False` so it always probes
         the live HTTP path even when the cache has a stale answer."""
         import httpx
@@ -201,6 +226,7 @@ class TestResolverCacheIntegration:
             calls.append(str(req.url))
             return httpx.Response(200, json=[{"bookId": "X"}])
 
+        gr_box["handler"] = handler
         transport = httpx.MockTransport(handler)
         async with httpx.AsyncClient(transport=transport, timeout=5.0) as client:
             await resolve_goodreads_id(
@@ -214,7 +240,7 @@ class TestResolverCacheIntegration:
         # Two HTTP calls — the second resolved past the cache.
         assert len(calls) == 2
 
-    async def test_miss_is_cached_so_repeat_misses_skip_http(self):
+    async def test_miss_is_cached_so_repeat_misses_skip_http(self, gr_box):
         """A dead-end ISBN that the resolver couldn't find shouldn't
         trigger another auto_complete call on the next scan within
         the miss-TTL window."""
@@ -232,6 +258,7 @@ class TestResolverCacheIntegration:
                 return httpx.Response(200, json=[])
             return httpx.Response(404)
 
+        gr_box["handler"] = handler
         transport = httpx.MockTransport(handler)
         async with httpx.AsyncClient(transport=transport, timeout=5.0) as client:
             first = await resolve_goodreads_id(
@@ -247,10 +274,10 @@ class TestResolverCacheIntegration:
         # Second call must NOT add any HTTP — the miss is cached.
         assert len(calls) == calls_after_first
 
-    async def test_soft_block_outcome_not_cached(self):
-        """Don't cache a soft-block result. Cloudflare gates are
+    async def test_soft_block_outcome_not_cached(self, gr_box):
+        """Don't cache a soft-block result. Bot-protection blocks are
         transient — caching them would lock us out of Goodreads for
-        the miss-TTL even after cookies refresh."""
+        the miss-TTL after the block has passed."""
         import httpx
         from app.metadata.goodreads_id_resolver import (
             ResolveQuery, resolve_goodreads_id,
@@ -261,6 +288,7 @@ class TestResolverCacheIntegration:
                 return httpx.Response(202, content=b"")  # soft-block
             return httpx.Response(404)
 
+        gr_box["handler"] = handler
         transport = httpx.MockTransport(handler)
         async with httpx.AsyncClient(transport=transport, timeout=5.0) as client:
             result = await resolve_goodreads_id(

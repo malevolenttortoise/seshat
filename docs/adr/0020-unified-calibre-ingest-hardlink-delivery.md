@@ -1,6 +1,7 @@
 # 0020. Unify ebook ingest on direct `calibredb add`; hardlink delivery; freeze slim image as LTS
 
 - Status: Accepted (design-locked 2026-06-25; implementation pending — strict-SemVer MAJOR)
+- Status note (2026-10-09, audit wave 5a, G115): still the plan, parked — not on the 2026-10 roadmap. Meanwhile every CWA drop is checked against Calibre's `metadata.db` (`orchestrator/import_check.py`); that wait-and-check goes when this ADR ships, since `calibredb add` returns the book id.
 - Date: 2026-06-25
 
 > Number note: `0019` is reserved for the refactor-era long-lived-branch ADR authored on `refactor/v3.5.x`; this decision takes `0020` to avoid a merge collision.

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { api, slugQuery } from "../api";
 import { useTheme } from "../theme";
+import { useBookSidebar } from "../hooks/useBookSidebar";
 import { BookSidebar } from "../components/BookSidebar";
 import { MobileBookCard, MobileBackButton } from "../components/mobile";
 import type { Book, BookAction, BooksResponse, NavFn } from "../types";
@@ -12,8 +13,7 @@ export default function MobileHiddenPage({ onNav }: { onNav: NavFn }) {
   const t = useTheme();
   const [bks, setBks] = useState<Book[]>([]);
   const [ld, setLd] = useState(true);
-  const [sb, setSb] = useState<Book | null>(null);
-  const [sbClosing, setSbClosing] = useState(false);
+  const { sb, setSb, sbClosing, closeSb } = useBookSidebar();
 
   const load = () => {
     setLd(true);
@@ -29,15 +29,6 @@ export default function MobileHiddenPage({ onNav }: { onNav: NavFn }) {
   useEffect(() => {
     load();
   }, []);
-
-  const closeSb = () => {
-    if (!sb) return;
-    setSbClosing(true);
-    setTimeout(() => {
-      setSb(null);
-      setSbClosing(false);
-    }, 200);
-  };
 
   const onAction = async (act: BookAction, id: number, slug?: string) => {
     if (act === "unhide") await api.post(`/discovery/books/${id}/unhide${slugQuery(slug)}`);

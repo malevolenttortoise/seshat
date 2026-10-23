@@ -18,7 +18,7 @@ the existing merge-pipeline tests).
 """
 from __future__ import annotations
 
-from app.discovery.lookup import _looks_foreign
+from app.discovery.filters import is_foreign_title as _looks_foreign
 
 
 class TestLooksForeignNewKeywords:

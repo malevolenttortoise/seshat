@@ -10,10 +10,12 @@
 // Data-fetching is duplicated from the desktop page rather than
 // shared via a hook. Kept additive while we iterate; eligible for
 // a useBooksPageData() extraction in a follow-up.
-import { useCallback, useEffect, useState } from "react";
-import { api, slugQuery } from "../api";
+import { useState } from "react";
 import { useTheme } from "../theme";
-import { usePersist } from "../hooks/usePersist";
+import { useBookSidebar } from "../hooks/useBookSidebar";
+import { useMamEnabled } from "../hooks/useMamEnabled";
+import { useBooksList } from "../hooks/useBooksList";
+import { REASON_GROUPS } from "../lib/bookFilters";
 import { BookSidebar } from "../components/BookSidebar";
 import { Ic } from "../icons";
 import {
@@ -25,12 +27,6 @@ import {
   MobileRow,
   MobileBackButton,
 } from "../components/mobile";
-import type {
-  Book,
-  BookAction,
-  BooksResponse,
-  MamStatusResponse,
-} from "../types";
 
 export interface MobileBooksPageProps {
   title: string;
@@ -67,89 +63,17 @@ export default function MobileBooksPage({
   showOwnedFilter = false,
 }: MobileBooksPageProps) {
   const t = useTheme();
-  const [bks, setBks] = useState<Book[]>([]);
-  const [total, setTotal] = useState(0);
-  const [pg, setPg] = useState(1);
-  const [ld, setLd] = useState(true);
-  const [q, setQ] = usePersist<string>(`bp_${title}_q`, "");
-  const [sort, setSort] = usePersist<string>(`bp_${title}_sort`, "title");
-  const [fmt, setFmt] = usePersist<string>(`bp_${title}_fmt`, "all");
-  const [mamFilter, setMamFilter] = usePersist<string>(
-    `bp_${title}_mam`,
-    "",
-  );
-  const [ownedFilter, setOwnedFilter] = usePersist<string>(
-    `bp_${title}_owned`, "all",
-  );
-  const [mamOn, setMamOn] = useState(false);
-  const [sb, setSb] = useState<Book | null>(null);
-  const [sbClosing, setSbClosing] = useState(false);
+  const {
+    bks, total, totalPages, pg, ld, load, onAction,
+    q, setQ, sort, setSort, fmt, setFmt, mamFilter, setMamFilter, ownedFilter, setOwnedFilter,
+    hiddenTabs, hiddenTab, setHiddenTab, reasonGroup, setReasonGroup, hiddenCounts,
+    showShortFilter, hideShort, setHideShort,
+  } = useBooksList({ title, apiPath, extraParams, showFormatTabs, showOwnedFilter });
+  const mamOn = useMamEnabled();
+  const { sb, setSb, sbClosing, closeSb } = useBookSidebar();
   const [sortSheet, setSortSheet] = useState(false);
 
-  const closeSb = () => {
-    if (!sb) return;
-    setSbClosing(true);
-    setTimeout(() => {
-      setSb(null);
-      setSbClosing(false);
-    }, 200);
-  };
 
-  const perPage = 60;
-
-  const load = useCallback(
-    (page: number = 1, signal?: AbortSignal) => {
-      setLd(true);
-      const init: Record<string, string> = {
-        search: q,
-        sort,
-        per_page: String(perPage),
-        page: String(page),
-      };
-      for (const [k, v] of Object.entries(extraParams)) init[k] = String(v);
-      const p = new URLSearchParams(init);
-      if (mamFilter) p.set("mam_status", mamFilter);
-      if (showFormatTabs) p.set("content_type", fmt);
-      if (showOwnedFilter && ownedFilter === "owned") p.set("owned", "true");
-      else if (showOwnedFilter && ownedFilter === "discovered") p.set("owned", "false");
-      return api
-        .get<BooksResponse>(`${apiPath}?${p}`, signal)
-        .then((d) => {
-          setBks(d.books);
-          setTotal(d.total ?? d.books.length);
-          setPg(page);
-          setLd(false);
-        })
-        .catch((e) => {
-          if (!api.isAbort(e)) setLd(false);
-        });
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [q, sort, apiPath, mamFilter, fmt, showFormatTabs, showOwnedFilter, ownedFilter],
-  );
-
-  useEffect(() => {
-    const c = new AbortController();
-    load(1, c.signal);
-    return () => c.abort();
-  }, [load]);
-
-  useEffect(() => {
-    api
-      .get<MamStatusResponse>("/discovery/mam/status")
-      .then((r) => setMamOn(!!r.enabled))
-      .catch(() => {});
-  }, []);
-
-  const totalPages = Math.max(1, Math.ceil(total / perPage));
-
-  const onAction = async (act: BookAction, id: number, slug?: string) => {
-    if (act === "hide") await api.post(`/discovery/books/${id}/hide${slugQuery(slug)}`);
-    if (act === "unhide") await api.post(`/discovery/books/${id}/unhide${slugQuery(slug)}`);
-    if (act === "dismiss") await api.post(`/discovery/books/${id}/dismiss${slugQuery(slug)}`);
-    if (act === "delete") await api.del(`/discovery/books/${id}${slugQuery(slug)}`);
-    await load(pg);
-  };
 
   const sortLabel =
     SORT_OPTIONS.find((o) => o.value === sort)?.label || "Title";
@@ -229,6 +153,37 @@ export default function MobileBooksPage({
         </div>
       )}
 
+      {/* F19: Hidden by you / Filtered, with the reasons Seshat hid books for. */}
+      {hiddenTabs && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ display: "flex", gap: 6 }}>
+            <MobileChip active={hiddenTab === "mine"} onClick={() => setHiddenTab("mine")}>
+              Hidden by you · {hiddenCounts.mine.toLocaleString()}
+            </MobileChip>
+            <MobileChip active={hiddenTab === "filtered"} onClick={() => setHiddenTab("filtered")}>
+              Filtered · {hiddenCounts.filtered.toLocaleString()}
+            </MobileChip>
+          </div>
+          {hiddenTab === "filtered" && (
+            <>
+              <div style={{ display: "flex", gap: 6, overflowX: "auto", scrollbarWidth: "none" }}>
+                <MobileChip active={reasonGroup === ""} onClick={() => setReasonGroup("")}>
+                  All
+                </MobileChip>
+                {REASON_GROUPS.filter((g) => hiddenCounts.byGroup[g.id] > 0 || g.id === reasonGroup).map((g) => (
+                  <MobileChip key={g.id} active={reasonGroup === g.id} onClick={() => setReasonGroup(g.id)}>
+                    {g.label} · {(hiddenCounts.byGroup[g.id] ?? 0).toLocaleString()}
+                  </MobileChip>
+                ))}
+              </div>
+              <div style={{ fontSize: 12, color: t.tg }}>
+                Books Seshat keeps hidden, with the reason. Unhide one and it stays listed.
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
       {/* v2.3.4.3 owned filter — Hidden page only. */}
       {showOwnedFilter && (
         <div
@@ -269,6 +224,11 @@ export default function MobileBooksPage({
         >
           Sort: {sortLabel}
         </MobileChip>
+        {showShortFilter && (
+          <MobileChip active={hideShort} onClick={() => setHideShort(!hideShort)}>
+            Hide short
+          </MobileChip>
+        )}
         {mamOn &&
           MAM_FILTER_OPTIONS.map((opt) => (
             <MobileChip

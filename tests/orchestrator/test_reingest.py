@@ -417,6 +417,43 @@ class TestCombinedFind:
 
 
 class TestStartReingest:
+    async def test_uses_the_ebook_format_priority_the_pipeline_uses(
+        self, temp_db, tmp_path, monkeypatch,
+    ):
+        """G134: reingest read `ebook_format_priority`, which nothing
+        writes; the pipeline's ebook priority is `mam_format_priority`."""
+        from app import config as config_module
+        from app.orchestrator import pipeline
+
+        seen = {}
+
+        async def fake_process_completion(db, event, **kwargs):
+            seen.update(kwargs)
+            return True
+
+        monkeypatch.setattr(pipeline, "process_completion", fake_process_completion)
+        original = config_module.load_settings
+        monkeypatch.setattr(config_module, "load_settings", lambda: {
+            **original(), "mam_format_priority": ["epub", "azw3"],
+        })
+        candidate = Candidate(
+            source="fs", display_path=str(tmp_path), save_path=str(tmp_path),
+            book_files=["book.epub", "book.azw3"], qbit_hash=None,
+            mtime=0.0, total_size=0, score=100,
+        )
+        db = await get_db()
+        try:
+            await start_reingest(
+                db, dispatcher=_make_dispatcher(qbit=None),
+                mam_torrent_id="9998", mam_torrent_name="Book",
+                category="Ebooks - Fantasy", author_blob="Author",
+                candidate=candidate,
+            )
+        finally:
+            await db.close()
+
+        assert seen["ebook_format_priority"] == ["epub", "azw3"]
+
     async def test_creates_grab_and_review_row(self, temp_db, tmp_path, monkeypatch):
         """Full reingest path: planted EPUB on disk → start_reingest
         creates a `grabs` row (is_reingest=1, state=downloaded) +

@@ -14,6 +14,7 @@ uses `stop_event` to break the loop cleanly.
 """
 from __future__ import annotations
 
+import asyncio
 import time
 
 import pytest
@@ -278,6 +279,58 @@ class TestQueueEmpty:
 # ─── Successful scan ───────────────────────────────────────────
 
 
+class TestAdaptiveRefresh:
+    """G183: 65% of the trial's Amazon refreshes found nothing new, and the
+    worker managed ~55 authors a day against ~100 a 7-day cycle needs. A
+    refresh that finds nothing steps the next out (14, then 28 days); one
+    that finds a new book brings it back to 7."""
+
+    async def _scan(self, monkeypatch, *titles):
+        async def _fake_scan(author_id, session):
+            return _author_result(*titles, author_id=author_id), None
+        monkeypatch.setattr(metadata_cache_worker, "_perform_amazon_scan", _fake_scan)
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+        try:
+            await db.execute(
+                f"UPDATE {metadata_cache.queue_table()} SET status = 'pending', "
+                f"next_scan_due_at = 0, last_attempt_at = NULL WHERE author_id = ?",
+                ("B0QUIET001",),
+            )
+            await db.commit()
+        finally:
+            await db.close()
+        before = time.time()
+        result = await metadata_cache_worker.tick()
+        assert result.outcome == "ok"
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+        try:
+            row = await (await db.execute(
+                f"SELECT next_scan_due_at, quiet_refreshes FROM {metadata_cache.queue_table()} "
+                f"WHERE author_id = ?", ("B0QUIET001",),
+            )).fetchone()
+        finally:
+            await db.close()
+        days = (row[0] - before) / 86400.0
+        return round(days), row[1]
+
+    async def test_quiet_refreshes_step_out_and_a_new_book_resets(self, worker_under, monkeypatch):
+        await _seed_queue_row(author_id="B0QUIET001", seed_in_libraries=("books-lib",))
+        books = ("Book One", "Book Two")
+        steps = [await self._scan(monkeypatch, *books) for _ in range(4)]
+        # ±1 day spread around 7 / 14 / 28 days.
+        assert [q for _, q in steps] == [0, 1, 2, 2]
+        assert [6 <= steps[0][0] <= 8, 13 <= steps[1][0] <= 15,
+                27 <= steps[2][0] <= 29, 27 <= steps[3][0] <= 29] == [True] * 4
+
+        days, quiet = await self._scan(monkeypatch, *books, "Book Three")
+        assert quiet == 0 and 6 <= days <= 8
+
+    def test_the_spacing_never_passes_28_days(self):
+        for quiet in (2, 3, 9):
+            due = metadata_cache_worker._next_refresh_due(0.0, quiet) / 86400.0
+            assert 27 <= due <= 29, quiet
+
+
 class TestSuccessfulScan:
     async def test_successful_scan_writes_cache_and_advances_queue(
         self, worker_under, monkeypatch,
@@ -491,6 +544,41 @@ class TestSoftBlockPath:
         # Worker escalated to tier 2 (1800s).
         from app.discovery import amazon_author_id_resolver as r
         assert r.amazon_block_remaining_s() > 1500
+
+    @pytest.mark.parametrize("scan_kind,catalog_escalated", [
+        ("store", False),     # a store-page 429: only store pages wait longer
+        (None, True),         # a bot page: every kind does
+    ])
+    async def test_escalation_extends_the_cooldown_the_scan_tripped(
+        self, worker_under, monkeypatch, scan_kind, catalog_escalated,
+    ):
+        """G181: a worker escalation used to put every kind (a grab's
+        enrichment included) out for up to an hour."""
+        db = await metadata_cache.get_db(metadata_cache.SOURCE_AMAZON)
+        try:
+            await db.execute(
+                f"UPDATE {metadata_cache.worker_state_table()} "
+                f"SET last_block_at = ?, consecutive_blocks = 1 "
+                f"WHERE id = 1",
+                (time.time(),),
+            )
+            await db.commit()
+        finally:
+            await db.close()
+
+        async def _fake_scan(author_id, session):
+            from app.discovery import amazon_author_id_resolver as r
+            r.record_amazon_soft_block("fake", retry_after_s=600, kind=scan_kind)
+            return None, "HTTP 429 (fake)"
+        monkeypatch.setattr(
+            metadata_cache_worker, "_perform_amazon_scan", _fake_scan,
+        )
+        await _seed_queue_row(author_id="B0SOFTBLK3")
+        await metadata_cache_worker.tick()
+
+        from app.discovery import amazon_author_id_resolver as r
+        assert r.amazon_block_remaining_s(r.KIND_STORE) > 1500
+        assert (r.amazon_block_remaining_s(r.KIND_CATALOG) > 1500) is catalog_escalated
 
 
 # ─── Hard error path ───────────────────────────────────────────
@@ -1260,6 +1348,144 @@ class TestPhaseGNewBookDetection:
         info = [c for c in fake_ntfy if c["event_key"] == "metadata_cache_new_book"]
         assert len(info) == 1
         assert "Brand New Book" in info[0]["message"]
+
+
+class TestStallThresholdFollowsTheGate:
+    """Trial item (g): 68 false "stalled" warnings while an Amazon author
+    scan waited on a 100s gate (one took 858s); the message said "Amazon
+    worker" for Goodreads too."""
+
+    async def _stale(self, source, age_s):
+        db = await metadata_cache.get_db(source)
+        try:
+            await db.execute(
+                f"UPDATE {metadata_cache.worker_state_table(source)} "
+                f"SET last_heartbeat_at = ? WHERE id = 1", (time.time() - age_s,),
+            )
+            await db.commit()
+        finally:
+            await db.close()
+
+    async def test_a_long_gated_scan_is_no_stall(self, worker_under, monkeypatch):
+        from app.metadata import source_gate
+        monkeypatch.setattr(source_gate, "gap_seconds", lambda source: 100.0)
+        sent: list = []
+
+        async def _ntfy(**kw):
+            sent.append(kw)
+        monkeypatch.setattr(metadata_cache_worker, "_send_ntfy", _ntfy)
+        await self._stale(metadata_cache.SOURCE_AMAZON, 858)
+        assert await metadata_cache_worker.check_stall("amazon") is False
+        await self._stale(metadata_cache.SOURCE_AMAZON, 1300)
+        assert await metadata_cache_worker.check_stall("amazon") is True
+        assert sent and sent[0]["title"] == "Amazon worker — stalled"
+
+    async def test_a_tick_still_sending_requests_is_no_stall(self, worker_under, monkeypatch, caplog):
+        """G193 (2026-10-21): two false warnings on Amazon ticks of 1,212s
+        and 1,213s (authors with 141 and 209 books) against 12 gaps = 1,200s.
+        Each request through the gate is a sign of life; another caller's
+        isn't, and the warning names the source."""
+        from app.metadata import source_gate
+        monkeypatch.setattr(source_gate, "gap_seconds", lambda source: 100.0)
+
+        async def _ntfy(**kw):
+            pass
+        monkeypatch.setattr(metadata_cache_worker, "_send_ntfy", _ntfy)
+        await self._stale(metadata_cache.SOURCE_AMAZON, 1300)
+        with source_gate.caller(source_gate.CALLER_ENRICHMENT):
+            async with source_gate.turn("amazon"):
+                pass
+        with caplog.at_level("WARNING", logger="seshat.discovery.metadata_cache_worker"):
+            assert await metadata_cache_worker.check_stall("amazon") is True
+        assert "metadata_cache_worker[amazon]: stall detected" in caplog.text
+
+        with source_gate.caller(source_gate.CALLER_WORKER):
+            async with source_gate.turn("amazon"):
+                pass
+        assert await metadata_cache_worker.check_stall("amazon") is False
+        # Amazon's requests don't keep the Goodreads worker alive.
+        assert metadata_cache_worker.worker_heartbeat("goodreads", None) is None
+
+    async def _goodreads_on(self, monkeypatch):
+        await metadata_cache.init_db(metadata_cache.SOURCE_GOODREADS)
+        monkeypatch.setattr(metadata_cache_worker, "is_worker_enabled", lambda source: True)
+        monkeypatch.setattr(metadata_cache_worker, "is_inside_schedule_window", lambda source: True)
+
+    async def _waiting_page(self, monkeypatch, began_ago: float):
+        """The worker's book page sitting out its turn at the gate (held
+        until the returned event is set), its wait begun `began_ago` s ago."""
+        from app.metadata import source_gate
+        monkeypatch.setattr(source_gate, "gap_seconds", lambda source: 30.0)
+        monkeypatch.setattr(
+            source_gate, "kind_gap_seconds",
+            lambda source, kind: 400.0 if kind == source_gate.KIND_BOOK_PAGE else 0.0,
+        )
+        release = asyncio.Event()
+
+        async def held_sleep(seconds):
+            await asyncio.wait_for(release.wait(), 5)
+        monkeypatch.setattr(source_gate, "_sleep", held_sleep)
+        source_gate._last_start["goodreads:book_page"] = source_gate._clock()
+        monkeypatch.setattr(source_gate, "_wall", lambda: time.time() - began_ago)
+
+        async def page():
+            with source_gate.caller(source_gate.CALLER_WORKER):
+                async with source_gate.turn("goodreads", kind=source_gate.KIND_BOOK_PAGE):
+                    pass
+        task = asyncio.create_task(page())
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert source_gate.waiting_since("goodreads") is not None
+        return task, release
+
+    async def test_a_worker_waiting_its_turn_is_no_stall(self, worker_under, monkeypatch):
+        """G207 (2026-10-21 20:30 EDT): enrichment took the book-page turn, the
+        worker sat its full 400s turn at the gate with nothing sent, and was
+        reported stalled at 439s (threshold 12 × 30s = 360s)."""
+        sent: list = []
+
+        async def _ntfy(**kw):
+            sent.append(kw)
+        monkeypatch.setattr(metadata_cache_worker, "_send_ntfy", _ntfy)
+        await self._goodreads_on(monkeypatch)
+        await self._stale(metadata_cache.SOURCE_GOODREADS, 439)
+        task, release = await self._waiting_page(monkeypatch, began_ago=210)
+        try:
+            assert await metadata_cache_worker.check_stall("goodreads") is False
+            assert sent == []
+        finally:
+            release.set()
+            await asyncio.wait_for(task, 5)
+        from app.metadata import source_gate
+        assert source_gate.waiting_since("goodreads") is None
+
+    async def test_a_wait_longer_than_the_gate_allows_is_a_stall(self, worker_under, monkeypatch):
+        """A wait that outlasts what a working gate makes (two book-page turns
+        with their quiet, ~20 min) is stuck: the watchdog still warns."""
+        async def _ntfy(**kw):
+            pass
+        monkeypatch.setattr(metadata_cache_worker, "_send_ntfy", _ntfy)
+        await self._goodreads_on(monkeypatch)
+        await self._stale(metadata_cache.SOURCE_GOODREADS, 3000)
+        task, release = await self._waiting_page(monkeypatch, began_ago=2000)
+        try:
+            assert await metadata_cache_worker.check_stall("goodreads") is True
+        finally:
+            release.set()
+            await asyncio.wait_for(task, 5)
+
+
+def test_crash_ntfys_at_most_one_an_hour(monkeypatch):
+    """Trial item (e): 2026-10-11 sent 78 crash ntfys in 45 minutes."""
+    monkeypatch.setattr(metadata_cache_worker, "_crash_ntfy_sent_at", {})
+    clock = {"t": 1_000_000.0}
+    monkeypatch.setattr(metadata_cache_worker.time, "time", lambda: clock["t"])
+    assert metadata_cache_worker._crash_ntfy_due("goodreads") is True
+    clock["t"] += 60
+    assert metadata_cache_worker._crash_ntfy_due("goodreads") is False
+    assert metadata_cache_worker._crash_ntfy_due("amazon") is True
+    clock["t"] += 3600
+    assert metadata_cache_worker._crash_ntfy_due("goodreads") is True
 
 
 class TestPhaseGStallWatchdog:

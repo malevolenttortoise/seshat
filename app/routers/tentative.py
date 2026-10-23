@@ -52,6 +52,9 @@ class TentativeItem(BaseModel):
     cover_path: Optional[str]
     status: str
     created_at: str
+    # Every MAM content tag the announce carried (wave 5a, G124); None
+    # when only `category` is known.
+    categories: Optional[list[str]] = None
 
 
 class TentativeListResponse(BaseModel):
@@ -91,6 +94,7 @@ def _to_item(row: tentative_storage.TentativeRow) -> TentativeItem:
         cover_path=row.cover_path,
         status=row.status,
         created_at=row.created_at,
+        categories=row.categories,
     )
 
 
@@ -347,6 +351,10 @@ async def approve(
         author_blob=row.author_blob,
         raw_line=f"tentative_approve:id={tentative_id}",
         override_mam_snatched=override_mam_snatched,
+        # An IRC announce held for the author decision: a book already
+        # owned in its media type isn't grabbed (D7).
+        apply_owned_skip=True,
+        categories=row.categories or (),
     )
 
     # Mark the tentative row as approved regardless of the injection

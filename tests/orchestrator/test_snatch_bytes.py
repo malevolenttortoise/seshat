@@ -93,6 +93,25 @@ class TestQueueSavesBytes:
         assert grab.state == grabs_storage.STATE_PENDING_QUEUE
         assert torrent_store.load(grab.torrent_file_path) == MINIMAL_BENCODED_TORRENT
 
+    @pytest.mark.parametrize("kind", ["auth_failed", "network_error"])
+    async def test_drop_mode_keeps_the_bytes_too(self, temp_db, kind):
+        """Drop mode is about a full budget. A qBit login / network failure
+        still keeps the bytes and queues (wave 5a, G119): dropping them lost
+        8 grabs on 2026-07-12 that MAM must never serve again."""
+        qbit = _FakeQbit(add_result=AddResult(
+            success=False, failure_kind=kind, failure_detail="qBit login rejected credentials",
+        ))
+        deps = _make_deps(qbit=qbit, queue_mode_enabled=False)
+
+        result = await inject_grab(deps, torrent_id=TID)
+
+        assert result.action == "queue"
+        assert result.reason == f"client_unreachable:{kind}"
+        assert deps.fetch_torrent.calls == [(TID, "good_token")]  # type: ignore[attr-defined]
+        grab = await _grab(result.grab_id)
+        assert grab.state == grabs_storage.STATE_PENDING_QUEUE
+        assert torrent_store.load(grab.torrent_file_path) == MINIMAL_BENCODED_TORRENT
+
     async def test_save_failure_fails_loudly_instead_of_queueing(
         self, temp_db, monkeypatch,
     ):

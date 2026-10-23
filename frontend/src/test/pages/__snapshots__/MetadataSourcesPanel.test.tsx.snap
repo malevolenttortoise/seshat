@@ -1,0 +1,4084 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Metadata Sources panel (desktop) > Amazon's details with its cache card > markup 1`] = `
+<DocumentFragment>
+  <div
+    style="display: flex; flex-direction: column; gap: 12px;"
+  >
+    <div
+      style="font-size: 13px; color: rgb(136, 134, 160); line-height: 1.6; margin: 0px; padding: 10px 14px; background: rgb(30, 32, 52); border-radius: 8px; border: 1px solid rgb(46, 48, 72);"
+    >
+      <div
+        style="margin-bottom: 4px;"
+      >
+        <strong
+          style="color: rgb(214, 212, 224);"
+        >
+          Enrich
+        </strong>
+         — sources run after a book downloads, merging title / description / ISBN / cover / narrator / etc. into the review-queue metadata.
+      </div>
+      <div
+        style="margin-bottom: 4px;"
+      >
+        <strong
+          style="color: rgb(214, 212, 224);"
+        >
+          Scan
+        </strong>
+         — sources run during library-side author scanning to find books you don't have yet.
+      </div>
+      <div>
+        <strong
+          style="color: rgb(214, 212, 224);"
+        >
+          Rate (s)
+        </strong>
+         — the minimum gap between any two requests to this source, from anything in Seshat (scans, the cache workers, enrichment). Higher = gentler on the upstream, slower scans. Leave at default if unsure.
+      </div>
+      <div
+        style="margin-top: 6px; color: rgb(136, 134, 160);"
+      >
+        Priority is top-to-bottom; drag rows to reorder. MAM is always first and free — its row is locked.
+      </div>
+    </div>
+    <div
+      style="background: rgba(228, 184, 104, 0.094); border: 1px solid rgba(228, 184, 104, 0.333); color: rgb(236, 234, 244); padding: 10px 14px; border-radius: 8px; font-size: 13px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;"
+    >
+      <span
+        style="flex: 1 1 0%;"
+      >
+        <b>
+          v2.13.0:
+        </b>
+         Goodreads's default rate limit is now 
+        <b>
+          5.0s
+        </b>
+         (was 2.0s). Goodreads' bot protection (AWS WAF) scores request density, so the slower pace keeps scans from being blocked. Your current setting is 
+        <b>
+          1s
+        </b>
+        .
+      </span>
+      <button
+        style="background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+      >
+        Bump to 5.0s
+      </button>
+    </div>
+    <div
+      style="display: grid; grid-template-columns: minmax(220px, 280px) 1fr; gap: 16px; align-items: start;"
+    >
+      <div
+        style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 8px; overflow: hidden; display: flex; flex-direction: column;"
+      >
+        <div
+          style="padding: 8px 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: rgb(136, 134, 160); border-bottom: 1px solid rgb(46, 48, 72); background: rgb(30, 32, 52);"
+        >
+          Sources
+        </div>
+        <button
+          style="display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; background: transparent; border-width: medium medium 1px 3px; border-style: none none solid solid; border-color: currentcolor currentcolor rgb(46, 48, 72) transparent; border-image: none; cursor: pointer; color: rgb(236, 234, 244); text-align: left; font-size: 13px; opacity: 1;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 700; color: rgb(228, 184, 104); text-align: center;"
+          >
+            🔒
+          </span>
+          <span
+            style="font-weight: 500; color: rgb(236, 234, 244);"
+          >
+            MyAnonamouse
+          </span>
+          <span
+            style="display: flex; gap: 4px;"
+          >
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              E
+            </span>
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              A
+            </span>
+          </span>
+        </button>
+        <button
+          style="display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; background: transparent; border-width: medium medium 1px 3px; border-style: none none solid solid; border-color: currentcolor currentcolor rgb(46, 48, 72) transparent; border-image: none; cursor: pointer; color: rgb(236, 234, 244); text-align: left; font-size: 13px; opacity: 1;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 700; color: rgb(136, 134, 160); text-align: center;"
+          >
+            2
+          </span>
+          <span
+            style="font-weight: 500; color: rgb(236, 234, 244);"
+          >
+            Goodreads
+          </span>
+          <span
+            style="display: flex; gap: 4px;"
+          >
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              E
+            </span>
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              A
+            </span>
+          </span>
+        </button>
+        <button
+          style="display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; background: transparent; border-width: medium medium 1px 3px; border-style: none none solid solid; border-color: currentcolor currentcolor rgb(46, 48, 72) transparent; border-image: none; cursor: pointer; color: rgb(236, 234, 244); text-align: left; font-size: 13px; opacity: 1;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 700; color: rgb(136, 134, 160); text-align: center;"
+          >
+            3
+          </span>
+          <span
+            style="font-weight: 500; color: rgb(236, 234, 244);"
+          >
+            Hardcover
+          </span>
+          <span
+            style="display: flex; gap: 4px;"
+          >
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              E
+            </span>
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              A
+            </span>
+          </span>
+        </button>
+        <button
+          style="display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; background: transparent; border-width: medium medium 1px 3px; border-style: none none solid solid; border-color: currentcolor currentcolor rgb(46, 48, 72) transparent; border-image: none; cursor: pointer; color: rgb(236, 234, 244); text-align: left; font-size: 13px; opacity: 1;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 700; color: rgb(136, 134, 160); text-align: center;"
+          >
+            4
+          </span>
+          <span
+            style="font-weight: 500; color: rgb(236, 234, 244);"
+          >
+            Open Library
+          </span>
+          <span
+            style="display: flex; gap: 4px;"
+          >
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              E
+            </span>
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              A
+            </span>
+          </span>
+        </button>
+        <button
+          style="display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; background: transparent; border-width: medium medium 1px 3px; border-style: none none solid solid; border-color: currentcolor currentcolor rgb(46, 48, 72) transparent; border-image: none; cursor: pointer; color: rgb(236, 234, 244); text-align: left; font-size: 13px; opacity: 1;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 700; color: rgb(136, 134, 160); text-align: center;"
+          >
+            5
+          </span>
+          <span
+            style="font-weight: 500; color: rgb(236, 234, 244);"
+          >
+            Google Books
+          </span>
+          <span
+            style="display: flex; gap: 4px;"
+          >
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              E
+            </span>
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgb(30, 32, 52); color: rgb(136, 134, 160); border: 1px solid rgb(46, 48, 72);"
+            >
+              A
+            </span>
+          </span>
+        </button>
+        <button
+          style="display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; background: transparent; border-width: medium medium 1px 3px; border-style: none none solid solid; border-color: currentcolor currentcolor rgb(46, 48, 72) transparent; border-image: none; cursor: pointer; color: rgb(236, 234, 244); text-align: left; font-size: 13px; opacity: 1;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 700; color: rgb(136, 134, 160); text-align: center;"
+          >
+            6
+          </span>
+          <span
+            style="font-weight: 500; color: rgb(236, 234, 244);"
+          >
+            Kobo
+          </span>
+          <span
+            style="display: flex; gap: 4px;"
+          >
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              E
+            </span>
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgb(30, 32, 52); color: rgb(46, 48, 72); border: 1px solid rgb(46, 48, 72);"
+              title="Not available for audiobook"
+            >
+              A
+            </span>
+          </span>
+        </button>
+        <button
+          style="display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; background: rgba(228, 184, 104, 0.1); border-width: medium medium 1px 3px; border-style: none none solid solid; border-color: currentcolor currentcolor rgb(46, 48, 72) rgb(228, 184, 104); border-image: none; cursor: pointer; color: rgb(236, 234, 244); text-align: left; font-size: 13px; opacity: 1;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 700; color: rgb(136, 134, 160); text-align: center;"
+          >
+            7
+          </span>
+          <span
+            style="font-weight: 700; color: rgb(228, 184, 104);"
+          >
+            Amazon
+          </span>
+          <span
+            style="display: flex; gap: 4px;"
+          >
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              E
+            </span>
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              A
+            </span>
+          </span>
+        </button>
+        <button
+          style="display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; background: transparent; border-width: medium medium 1px 3px; border-style: none none solid solid; border-color: currentcolor currentcolor rgb(46, 48, 72) transparent; border-image: none; cursor: pointer; color: rgb(236, 234, 244); text-align: left; font-size: 13px; opacity: 1;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 700; color: rgb(136, 134, 160); text-align: center;"
+          >
+            8
+          </span>
+          <span
+            style="font-weight: 500; color: rgb(236, 234, 244);"
+          >
+            IBDB
+          </span>
+          <span
+            style="display: flex; gap: 4px;"
+          >
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgb(30, 32, 52); color: rgb(136, 134, 160); border: 1px solid rgb(46, 48, 72);"
+            >
+              E
+            </span>
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgb(30, 32, 52); color: rgb(46, 48, 72); border: 1px solid rgb(46, 48, 72);"
+              title="Not available for audiobook"
+            >
+              A
+            </span>
+          </span>
+        </button>
+        <button
+          style="display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; background: transparent; border-width: medium medium 1px 3px; border-style: none none solid solid; border-color: currentcolor currentcolor rgb(46, 48, 72) transparent; border-image: none; cursor: pointer; color: rgb(236, 234, 244); text-align: left; font-size: 13px; opacity: 0.55;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 700; color: rgb(136, 134, 160); text-align: center;"
+          >
+            9
+          </span>
+          <span
+            style="font-weight: 500; color: rgb(236, 234, 244);"
+          >
+            Audible
+          </span>
+          <span
+            style="display: flex; gap: 4px;"
+          >
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgb(30, 32, 52); color: rgb(46, 48, 72); border: 1px solid rgb(46, 48, 72);"
+              title="Not available for ebook"
+            >
+              E
+            </span>
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              A
+            </span>
+          </span>
+        </button>
+      </div>
+      <div
+        style="padding: 14px 18px; background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 8px; display: flex; flex-direction: column; gap: 12px;"
+      >
+        <div
+          style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;"
+        >
+          <h3
+            style="margin: 0px; font-size: 17px; font-weight: 700; color: rgb(236, 234, 244);"
+          >
+            Amazon
+          </h3>
+          <span
+            style="flex: 1 1 0%;"
+          />
+          <div
+            style="display: inline-flex; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 6px; padding: 2px; gap: 0px;"
+          >
+            <button
+              style="padding: 4px 14px; font-size: 12px; font-weight: 600; background: rgba(228, 184, 104, 0.133); color: rgb(228, 184, 104); border: medium; border-radius: 4px; cursor: default; text-transform: capitalize;"
+            >
+              ebook
+            </button>
+            <button
+              style="padding: 4px 14px; font-size: 12px; font-weight: 600; background: transparent; color: rgb(214, 212, 224); border: medium; border-radius: 4px; cursor: pointer; text-transform: capitalize;"
+            >
+              audiobook
+            </button>
+          </div>
+        </div>
+        <div
+          style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;"
+        >
+          <label
+            style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 6px; cursor: pointer; opacity: 1;"
+            title="Query during ebook enrich."
+          >
+            <input
+              checked=""
+              style="width: 18px; height: 18px; cursor: pointer;"
+              type="checkbox"
+            />
+            <span
+              style="font-size: 13px; font-weight: 600; color: rgb(236, 234, 244);"
+            >
+              Enrich
+            </span>
+          </label>
+          <label
+            style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 6px; cursor: pointer; opacity: 1;"
+            title="Include in per-author ebook scans."
+          >
+            <input
+              checked=""
+              style="width: 18px; height: 18px; cursor: pointer;"
+              type="checkbox"
+            />
+            <span
+              style="font-size: 13px; font-weight: 600; color: rgb(236, 234, 244);"
+            >
+              Scan
+            </span>
+          </label>
+          <label
+            style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 6px; cursor: pointer; opacity: 1;"
+            title="Keep DETAIL-fetching until every book has a URL from this source."
+          >
+            <input
+              style="width: 18px; height: 18px; cursor: pointer;"
+              type="checkbox"
+            />
+            <span
+              style="font-size: 13px; font-weight: 600; color: rgb(236, 234, 244);"
+            >
+              Mandatory
+            </span>
+          </label>
+        </div>
+        <div
+          style="display: flex; align-items: center; gap: 12px;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: rgb(136, 134, 160); min-width: 80px;"
+          >
+            Rate (s)
+          </span>
+          <input
+            max="100"
+            min="0.1"
+            step="0.5"
+            style="width: 90px; padding: 5px 8px; text-align: center; border-radius: 6px; border: 1px solid rgb(58, 60, 86); background: rgb(34, 36, 56); color: rgb(214, 212, 224); font-size: 13px; outline: none; opacity: 1;"
+            type="number"
+            value="1"
+          />
+          <span
+            style="font-size: 11px; color: rgb(136, 134, 160); font-style: italic;"
+          >
+            Minimum gap between any two requests to this source, from any part of Seshat.
+          </span>
+        </div>
+        <div
+          style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 6px; opacity: 1;"
+          >
+            <span
+              style="font-size: 11px; font-weight: 700; text-transform: capitalize; letter-spacing: 0.5px; color: rgb(136, 134, 160);"
+            >
+              ebook
+            </span>
+            <span
+              style="font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+            >
+              #7
+            </span>
+            <span
+              style="flex: 1 1 0%;"
+            />
+            <button
+              style="background: none; border: 1px solid rgb(46, 48, 72); border-radius: 4px; padding: 3px 7px; cursor: pointer; color: rgb(236, 234, 244); opacity: 1; font-size: 11px;"
+              title="Move up"
+            >
+              ▲
+            </button>
+            <button
+              style="background: none; border: 1px solid rgb(46, 48, 72); border-radius: 4px; padding: 3px 7px; cursor: pointer; color: rgb(236, 234, 244); opacity: 1; font-size: 11px;"
+              title="Move down"
+            >
+              ▼
+            </button>
+          </div>
+          <div
+            style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 6px; opacity: 1;"
+          >
+            <span
+              style="font-size: 11px; font-weight: 700; text-transform: capitalize; letter-spacing: 0.5px; color: rgb(136, 134, 160);"
+            >
+              audiobook
+            </span>
+            <span
+              style="font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+            >
+              #7
+            </span>
+            <span
+              style="flex: 1 1 0%;"
+            />
+            <button
+              style="background: none; border: 1px solid rgb(46, 48, 72); border-radius: 4px; padding: 3px 7px; cursor: pointer; color: rgb(236, 234, 244); opacity: 1; font-size: 11px;"
+              title="Move up"
+            >
+              ▲
+            </button>
+            <button
+              style="background: none; border: 1px solid rgb(46, 48, 72); border-radius: 4px; padding: 3px 7px; cursor: pointer; color: rgb(236, 234, 244); opacity: 1; font-size: 11px;"
+              title="Move down"
+            >
+              ▼
+            </button>
+          </div>
+        </div>
+        <div
+          style="display: flex; flex-direction: column; gap: 8px; padding: 10px 4px 12px 0px; border-top: 1px solid rgb(46, 48, 72); margin-top: 4px; font-size: 12px;"
+        >
+          <div
+            style="display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;"
+          >
+            <span
+              style="color: rgb(136, 134, 160); font-weight: 600;"
+            >
+              Amazon traffic
+            </span>
+            <span
+              style="color: rgb(136, 134, 160); font-size: 11px;"
+            >
+              every request Seshat sent, by who sent it
+            </span>
+          </div>
+          <span
+            style="color: rgb(136, 134, 160);"
+          >
+            No requests to Amazon yet today.
+          </span>
+          <table
+            style="width: 100%; border-collapse: collapse; font-size: 12px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 6px;"
+          >
+            <thead>
+              <tr>
+                <th
+                  style="padding: 3px 8px; text-align: left; font-variant-numeric: tabular-nums; color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  Last 7 days
+                </th>
+                <th
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  Requests
+                </th>
+                <th
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  OK
+                </th>
+                <th
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  Blocked
+                </th>
+                <th
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  Errors
+                </th>
+                <th
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  Timeouts
+                </th>
+                <th
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  New
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td
+                  style="padding: 3px 8px; text-align: left; font-variant-numeric: tabular-nums; color: rgb(236, 234, 244);"
+                >
+                  Today
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+              </tr>
+              <tr>
+                <td
+                  style="padding: 3px 8px; text-align: left; font-variant-numeric: tabular-nums; color: rgb(236, 234, 244);"
+                >
+                  Thu, Oct 8
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+              </tr>
+              <tr>
+                <td
+                  style="padding: 3px 8px; text-align: left; font-variant-numeric: tabular-nums; color: rgb(236, 234, 244);"
+                >
+                  Wed, Oct 7
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+              </tr>
+              <tr>
+                <td
+                  style="padding: 3px 8px; text-align: left; font-variant-numeric: tabular-nums; color: rgb(236, 234, 244);"
+                >
+                  Tue, Oct 6
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+              </tr>
+              <tr>
+                <td
+                  style="padding: 3px 8px; text-align: left; font-variant-numeric: tabular-nums; color: rgb(236, 234, 244);"
+                >
+                  Mon, Oct 5
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+              </tr>
+              <tr>
+                <td
+                  style="padding: 3px 8px; text-align: left; font-variant-numeric: tabular-nums; color: rgb(236, 234, 244);"
+                >
+                  Sun, Oct 4
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+              </tr>
+              <tr>
+                <td
+                  style="padding: 3px 8px; text-align: left; font-variant-numeric: tabular-nums; color: rgb(236, 234, 244);"
+                >
+                  Sat, Oct 3
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+              </tr>
+              <tr>
+                <td
+                  style="padding: 3px 8px; text-align: left; font-variant-numeric: tabular-nums; color: rgb(236, 234, 244);"
+                >
+                  Fri, Oct 2
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div
+          style="display: flex; gap: 16px; align-items: center; flex-wrap: wrap; padding: 2px 0px; font-size: 12px;"
+        >
+          <label
+            style="display: flex; align-items: center; gap: 8px;"
+          >
+            <span
+              style="color: rgb(136, 134, 160); font-weight: 600;"
+            >
+              Format
+            </span>
+            <select
+              style="padding: 4px 8px; border-radius: 6px; border: 1px solid rgb(58, 60, 86); background: rgb(34, 36, 56); color: rgb(214, 212, 224); font-size: 12px; outline: none;"
+            >
+              <option
+                value="kindle"
+              >
+                Kindle
+              </option>
+              <option
+                value="paperback"
+              >
+                Paperback
+              </option>
+              <option
+                value="hardcover"
+              >
+                Hardcover
+              </option>
+              <option
+                value="mass_market"
+              >
+                Mass Market Paperback
+              </option>
+              <option
+                value="allFormats"
+              >
+                All Formats
+              </option>
+            </select>
+          </label>
+          <label
+            style="display: flex; align-items: center; gap: 8px;"
+          >
+            <span
+              style="color: rgb(136, 134, 160); font-weight: 600;"
+            >
+              Language
+            </span>
+            <select
+              style="padding: 4px 8px; border-radius: 6px; border: 1px solid rgb(58, 60, 86); background: rgb(34, 36, 56); color: rgb(214, 212, 224); font-size: 12px; outline: none;"
+            >
+              <option
+                value="English"
+              >
+                English
+              </option>
+              <option
+                value="Spanish"
+              >
+                Spanish
+              </option>
+              <option
+                value="German"
+              >
+                German
+              </option>
+              <option
+                value="French"
+              >
+                French
+              </option>
+              <option
+                value="Italian"
+              >
+                Italian
+              </option>
+              <option
+                value="Portuguese"
+              >
+                Portuguese
+              </option>
+              <option
+                value="Japanese"
+              >
+                Japanese
+              </option>
+              <option
+                value="ChineseSimplified"
+              >
+                Chinese (Simplified)
+              </option>
+              <option
+                value="ChineseTraditional"
+              >
+                Chinese (Traditional)
+              </option>
+              <option
+                value="Russian"
+              >
+                Russian
+              </option>
+              <option
+                value="Polish"
+              >
+                Polish
+              </option>
+              <option
+                value="Turkish"
+              >
+                Turkish
+              </option>
+              <option
+                value="All Languages"
+              >
+                All Languages
+              </option>
+            </select>
+          </label>
+          <span
+            style="color: rgb(136, 134, 160); font-size: 11px; font-style: italic;"
+          >
+            Drives Amazon's Author Store filter — only books matching format + language are returned.
+          </span>
+        </div>
+        <div
+          style="padding: 10px 4px 12px 0px; font-size: 12px; display: flex; flex-direction: column; gap: 8px; border-top: 1px solid rgb(46, 48, 72); margin-top: 4px;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;"
+          >
+            <span
+              style="color: rgb(136, 134, 160); font-weight: 600;"
+            >
+              Amazon cache worker
+            </span>
+            <span
+              style="font-size: 11px; font-weight: 700; text-transform: uppercase; padding: 3px 9px; border-radius: 99px; letter-spacing: 0.5px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136);"
+            >
+              Active
+            </span>
+            <span
+              style="flex: 1 1 0%;"
+            />
+            <div
+              style="display: flex; gap: 0px; align-items: stretch;"
+            >
+              <button
+                disabled=""
+                style="padding: 4px 10px; font-size: 11px; font-weight: 600; background: rgba(228, 184, 104, 0.133); color: rgb(228, 184, 104); border: 1px solid rgb(228, 184, 104); border-top-left-radius: 4px; border-bottom-left-radius: 4px; border-top-right-radius: 0px; border-bottom-right-radius: 0px; cursor: default; opacity: 1;"
+                title="Worker fires every 30–90s round the clock."
+              >
+                Continuous
+              </button>
+              <button
+                style="padding: 4px 10px; font-size: 11px; font-weight: 600; background: rgb(30, 32, 52); color: rgb(236, 234, 244); border-width: 1px 1px 1px 0px; border-style: solid; border-color: rgb(46, 48, 72); border-image: none; border-top-left-radius: 0px; border-bottom-left-radius: 0px; border-top-right-radius: 0px; border-bottom-right-radius: 0px; cursor: pointer; opacity: 1;"
+                title="Worker only runs inside the active-hours window below."
+              >
+                Scheduled
+              </button>
+              <button
+                style="padding: 4px 10px; font-size: 11px; font-weight: 600; background: rgb(30, 32, 52); color: rgb(236, 234, 244); border-width: 1px 1px 1px 0px; border-style: solid; border-color: rgb(46, 48, 72); border-image: none; border-top-left-radius: 0px; border-bottom-left-radius: 0px; border-top-right-radius: 4px; border-bottom-right-radius: 4px; cursor: pointer; opacity: 1;"
+                title="Worker stays idle; cache reads still hit existing rows."
+              >
+                Disabled
+              </button>
+            </div>
+            <span
+              style="color: rgb(136, 134, 160); font-size: 11px;"
+            >
+              heartbeat 30s ago
+            </span>
+          </div>
+          <div
+            style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px 12px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 6px; padding: 6px 10px;"
+          >
+            <div
+              style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+              title="598 cooling off"
+            >
+              <span
+                style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+              >
+                Queue
+              </span>
+              <span
+                style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+              >
+                12
+              </span>
+            </div>
+            <div
+              style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+              title="ok / total (author-level)"
+            >
+              <span
+                style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+              >
+                Authors cached
+              </span>
+              <span
+                style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+              >
+                595 / 640
+              </span>
+            </div>
+            <div
+              style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+            >
+              <span
+                style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+              >
+                Books cached
+              </span>
+              <span
+                style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+              >
+                9,100
+              </span>
+            </div>
+            <div
+              style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+            >
+              <span
+                style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+              >
+                Last scan
+              </span>
+              <span
+                style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+              >
+                5m ago
+              </span>
+            </div>
+            <div
+              style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+              title="40 authors attempted since midnight; routine refreshes stop at 101 a day (new authors skip the cap)"
+            >
+              <span
+                style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+              >
+                Scans today
+              </span>
+              <span
+                style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+              >
+                42
+              </span>
+            </div>
+            <div
+              style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+            >
+              <span
+                style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+              >
+                Blocks today
+              </span>
+              <span
+                style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+              >
+                0
+              </span>
+            </div>
+            <div
+              style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+            >
+              <span
+                style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+              >
+                In progress
+              </span>
+              <span
+                style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+              >
+                1
+              </span>
+            </div>
+            <div
+              style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+            >
+              <span
+                style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+              >
+                Failed perm.
+              </span>
+              <span
+                style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+              >
+                0
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div
+      style="position: sticky; bottom: 12px; display: flex; justify-content: flex-end; gap: 10px; background: rgba(26, 28, 48, 0.933); backdrop-filter: blur(8px); padding: 12px 0px; border-top: 1px solid rgb(46, 48, 72); margin-top: 8px;"
+    >
+      <button
+        style="background: transparent; color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+        title="Wipe all panel settings + reapply v2.11.x ship-defaults"
+      >
+        Reset to defaults
+      </button>
+      <span
+        style="flex: 1 1 0%;"
+      />
+      <span
+        style="font-size: 13px; color: rgb(136, 134, 160); align-self: center;"
+      >
+        No unsaved changes
+      </span>
+      <button
+        disabled=""
+        style="background: transparent; color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+      >
+        Discard
+      </button>
+      <button
+        disabled=""
+        style="background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+      >
+        Save
+      </button>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Metadata Sources panel (desktop) > Amazon's details with its cache card > requests 1`] = `
+[
+  "GET /v1/metadata-cache/amazon/status",
+  "GET /v1/metadata-sources",
+  "GET /v1/metadata-sources/traffic?days=8",
+]
+`;
+
+exports[`Metadata Sources panel (desktop) > Goodreads' cache card in cooldown > markup 1`] = `
+<DocumentFragment>
+  <div
+    style="display: flex; flex-direction: column; gap: 12px;"
+  >
+    <div
+      style="font-size: 13px; color: rgb(136, 134, 160); line-height: 1.6; margin: 0px; padding: 10px 14px; background: rgb(30, 32, 52); border-radius: 8px; border: 1px solid rgb(46, 48, 72);"
+    >
+      <div
+        style="margin-bottom: 4px;"
+      >
+        <strong
+          style="color: rgb(214, 212, 224);"
+        >
+          Enrich
+        </strong>
+         — sources run after a book downloads, merging title / description / ISBN / cover / narrator / etc. into the review-queue metadata.
+      </div>
+      <div
+        style="margin-bottom: 4px;"
+      >
+        <strong
+          style="color: rgb(214, 212, 224);"
+        >
+          Scan
+        </strong>
+         — sources run during library-side author scanning to find books you don't have yet.
+      </div>
+      <div>
+        <strong
+          style="color: rgb(214, 212, 224);"
+        >
+          Rate (s)
+        </strong>
+         — the minimum gap between any two requests to this source, from anything in Seshat (scans, the cache workers, enrichment). Higher = gentler on the upstream, slower scans. Leave at default if unsure.
+      </div>
+      <div
+        style="margin-top: 6px; color: rgb(136, 134, 160);"
+      >
+        Priority is top-to-bottom; drag rows to reorder. MAM is always first and free — its row is locked.
+      </div>
+    </div>
+    <div
+      style="background: rgba(228, 184, 104, 0.094); border: 1px solid rgba(228, 184, 104, 0.333); color: rgb(236, 234, 244); padding: 10px 14px; border-radius: 8px; font-size: 13px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;"
+    >
+      <span
+        style="flex: 1 1 0%;"
+      >
+        <b>
+          v2.13.0:
+        </b>
+         Goodreads's default rate limit is now 
+        <b>
+          5.0s
+        </b>
+         (was 2.0s). Goodreads' bot protection (AWS WAF) scores request density, so the slower pace keeps scans from being blocked. Your current setting is 
+        <b>
+          1s
+        </b>
+        .
+      </span>
+      <button
+        style="background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+      >
+        Bump to 5.0s
+      </button>
+    </div>
+    <div
+      style="display: grid; grid-template-columns: minmax(220px, 280px) 1fr; gap: 16px; align-items: start;"
+    >
+      <div
+        style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 8px; overflow: hidden; display: flex; flex-direction: column;"
+      >
+        <div
+          style="padding: 8px 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: rgb(136, 134, 160); border-bottom: 1px solid rgb(46, 48, 72); background: rgb(30, 32, 52);"
+        >
+          Sources
+        </div>
+        <button
+          style="display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; background: transparent; border-width: medium medium 1px 3px; border-style: none none solid solid; border-color: currentcolor currentcolor rgb(46, 48, 72) transparent; border-image: none; cursor: pointer; color: rgb(236, 234, 244); text-align: left; font-size: 13px; opacity: 1;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 700; color: rgb(228, 184, 104); text-align: center;"
+          >
+            🔒
+          </span>
+          <span
+            style="font-weight: 500; color: rgb(236, 234, 244);"
+          >
+            MyAnonamouse
+          </span>
+          <span
+            style="display: flex; gap: 4px;"
+          >
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              E
+            </span>
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              A
+            </span>
+          </span>
+        </button>
+        <button
+          style="display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; background: rgba(228, 184, 104, 0.1); border-width: medium medium 1px 3px; border-style: none none solid solid; border-color: currentcolor currentcolor rgb(46, 48, 72) rgb(228, 184, 104); border-image: none; cursor: pointer; color: rgb(236, 234, 244); text-align: left; font-size: 13px; opacity: 1;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 700; color: rgb(136, 134, 160); text-align: center;"
+          >
+            2
+          </span>
+          <span
+            style="font-weight: 700; color: rgb(228, 184, 104);"
+          >
+            Goodreads
+          </span>
+          <span
+            style="display: flex; gap: 4px;"
+          >
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              E
+            </span>
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              A
+            </span>
+          </span>
+        </button>
+        <button
+          style="display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; background: transparent; border-width: medium medium 1px 3px; border-style: none none solid solid; border-color: currentcolor currentcolor rgb(46, 48, 72) transparent; border-image: none; cursor: pointer; color: rgb(236, 234, 244); text-align: left; font-size: 13px; opacity: 1;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 700; color: rgb(136, 134, 160); text-align: center;"
+          >
+            3
+          </span>
+          <span
+            style="font-weight: 500; color: rgb(236, 234, 244);"
+          >
+            Hardcover
+          </span>
+          <span
+            style="display: flex; gap: 4px;"
+          >
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              E
+            </span>
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              A
+            </span>
+          </span>
+        </button>
+        <button
+          style="display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; background: transparent; border-width: medium medium 1px 3px; border-style: none none solid solid; border-color: currentcolor currentcolor rgb(46, 48, 72) transparent; border-image: none; cursor: pointer; color: rgb(236, 234, 244); text-align: left; font-size: 13px; opacity: 1;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 700; color: rgb(136, 134, 160); text-align: center;"
+          >
+            4
+          </span>
+          <span
+            style="font-weight: 500; color: rgb(236, 234, 244);"
+          >
+            Open Library
+          </span>
+          <span
+            style="display: flex; gap: 4px;"
+          >
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              E
+            </span>
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              A
+            </span>
+          </span>
+        </button>
+        <button
+          style="display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; background: transparent; border-width: medium medium 1px 3px; border-style: none none solid solid; border-color: currentcolor currentcolor rgb(46, 48, 72) transparent; border-image: none; cursor: pointer; color: rgb(236, 234, 244); text-align: left; font-size: 13px; opacity: 1;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 700; color: rgb(136, 134, 160); text-align: center;"
+          >
+            5
+          </span>
+          <span
+            style="font-weight: 500; color: rgb(236, 234, 244);"
+          >
+            Google Books
+          </span>
+          <span
+            style="display: flex; gap: 4px;"
+          >
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              E
+            </span>
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgb(30, 32, 52); color: rgb(136, 134, 160); border: 1px solid rgb(46, 48, 72);"
+            >
+              A
+            </span>
+          </span>
+        </button>
+        <button
+          style="display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; background: transparent; border-width: medium medium 1px 3px; border-style: none none solid solid; border-color: currentcolor currentcolor rgb(46, 48, 72) transparent; border-image: none; cursor: pointer; color: rgb(236, 234, 244); text-align: left; font-size: 13px; opacity: 1;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 700; color: rgb(136, 134, 160); text-align: center;"
+          >
+            6
+          </span>
+          <span
+            style="font-weight: 500; color: rgb(236, 234, 244);"
+          >
+            Kobo
+          </span>
+          <span
+            style="display: flex; gap: 4px;"
+          >
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              E
+            </span>
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgb(30, 32, 52); color: rgb(46, 48, 72); border: 1px solid rgb(46, 48, 72);"
+              title="Not available for audiobook"
+            >
+              A
+            </span>
+          </span>
+        </button>
+        <button
+          style="display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; background: transparent; border-width: medium medium 1px 3px; border-style: none none solid solid; border-color: currentcolor currentcolor rgb(46, 48, 72) transparent; border-image: none; cursor: pointer; color: rgb(236, 234, 244); text-align: left; font-size: 13px; opacity: 1;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 700; color: rgb(136, 134, 160); text-align: center;"
+          >
+            7
+          </span>
+          <span
+            style="font-weight: 500; color: rgb(236, 234, 244);"
+          >
+            Amazon
+          </span>
+          <span
+            style="display: flex; gap: 4px;"
+          >
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              E
+            </span>
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              A
+            </span>
+          </span>
+        </button>
+        <button
+          style="display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; background: transparent; border-width: medium medium 1px 3px; border-style: none none solid solid; border-color: currentcolor currentcolor rgb(46, 48, 72) transparent; border-image: none; cursor: pointer; color: rgb(236, 234, 244); text-align: left; font-size: 13px; opacity: 1;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 700; color: rgb(136, 134, 160); text-align: center;"
+          >
+            8
+          </span>
+          <span
+            style="font-weight: 500; color: rgb(236, 234, 244);"
+          >
+            IBDB
+          </span>
+          <span
+            style="display: flex; gap: 4px;"
+          >
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgb(30, 32, 52); color: rgb(136, 134, 160); border: 1px solid rgb(46, 48, 72);"
+            >
+              E
+            </span>
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgb(30, 32, 52); color: rgb(46, 48, 72); border: 1px solid rgb(46, 48, 72);"
+              title="Not available for audiobook"
+            >
+              A
+            </span>
+          </span>
+        </button>
+        <button
+          style="display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; background: transparent; border-width: medium medium 1px 3px; border-style: none none solid solid; border-color: currentcolor currentcolor rgb(46, 48, 72) transparent; border-image: none; cursor: pointer; color: rgb(236, 234, 244); text-align: left; font-size: 13px; opacity: 0.55;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 700; color: rgb(136, 134, 160); text-align: center;"
+          >
+            9
+          </span>
+          <span
+            style="font-weight: 500; color: rgb(236, 234, 244);"
+          >
+            Audible
+          </span>
+          <span
+            style="display: flex; gap: 4px;"
+          >
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgb(30, 32, 52); color: rgb(46, 48, 72); border: 1px solid rgb(46, 48, 72);"
+              title="Not available for ebook"
+            >
+              E
+            </span>
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              A
+            </span>
+          </span>
+        </button>
+      </div>
+      <div
+        style="padding: 14px 18px; background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 8px; display: flex; flex-direction: column; gap: 12px;"
+      >
+        <div
+          style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;"
+        >
+          <h3
+            style="margin: 0px; font-size: 17px; font-weight: 700; color: rgb(236, 234, 244);"
+          >
+            Goodreads
+          </h3>
+          <span
+            style="flex: 1 1 0%;"
+          />
+          <div
+            style="display: inline-flex; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 6px; padding: 2px; gap: 0px;"
+          >
+            <button
+              style="padding: 4px 14px; font-size: 12px; font-weight: 600; background: rgba(228, 184, 104, 0.133); color: rgb(228, 184, 104); border: medium; border-radius: 4px; cursor: default; text-transform: capitalize;"
+            >
+              ebook
+            </button>
+            <button
+              style="padding: 4px 14px; font-size: 12px; font-weight: 600; background: transparent; color: rgb(214, 212, 224); border: medium; border-radius: 4px; cursor: pointer; text-transform: capitalize;"
+            >
+              audiobook
+            </button>
+          </div>
+        </div>
+        <div
+          style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;"
+        >
+          <label
+            style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 6px; cursor: pointer; opacity: 1;"
+            title="Query during ebook enrich."
+          >
+            <input
+              checked=""
+              style="width: 18px; height: 18px; cursor: pointer;"
+              type="checkbox"
+            />
+            <span
+              style="font-size: 13px; font-weight: 600; color: rgb(236, 234, 244);"
+            >
+              Enrich
+            </span>
+          </label>
+          <label
+            style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 6px; cursor: pointer; opacity: 1;"
+            title="Include in per-author ebook scans."
+          >
+            <input
+              checked=""
+              style="width: 18px; height: 18px; cursor: pointer;"
+              type="checkbox"
+            />
+            <span
+              style="font-size: 13px; font-weight: 600; color: rgb(236, 234, 244);"
+            >
+              Scan
+            </span>
+          </label>
+          <label
+            style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 6px; cursor: pointer; opacity: 1;"
+            title="Keep DETAIL-fetching until every book has a URL from this source."
+          >
+            <input
+              style="width: 18px; height: 18px; cursor: pointer;"
+              type="checkbox"
+            />
+            <span
+              style="font-size: 13px; font-weight: 600; color: rgb(236, 234, 244);"
+            >
+              Mandatory
+            </span>
+          </label>
+        </div>
+        <div
+          style="display: flex; align-items: center; gap: 12px;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: rgb(136, 134, 160); min-width: 80px;"
+          >
+            Rate (s)
+          </span>
+          <input
+            max="100"
+            min="0.1"
+            step="0.5"
+            style="width: 90px; padding: 5px 8px; text-align: center; border-radius: 6px; border: 1px solid rgb(58, 60, 86); background: rgb(34, 36, 56); color: rgb(214, 212, 224); font-size: 13px; outline: none; opacity: 1;"
+            type="number"
+            value="1"
+          />
+          <span
+            style="font-size: 11px; color: rgb(136, 134, 160); font-style: italic;"
+          >
+            Minimum gap between any two requests to this source, from any part of Seshat.
+          </span>
+        </div>
+        <div
+          style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 6px; opacity: 1;"
+          >
+            <span
+              style="font-size: 11px; font-weight: 700; text-transform: capitalize; letter-spacing: 0.5px; color: rgb(136, 134, 160);"
+            >
+              ebook
+            </span>
+            <span
+              style="font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+            >
+              #2
+            </span>
+            <span
+              style="flex: 1 1 0%;"
+            />
+            <button
+              disabled=""
+              style="background: none; border: 1px solid rgb(46, 48, 72); border-radius: 4px; padding: 3px 7px; cursor: default; color: rgb(46, 48, 72); opacity: 0.4; font-size: 11px;"
+              title="Already at top"
+            >
+              ▲
+            </button>
+            <button
+              style="background: none; border: 1px solid rgb(46, 48, 72); border-radius: 4px; padding: 3px 7px; cursor: pointer; color: rgb(236, 234, 244); opacity: 1; font-size: 11px;"
+              title="Move down"
+            >
+              ▼
+            </button>
+          </div>
+          <div
+            style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 6px; opacity: 1;"
+          >
+            <span
+              style="font-size: 11px; font-weight: 700; text-transform: capitalize; letter-spacing: 0.5px; color: rgb(136, 134, 160);"
+            >
+              audiobook
+            </span>
+            <span
+              style="font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+            >
+              #3
+            </span>
+            <span
+              style="flex: 1 1 0%;"
+            />
+            <button
+              style="background: none; border: 1px solid rgb(46, 48, 72); border-radius: 4px; padding: 3px 7px; cursor: pointer; color: rgb(236, 234, 244); opacity: 1; font-size: 11px;"
+              title="Move up"
+            >
+              ▲
+            </button>
+            <button
+              style="background: none; border: 1px solid rgb(46, 48, 72); border-radius: 4px; padding: 3px 7px; cursor: pointer; color: rgb(236, 234, 244); opacity: 1; font-size: 11px;"
+              title="Move down"
+            >
+              ▼
+            </button>
+          </div>
+        </div>
+        <div
+          style="display: flex; flex-direction: column; gap: 8px; padding: 10px 4px 12px 0px; border-top: 1px solid rgb(46, 48, 72); margin-top: 4px; font-size: 12px;"
+        >
+          <div
+            style="display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;"
+          >
+            <span
+              style="color: rgb(136, 134, 160); font-weight: 600;"
+            >
+              Goodreads traffic
+            </span>
+            <span
+              style="color: rgb(136, 134, 160); font-size: 11px;"
+            >
+              every request Seshat sent, by who sent it
+            </span>
+          </div>
+          <table
+            style="width: 100%; border-collapse: collapse; font-size: 12px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 6px;"
+          >
+            <thead>
+              <tr>
+                <th
+                  style="padding: 3px 8px; text-align: left; font-variant-numeric: tabular-nums; color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  Today
+                </th>
+                <th
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  Requests
+                </th>
+                <th
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  OK
+                </th>
+                <th
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  Blocked
+                </th>
+                <th
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  Errors
+                </th>
+                <th
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  Timeouts
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td
+                  style="padding: 3px 8px; text-align: left; font-variant-numeric: tabular-nums; color: rgb(236, 234, 244);"
+                >
+                  Cache worker
+                  <span
+                    style="color: rgb(136, 134, 160);"
+                  >
+                     · book pages
+                  </span>
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  40
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  31
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <table
+            style="width: 100%; border-collapse: collapse; font-size: 12px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 6px;"
+          >
+            <thead>
+              <tr>
+                <th
+                  style="padding: 3px 8px; text-align: left; font-variant-numeric: tabular-nums; color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  Last 7 days
+                </th>
+                <th
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  Requests
+                </th>
+                <th
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  OK
+                </th>
+                <th
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  Blocked
+                </th>
+                <th
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  Errors
+                </th>
+                <th
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  Timeouts
+                </th>
+                <th
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  New
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td
+                  style="padding: 3px 8px; text-align: left; font-variant-numeric: tabular-nums; color: rgb(236, 234, 244);"
+                >
+                  Today
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  37
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  27
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+              </tr>
+              <tr>
+                <td
+                  style="padding: 3px 8px; text-align: left; font-variant-numeric: tabular-nums; color: rgb(236, 234, 244);"
+                >
+                  Thu, Oct 8
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  36
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  26
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+              </tr>
+              <tr>
+                <td
+                  style="padding: 3px 8px; text-align: left; font-variant-numeric: tabular-nums; color: rgb(236, 234, 244);"
+                >
+                  Wed, Oct 7
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  35
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  25
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+              </tr>
+              <tr>
+                <td
+                  style="padding: 3px 8px; text-align: left; font-variant-numeric: tabular-nums; color: rgb(236, 234, 244);"
+                >
+                  Tue, Oct 6
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  34
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  24
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+              </tr>
+              <tr>
+                <td
+                  style="padding: 3px 8px; text-align: left; font-variant-numeric: tabular-nums; color: rgb(236, 234, 244);"
+                >
+                  Mon, Oct 5
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  33
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  23
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+              </tr>
+              <tr>
+                <td
+                  style="padding: 3px 8px; text-align: left; font-variant-numeric: tabular-nums; color: rgb(236, 234, 244);"
+                >
+                  Sun, Oct 4
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  32
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  22
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+              </tr>
+              <tr>
+                <td
+                  style="padding: 3px 8px; text-align: left; font-variant-numeric: tabular-nums; color: rgb(236, 234, 244);"
+                >
+                  Sat, Oct 3
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  31
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  21
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+              </tr>
+              <tr>
+                <td
+                  style="padding: 3px 8px; text-align: left; font-variant-numeric: tabular-nums; color: rgb(236, 234, 244);"
+                >
+                  Fri, Oct 2
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  30
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  20
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div
+          style="display: flex; flex-direction: column; gap: 6px; padding: 2px 0px; font-size: 12px;"
+        >
+          <div
+            style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;"
+          >
+            <label
+              style="display: flex; align-items: center; gap: 8px;"
+            >
+              <span
+                style="color: rgb(136, 134, 160); font-weight: 600;"
+              >
+                Book-page gap
+              </span>
+              <input
+                max="3600"
+                min="0"
+                step="10"
+                style="width: 70px; padding: 4px 8px; text-align: center; border-radius: 6px; border: 1px solid rgb(58, 60, 86); background: rgb(34, 36, 56); color: rgb(214, 212, 224); font-size: 12px; outline: none;"
+                type="number"
+                value="120"
+              />
+              <span
+                style="color: rgb(136, 134, 160);"
+              >
+                s
+              </span>
+            </label>
+            <span
+              style="color: rgb(136, 134, 160); font-size: 11px; font-style: italic;"
+            >
+              Book pages wait this long after the last one, on top of the Rate: Goodreads blocks a run of book pages from one address.
+            </span>
+          </div>
+          <label
+            style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer;"
+          >
+            <input
+              style="margin-top: 2px;"
+              type="checkbox"
+            />
+            <span
+              style="display: flex; flex-direction: column; gap: 2px;"
+            >
+              <span
+                style="color: rgb(214, 212, 224); font-weight: 600;"
+              >
+                Include non-fiction from Goodreads
+              </span>
+              <span
+                style="color: rgb(136, 134, 160); font-size: 11px;"
+              >
+                Off: books Goodreads files under Nonfiction, Self Help, Sports, Puzzles, Cookbooks, Reference or Picture Books aren't added to discovery. Turn on if you collect non-fiction.
+              </span>
+            </span>
+          </label>
+        </div>
+        <div
+          style="display: flex; flex-direction: column; gap: 10px; padding: 10px 4px 14px 60px; border-bottom: 1px solid rgb(46, 48, 72); font-size: 12px;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;"
+          >
+            <span
+              style="color: rgb(136, 134, 160); font-weight: 600;"
+            >
+              Session state
+            </span>
+            <span
+              style="font-size: 11px; font-weight: 700; text-transform: uppercase; padding: 3px 9px; border-radius: 99px; letter-spacing: 0.5px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136);"
+            >
+              Active
+            </span>
+            <span
+              style="color: rgb(136, 134, 160); font-size: 11px;"
+            >
+              last HTTP 200
+            </span>
+          </div>
+          <div
+            style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px 12px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 6px; padding: 6px 10px;"
+          >
+            <div
+              style="display: flex; flex-direction: column; gap: 1px;"
+            >
+              <span
+                style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+              >
+                Book pages
+              </span>
+              <span
+                style="color: rgb(76, 184, 136); font-size: 12px; font-weight: 600;"
+              >
+                OK
+              </span>
+            </div>
+            <div
+              style="display: flex; flex-direction: column; gap: 1px;"
+            >
+              <span
+                style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+              >
+                List pages
+              </span>
+              <span
+                style="color: rgb(76, 184, 136); font-size: 12px; font-weight: 600;"
+              >
+                OK
+              </span>
+            </div>
+            <div
+              style="display: flex; flex-direction: column; gap: 1px;"
+            >
+              <span
+                style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+              >
+                Autocomplete
+              </span>
+              <span
+                style="color: rgb(76, 184, 136); font-size: 12px; font-weight: 600;"
+              >
+                OK
+              </span>
+            </div>
+          </div>
+          <div
+            style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;"
+          >
+            <button
+              style="background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+            >
+              Run probe
+            </button>
+            <button
+              style="background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+            >
+              Run burst (10×)
+            </button>
+          </div>
+          <div
+            style="color: rgb(136, 134, 160); font-size: 11px; font-style: italic; line-height: 1.4;"
+          >
+            Goodreads sits behind AWS WAF bot protection, which turns away book pages far sooner than list pages. After a block, that kind of request backs off for 2 minutes, then 5, 10, 30 and 60 on repeated blocks, and clears on the next success; the others carry on. Run probe for a quick check (it goes out even while book pages back off); run burst to see how density holds. Mark as active ends every backoff now.
+          </div>
+        </div>
+        <div
+          style="padding: 10px 4px 12px 0px; font-size: 12px; display: flex; flex-direction: column; gap: 8px; border-top: 1px solid rgb(46, 48, 72); margin-top: 4px;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;"
+          >
+            <span
+              style="color: rgb(136, 134, 160); font-weight: 600;"
+            >
+              Goodreads cache worker
+            </span>
+            <span
+              style="font-size: 11px; font-weight: 700; text-transform: uppercase; padding: 3px 9px; border-radius: 99px; letter-spacing: 0.5px; background: rgba(224, 96, 96, 0.133); color: rgb(224, 96, 96);"
+            >
+              Cooldown
+            </span>
+            <span
+              style="color: rgb(136, 134, 160); font-size: 11px;"
+            >
+              clears in 30m
+            </span>
+            <span
+              style="flex: 1 1 0%;"
+            />
+            <div
+              style="display: flex; gap: 0px; align-items: stretch;"
+            >
+              <button
+                disabled=""
+                style="padding: 4px 10px; font-size: 11px; font-weight: 600; background: rgba(228, 184, 104, 0.133); color: rgb(228, 184, 104); border: 1px solid rgb(228, 184, 104); border-top-left-radius: 4px; border-bottom-left-radius: 4px; border-top-right-radius: 0px; border-bottom-right-radius: 0px; cursor: default; opacity: 1;"
+                title="Worker fires every 30–90s round the clock."
+              >
+                Continuous
+              </button>
+              <button
+                style="padding: 4px 10px; font-size: 11px; font-weight: 600; background: rgb(30, 32, 52); color: rgb(236, 234, 244); border-width: 1px 1px 1px 0px; border-style: solid; border-color: rgb(46, 48, 72); border-image: none; border-top-left-radius: 0px; border-bottom-left-radius: 0px; border-top-right-radius: 0px; border-bottom-right-radius: 0px; cursor: pointer; opacity: 1;"
+                title="Worker only runs inside the active-hours window below."
+              >
+                Scheduled
+              </button>
+              <button
+                style="padding: 4px 10px; font-size: 11px; font-weight: 600; background: rgb(30, 32, 52); color: rgb(236, 234, 244); border-width: 1px 1px 1px 0px; border-style: solid; border-color: rgb(46, 48, 72); border-image: none; border-top-left-radius: 0px; border-bottom-left-radius: 0px; border-top-right-radius: 4px; border-bottom-right-radius: 4px; cursor: pointer; opacity: 1;"
+                title="Worker stays idle; cache reads still hit existing rows."
+              >
+                Disabled
+              </button>
+            </div>
+            <span
+              style="color: rgb(136, 134, 160); font-size: 11px;"
+            >
+              heartbeat 30s ago
+            </span>
+          </div>
+          <div
+            style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px 12px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 6px; padding: 6px 10px;"
+          >
+            <div
+              style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+              title="598 cooling off"
+            >
+              <span
+                style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+              >
+                Queue
+              </span>
+              <span
+                style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+              >
+                12
+              </span>
+            </div>
+            <div
+              style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+              title="ok / total (author-level)"
+            >
+              <span
+                style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+              >
+                Authors cached
+              </span>
+              <span
+                style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+              >
+                595 / 640
+              </span>
+            </div>
+            <div
+              style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+              title="cached list-page snapshots (sum across libraries)"
+            >
+              <span
+                style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+              >
+                List pages
+              </span>
+              <span
+                style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+              >
+                2,210
+              </span>
+            </div>
+            <div
+              style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+            >
+              <span
+                style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+              >
+                Last scan
+              </span>
+              <span
+                style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+              >
+                5m ago
+              </span>
+            </div>
+            <div
+              style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+              title="15 authors attempted since midnight; routine refreshes stop at 101 a day (new authors skip the cap)"
+            >
+              <span
+                style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+              >
+                Scans today
+              </span>
+              <span
+                style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+              >
+                17
+              </span>
+            </div>
+            <div
+              style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+            >
+              <span
+                style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+              >
+                Blocks today
+              </span>
+              <span
+                style="color: rgb(204, 153, 51); font-size: 13px; font-weight: 600; line-height: 1.2;"
+              >
+                3
+              </span>
+            </div>
+            <div
+              style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+            >
+              <span
+                style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+              >
+                In progress
+              </span>
+              <span
+                style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+              >
+                1
+              </span>
+            </div>
+            <div
+              style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+              title="GR per-author wall-clock budget exhausts today; non-zero on prolific authors motivates the v3.5.0 detail-cache decision"
+            >
+              <span
+                style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+              >
+                Budget exhausts
+              </span>
+              <span
+                style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+              >
+                0
+              </span>
+            </div>
+          </div>
+          <div
+            style="display: flex; flex-direction: column; gap: 6px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 6px; padding: 6px 10px;"
+          >
+            <span
+              style="font-size: 11px; color: rgb(136, 134, 160); font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;"
+            >
+              Candidate worker
+            </span>
+            <div
+              style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px 12px;"
+            >
+              <div
+                style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+                title="31 of 64 authors left (authors listing up to 100 books)"
+              >
+                <span
+                  style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  First fill
+                </span>
+                <span
+                  style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+                >
+                  120 / 300
+                </span>
+              </div>
+              <div
+                style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+                title="books added to an author's Goodreads list since it was first checked"
+              >
+                <span
+                  style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  New on lists
+                </span>
+                <span
+                  style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+                >
+                  22 / 22
+                </span>
+              </div>
+              <div
+                style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+                title="180 waiting for an autocomplete check, 9 for their book page, 2 accepted and waiting for a scan to finish"
+              >
+                <span
+                  style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  Waiting
+                </span>
+                <span
+                  style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+                >
+                  180 · 9
+                </span>
+              </div>
+              <div
+                style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+                title="book pages wait the book-page gap after the last one"
+              >
+                <span
+                  style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  Next book page
+                </span>
+                <span
+                  style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+                >
+                  04:02 PM
+                </span>
+              </div>
+              <div
+                style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+              >
+                <span
+                  style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  Created
+                </span>
+                <span
+                  style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+                >
+                  41
+                </span>
+              </div>
+              <div
+                style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+                title="no_confirm 50, owned 27"
+              >
+                <span
+                  style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  Rejected
+                </span>
+                <span
+                  style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+                >
+                  77
+                </span>
+              </div>
+              <div
+                style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+                title="accepted"
+              >
+                <span
+                  style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  Last checked
+                </span>
+                <span
+                  style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+                >
+                  Rootbound
+                </span>
+              </div>
+              <div
+                style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+                title="authors a scan has covered, with a cached Goodreads list"
+              >
+                <span
+                  style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  Authors
+                </span>
+                <span
+                  style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+                >
+                  64
+                </span>
+              </div>
+            </div>
+            <label
+              style="display: flex; align-items: center; gap: 8px; font-size: 12px; cursor: pointer;"
+            >
+              <input
+                type="checkbox"
+              />
+              <span
+                style="color: rgb(214, 212, 224); font-weight: 600;"
+              >
+                Phase 2: fetch every listed book's page
+              </span>
+              <span
+                style="color: rgb(136, 134, 160); font-size: 11px;"
+              >
+                0 fetched, 0 left — runs only when no candidate is waiting
+              </span>
+            </label>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div
+      style="position: sticky; bottom: 12px; display: flex; justify-content: flex-end; gap: 10px; background: rgba(26, 28, 48, 0.933); backdrop-filter: blur(8px); padding: 12px 0px; border-top: 1px solid rgb(46, 48, 72); margin-top: 8px;"
+    >
+      <button
+        style="background: transparent; color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+        title="Wipe all panel settings + reapply v2.11.x ship-defaults"
+      >
+        Reset to defaults
+      </button>
+      <span
+        style="flex: 1 1 0%;"
+      />
+      <span
+        style="font-size: 13px; color: rgb(136, 134, 160); align-self: center;"
+      >
+        No unsaved changes
+      </span>
+      <button
+        disabled=""
+        style="background: transparent; color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+      >
+        Discard
+      </button>
+      <button
+        disabled=""
+        style="background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+      >
+        Save
+      </button>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Metadata Sources panel (desktop) > Goodreads' cache card in cooldown > requests 1`] = `
+[
+  "GET /v1/metadata-cache/goodreads/status",
+  "GET /v1/metadata-sources",
+  "GET /v1/metadata-sources/traffic?days=8",
+  "GET /v1/metadata/goodreads/state",
+]
+`;
+
+exports[`Metadata Sources panel (desktop) > Goodreads' details with its cache card > markup 1`] = `
+<DocumentFragment>
+  <div
+    style="display: flex; flex-direction: column; gap: 12px;"
+  >
+    <div
+      style="font-size: 13px; color: rgb(136, 134, 160); line-height: 1.6; margin: 0px; padding: 10px 14px; background: rgb(30, 32, 52); border-radius: 8px; border: 1px solid rgb(46, 48, 72);"
+    >
+      <div
+        style="margin-bottom: 4px;"
+      >
+        <strong
+          style="color: rgb(214, 212, 224);"
+        >
+          Enrich
+        </strong>
+         — sources run after a book downloads, merging title / description / ISBN / cover / narrator / etc. into the review-queue metadata.
+      </div>
+      <div
+        style="margin-bottom: 4px;"
+      >
+        <strong
+          style="color: rgb(214, 212, 224);"
+        >
+          Scan
+        </strong>
+         — sources run during library-side author scanning to find books you don't have yet.
+      </div>
+      <div>
+        <strong
+          style="color: rgb(214, 212, 224);"
+        >
+          Rate (s)
+        </strong>
+         — the minimum gap between any two requests to this source, from anything in Seshat (scans, the cache workers, enrichment). Higher = gentler on the upstream, slower scans. Leave at default if unsure.
+      </div>
+      <div
+        style="margin-top: 6px; color: rgb(136, 134, 160);"
+      >
+        Priority is top-to-bottom; drag rows to reorder. MAM is always first and free — its row is locked.
+      </div>
+    </div>
+    <div
+      style="background: rgba(228, 184, 104, 0.094); border: 1px solid rgba(228, 184, 104, 0.333); color: rgb(236, 234, 244); padding: 10px 14px; border-radius: 8px; font-size: 13px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;"
+    >
+      <span
+        style="flex: 1 1 0%;"
+      >
+        <b>
+          v2.13.0:
+        </b>
+         Goodreads's default rate limit is now 
+        <b>
+          5.0s
+        </b>
+         (was 2.0s). Goodreads' bot protection (AWS WAF) scores request density, so the slower pace keeps scans from being blocked. Your current setting is 
+        <b>
+          1s
+        </b>
+        .
+      </span>
+      <button
+        style="background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+      >
+        Bump to 5.0s
+      </button>
+    </div>
+    <div
+      style="display: grid; grid-template-columns: minmax(220px, 280px) 1fr; gap: 16px; align-items: start;"
+    >
+      <div
+        style="background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 8px; overflow: hidden; display: flex; flex-direction: column;"
+      >
+        <div
+          style="padding: 8px 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: rgb(136, 134, 160); border-bottom: 1px solid rgb(46, 48, 72); background: rgb(30, 32, 52);"
+        >
+          Sources
+        </div>
+        <button
+          style="display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; background: transparent; border-width: medium medium 1px 3px; border-style: none none solid solid; border-color: currentcolor currentcolor rgb(46, 48, 72) transparent; border-image: none; cursor: pointer; color: rgb(236, 234, 244); text-align: left; font-size: 13px; opacity: 1;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 700; color: rgb(228, 184, 104); text-align: center;"
+          >
+            🔒
+          </span>
+          <span
+            style="font-weight: 500; color: rgb(236, 234, 244);"
+          >
+            MyAnonamouse
+          </span>
+          <span
+            style="display: flex; gap: 4px;"
+          >
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              E
+            </span>
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              A
+            </span>
+          </span>
+        </button>
+        <button
+          style="display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; background: rgba(228, 184, 104, 0.1); border-width: medium medium 1px 3px; border-style: none none solid solid; border-color: currentcolor currentcolor rgb(46, 48, 72) rgb(228, 184, 104); border-image: none; cursor: pointer; color: rgb(236, 234, 244); text-align: left; font-size: 13px; opacity: 1;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 700; color: rgb(136, 134, 160); text-align: center;"
+          >
+            2
+          </span>
+          <span
+            style="font-weight: 700; color: rgb(228, 184, 104);"
+          >
+            Goodreads
+          </span>
+          <span
+            style="display: flex; gap: 4px;"
+          >
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              E
+            </span>
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              A
+            </span>
+          </span>
+        </button>
+        <button
+          style="display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; background: transparent; border-width: medium medium 1px 3px; border-style: none none solid solid; border-color: currentcolor currentcolor rgb(46, 48, 72) transparent; border-image: none; cursor: pointer; color: rgb(236, 234, 244); text-align: left; font-size: 13px; opacity: 1;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 700; color: rgb(136, 134, 160); text-align: center;"
+          >
+            3
+          </span>
+          <span
+            style="font-weight: 500; color: rgb(236, 234, 244);"
+          >
+            Hardcover
+          </span>
+          <span
+            style="display: flex; gap: 4px;"
+          >
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              E
+            </span>
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              A
+            </span>
+          </span>
+        </button>
+        <button
+          style="display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; background: transparent; border-width: medium medium 1px 3px; border-style: none none solid solid; border-color: currentcolor currentcolor rgb(46, 48, 72) transparent; border-image: none; cursor: pointer; color: rgb(236, 234, 244); text-align: left; font-size: 13px; opacity: 1;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 700; color: rgb(136, 134, 160); text-align: center;"
+          >
+            4
+          </span>
+          <span
+            style="font-weight: 500; color: rgb(236, 234, 244);"
+          >
+            Open Library
+          </span>
+          <span
+            style="display: flex; gap: 4px;"
+          >
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              E
+            </span>
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              A
+            </span>
+          </span>
+        </button>
+        <button
+          style="display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; background: transparent; border-width: medium medium 1px 3px; border-style: none none solid solid; border-color: currentcolor currentcolor rgb(46, 48, 72) transparent; border-image: none; cursor: pointer; color: rgb(236, 234, 244); text-align: left; font-size: 13px; opacity: 1;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 700; color: rgb(136, 134, 160); text-align: center;"
+          >
+            5
+          </span>
+          <span
+            style="font-weight: 500; color: rgb(236, 234, 244);"
+          >
+            Google Books
+          </span>
+          <span
+            style="display: flex; gap: 4px;"
+          >
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              E
+            </span>
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgb(30, 32, 52); color: rgb(136, 134, 160); border: 1px solid rgb(46, 48, 72);"
+            >
+              A
+            </span>
+          </span>
+        </button>
+        <button
+          style="display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; background: transparent; border-width: medium medium 1px 3px; border-style: none none solid solid; border-color: currentcolor currentcolor rgb(46, 48, 72) transparent; border-image: none; cursor: pointer; color: rgb(236, 234, 244); text-align: left; font-size: 13px; opacity: 1;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 700; color: rgb(136, 134, 160); text-align: center;"
+          >
+            6
+          </span>
+          <span
+            style="font-weight: 500; color: rgb(236, 234, 244);"
+          >
+            Kobo
+          </span>
+          <span
+            style="display: flex; gap: 4px;"
+          >
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              E
+            </span>
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgb(30, 32, 52); color: rgb(46, 48, 72); border: 1px solid rgb(46, 48, 72);"
+              title="Not available for audiobook"
+            >
+              A
+            </span>
+          </span>
+        </button>
+        <button
+          style="display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; background: transparent; border-width: medium medium 1px 3px; border-style: none none solid solid; border-color: currentcolor currentcolor rgb(46, 48, 72) transparent; border-image: none; cursor: pointer; color: rgb(236, 234, 244); text-align: left; font-size: 13px; opacity: 1;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 700; color: rgb(136, 134, 160); text-align: center;"
+          >
+            7
+          </span>
+          <span
+            style="font-weight: 500; color: rgb(236, 234, 244);"
+          >
+            Amazon
+          </span>
+          <span
+            style="display: flex; gap: 4px;"
+          >
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              E
+            </span>
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              A
+            </span>
+          </span>
+        </button>
+        <button
+          style="display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; background: transparent; border-width: medium medium 1px 3px; border-style: none none solid solid; border-color: currentcolor currentcolor rgb(46, 48, 72) transparent; border-image: none; cursor: pointer; color: rgb(236, 234, 244); text-align: left; font-size: 13px; opacity: 1;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 700; color: rgb(136, 134, 160); text-align: center;"
+          >
+            8
+          </span>
+          <span
+            style="font-weight: 500; color: rgb(236, 234, 244);"
+          >
+            IBDB
+          </span>
+          <span
+            style="display: flex; gap: 4px;"
+          >
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgb(30, 32, 52); color: rgb(136, 134, 160); border: 1px solid rgb(46, 48, 72);"
+            >
+              E
+            </span>
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgb(30, 32, 52); color: rgb(46, 48, 72); border: 1px solid rgb(46, 48, 72);"
+              title="Not available for audiobook"
+            >
+              A
+            </span>
+          </span>
+        </button>
+        <button
+          style="display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; background: transparent; border-width: medium medium 1px 3px; border-style: none none solid solid; border-color: currentcolor currentcolor rgb(46, 48, 72) transparent; border-image: none; cursor: pointer; color: rgb(236, 234, 244); text-align: left; font-size: 13px; opacity: 0.55;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 700; color: rgb(136, 134, 160); text-align: center;"
+          >
+            9
+          </span>
+          <span
+            style="font-weight: 500; color: rgb(236, 234, 244);"
+          >
+            Audible
+          </span>
+          <span
+            style="display: flex; gap: 4px;"
+          >
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgb(30, 32, 52); color: rgb(46, 48, 72); border: 1px solid rgb(46, 48, 72);"
+              title="Not available for ebook"
+            >
+              E
+            </span>
+            <span
+              style="font-size: 9px; font-weight: 700; letter-spacing: 0.5px; padding: 2px 5px; border-radius: 3px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136); border: 1px solid rgba(76, 184, 136, 0.333);"
+            >
+              A
+            </span>
+          </span>
+        </button>
+      </div>
+      <div
+        style="padding: 14px 18px; background: rgb(34, 36, 56); border: 1px solid rgb(46, 48, 72); border-radius: 8px; display: flex; flex-direction: column; gap: 12px;"
+      >
+        <div
+          style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;"
+        >
+          <h3
+            style="margin: 0px; font-size: 17px; font-weight: 700; color: rgb(236, 234, 244);"
+          >
+            Goodreads
+          </h3>
+          <span
+            style="flex: 1 1 0%;"
+          />
+          <div
+            style="display: inline-flex; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 6px; padding: 2px; gap: 0px;"
+          >
+            <button
+              style="padding: 4px 14px; font-size: 12px; font-weight: 600; background: rgba(228, 184, 104, 0.133); color: rgb(228, 184, 104); border: medium; border-radius: 4px; cursor: default; text-transform: capitalize;"
+            >
+              ebook
+            </button>
+            <button
+              style="padding: 4px 14px; font-size: 12px; font-weight: 600; background: transparent; color: rgb(214, 212, 224); border: medium; border-radius: 4px; cursor: pointer; text-transform: capitalize;"
+            >
+              audiobook
+            </button>
+          </div>
+        </div>
+        <div
+          style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;"
+        >
+          <label
+            style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 6px; cursor: pointer; opacity: 1;"
+            title="Query during ebook enrich."
+          >
+            <input
+              checked=""
+              style="width: 18px; height: 18px; cursor: pointer;"
+              type="checkbox"
+            />
+            <span
+              style="font-size: 13px; font-weight: 600; color: rgb(236, 234, 244);"
+            >
+              Enrich
+            </span>
+          </label>
+          <label
+            style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 6px; cursor: pointer; opacity: 1;"
+            title="Include in per-author ebook scans."
+          >
+            <input
+              checked=""
+              style="width: 18px; height: 18px; cursor: pointer;"
+              type="checkbox"
+            />
+            <span
+              style="font-size: 13px; font-weight: 600; color: rgb(236, 234, 244);"
+            >
+              Scan
+            </span>
+          </label>
+          <label
+            style="display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 6px; cursor: pointer; opacity: 1;"
+            title="Keep DETAIL-fetching until every book has a URL from this source."
+          >
+            <input
+              style="width: 18px; height: 18px; cursor: pointer;"
+              type="checkbox"
+            />
+            <span
+              style="font-size: 13px; font-weight: 600; color: rgb(236, 234, 244);"
+            >
+              Mandatory
+            </span>
+          </label>
+        </div>
+        <div
+          style="display: flex; align-items: center; gap: 12px;"
+        >
+          <span
+            style="font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: rgb(136, 134, 160); min-width: 80px;"
+          >
+            Rate (s)
+          </span>
+          <input
+            max="100"
+            min="0.1"
+            step="0.5"
+            style="width: 90px; padding: 5px 8px; text-align: center; border-radius: 6px; border: 1px solid rgb(58, 60, 86); background: rgb(34, 36, 56); color: rgb(214, 212, 224); font-size: 13px; outline: none; opacity: 1;"
+            type="number"
+            value="1"
+          />
+          <span
+            style="font-size: 11px; color: rgb(136, 134, 160); font-style: italic;"
+          >
+            Minimum gap between any two requests to this source, from any part of Seshat.
+          </span>
+        </div>
+        <div
+          style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 6px; opacity: 1;"
+          >
+            <span
+              style="font-size: 11px; font-weight: 700; text-transform: capitalize; letter-spacing: 0.5px; color: rgb(136, 134, 160);"
+            >
+              ebook
+            </span>
+            <span
+              style="font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+            >
+              #2
+            </span>
+            <span
+              style="flex: 1 1 0%;"
+            />
+            <button
+              disabled=""
+              style="background: none; border: 1px solid rgb(46, 48, 72); border-radius: 4px; padding: 3px 7px; cursor: default; color: rgb(46, 48, 72); opacity: 0.4; font-size: 11px;"
+              title="Already at top"
+            >
+              ▲
+            </button>
+            <button
+              style="background: none; border: 1px solid rgb(46, 48, 72); border-radius: 4px; padding: 3px 7px; cursor: pointer; color: rgb(236, 234, 244); opacity: 1; font-size: 11px;"
+              title="Move down"
+            >
+              ▼
+            </button>
+          </div>
+          <div
+            style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 6px; opacity: 1;"
+          >
+            <span
+              style="font-size: 11px; font-weight: 700; text-transform: capitalize; letter-spacing: 0.5px; color: rgb(136, 134, 160);"
+            >
+              audiobook
+            </span>
+            <span
+              style="font-size: 18px; font-weight: 700; color: rgb(236, 234, 244);"
+            >
+              #3
+            </span>
+            <span
+              style="flex: 1 1 0%;"
+            />
+            <button
+              style="background: none; border: 1px solid rgb(46, 48, 72); border-radius: 4px; padding: 3px 7px; cursor: pointer; color: rgb(236, 234, 244); opacity: 1; font-size: 11px;"
+              title="Move up"
+            >
+              ▲
+            </button>
+            <button
+              style="background: none; border: 1px solid rgb(46, 48, 72); border-radius: 4px; padding: 3px 7px; cursor: pointer; color: rgb(236, 234, 244); opacity: 1; font-size: 11px;"
+              title="Move down"
+            >
+              ▼
+            </button>
+          </div>
+        </div>
+        <div
+          style="display: flex; flex-direction: column; gap: 8px; padding: 10px 4px 12px 0px; border-top: 1px solid rgb(46, 48, 72); margin-top: 4px; font-size: 12px;"
+        >
+          <div
+            style="display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;"
+          >
+            <span
+              style="color: rgb(136, 134, 160); font-weight: 600;"
+            >
+              Goodreads traffic
+            </span>
+            <span
+              style="color: rgb(136, 134, 160); font-size: 11px;"
+            >
+              every request Seshat sent, by who sent it
+            </span>
+          </div>
+          <table
+            style="width: 100%; border-collapse: collapse; font-size: 12px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 6px;"
+          >
+            <thead>
+              <tr>
+                <th
+                  style="padding: 3px 8px; text-align: left; font-variant-numeric: tabular-nums; color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  Today
+                </th>
+                <th
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  Requests
+                </th>
+                <th
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  OK
+                </th>
+                <th
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  Blocked
+                </th>
+                <th
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  Errors
+                </th>
+                <th
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  Timeouts
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td
+                  style="padding: 3px 8px; text-align: left; font-variant-numeric: tabular-nums; color: rgb(236, 234, 244);"
+                >
+                  Cache worker
+                  <span
+                    style="color: rgb(136, 134, 160);"
+                  >
+                     · book pages
+                  </span>
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  40
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  31
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <table
+            style="width: 100%; border-collapse: collapse; font-size: 12px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 6px;"
+          >
+            <thead>
+              <tr>
+                <th
+                  style="padding: 3px 8px; text-align: left; font-variant-numeric: tabular-nums; color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  Last 7 days
+                </th>
+                <th
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  Requests
+                </th>
+                <th
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  OK
+                </th>
+                <th
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  Blocked
+                </th>
+                <th
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  Errors
+                </th>
+                <th
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  Timeouts
+                </th>
+                <th
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  New
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td
+                  style="padding: 3px 8px; text-align: left; font-variant-numeric: tabular-nums; color: rgb(236, 234, 244);"
+                >
+                  Today
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  37
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  27
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+              </tr>
+              <tr>
+                <td
+                  style="padding: 3px 8px; text-align: left; font-variant-numeric: tabular-nums; color: rgb(236, 234, 244);"
+                >
+                  Thu, Oct 8
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  36
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  26
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+              </tr>
+              <tr>
+                <td
+                  style="padding: 3px 8px; text-align: left; font-variant-numeric: tabular-nums; color: rgb(236, 234, 244);"
+                >
+                  Wed, Oct 7
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  35
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  25
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+              </tr>
+              <tr>
+                <td
+                  style="padding: 3px 8px; text-align: left; font-variant-numeric: tabular-nums; color: rgb(236, 234, 244);"
+                >
+                  Tue, Oct 6
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  34
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  24
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+              </tr>
+              <tr>
+                <td
+                  style="padding: 3px 8px; text-align: left; font-variant-numeric: tabular-nums; color: rgb(236, 234, 244);"
+                >
+                  Mon, Oct 5
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  33
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  23
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+              </tr>
+              <tr>
+                <td
+                  style="padding: 3px 8px; text-align: left; font-variant-numeric: tabular-nums; color: rgb(236, 234, 244);"
+                >
+                  Sun, Oct 4
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  32
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  22
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+              </tr>
+              <tr>
+                <td
+                  style="padding: 3px 8px; text-align: left; font-variant-numeric: tabular-nums; color: rgb(236, 234, 244);"
+                >
+                  Sat, Oct 3
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  31
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  21
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+              </tr>
+              <tr>
+                <td
+                  style="padding: 3px 8px; text-align: left; font-variant-numeric: tabular-nums; color: rgb(236, 234, 244);"
+                >
+                  Fri, Oct 2
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  30
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  20
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+                <td
+                  style="padding: 3px 8px; text-align: right; font-variant-numeric: tabular-nums; color: rgb(214, 212, 224);"
+                >
+                  ·
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div
+          style="display: flex; flex-direction: column; gap: 6px; padding: 2px 0px; font-size: 12px;"
+        >
+          <div
+            style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;"
+          >
+            <label
+              style="display: flex; align-items: center; gap: 8px;"
+            >
+              <span
+                style="color: rgb(136, 134, 160); font-weight: 600;"
+              >
+                Book-page gap
+              </span>
+              <input
+                max="3600"
+                min="0"
+                step="10"
+                style="width: 70px; padding: 4px 8px; text-align: center; border-radius: 6px; border: 1px solid rgb(58, 60, 86); background: rgb(34, 36, 56); color: rgb(214, 212, 224); font-size: 12px; outline: none;"
+                type="number"
+                value="120"
+              />
+              <span
+                style="color: rgb(136, 134, 160);"
+              >
+                s
+              </span>
+            </label>
+            <span
+              style="color: rgb(136, 134, 160); font-size: 11px; font-style: italic;"
+            >
+              Book pages wait this long after the last one, on top of the Rate: Goodreads blocks a run of book pages from one address.
+            </span>
+          </div>
+          <label
+            style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer;"
+          >
+            <input
+              style="margin-top: 2px;"
+              type="checkbox"
+            />
+            <span
+              style="display: flex; flex-direction: column; gap: 2px;"
+            >
+              <span
+                style="color: rgb(214, 212, 224); font-weight: 600;"
+              >
+                Include non-fiction from Goodreads
+              </span>
+              <span
+                style="color: rgb(136, 134, 160); font-size: 11px;"
+              >
+                Off: books Goodreads files under Nonfiction, Self Help, Sports, Puzzles, Cookbooks, Reference or Picture Books aren't added to discovery. Turn on if you collect non-fiction.
+              </span>
+            </span>
+          </label>
+        </div>
+        <div
+          style="display: flex; flex-direction: column; gap: 10px; padding: 10px 4px 14px 60px; border-bottom: 1px solid rgb(46, 48, 72); font-size: 12px;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;"
+          >
+            <span
+              style="color: rgb(136, 134, 160); font-weight: 600;"
+            >
+              Session state
+            </span>
+            <span
+              style="font-size: 11px; font-weight: 700; text-transform: uppercase; padding: 3px 9px; border-radius: 99px; letter-spacing: 0.5px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136);"
+            >
+              Active
+            </span>
+            <span
+              style="color: rgb(136, 134, 160); font-size: 11px;"
+            >
+              last HTTP 200
+            </span>
+          </div>
+          <div
+            style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px 12px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 6px; padding: 6px 10px;"
+          >
+            <div
+              style="display: flex; flex-direction: column; gap: 1px;"
+            >
+              <span
+                style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+              >
+                Book pages
+              </span>
+              <span
+                style="color: rgb(76, 184, 136); font-size: 12px; font-weight: 600;"
+              >
+                OK
+              </span>
+            </div>
+            <div
+              style="display: flex; flex-direction: column; gap: 1px;"
+            >
+              <span
+                style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+              >
+                List pages
+              </span>
+              <span
+                style="color: rgb(76, 184, 136); font-size: 12px; font-weight: 600;"
+              >
+                OK
+              </span>
+            </div>
+            <div
+              style="display: flex; flex-direction: column; gap: 1px;"
+            >
+              <span
+                style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+              >
+                Autocomplete
+              </span>
+              <span
+                style="color: rgb(76, 184, 136); font-size: 12px; font-weight: 600;"
+              >
+                OK
+              </span>
+            </div>
+          </div>
+          <div
+            style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;"
+          >
+            <button
+              style="background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+            >
+              Run probe
+            </button>
+            <button
+              style="background: rgb(30, 32, 52); color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+            >
+              Run burst (10×)
+            </button>
+          </div>
+          <div
+            style="color: rgb(136, 134, 160); font-size: 11px; font-style: italic; line-height: 1.4;"
+          >
+            Goodreads sits behind AWS WAF bot protection, which turns away book pages far sooner than list pages. After a block, that kind of request backs off for 2 minutes, then 5, 10, 30 and 60 on repeated blocks, and clears on the next success; the others carry on. Run probe for a quick check (it goes out even while book pages back off); run burst to see how density holds. Mark as active ends every backoff now.
+          </div>
+        </div>
+        <div
+          style="padding: 10px 4px 12px 0px; font-size: 12px; display: flex; flex-direction: column; gap: 8px; border-top: 1px solid rgb(46, 48, 72); margin-top: 4px;"
+        >
+          <div
+            style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;"
+          >
+            <span
+              style="color: rgb(136, 134, 160); font-weight: 600;"
+            >
+              Goodreads cache worker
+            </span>
+            <span
+              style="font-size: 11px; font-weight: 700; text-transform: uppercase; padding: 3px 9px; border-radius: 99px; letter-spacing: 0.5px; background: rgba(76, 184, 136, 0.133); color: rgb(76, 184, 136);"
+            >
+              Active
+            </span>
+            <span
+              style="flex: 1 1 0%;"
+            />
+            <div
+              style="display: flex; gap: 0px; align-items: stretch;"
+            >
+              <button
+                disabled=""
+                style="padding: 4px 10px; font-size: 11px; font-weight: 600; background: rgba(228, 184, 104, 0.133); color: rgb(228, 184, 104); border: 1px solid rgb(228, 184, 104); border-top-left-radius: 4px; border-bottom-left-radius: 4px; border-top-right-radius: 0px; border-bottom-right-radius: 0px; cursor: default; opacity: 1;"
+                title="Worker fires every 30–90s round the clock."
+              >
+                Continuous
+              </button>
+              <button
+                style="padding: 4px 10px; font-size: 11px; font-weight: 600; background: rgb(30, 32, 52); color: rgb(236, 234, 244); border-width: 1px 1px 1px 0px; border-style: solid; border-color: rgb(46, 48, 72); border-image: none; border-top-left-radius: 0px; border-bottom-left-radius: 0px; border-top-right-radius: 0px; border-bottom-right-radius: 0px; cursor: pointer; opacity: 1;"
+                title="Worker only runs inside the active-hours window below."
+              >
+                Scheduled
+              </button>
+              <button
+                style="padding: 4px 10px; font-size: 11px; font-weight: 600; background: rgb(30, 32, 52); color: rgb(236, 234, 244); border-width: 1px 1px 1px 0px; border-style: solid; border-color: rgb(46, 48, 72); border-image: none; border-top-left-radius: 0px; border-bottom-left-radius: 0px; border-top-right-radius: 4px; border-bottom-right-radius: 4px; cursor: pointer; opacity: 1;"
+                title="Worker stays idle; cache reads still hit existing rows."
+              >
+                Disabled
+              </button>
+            </div>
+            <span
+              style="color: rgb(136, 134, 160); font-size: 11px;"
+            >
+              heartbeat 30s ago
+            </span>
+          </div>
+          <div
+            style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px 12px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 6px; padding: 6px 10px;"
+          >
+            <div
+              style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+              title="598 cooling off"
+            >
+              <span
+                style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+              >
+                Queue
+              </span>
+              <span
+                style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+              >
+                12
+              </span>
+            </div>
+            <div
+              style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+              title="ok / total (author-level)"
+            >
+              <span
+                style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+              >
+                Authors cached
+              </span>
+              <span
+                style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+              >
+                595 / 640
+              </span>
+            </div>
+            <div
+              style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+              title="cached list-page snapshots (sum across libraries)"
+            >
+              <span
+                style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+              >
+                List pages
+              </span>
+              <span
+                style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+              >
+                2,210
+              </span>
+            </div>
+            <div
+              style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+            >
+              <span
+                style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+              >
+                Last scan
+              </span>
+              <span
+                style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+              >
+                5m ago
+              </span>
+            </div>
+            <div
+              style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+              title="15 authors attempted since midnight; routine refreshes stop at 101 a day (new authors skip the cap)"
+            >
+              <span
+                style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+              >
+                Scans today
+              </span>
+              <span
+                style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+              >
+                17
+              </span>
+            </div>
+            <div
+              style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+            >
+              <span
+                style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+              >
+                Blocks today
+              </span>
+              <span
+                style="color: rgb(204, 153, 51); font-size: 13px; font-weight: 600; line-height: 1.2;"
+              >
+                3
+              </span>
+            </div>
+            <div
+              style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+            >
+              <span
+                style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+              >
+                In progress
+              </span>
+              <span
+                style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+              >
+                1
+              </span>
+            </div>
+            <div
+              style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+              title="GR per-author wall-clock budget exhausts today; non-zero on prolific authors motivates the v3.5.0 detail-cache decision"
+            >
+              <span
+                style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+              >
+                Budget exhausts
+              </span>
+              <span
+                style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+              >
+                0
+              </span>
+            </div>
+          </div>
+          <div
+            style="display: flex; flex-direction: column; gap: 6px; background: rgb(30, 32, 52); border: 1px solid rgb(46, 48, 72); border-radius: 6px; padding: 6px 10px;"
+          >
+            <span
+              style="font-size: 11px; color: rgb(136, 134, 160); font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;"
+            >
+              Candidate worker
+            </span>
+            <div
+              style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px 12px;"
+            >
+              <div
+                style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+                title="31 of 64 authors left (authors listing up to 100 books)"
+              >
+                <span
+                  style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  First fill
+                </span>
+                <span
+                  style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+                >
+                  120 / 300
+                </span>
+              </div>
+              <div
+                style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+                title="books added to an author's Goodreads list since it was first checked"
+              >
+                <span
+                  style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  New on lists
+                </span>
+                <span
+                  style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+                >
+                  22 / 22
+                </span>
+              </div>
+              <div
+                style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+                title="180 waiting for an autocomplete check, 9 for their book page, 2 accepted and waiting for a scan to finish"
+              >
+                <span
+                  style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  Waiting
+                </span>
+                <span
+                  style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+                >
+                  180 · 9
+                </span>
+              </div>
+              <div
+                style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+                title="book pages wait the book-page gap after the last one"
+              >
+                <span
+                  style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  Next book page
+                </span>
+                <span
+                  style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+                >
+                  04:02 PM
+                </span>
+              </div>
+              <div
+                style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+              >
+                <span
+                  style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  Created
+                </span>
+                <span
+                  style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+                >
+                  41
+                </span>
+              </div>
+              <div
+                style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+                title="no_confirm 50, owned 27"
+              >
+                <span
+                  style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  Rejected
+                </span>
+                <span
+                  style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+                >
+                  77
+                </span>
+              </div>
+              <div
+                style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+                title="accepted"
+              >
+                <span
+                  style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  Last checked
+                </span>
+                <span
+                  style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+                >
+                  Rootbound
+                </span>
+              </div>
+              <div
+                style="display: flex; flex-direction: column; gap: 1px; min-width: 0px; padding: 2px 0px;"
+                title="authors a scan has covered, with a cached Goodreads list"
+              >
+                <span
+                  style="color: rgb(136, 134, 160); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;"
+                >
+                  Authors
+                </span>
+                <span
+                  style="color: rgb(214, 212, 224); font-size: 13px; font-weight: 600; line-height: 1.2;"
+                >
+                  64
+                </span>
+              </div>
+            </div>
+            <label
+              style="display: flex; align-items: center; gap: 8px; font-size: 12px; cursor: pointer;"
+            >
+              <input
+                type="checkbox"
+              />
+              <span
+                style="color: rgb(214, 212, 224); font-weight: 600;"
+              >
+                Phase 2: fetch every listed book's page
+              </span>
+              <span
+                style="color: rgb(136, 134, 160); font-size: 11px;"
+              >
+                0 fetched, 0 left — runs only when no candidate is waiting
+              </span>
+            </label>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div
+      style="position: sticky; bottom: 12px; display: flex; justify-content: flex-end; gap: 10px; background: rgba(26, 28, 48, 0.933); backdrop-filter: blur(8px); padding: 12px 0px; border-top: 1px solid rgb(46, 48, 72); margin-top: 8px;"
+    >
+      <button
+        style="background: transparent; color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+        title="Wipe all panel settings + reapply v2.11.x ship-defaults"
+      >
+        Reset to defaults
+      </button>
+      <span
+        style="flex: 1 1 0%;"
+      />
+      <span
+        style="font-size: 13px; color: rgb(136, 134, 160); align-self: center;"
+      >
+        No unsaved changes
+      </span>
+      <button
+        disabled=""
+        style="background: transparent; color: rgb(214, 212, 224); border: 1px solid rgb(58, 60, 86); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+      >
+        Discard
+      </button>
+      <button
+        disabled=""
+        style="background: rgb(228, 184, 104); color: rgb(26, 28, 48); border: 1px solid rgb(228, 184, 104); border-radius: 8px; font-weight: 600; cursor: pointer; padding: 8px 14px; font-size: 14px;"
+      >
+        Save
+      </button>
+    </div>
+  </div>
+</DocumentFragment>
+`;
+
+exports[`Metadata Sources panel (desktop) > Goodreads' details with its cache card > requests 1`] = `
+[
+  "GET /v1/metadata-cache/goodreads/status",
+  "GET /v1/metadata-sources",
+  "GET /v1/metadata-sources/traffic?days=8",
+  "GET /v1/metadata/goodreads/state",
+]
+`;

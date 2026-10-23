@@ -4,8 +4,10 @@ Three layers of coverage:
 
   1. Pure helpers (synthetic images via Pillow) — no fixture files in
      the repo so we don't have to worry about MAM image licensing.
-     `imagehash.phash` is deterministic across Pillow versions for a
-     given input, so synthetic gradients give stable expected outputs.
+     The synthetic gradients here hash the same on Pillow 12.3 and 13.0,
+     so they give stable expected outputs. Encoded covers can move a bit
+     or two between Pillow versions (3 of 120 random JPEG / PNG / WebP
+     images moved 2 bits, 12.3 → 13.0), well inside the match band.
 
   2. Cache helpers (round-trip via `temp_db` fixture) — store, read,
      TTL expiration via time monkeypatching.

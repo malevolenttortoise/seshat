@@ -79,10 +79,6 @@ async def drain_digest() -> list[DigestEvent]:
         return events
 
 
-def digest_size() -> int:
-    return len(_digest_queue)
-
-
 def _resolve_endpoint(url: str, topic: str) -> Optional[str]:
     """Resolve full ntfy endpoint from user settings.
 
@@ -241,11 +237,3 @@ async def notify_library_sync(library_name: str, new: int, updated: int) -> bool
     )
 
 
-async def notify_mam_cookie_rotated() -> bool:
-    from app.notifications import events
-    return await _emit(
-        bus_event=events.SYNC_MAM_COOKIE_ROTATED,
-        digest_kind="cookie",
-        title="MAM cookie rotated",
-        message="Session token automatically refreshed",
-    )

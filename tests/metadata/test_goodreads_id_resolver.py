@@ -57,26 +57,41 @@ def goodreads_html(monkeypatch):
     through `box["handler"]` (default 404 — "no such page"), so no test
     here touches the network and a test can route Tier 5 through the
     same handler as its other tiers.
+
+    Since the 2026-10 audit Tiers 1 and 4 (`auto_complete`) go through
+    the session too, so the fake is the real `GoodreadsSession` (its
+    backoff and block recording included) over a fake transport, and
+    `_make_client(handler)` routes the session through the same handler.
     """
     from app.metadata import goodreads_session
 
     box: dict = {"handler": lambda req: httpx.Response(404), "calls": []}
 
-    class _FakeSession:
-        async def get(self, url, **kwargs):
+    class _FakeCurl:
+        async def get(self, url, headers=None, **kwargs):
             box["calls"].append(url)
-            return box["handler"](httpx.Request("GET", url))
+            return box["handler"](httpx.Request("GET", url, params=kwargs.get("params")))
 
-    fake = _FakeSession()
+    session = goodreads_session.GoodreadsSession()
+    session._curl = _FakeCurl()
 
     async def fake_get_session(rate_limit=None):
-        return fake
+        return session
 
     monkeypatch.setattr(goodreads_session, "get_session", fake_get_session)
-    return box
+    _CURRENT_BOX[0] = box
+    yield box
+    _CURRENT_BOX[0] = None
+
+
+# The running test's `goodreads_html` box, so `_make_client` can point the
+# session at the test's handler.
+_CURRENT_BOX: list = [None]
 
 
 def _make_client(handler: Callable[[httpx.Request], httpx.Response]) -> httpx.AsyncClient:
+    if _CURRENT_BOX[0] is not None:
+        _CURRENT_BOX[0]["handler"] = handler
     transport = httpx.MockTransport(handler)
     return httpx.AsyncClient(transport=transport, timeout=5.0)
 

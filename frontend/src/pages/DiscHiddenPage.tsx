@@ -12,6 +12,7 @@
 // hard-purge hidden discoveries rather than just hide them.
 import { useState, useEffect } from "react";
 import { useTheme } from "../theme";
+import { useBookSidebar } from "../hooks/useBookSidebar";
 import { api, slugQuery } from "../api";
 import { Btn } from "../components/Btn";
 import { Load } from "../components/Load";
@@ -36,8 +37,7 @@ function DesktopHiddenPage({ onNav }: { onNav: NavFn }) {
   const t = useTheme();
   const [bks, setBks] = useState<Book[]>([]);
   const [ld, setLd] = useState(true);
-  const [sb, setSb] = useState<Book | null>(null);
-  const [sbClosing, setSbClosing] = useState(false);
+  const { sb, sbClosing, closeSb, toggleSb } = useBookSidebar();
   // v2.17.0 — multi-select state.
   const [selMode, setSelMode] = useState(false);
   const [sel, setSel] = useState<Set<number>>(new Set());
@@ -57,23 +57,6 @@ function DesktopHiddenPage({ onNav }: { onNav: NavFn }) {
   useEffect(() => {
     load();
   }, []);
-
-  const closeSb = () => {
-    if (!sb) return;
-    setSbClosing(true);
-    setTimeout(() => {
-      setSb(null);
-      setSbClosing(false);
-    }, 200);
-  };
-
-  const toggleSb = (b: Book) => {
-    if (sb && sb.id === b.id) closeSb();
-    else {
-      setSbClosing(false);
-      setSb(b);
-    }
-  };
 
   const onAction = async (act: BookAction, id: number, slug?: string) => {
     const scrollY = window.scrollY;

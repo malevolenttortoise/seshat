@@ -1061,11 +1061,6 @@ async def register_ip(session_id: str, skip_ip_update: bool = True) -> dict:
     return await mam_cookie.register_ip(session_id, skip_ip_update)
 
 
-async def verify_search_auth(session_id: str) -> dict:
-    """Probe the MAM search endpoint. Delegates to app.mam.cookie."""
-    return await mam_cookie.verify_session(session_id)
-
-
 async def validate_connection(session_id: str, skip_ip_update: bool = True) -> dict:
     """Full validation: IP registration + search auth test.
 

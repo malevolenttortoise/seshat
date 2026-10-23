@@ -6,7 +6,9 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import { runBatchJob } from "../lib/batchJob";
 import { useTheme } from "../theme";
+import { CategoryChips } from "../components/CategoryChips";
 import { useVisibleInterval } from "../hooks/useVisibleInterval";
+import { useBulkSelection } from "../hooks/useBulkSelection";
 import {
   MobileBtn,
   MobileChip,
@@ -25,6 +27,9 @@ interface TentativeItem {
   vip: boolean;
   cover_path: string | null;
   status: string;
+  // Every MAM content tag the announce carried (wave 5a); null when
+  // only `category` is known.
+  categories?: string[] | null;
 }
 
 export default function MobileTentativePage() {
@@ -32,8 +37,9 @@ export default function MobileTentativePage() {
   const [items, setItems] = useState<TentativeItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
-  const [selMode, setSelMode] = useState(false);
-  const [sel, setSel] = useState<Set<number>>(new Set());
+  const {
+    selMode, setSelMode, sel, toggle: toggleSel, selectOnly, clear: clearSel,
+  } = useBulkSelection();
   const [bulkBusy, setBulkBusy] = useState(false);
 
   const refresh = async () => {
@@ -48,15 +54,6 @@ export default function MobileTentativePage() {
 
   useEffect(() => { refresh(); }, []);
   useVisibleInterval(refresh, 30_000);
-
-  const toggleSel = (id: number) => {
-    setSel((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
 
   const approve = async (id: number) => {
     setBusyId(id);
@@ -108,7 +105,7 @@ export default function MobileTentativePage() {
       } else {
         await api.post(`/v1/tentative/bulk/${action}`, { ids: [...sel] });
       }
-      setSel(new Set());
+      clearSel();
       setSelMode(false);
       await refresh();
     } catch (e) {
@@ -159,7 +156,7 @@ export default function MobileTentativePage() {
             active={selMode}
             onClick={() => {
               setSelMode((m) => !m);
-              setSel(new Set());
+              clearSel();
             }}
           >
             {selMode ? `Selecting (${sel.size})` : "Select"}
@@ -167,11 +164,11 @@ export default function MobileTentativePage() {
           {selMode && (
             <>
               <MobileChip
-                onClick={() => setSel(new Set(items.map((i) => i.id)))}
+                onClick={() => selectOnly(items.map((i) => i.id))}
               >
                 Select all
               </MobileChip>
-              <MobileChip onClick={() => setSel(new Set())}>Clear</MobileChip>
+              <MobileChip onClick={clearSel}>Clear</MobileChip>
             </>
           )}
         </div>
@@ -301,6 +298,7 @@ export default function MobileTentativePage() {
                   <MobileBadge tone="info">{item.language}</MobileBadge>
                 )}
                 {item.vip && <MobileBadge tone="accent">VIP</MobileBadge>}
+                <CategoryChips categories={item.categories} />
                 <a
                   href={`https://www.myanonamouse.net/t/${item.mam_torrent_id}`}
                   target="_blank"

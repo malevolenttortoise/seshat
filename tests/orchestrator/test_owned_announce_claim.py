@@ -181,6 +181,27 @@ class TestFindOwnedMatches:
         assert matches[0].book_id == book_id
         assert matches[0].library_slug == ebook_library["slug"]
 
+    async def test_a_series_position_clash_still_separates_on_the_grab_side(self, ebook_library):
+        """C35: G213 calls one title in one series the same book whatever the
+        numbers say, for merges; here a wrong "same" would skip a wanted
+        volume, so "Blade Angels (Blade Academy Book 2)" isn't the owned
+        "Blade Angels" (Blade Academy #1): the author titles every book so."""
+        book_id = await _seed_owned(ebook_library["slug"], title="Blade Angels", author="Dante Hull")
+        db = await disco_db.get_db(ebook_library["slug"])
+        try:
+            sid = (await db.execute(
+                "INSERT INTO series (name, author_id) VALUES ('Blade Academy', "
+                "(SELECT id FROM authors WHERE name = 'Dante Hull'))")).lastrowid
+            await db.execute("UPDATE books SET series_id = ?, series_index = 1 WHERE id = ?", (sid, book_id))
+            await db.commit()
+        finally:
+            await db.close()
+        matches = await find_owned_matches(
+            title="Blade Angels (Blade Academy Book 2)", author_blob="Dante Hull",
+            category="Ebooks - Science Fiction",
+        )
+        assert matches == []
+
     async def test_unowned_row_excluded(self, ebook_library):
         # owned=0 rows aren't candidates regardless of title match.
         from app.metadata.author_names import normalize_author_name

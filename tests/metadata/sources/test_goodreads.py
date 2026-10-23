@@ -15,7 +15,6 @@ import httpx
 from app.metadata.record import MetaRecord
 from app.metadata.sources.goodreads import (
     GoodreadsSource,
-    _is_cloudflare_soft_block,
     _merge_detail_page,
     _parse_series_string,
 )
@@ -49,31 +48,6 @@ class TestSearchBookDisabled:
         src = GoodreadsSource()
         assert await src.search_book("", "any author") is None
         await src.close()
-
-
-class TestCloudflareSoftBlockDetection:
-    """Distinguish "Goodreads doesn't know this book" (silent miss)
-    from "Cloudflare is blocking us" (202 / empty body). Future
-    diagnostics rely on this signal."""
-
-    def test_202_status_is_soft_block(self):
-        resp = httpx.Response(202, content=b"")
-        assert _is_cloudflare_soft_block(resp) is True
-
-    def test_200_with_empty_body_is_soft_block(self):
-        resp = httpx.Response(200, content=b"")
-        assert _is_cloudflare_soft_block(resp) is True
-
-    def test_200_with_real_body_is_not_soft_block(self):
-        resp = httpx.Response(200, content=b"<html>real content</html>")
-        assert _is_cloudflare_soft_block(resp) is False
-
-    def test_404_is_not_soft_block(self):
-        resp = httpx.Response(404, content=b"not found")
-        assert _is_cloudflare_soft_block(resp) is False
-
-    def test_none_response_not_soft_block(self):
-        assert _is_cloudflare_soft_block(None) is False
 
 
 _LONG_DESC = (
@@ -229,3 +203,65 @@ class TestParseSeriesString:
         name, idx = _parse_series_string("Series Name")
         assert name == "Series Name"
         assert idx is None
+
+
+class TestABlockIsSkippedNotMissed:
+    """G192 (2026-10-21): a block met by the book's own Goodreads lookup was
+    filed 'no match', so G182 never retried it (review 2212). It is now
+    `soft_blocked`, and the enricher's cleaned-title retry isn't sent."""
+
+    @staticmethod
+    def _install(monkeypatch, *, soft_blocked=False, page=None):
+        from app.metadata import goodreads_id_resolver, goodreads_session
+        from app.metadata.sources import goodreads as gr_src
+        resolves: list[str] = []
+
+        async def resolve(query):
+            resolves.append(query.title)
+            return goodreads_id_resolver.ResolveResult(
+                None if soft_blocked else "123", "auto_complete", soft_blocked=soft_blocked,
+            )
+
+        class _Session:
+            async def get(self, url, **_):
+                if isinstance(page, Exception):
+                    raise page
+                return page
+
+        async def get_session():
+            return _Session()
+
+        async def no_stored(book_id):
+            return None
+
+        monkeypatch.setattr(goodreads_id_resolver, "resolve_goodreads_id", resolve)
+        monkeypatch.setattr(goodreads_session, "get_session", get_session)
+        monkeypatch.setattr(gr_src, "_stored_record", no_stored)
+        return resolves
+
+    @staticmethod
+    async def _status():
+        from app.metadata.enricher import EnrichmentConfig, MetadataEnricher
+        enricher = MetadataEnricher(EnrichmentConfig(enabled=True), sources=[GoodreadsSource()])
+        await enricher.enrich(title="The Tale: Book 1", author="Author")
+        return enricher.last_source_log[0]["status"]
+
+    async def test_a_resolver_block(self, monkeypatch):
+        resolves = self._install(monkeypatch, soft_blocked=True)
+        assert await self._status() == "soft_blocked"
+        assert resolves == ["The Tale: Book 1"]
+
+    async def test_a_book_page_block(self, monkeypatch):
+        resolves = self._install(monkeypatch, page=httpx.Response(202, content=b""))
+        assert await self._status() == "soft_blocked"
+        assert len(resolves) == 1
+
+    async def test_the_backoff_refusing_the_page(self, monkeypatch):
+        from app.metadata import goodreads_session
+        self._install(monkeypatch, page=goodreads_session.GoodreadsBackingOff("book_page", 9e12))
+        assert await self._status() == "soft_blocked"
+
+    async def test_a_page_that_is_gone_stays_no_result(self, monkeypatch):
+        resolves = self._install(monkeypatch, page=httpx.Response(404, content=b""))
+        assert await self._status() == "no_result"
+        assert resolves == ["The Tale: Book 1", "The Tale 1"]    # the cleaned title tried

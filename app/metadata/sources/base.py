@@ -9,8 +9,10 @@ and just want metadata to enrich it.
 
 Shared concerns that live in this base:
   - httpx.AsyncClient lifecycle (lazy-created, aclose on shutdown)
-  - A rate-limited `_get()` helper (asyncio.sleep before each request,
-    exponential backoff on 5xx/network errors)
+  - A `_get()` helper that sends each attempt in the source's turn
+    (`app.metadata.source_gate`: the Metadata Sources rate since the
+    last request to the source from any caller, counted there), with
+    exponential backoff on 5xx/network errors
   - Hooks for test injection: subclasses read self._get / self.client
     so tests can swap in a fake transport on the httpx client.
 
@@ -32,7 +34,49 @@ from typing import Optional
 
 import httpx
 
+from app.metadata import source_gate
 from app.metadata.record import MetaRecord
+
+
+# ─── Per-book scope (2026-10 audit wave 4b, S5) ───────────────────
+#
+# The enricher opens one per book (`enrichment_scope()`); a source keeps
+# per-book state in it across the enricher's calls for that book, the
+# title-variant retry included: Amazon's live-request budget (G92) and its
+# fresh session. Values with a `close()` / `aclose()` are closed when the
+# book is done.
+
+import contextlib as _contextlib
+import contextvars as _contextvars
+
+_ENRICHMENT_SCOPE: "_contextvars.ContextVar[Optional[dict]]" = _contextvars.ContextVar(
+    "enrichment_scope", default=None,
+)
+
+
+@_contextlib.asynccontextmanager
+async def enrichment_scope():
+    scope: dict = {}
+    token = _ENRICHMENT_SCOPE.set(scope)
+    try:
+        yield scope
+    finally:
+        _ENRICHMENT_SCOPE.reset(token)
+        for value in scope.values():
+            close = getattr(value, "aclose", None) or getattr(value, "close", None)
+            if close is None:
+                continue
+            try:
+                result = close()
+                if hasattr(result, "__await__"):
+                    await result
+            except Exception:
+                pass
+
+
+def current_enrichment_scope() -> Optional[dict]:
+    """The book's scope, or None outside an enrichment."""
+    return _ENRICHMENT_SCOPE.get()
 
 
 class MetaSource:
@@ -45,6 +89,8 @@ class MetaSource:
     follow_redirects: bool = True
 
     def __init__(self, *, rate_limit: float = 1.0):
+        # Kept for callers and tests that pass it; the source gate paces
+        # requests at the Metadata Sources rate.
         self.rate_limit = rate_limit
         self.logger = logging.getLogger(f"seshat.metadata.{self.name}")
         self._client: Optional[httpx.AsyncClient] = None
@@ -70,7 +116,7 @@ class MetaSource:
     async def _get(
         self, url: str, *, retries: int = 2, **kwargs
     ) -> httpx.Response:
-        """Rate-limited GET with exponential backoff on failure.
+        """GET in the source's turn, with exponential backoff on failure.
 
         Retries up to `retries` additional attempts with 3s → 6s → 12s
         waits. Re-raises the final exception on terminal failure so the
@@ -79,9 +125,9 @@ class MetaSource:
         """
         for attempt in range(retries + 1):
             try:
-                if self.rate_limit > 0:
-                    await asyncio.sleep(self.rate_limit)
-                resp = await self.client.get(url, **kwargs)
+                async with source_gate.turn(self.name) as t:
+                    resp = await self.client.get(url, **kwargs)
+                    t.status(resp.status_code)
                 resp.raise_for_status()
                 return resp
             except Exception as e:
@@ -163,4 +209,16 @@ class MetaSource:
         sources after a good-enough fuzzy match (cheap sources still
         run; expensive sources are skipped).
         """
+        return False
+
+    def backing_off(self) -> bool:
+        """True while this source refuses requests (a block's backoff):
+        the enricher records the source as skipped, `soft_blocked`, and
+        G182's retry re-runs it for a pending review once it's over."""
+        return False
+
+    def skipped_for_backoff(self) -> bool:
+        """After a None result: was it a backoff refusing the request
+        (this book's enrichment scope), not a real miss? Sources with a
+        partial cooldown (Amazon's page kinds) answer here."""
         return False

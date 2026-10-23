@@ -44,11 +44,9 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Literal, Optional, Sequence
 
-from app import state
 from app.database import get_db
-from app.discovery.database import get_db as get_library_db
 from app.filter.gate import Announce
 from app.quality.extract import QualitySnapshot
 from app.quality.scoring import (
@@ -298,6 +296,8 @@ def evaluate_format_dedup(
     # ── Disabled branch ──────────────────────────────────────
     # Rule (a): any owned sibling of any format blocks a disabled grab.
     # "We already have the book" wins, regardless of which format.
+    # (An owned book in an enabled format is dispatch's owned skip, D7:
+    # this gate never sees an announce of an owned book there.)
     if any(s.where == "owned" for s in siblings):
         return FormatDedupDecision(
             action="skip", reason="format_dedup_owned_sibling", **base,
@@ -345,13 +345,21 @@ async def lookup_dedup_siblings(
     dedup_key: str,
     media_type: str,
     libraries: Optional[list[dict]] = None,
+    title: str = "",
+    author_blob: str = "",
+    categories: Sequence[str] = (),
 ) -> list[SiblingMatch]:
-    """Fetch every currently-known sibling of the given dedup key.
+    """Fetch every currently-known sibling of an announce.
 
     Three sources:
-      1. `grabs` — rows whose state is still in `_IN_FLIGHT_STATES`.
-      2. `pending_holds` — rows whose state is 'pending'.
-      3. Per-library `books` tables — owned=1, normalized key matches.
+      1. `grabs` — rows whose state is still in `_IN_FLIGHT_STATES`,
+         same dedup key.
+      2. `pending_holds` — rows whose state is 'pending', same dedup key.
+      3. Per-library `books` tables — owned books the announce (`title`,
+         `author_blob`, its MAM `categories` for F28's full-cast check)
+         is by the title identity, its primary author any contributor
+         (ADR-0004 amended; the lookup claim-for-owned uses). Without a
+         title or author, no owned siblings.
 
     Owned-side scope is filtered by media type: an ebook announce only
     cross-checks ebook libraries, an audiobook announce only cross-
@@ -399,41 +407,17 @@ async def lookup_dedup_siblings(
     finally:
         await db.close()
 
-    libs = libraries if libraries is not None else list(state._discovered_libraries)
-    for lib in libs:
-        slug = lib.get("slug")
-        ctype = lib.get("content_type") or "ebook"
-        if not slug or ctype != media_type:
-            continue
-        try:
-            lib_db = await get_library_db(slug)
-        except Exception:
-            _log.debug("dedup owned-scan: skipping library %s (open failed)", slug)
-            continue
-        try:
-            cur = await lib_db.execute(
-                "SELECT b.id AS book_id, b.title, b.formats, "
-                "       a.name AS author_name "
-                "FROM books b "
-                "JOIN book_authors bpa ON bpa.book_id = b.id AND bpa.position = 0 "
-                "JOIN authors a ON a.id = bpa.author_id "
-                "WHERE b.hidden = 0 AND b.owned = 1"
-            )
-            rows = await cur.fetchall()
-        finally:
-            await lib_db.close()
+    from app.orchestrator.owned_announce_claim import owned_books_matching
 
-        for r in rows:
-            row_key = normalize_dedup_key(
-                r["title"] or "", r["author_name"] or "",
-            )
-            if row_key and row_key == dedup_key:
-                formats_csv = (r["formats"] or "").lower()
-                first_fmt = (formats_csv.split(",")[0] or "").strip()
-                matches.append(SiblingMatch(
-                    where="owned",
-                    book_format=first_fmt,
-                    library_slug=slug,
-                ))
+    for book in await owned_books_matching(
+        title=title, author_blob=author_blob, media_type=media_type,
+        libraries=libraries, categories=categories,
+    ):
+        formats_csv = book.formats.lower()
+        matches.append(SiblingMatch(
+            where="owned",
+            book_format=(formats_csv.split(",")[0] or "").strip(),
+            library_slug=book.library_slug,
+        ))
 
     return matches

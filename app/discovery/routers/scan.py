@@ -400,6 +400,10 @@ def _project_lookup() -> dict:
             # silently under-scanning a batch of authors doesn't get lost
             # in the logs. Empty dict when nothing timed out.
             "source_timeouts": p.get("source_timeouts") or {},
+            # Authors the scan skipped as not scan-eligible (F15), and
+            # the first 50 with their reason.
+            "skipped": p.get("skipped", 0),
+            "skipped_authors": p.get("skipped_authors") or [],
         },
     }
 

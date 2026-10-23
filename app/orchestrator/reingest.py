@@ -602,7 +602,10 @@ async def start_reingest(
         metadata_enricher=metadata_enricher,
         torrent_files=candidate.book_files,
         audiobook_format_priority=settings.get("audiobook_format_priority") or None,
-        ebook_format_priority=settings.get("ebook_format_priority") or None,
+        # The live pipeline's ebook priority (main builds it from the same
+        # key). This read `ebook_format_priority`, which nothing writes,
+        # so a multi-format reingest ignored it (2026-10 audit, G134).
+        ebook_format_priority=settings.get("mam_format_priority") or None,
     )
 
     _log.info(

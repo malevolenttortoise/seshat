@@ -1,0 +1,319 @@
+{
+ "abs_sink_library_id": "",
+ "abs_sync_interval_minutes": 0,
+ "abs_url": "http://abs.example.invalid:13378",
+ "abs_web_url": "https://abs.example.invalid",
+ "active_library": "",
+ "active_replacement_auto_enact_by_slug": {},
+ "active_replacement_enabled_by_slug": {},
+ "active_replacement_soft_delete_retention_days": 30,
+ "allowed_audiobook_categories": [
+  "audiobooks action adventure",
+  "audiobooks science fiction",
+  "audiobooks fantasy",
+  "audiobooks urban fantasy",
+  "audiobooks general fiction",
+  "audiobooks young adult",
+  "audiobooks mixed collections"
+ ],
+ "allowed_categories": [
+  "ebooks action adventure",
+  "ebooks science fiction",
+  "ebooks fantasy",
+  "ebooks urban fantasy",
+  "ebooks general fiction",
+  "ebooks mixed collections",
+  "ebooks young adult"
+ ],
+ "allowed_formats": [],
+ "allowed_languages": [
+  "english"
+ ],
+ "audible_region": "us",
+ "audiobook_format_priority": [
+  "m4b",
+  "m4a",
+  "mp3"
+ ],
+ "audiobook_tracking_mode": "both",
+ "audiobookshelf_library_path": "",
+ "author_scan_owned_only": false,
+ "author_scanning_enabled": true,
+ "bundle_detection_enabled": true,
+ "calibre_library_path": "",
+ "calibre_url": "",
+ "calibre_web_url": "",
+ "category_routing": {},
+ "cookie_keepalive_interval_hours": 168,
+ "cookie_retry_interval_seconds": 300,
+ "cwa_base_url": "",
+ "cwa_ingest_path": "",
+ "cwa_min_inter_book_seconds": 10,
+ "cwa_username": "",
+ "cwa_web_url": "https://books.example.invalid",
+ "daily_digest_enabled": true,
+ "daily_digest_hour": 9,
+ "default_sink": "calibre",
+ "delayed_torrents_path": "",
+ "download_client_type": "qbittorrent",
+ "download_folder_structure": "monthly",
+ "download_folder_template": "",
+ "dry_run": false,
+ "emergency_export_path": "",
+ "exclude_audiobooks": true,
+ "excluded_categories": [],
+ "excluded_formats": [],
+ "excluded_uploaders": [],
+ "folder_sink_path": "",
+ "format_dedup_hold_seconds": 600,
+ "format_priority": {
+  "audiobook": [
+   {
+    "enabled": true,
+    "fmt": "m4b"
+   },
+   {
+    "enabled": false,
+    "fmt": "mp3"
+   }
+  ],
+  "ebook": [
+   {
+    "enabled": true,
+    "fmt": "epub"
+   },
+   {
+    "enabled": false,
+    "fmt": "azw3"
+   },
+   {
+    "enabled": false,
+    "fmt": "mobi"
+   },
+   {
+    "enabled": false,
+    "fmt": "pdf"
+   }
+  ]
+ },
+ "goodreads_session_last_status": null,
+ "goodreads_session_state": "unknown",
+ "goodreads_session_state_since": null,
+ "google_books_auto_disabled_at": null,
+ "hardcover_api_key_configured": true,
+ "languages": [
+  "English"
+ ],
+ "last_mam_validated_at": null,
+ "library_mtimes": {},
+ "library_sources": [],
+ "library_sync_interval_minutes": 60,
+ "library_sync_state": {},
+ "local_path_prefix": "/downloads",
+ "lookup_interval_days": 3,
+ "mam_aggressive_cover_demotion": true,
+ "mam_debug_match_enabled": false,
+ "mam_economy_buffer_gate_enabled": false,
+ "mam_economy_buffer_gate_safety_margin_gb": 1,
+ "mam_economy_dry_run": false,
+ "mam_economy_intro_dismissed": false,
+ "mam_economy_last_upload_buy_at": 0.0,
+ "mam_economy_last_vip_buy_at": 0.0,
+ "mam_economy_manual_wedge_offer_enabled": false,
+ "mam_economy_upload_bonus_ceiling": 5000,
+ "mam_economy_upload_bonus_trigger": false,
+ "mam_economy_upload_buffer_chunk_gb": 50,
+ "mam_economy_upload_buffer_floor_gb": 10,
+ "mam_economy_upload_buffer_trigger": false,
+ "mam_economy_upload_enabled": false,
+ "mam_economy_upload_interval_hours": 6,
+ "mam_economy_upload_ratio_chunk_gb": 50,
+ "mam_economy_upload_ratio_floor": 1.5,
+ "mam_economy_upload_ratio_trigger": false,
+ "mam_economy_vip_enabled": false,
+ "mam_economy_vip_interval_hours": 24,
+ "mam_economy_vip_min_bonus": 0,
+ "mam_economy_vip_weeks": 4,
+ "mam_enabled": false,
+ "mam_format_priority": [
+  "epub",
+  "azw",
+  "azw3",
+  "pdf",
+  "djvu",
+  "azw4"
+ ],
+ "mam_irc_account": "",
+ "mam_irc_enabled": true,
+ "mam_irc_nick": "",
+ "mam_irc_password_configured": true,
+ "mam_last_validated_at": null,
+ "mam_recent_scan_skip_days": 7,
+ "mam_scan_interval_minutes": 360,
+ "mam_scanning_enabled": true,
+ "mam_session_id_configured": true,
+ "mam_skip_ip_update": true,
+ "mam_validation_ok": false,
+ "metadata_accept_confidence": 0.8,
+ "metadata_audiobook_priority": [
+  "audible",
+  "goodreads",
+  "hardcover",
+  "google_books"
+ ],
+ "metadata_cache": {
+  "amazon": {
+   "enabled": false,
+   "mode": "disabled",
+   "schedule": {
+    "active_hours": "10:00-22:00",
+    "timezone": ""
+   }
+  },
+  "goodreads": {
+   "enabled": false,
+   "mode": "disabled",
+   "phase2_enabled": false,
+   "schedule": {
+    "active_hours": "10:00-22:00",
+    "timezone": ""
+   }
+  }
+ },
+ "metadata_cache_daily_summary_hour": 9,
+ "metadata_cache_log_file_backup_count": 3,
+ "metadata_cache_log_file_enabled": false,
+ "metadata_cache_log_file_max_bytes": 1000000,
+ "metadata_cache_stall_threshold_s": 300,
+ "metadata_disabled_sources": [],
+ "metadata_enrichment_enabled": false,
+ "metadata_per_source_timeout": 15.0,
+ "metadata_priority": {
+  "audiobook": [],
+  "ebook": []
+ },
+ "metadata_provider_priority": [
+  "goodreads",
+  "amazon",
+  "hardcover",
+  "kobo",
+  "ibdb",
+  "google_books",
+  "audible"
+ ],
+ "metadata_review_timeout_days": 14,
+ "metadata_sources": {},
+ "notifications": {
+  "events": {},
+  "master_enabled": true,
+  "quiet_hours": {
+   "enabled": false,
+   "end": "07:00",
+   "start": "23:00",
+   "timezone": ""
+  }
+ },
+ "notify_daily_accepted": true,
+ "notify_daily_ignored": true,
+ "notify_daily_tentative": true,
+ "notify_on_buffer_gate_block": true,
+ "notify_on_download_complete": true,
+ "notify_on_goodreads_canary_failed": true,
+ "notify_on_grab": true,
+ "notify_on_library_ingest": true,
+ "notify_on_metadata_cache_daily_summary": false,
+ "notify_on_metadata_cache_error": true,
+ "notify_on_metadata_cache_new_book": false,
+ "notify_on_metadata_cache_warning": true,
+ "notify_on_pipeline_error": true,
+ "notify_on_review_queued": true,
+ "notify_weekly_digest": true,
+ "ntfy_digest_enabled": false,
+ "ntfy_digest_schedule": "daily",
+ "ntfy_on_library_sync": false,
+ "ntfy_on_mam_complete": true,
+ "ntfy_on_new_books": true,
+ "ntfy_on_pipeline_sent": true,
+ "ntfy_on_scan_complete": true,
+ "ntfy_topic": "seshat-test",
+ "ntfy_url": "https://ntfy.example.invalid",
+ "ntfy_username": "",
+ "per_event_notifications": false,
+ "pipeline_auto_train_enabled": true,
+ "policy_free_only": false,
+ "policy_min_wedges_reserved": 0,
+ "policy_ratio_floor": 0.0,
+ "policy_use_wedge": false,
+ "policy_vip_always_grab": true,
+ "policy_vip_only": false,
+ "qbit_add_stagger_jitter_s": 0.5,
+ "qbit_add_stagger_s": 2.0,
+ "qbit_download_path": "",
+ "qbit_missing_grab_grace_hours": 12,
+ "qbit_orphan_adoption_since": 0,
+ "qbit_password_configured": true,
+ "qbit_path_prefix": "/data",
+ "qbit_poll_interval_seconds": 60,
+ "qbit_tag": "seshat-seed",
+ "qbit_url": "http://qbit.example.invalid:8080",
+ "qbit_username": "",
+ "qbit_watch_category": "[mam-reseed]",
+ "quality_axes": {
+  "audiobook": [
+   {
+    "axis": "audio_bitrate_kbps",
+    "tiers": [
+     {
+      "label": "320+ kbps",
+      "min_value": 320
+     },
+     {
+      "label": "192+ kbps",
+      "min_value": 192
+     },
+     {
+      "label": "128+ kbps",
+      "min_value": 128
+     },
+     {
+      "label": "64+ kbps",
+      "min_value": 64
+     },
+     {
+      "label": "<64 kbps",
+      "min_value": 0
+     }
+    ]
+   },
+   {
+    "axis": "audio_channels",
+    "tiers": [
+     {
+      "label": "Stereo+",
+      "min_value": 2
+     },
+     {
+      "label": "Mono",
+      "min_value": 1
+     }
+    ]
+   }
+  ],
+  "ebook": []
+ },
+ "quality_backfill_interval_s": 5.0,
+ "quality_profile_overrides_by_slug": {},
+ "rate_mam": 2,
+ "review_queue_enabled": true,
+ "review_staging_path": "",
+ "review_timeout_check_interval_seconds": 86400,
+ "setup_complete": false,
+ "sink_max_retries": 3,
+ "snatch_budget_cap": 200,
+ "snatch_full_mode": "queue",
+ "snatch_queue_max": 200,
+ "snatch_seed_hours_required": 72,
+ "staging_path": "",
+ "theme": "dark",
+ "verbose_logging": false
+}

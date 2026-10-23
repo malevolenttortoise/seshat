@@ -2,9 +2,10 @@
 Tests for same-series-position book dedup — Bug C from the Tier 2
 UAT follow-ups.
 
-Covers both the migration helper (`_dedupe_same_series_position`
-in `app.discovery.database`) and the insert-time prevention added
-to `_merge_result` in `app.discovery.lookup`.
+Covers the start-up check (`_check_series_positions` in
+`app.discovery.database`, which no longer deletes: G215) and the
+scans' title→series passes, which fold two books on one series number
+only when the title identity calls them one book (G216).
 
 The Remnant case: Mark owns "Remnant II" at series_index=2 in the
 "Remnant" series. A source reported "Remnant Book 2" also at
@@ -106,345 +107,86 @@ async def _book_rows(author_id: int) -> list[dict]:
         await db.close()
 
 
-# ─── Migration: _dedupe_same_series_position ──────────────────
+# ─── Startup: _check_series_positions (G215) ──────────────────
 
-class TestMigration:
-    async def test_remnant_case_owned_beats_new(self, discovery_db):
-        """
-        Mirror Mark's exact Remnant state: OWNED "Remnant II" + NEW
-        "Remnant Book 2" both at series_index=2. Migration keeps the
-        OWNED roman-numeral row.
-        """
-        from app.discovery.database import _dedupe_same_series_position, get_db
 
+async def _check():
+    from app.discovery.database import _check_series_positions, get_db
+    db = await get_db()
+    try:
+        return await _check_series_positions(db)
+    finally:
+        await db.close()
+
+
+class TestStartupCheck:
+    """A taken series number isn't a match: the start-up pass that
+    deleted the unowned book on it is retired (G215). On the reference
+    library it would have deleted "The Forge of God" for its Spanish
+    edition at that number."""
+
+    async def test_books_on_a_taken_number_all_stay(self, discovery_db):
+        author_id = await _insert_author("Greg Bear")
+        series_id = await _insert_series("The Forge of God", author_id)
+        spanish = await _insert_book("La Fragua de Dios", author_id, series_id=series_id, series_index=1.0)
+        english = await _insert_book("The Forge of God", author_id, series_id=series_id, series_index=1.0)
+        owned = await _insert_book("Anvil of Stars", author_id, series_id=series_id, series_index=2.0,
+                                   owned=1, source="calibre")
+        other = await _insert_book("Anvil of Stars: Book 2", author_id, series_id=series_id, series_index=2.0)
+        assert await _check() == 0
+        assert sorted(r["id"] for r in await _book_rows(author_id)) == sorted([spanish, english, owned, other])
+
+    async def test_a_restart_deletes_nothing(self, discovery_db):
+        from app.discovery import database as disco_db
         author_id = await _insert_author("Randi Darren")
         series_id = await _insert_series("Remnant", author_id)
-        owned_id = await _insert_book(
-            "Remnant II", author_id,
-            series_id=series_id, series_index=2.0, owned=1, source="calibre",
-        )
-        await _insert_book(
-            "Remnant Book 2", author_id,
-            series_id=series_id, series_index=2.0, owned=0, source="hardcover",
-        )
+        await _insert_book("Remnant II", author_id, series_id=series_id, series_index=2.0, owned=1, source="calibre")
+        await _insert_book("Remnant Book 2", author_id, series_id=series_id, series_index=2.0)
+        await disco_db.init_db("test")
+        assert len(await _book_rows(author_id)) == 2
 
-        db = await get_db()
-        try:
-            deleted = await _dedupe_same_series_position(db)
-        finally:
-            await db.close()
+    async def test_a_number_recovered_from_a_title_never_evicts_a_book(self, discovery_db):
+        from app.discovery import database as disco_db
+        author_id = await _insert_author("Kurtis Eckstein")
+        series_id = await _insert_series("Paths of Akashic", author_id)
+        held = await _insert_book("Paths of Akashic 5: The Expanse", author_id, series_id=series_id,
+                                  series_index=5.0)
+        taken = await _insert_book("Bloodprice (Paths of Akashic #5)", author_id, series_id=series_id)
+        free = await _insert_book("Ashfall (Paths of Akashic #6)", author_id, series_id=series_id)
+        await disco_db.init_db("test")
+        rows = {r["id"]: r["series_index"] for r in await _book_rows(author_id)}
+        assert rows == {held: 5.0, taken: None, free: 6.0}
 
-        assert deleted == 1
-        rows = await _book_rows(author_id)
-        assert len(rows) == 1
-        assert rows[0]["id"] == owned_id
-        assert rows[0]["title"] == "Remnant II"
-
-    async def test_book_n_suffix_loses_when_both_same_owned_flag(
-        self, discovery_db,
-    ):
-        """
-        Tiebreaker after OWNED: title without "Book N" suffix wins.
-        Both NEW here, so OWNED flag ties — the non-"Book N" title
-        is the canonical choice.
-        """
-        from app.discovery.database import _dedupe_same_series_position, get_db
-
+    async def test_a_blank_series_number_is_scrubbed(self, discovery_db):
+        from app.discovery.database import get_db
         author_id = await _insert_author("Randi Darren")
         series_id = await _insert_series("Remnant", author_id)
-        canonical_id = await _insert_book(
-            "Remnant II", author_id,
-            series_id=series_id, series_index=2.0, owned=0, source="hardcover",
-        )
-        await _insert_book(
-            "Remnant Book 2", author_id,
-            series_id=series_id, series_index=2.0, owned=0, source="ibdb",
-        )
-
+        bid = await _insert_book("Remnant", author_id, series_id=series_id, series_index=None)
         db = await get_db()
         try:
-            await _dedupe_same_series_position(db)
-        finally:
-            await db.close()
-
-        rows = await _book_rows(author_id)
-        assert len(rows) == 1
-        assert rows[0]["id"] == canonical_id
-
-    async def test_distinct_series_positions_untouched(self, discovery_db):
-        """Sanity: books at different series_index values are not touched."""
-        from app.discovery.database import _dedupe_same_series_position, get_db
-
-        author_id = await _insert_author("Randi Darren")
-        series_id = await _insert_series("Remnant", author_id)
-        await _insert_book(
-            "Remnant", author_id,
-            series_id=series_id, series_index=1.0, owned=1,
-        )
-        await _insert_book(
-            "Remnant II", author_id,
-            series_id=series_id, series_index=2.0, owned=1,
-        )
-        await _insert_book(
-            "Remnant III", author_id,
-            series_id=series_id, series_index=3.0, owned=1,
-        )
-
-        db = await get_db()
-        try:
-            deleted = await _dedupe_same_series_position(db)
-        finally:
-            await db.close()
-
-        assert deleted == 0
-        rows = await _book_rows(author_id)
-        assert len(rows) == 3
-
-    async def test_books_without_series_index_untouched(self, discovery_db):
-        """Books missing series_index or series_id are not affected."""
-        from app.discovery.database import _dedupe_same_series_position, get_db
-
-        author_id = await _insert_author("Randi Darren")
-        # Two standalones (no series) with identical titles — NOT our
-        # concern here. Bug C only collapses same-series-position.
-        await _insert_book("Privateer's Commission", author_id, owned=1)
-        await _insert_book("Privateer's Commission", author_id, owned=0)
-
-        db = await get_db()
-        try:
-            deleted = await _dedupe_same_series_position(db)
-        finally:
-            await db.close()
-
-        assert deleted == 0
-        rows = await _book_rows(author_id)
-        assert len(rows) == 2
-
-    async def test_suggestions_cascade_on_delete(self, discovery_db):
-        """
-        book_series_suggestions has ON DELETE CASCADE on book_id — the
-        loser's suggestion row should auto-drop with the book.
-        """
-        from app.discovery.database import _dedupe_same_series_position, get_db
-
-        author_id = await _insert_author("Randi Darren")
-        series_id = await _insert_series("Remnant", author_id)
-        await _insert_book(
-            "Remnant II", author_id,
-            series_id=series_id, series_index=2.0, owned=1, source="calibre",
-        )
-        loser_id = await _insert_book(
-            "Remnant Book 2", author_id,
-            series_id=series_id, series_index=2.0, owned=0, source="hardcover",
-        )
-
-        db = await get_db()
-        try:
-            await db.execute(
-                "INSERT INTO book_series_suggestions "
-                "(book_id, suggested_series_name, suggested_series_index, "
-                "sources_agreeing) VALUES (?, ?, ?, ?)",
-                (loser_id, "Remnant", 2.0, "hardcover"),
-            )
+            await db.execute("UPDATE books SET series_index = '' WHERE id = ?", (bid,))
             await db.commit()
-            await _dedupe_same_series_position(db)
-            sug = await (await db.execute(
-                "SELECT COUNT(*) c FROM book_series_suggestions"
-            )).fetchone()
         finally:
             await db.close()
-        assert sug["c"] == 0
+        await _check()
+        assert (await _book_rows(author_id))[0]["series_index"] is None
 
-    async def test_idempotent(self, discovery_db):
-        """Second run finds nothing to do."""
-        from app.discovery.database import _dedupe_same_series_position, get_db
-
-        author_id = await _insert_author("Randi Darren")
-        series_id = await _insert_series("Remnant", author_id)
-        await _insert_book(
-            "Remnant II", author_id,
-            series_id=series_id, series_index=2.0, owned=1,
-        )
-        await _insert_book(
-            "Remnant Book 2", author_id,
-            series_id=series_id, series_index=2.0, owned=0,
-        )
-
-        db = await get_db()
-        try:
-            first = await _dedupe_same_series_position(db)
-            second = await _dedupe_same_series_position(db)
-        finally:
-            await db.close()
-        assert first == 1
-        assert second == 0
-
-
-# ─── Owned-collision guard (regression: Witcher case 2026-05-09) ──
-
-
-class TestOwnedCollisionGuard:
-    """When 2+ owned books collide on the same series position, dedup
-    must NOT delete any of them — that's lossy for what's almost always
-    a metadata error in the source library. Mark hit this when his
-    Calibre Witcher series had 'The Last Wish' and 'Blood of Elves'
-    both at series_index=1, and 'Time of Contempt' / 'Sword of Destiny'
-    both at series_index=2: every container restart silently dropped
-    one Calibre book per pair, then the next sync re-inserted it,
-    perpetual loop until the user happened to notice."""
-
-    async def test_two_owned_calibre_books_both_kept(self, discovery_db):
-        from app.discovery.database import _dedupe_same_series_position, get_db
-
-        author_id = await _insert_author("Andrzej Sapkowski")
-        series_id = await _insert_series("The Witcher", author_id)
-        a = await _insert_book(
-            "The Last Wish", author_id,
-            series_id=series_id, series_index=1.0, owned=1, source="calibre",
-        )
-        b = await _insert_book(
-            "Blood of Elves", author_id,
-            series_id=series_id, series_index=1.0, owned=1, source="calibre",
-        )
-
-        db = await get_db()
-        try:
-            deleted = await _dedupe_same_series_position(db)
-        finally:
-            await db.close()
-
-        # Neither book deleted — both remain in the library.
-        assert deleted == 0
-        rows = await _book_rows(author_id)
-        ids = sorted(r["id"] for r in rows)
-        assert ids == sorted([a, b])
-
-    async def test_three_owned_books_all_kept(self, discovery_db):
-        # Edge: a triple collision still keeps everyone. Unlikely in
-        # practice but the rule is "owned_count >= 2 → keep all".
-        from app.discovery.database import _dedupe_same_series_position, get_db
-
-        author_id = await _insert_author("Andrzej Sapkowski")
-        series_id = await _insert_series("The Witcher", author_id)
-        for title in ("Book A", "Book B", "Book C"):
-            await _insert_book(
-                title, author_id,
-                series_id=series_id, series_index=1.0, owned=1, source="calibre",
-            )
-
-        db = await get_db()
-        try:
-            deleted = await _dedupe_same_series_position(db)
-        finally:
-            await db.close()
-
-        assert deleted == 0
-        rows = await _book_rows(author_id)
-        assert len(rows) == 3
-
-    async def test_owned_calibre_plus_owned_abs_both_kept(self, discovery_db):
-        # Cross-source owned collision — same rule applies. Calibre
-        # has the ebook, ABS has the audiobook, both at series_index=1.
-        # Whether that's a metadata bug or intentional cross-format
-        # tracking, dedup-by-deletion is the wrong response.
-        from app.discovery.database import _dedupe_same_series_position, get_db
-
-        author_id = await _insert_author("Andrzej Sapkowski")
-        series_id = await _insert_series("The Witcher", author_id)
-        await _insert_book(
-            "The Last Wish (ebook)", author_id,
-            series_id=series_id, series_index=1.0, owned=1, source="calibre",
-        )
-        await _insert_book(
-            "The Last Wish (audiobook)", author_id,
-            series_id=series_id, series_index=1.0, owned=1, source="audiobookshelf",
-        )
-
-        db = await get_db()
-        try:
-            deleted = await _dedupe_same_series_position(db)
-        finally:
-            await db.close()
-
-        assert deleted == 0
-        rows = await _book_rows(author_id)
-        assert len(rows) == 2
-
-    async def test_owned_collision_does_not_block_other_groups(self, discovery_db):
-        # An owned-collision in series 'A' must not stop dedup of a
-        # legitimate single-owned-vs-unowned conflict in series 'B'.
-        from app.discovery.database import _dedupe_same_series_position, get_db
-
-        author_id = await _insert_author("Multi Series Author")
-        series_a = await _insert_series("Series A", author_id)
-        series_b = await _insert_series("Series B", author_id)
-
-        # Series A: owned-collision (kept).
-        await _insert_book(
-            "A1", author_id,
-            series_id=series_a, series_index=1.0, owned=1, source="calibre",
-        )
-        await _insert_book(
-            "A2", author_id,
-            series_id=series_a, series_index=1.0, owned=1, source="calibre",
-        )
-        # Series B: classic owned-vs-unowned (loser deleted).
-        keeper = await _insert_book(
-            "B owned", author_id,
-            series_id=series_b, series_index=1.0, owned=1, source="calibre",
-        )
-        await _insert_book(
-            "B Book 1", author_id,
-            series_id=series_b, series_index=1.0, owned=0, source="hardcover",
-        )
-
-        db = await get_db()
-        try:
-            deleted = await _dedupe_same_series_position(db)
-        finally:
-            await db.close()
-
-        # Exactly one delete — the unowned source-discovered B Book 1.
-        assert deleted == 1
-        rows = await _book_rows(author_id)
-        # 2 from series A (collision kept) + 1 from series B (winner) = 3.
-        assert len(rows) == 3
-        # Series B winner is the owned Calibre row.
-        assert any(r["id"] == keeper for r in rows)
-
-    async def test_owned_collision_emits_warning(
-        self, discovery_db, caplog
-    ):
-        # The user-visible signal that a metadata fix is needed in
-        # the source library. Without this log line, the duplicate
-        # would be invisible — books look fine in the UI; only a
-        # series-position-aware view would expose them.
+    async def test_two_owned_books_on_one_number_are_reported(self, discovery_db, caplog):
+        # The signal that Calibre's numbering needs a fix (the Witcher case).
         import logging
-        from app.discovery.database import _dedupe_same_series_position, get_db
-
         author_id = await _insert_author("Andrzej Sapkowski")
         series_id = await _insert_series("The Witcher", author_id)
-        await _insert_book(
-            "The Last Wish", author_id,
-            series_id=series_id, series_index=1.0, owned=1, source="calibre",
-        )
-        await _insert_book(
-            "Blood of Elves", author_id,
-            series_id=series_id, series_index=1.0, owned=1, source="calibre",
-        )
-
-        db = await get_db()
-        try:
-            with caplog.at_level(logging.WARNING, logger="seshat.discovery.database"):
-                await _dedupe_same_series_position(db)
-        finally:
-            await db.close()
-
-        assert any(
-            "Series-position collision" in record.message
-            and "kept all 2" in record.message
-            for record in caplog.records
-        )
+        await _insert_book("The Last Wish", author_id, series_id=series_id, series_index=1.0, owned=1,
+                           source="calibre")
+        await _insert_book("Blood of Elves", author_id, series_id=series_id, series_index=1.0, owned=1,
+                           source="calibre")
+        await _insert_book("Sword of Destiny", author_id, series_id=series_id, series_index=2.0, owned=1,
+                           source="calibre")
+        await _insert_book("The Witcher 2", author_id, series_id=series_id, series_index=2.0)
+        with caplog.at_level(logging.WARNING, logger="seshat.discovery.database"):
+            await _check()
+        warned = [r.message for r in caplog.records if "Series-position collision" in r.message]
+        assert len(warned) == 1 and "kept all 2" in warned[0] and "Blood of Elves" in warned[0]
 
 
 # ─── Insert-time prevention via _merge_result ─────────────────
@@ -711,3 +453,52 @@ class TestInsertTimePrevention:
         titles = sorted(r["title"] for r in rows)
         assert titles == ["Remnant II", "Remnant IV"]
         assert new == 1
+
+
+class TestTakenNumberNotAMatch:
+    """G216: the title→series passes fold two books on one series number
+    only when the title identity calls them one book (of one filter
+    family); a different book is filed beside the other."""
+
+    async def test_a_boxed_set_isnt_the_owned_novel_on_its_number(self, discovery_db):
+        from app.discovery.lookup import _title_to_series_pass
+        author_id = await _insert_author("Brandon Sanderson")
+        series_id = await _insert_series("The Stormlight Archive", author_id)
+        owned = await _insert_book("Words of Radiance", author_id, series_id=series_id, series_index=2.0,
+                                   owned=1, source="calibre")
+        boxed = await _insert_book("The Stormlight Archive Boxed Set 2", author_id, source="kobo")
+        await _title_to_series_pass(author_id)
+        rows = {r["id"]: r for r in await _book_rows(author_id)}
+        assert set(rows) == {owned, boxed}
+        assert (rows[boxed]["series_id"], rows[boxed]["series_index"]) == (series_id, 2.0)
+
+    async def test_another_book_on_a_taken_number_is_filed_beside_it(self, discovery_db):
+        from app.discovery.lookup import _title_to_series_pass
+        from app.discovery.database import get_db
+        author_id = await _insert_author("Leigh Bardugo")
+        series_id = await _insert_series("Six of Crows", author_id)
+        owned = await _insert_book("Crooked Kingdom", author_id, series_id=series_id, series_index=2.0,
+                                   owned=1, source="calibre")
+        sampler = await _insert_book("Six of Crows - Chapters 1 and 2", author_id, source="goodreads")
+        await _title_to_series_pass(author_id)
+        assert {r["id"] for r in await _book_rows(author_id)} == {owned, sampler}
+        db = await get_db()
+        try:
+            merges = await (await db.execute("SELECT COUNT(*) FROM book_merges")).fetchone()
+        finally:
+            await db.close()
+        assert merges[0] == 0
+
+    async def test_a_single_volume_isnt_the_omnibus_on_its_number(self, discovery_db):
+        # One filter family per match, as in the merge (G197): the
+        # identity alone reads "Slime 01" as "Slime Omnibus 1".
+        from app.discovery.lookup import _title_to_series_pass
+        author_id = await _insert_author("Fuse")
+        series_id = await _insert_series("That Time I Got Reincarnated as a Slime", author_id)
+        omnibus = await _insert_book("That Time I Got Reincarnated as a Slime Omnibus 1", author_id,
+                                     series_id=series_id, series_index=1.0)
+        single = await _insert_book("That Time I Got Reincarnated as a Slime 01", author_id, source="kobo")
+        await _title_to_series_pass(author_id)
+        rows = {r["id"]: r for r in await _book_rows(author_id)}
+        assert set(rows) == {omnibus, single}
+        assert (rows[single]["series_id"], rows[single]["series_index"]) == (series_id, 1.0)

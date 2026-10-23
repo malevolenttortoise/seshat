@@ -5,8 +5,8 @@
 // (Hermes, absorbing the old MAM Activity row), Quick Actions + Tools across
 // the bottom, and a stats rail on the right that wraps under the actions bar
 // on narrow viewports.
-import { useCallback, useEffect, useState } from "react";
-import { api } from "../api";
+import { useEffect, useState } from "react";
+import { toast } from "../lib/toast";
 import { useTheme } from "../theme";
 import type { Theme } from "../theme";
 import { Spin } from "../components/Spin";
@@ -18,120 +18,26 @@ import {
   fmtNum,
   fmtRatio,
   pct,
-  type MamBudgetFields,
 } from "../lib/format";
 import { useVisibleInterval } from "../hooks/useVisibleInterval";
-import { useVisibleEventSource } from "../hooks/useVisibleEventSource";
+import {
+  DASHBOARD_POLL_S,
+  useDashboard,
+  type BudgetResponse,
+  type DashboardStats,
+} from "../hooks/useDashboard";
 import { useSseEvents } from "../providers/SseEventsProvider";
 import { useViewport } from "../hooks/useViewport";
 import { useMobileCodepath } from "../components/mobile";
 import MobileUnifiedDashboard from "./MobileUnifiedDashboard";
-import type { MamStatusResponse, NavFn, ScanProgress } from "../types";
+import { Tile } from "../components/dashboard/Tile";
+import { AmazonCacheRail, GoodreadsCacheRail } from "../components/dashboard/CacheRails";
+import { MissingCleanupBody } from "../components/dashboard/MissingCleanup";
+import { useMissingCleanup } from "../hooks/useMissingCleanup";
+import type { NavFn, ScanProgress } from "../types";
 
 interface Props {
   onNav: NavFn;
-}
-
-const POLL = 30;
-
-// ─── API response shapes ─────────────────────────────────────
-// GET /discovery/stats — same projection the DiscDashboard page consumes.
-// Duplicated here rather than shared because the two files read different
-// overlapping subsets and sharing would balloon the type.
-interface DashboardStats {
-  owned_books?: number;
-  total_books?: number;
-  missing_books?: number;
-  new_books?: number;
-  upcoming_books?: number;
-  total_series?: number;
-  authors?: number;
-  hidden_books?: number;
-  suggestions?: number;
-  library_name?: string;
-  library_display_name?: string;
-  content_type?: string;
-  mam?: {
-    upload_candidates?: number;
-    available_to_download?: number;
-    missing_everywhere?: number;
-    total_unscanned?: number;
-  };
-  // Audiobook-specific — only populated on audiobook-library slug stats.
-  total_duration_sec?: number;
-  narrator_count?: number;
-  unabridged_count?: number;
-}
-
-interface HealthResponse {
-  dispatcher_ready?: boolean;
-}
-
-// Extends MamStatusResponse with the MAM user/account fields the
-// Hermes block renders when the MAM cookie is configured.
-interface MamUserStatus extends MamStatusResponse {
-  username?: string;
-  classname?: string;
-  ratio?: number;
-  wedges?: number;
-  seedbonus?: number;
-  upload_buffer_bytes?: number;
-  uploaded_bytes?: number;
-  downloaded_bytes?: number;
-  cookie_configured?: boolean;
-}
-
-interface BudgetEntry {
-  grab_id?: number;
-  torrent_name?: string;
-  source?: string;
-  seeding_seconds?: number;
-  remaining_seconds?: number;
-}
-
-interface BudgetResponse extends MamBudgetFields {
-  budget_used?: number;
-  budget_cap?: number;
-  next_release_seconds?: number;
-  ledger_active?: number;
-  qbit_extras?: number;
-  queue_size?: number;
-  seed_seconds_required?: number;
-  entries?: BudgetEntry[];
-}
-
-interface ReviewResponse {
-  pending_count?: number;
-}
-
-interface TentativeResponse {
-  items?: unknown[];
-}
-
-interface CountsResponse {
-  authors_allowed?: number;
-  authors_ignored?: number;
-  grabs?: number;
-  calibre_additions?: number;
-}
-
-interface GrabRow {
-  torrent_name?: string;
-  grabbed_at?: string;
-}
-
-interface GrabsResponse {
-  grabs?: GrabRow[];
-}
-
-interface SettingsBlob {
-  cwa_web_url?: string;
-  calibre_web_url?: string;
-  abs_web_url?: string;
-}
-
-interface ScanStatusResponse {
-  scans?: ScanProgress[];
 }
 
 // ─── Library-link panel helper shape ─────────────────────────
@@ -153,84 +59,17 @@ export default function UnifiedDashboard({ onNav }: Props) {
 
 function DesktopUnifiedDashboard({ onNav }: Props) {
   const t = useTheme();
-  const [d, setD] = useState<DashboardStats | null>(null);
-  const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [mam, setMam] = useState<MamUserStatus | null>(null);
-  const [budget, setBudget] = useState<BudgetResponse | null>(null);
-  const [reviewCount, setReviewCount] = useState(0);
-  const [tentativeCount, setTentativeCount] = useState(0);
-  const [counts, setCounts] = useState<CountsResponse | null>(null);
-  const [grabs, setGrabs] = useState<GrabRow[]>([]);
-  const [settings, setSettings] = useState<SettingsBlob | null>(null);
-  const [cd, setCd] = useState(POLL);
-  const [scanStatus, setScanStatus] = useState<ScanStatusResponse | null>(null);
-  // Per-slug syncing spinner state. Serialized server-side (only one
-  // library sync runs at a time via _library_sync_in_progress), but
-  // the UI tracks per-slug so the clicked button is the one that
-  // spins — not every Sync button at once.
-  const [syncingSlug, setSyncingSlug] = useState<string | null>(null);
-  const [scanning, setScanning] = useState(false);
-  const [mamScanning, setMamScanning] = useState(false);
-
-  // Per-library stats map keyed by slug. Populated after the first
-  // refresh tick so the Athena widget and Seshat Stats row can show
-  // Calibre AND Audiobookshelf numbers simultaneously instead of only
-  // the active library. `d` (the active-library stats) is kept for
-  // back-compat with the existing Hermes/Pipeline consumers that
-  // don't care which library is active.
-  const [statsBySlug, setStatsBySlug] = useState<Record<string, DashboardStats>>({});
-
-  const refresh = useCallback(async () => {
-    const r = await Promise.all([
-      api.get<DashboardStats>("/discovery/stats").catch(() => null),
-      api.get<HealthResponse>("/health").catch(() => null),
-      api.get<MamUserStatus>("/v1/mam/status").catch(() => null),
-      api.get<BudgetResponse>("/v1/grabs/budget").catch(() => null),
-      api.get<ReviewResponse>("/v1/review").catch(() => ({ pending_count: 0 })),
-      api.get<TentativeResponse>("/v1/tentative").catch(() => ({ items: [] })),
-      api.get<CountsResponse>("/v1/data/counts").catch(() => null),
-      api.get<GrabsResponse>("/v1/grabs/recent").catch(() => ({ grabs: [] })),
-      api.get<SettingsBlob>("/v1/settings").catch(() => null),
-      api.get<ScanStatusResponse>("/discovery/scan-status").catch(() => null),
-    ]);
-    setD(r[0]);
-    setHealth(r[1]);
-    setMam(r[2]);
-    setBudget(r[3]);
-    setReviewCount(r[4]?.pending_count ?? 0);
-    setTentativeCount(r[5]?.items?.length ?? 0);
-    setCounts(r[6]);
-    setGrabs(r[7]?.grabs ?? []);
-    setSettings(r[8]);
-    if (r[9]) setScanStatus(r[9]);
-    // Second pass: fan out one /stats call per discovered library so
-    // Calibre + ABS widgets render with their own numbers. Bounded by
-    // the number of libraries (2 in practice); the parallel fetch
-    // adds one network round-trip to the 30s poll loop.
-    const libs = (r[9]?.scans || []).filter((s) => s.kind === "library");
-    if (libs.length > 0) {
-      const byPair = await Promise.all(
-        libs.map(async (ls) => {
-          const s = await api
-            .get<DashboardStats>(
-              `/discovery/stats?slug=${encodeURIComponent((ls as ScanProgress & { slug?: string }).slug || "")}`,
-            )
-            .catch(() => null);
-          return [(ls as ScanProgress & { slug?: string }).slug || "", s] as const;
-        }),
-      );
-      const map: Record<string, DashboardStats> = {};
-      for (const [slug, stats] of byPair) {
-        if (stats && slug) map[slug] = stats;
-      }
-      setStatsBySlug(map);
-    }
-    setCd(POLL);
-  }, []);
-
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
+  const {
+    stats: d, health, mam, budget, reviewCount, tentativeCount, counts, grabs, settings, scans: scansArr,
+    ebookStats, audiobookStats, refreshes, syncingSlug, scanning, mamScanning,
+    showHygieneConfirm, setShowHygieneConfirm, hygieneStarting,
+    triggerSync, triggerEbookSources, triggerAudiobookSources, triggerMam,
+    cancelSources, cancelMam, triggerHygiene, cancelHygiene,
+  } = useDashboard(toast.error);
+  const cleanup = useMissingCleanup(toast.error);
+  // Seconds to the next 30s refresh, restarted by each one.
+  const [cd, setCd] = useState(DASHBOARD_POLL_S);
+  useEffect(() => { setCd(DASHBOARD_POLL_S); }, [refreshes]);
 
   const ds: DashboardStats = d || {};
   const b = budget || ({} as BudgetResponse);
@@ -245,16 +84,6 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
   const calibreWebUrl = settings?.cwa_web_url || settings?.calibre_web_url || "";
   const absWebUrl = settings?.abs_web_url || "";
 
-  // Per-library stats split. Each content type picks the first library
-  // of that kind from statsBySlug — matches the current 1-ebook +
-  // 1-audiobook setup. Multi-library-per-kind users fall back to the
-  // first discovered; a proper per-library tab can come later.
-  const statsEntries: DashboardStats[] = Object.values(statsBySlug);
-  const ebookStats: DashboardStats =
-    statsEntries.find((s) => s?.content_type === "ebook") || ds;
-  const audiobookStats: DashboardStats | undefined = statsEntries.find(
-    (s) => s?.content_type === "audiobook",
-  );
   const authors = ebookStats?.authors ?? 0;
   const series = ebookStats?.total_series ?? 0;
   const newBooks = ebookStats?.new_books ?? 0;
@@ -270,7 +99,6 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
   // Library entries are per-slug: Calibre and Audiobookshelf each get
   // their own entry so the Command Center shows dedicated rows with
   // independent in-flight progress + "(Last Sync: ...)" timestamps.
-  const scansArr: ScanProgress[] = scanStatus?.scans || [];
   const libScans: (ScanProgress & { slug?: string })[] = scansArr.filter(
     (s) => s.kind === "library",
   );
@@ -286,127 +114,6 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
   const hygieneScan: ScanProgress | Record<string, never> =
     scansArr.find((s) => s.kind === "hygiene") || {};
 
-  const triggerSync = async (slug?: string) => {
-    setSyncingSlug(slug || "__active__");
-    try {
-      const qs = slug ? `?slug=${encodeURIComponent(slug)}` : "";
-      await api.post(`/discovery/sync/library${qs}`);
-    } catch {
-      /* ignore — poll loop will surface errors */
-    }
-    setSyncingSlug(null);
-    refresh();
-  };
-  // v2.12.0 — explicit scope. "Scan Ebooks" / "Scan Audiobooks"
-  // each fan across every library of the named content_type. The
-  // pre-v2.12.0 "Scan Sources" button only scanned the active
-  // library, which was inconsistent with the parallel "Scan
-  // Audiobooks" button that already fan-iterated. Both buttons now
-  // use the cross-fan path so behaviour matches the labels.
-  const triggerEbookSources = async () => {
-    setScanning(true);
-    try {
-      await api.post("/discovery/lookup?content_type=ebook");
-    } catch {
-      /* ignore */
-    }
-    setScanning(false);
-    refresh();
-  };
-  const triggerAudiobookSources = async () => {
-    setScanning(true);
-    try {
-      await api.post("/discovery/lookup?content_type=audiobook");
-    } catch {
-      /* ignore */
-    }
-    setScanning(false);
-    refresh();
-  };
-  const triggerMam = async () => {
-    setMamScanning(true);
-    try {
-      await api.post("/discovery/mam/scan");
-    } catch {
-      /* ignore */
-    }
-    setMamScanning(false);
-    refresh();
-  };
-  const cancelSources = async () => {
-    try {
-      await api.post("/discovery/lookup/cancel");
-    } catch {
-      /* ignore */
-    }
-    refresh();
-  };
-  const cancelMam = async () => {
-    try {
-      await api.post("/discovery/mam/scan/cancel");
-    } catch {
-      /* ignore */
-    }
-    refresh();
-  };
-
-  // v2.16.0 Data Hygiene chain — confirmation gate is intentional;
-  // the chain mutates per-library DBs (deletes empty authors,
-  // merges duplicate books, consolidates series) so a misclick
-  // shouldn't fire it. The modal lists the 9 jobs verbatim
-  // (originally 6 in v2.16.0; v2.22.0 added orphan retrolink +
-  // cross-library person backfill + prune-orphan-links) so the
-  // user sees what's about to run.
-  const [showHygieneConfirm, setShowHygieneConfirm] = useState(false);
-  const [hygieneStarting, setHygieneStarting] = useState(false);
-  const triggerHygiene = async () => {
-    setHygieneStarting(true);
-    try {
-      await api.post("/discovery/hygiene/run");
-    } catch {
-      /* ignore — banner will surface errors */
-    }
-    setHygieneStarting(false);
-    setShowHygieneConfirm(false);
-    refresh();
-  };
-  const cancelHygiene = async () => {
-    try {
-      await api.post("/discovery/hygiene/cancel");
-    } catch {
-      /* ignore */
-    }
-    refresh();
-  };
-
-  const anyLibRunning = libScans.some((s) => s.running);
-  const anyRunning =
-    anyLibRunning ||
-    ("running" in srcScan && srcScan.running) ||
-    ("running" in mamScan && mamScan.running) ||
-    ("running" in hygieneScan && hygieneScan.running) ||
-    syncingSlug !== null;
-  const pollMs = anyRunning ? 3000 : POLL * 1000;
-  useVisibleInterval(refresh, pollMs);
-
-  // Dashboard-local SSE subscription — patches `mam-stats` into the
-  // rendered MAM block in place so ratio/seedbonus/wedges update
-  // without waiting for the 30s refresh cycle. `toast` and
-  // `client-status` are handled app-level by SseEventsProvider.
-  useVisibleEventSource({
-    "mam-stats": (e) => {
-      setMam((prev) => ({
-        enabled: prev?.enabled ?? true,
-        validation_ok: prev?.validation_ok,
-        stats: prev?.stats,
-        ...prev,
-        ratio: e.ratio,
-        seedbonus: e.seedbonus,
-        wedges: e.wedges,
-        upload_buffer_bytes: e.upload_buffer_bytes,
-      }));
-    },
-  });
   const { clientReachable } = useSseEvents();
   useVisibleInterval(() => setCd((c) => Math.max(0, c - 1)), 1000);
 
@@ -497,6 +204,22 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
     return v && typeof v === "object" ? (v as Record<string, number>) : {};
   })();
   const hasTimeouts = Object.keys(srcTimeouts).length > 0;
+  // F15: authors the scan skipped as not scan-eligible, with why.
+  const srcSkipped = (() => {
+    const v = srcExtra?.skipped;
+    return typeof v === "number" ? v : 0;
+  })();
+  const srcSkippedTitle = (() => {
+    const v = srcExtra?.skipped_authors;
+    if (!Array.isArray(v)) return "";
+    const why: Record<string, string> = {
+      not_scan_eligible: "not on your allow list and owns nothing",
+      list_missing_off: "List missing books is off",
+    };
+    return (v as { name?: string; reason?: string }[])
+      .map((x) => `${x.name ?? "?"}: ${why[x.reason ?? ""] ?? x.reason ?? ""}`)
+      .join("\n");
+  })();
 
   return (
     <div style={gridStyle}>
@@ -647,6 +370,14 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
               onClick={() => setShowHygieneConfirm(true)}
             />
             <CmdBtn
+              label={
+                <>
+                  <Dot color={t.ylw} /> Clean up missing books
+                </>
+              }
+              onClick={cleanup.show}
+            />
+            <CmdBtn
               label={`Review ${reviewCount ? `(${reviewCount})` : ""}`}
               highlight
               onClick={() => onNav("pipe-review")}
@@ -734,6 +465,11 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
                   >
                     {srcNewBooks ?? 0} new books
                   </span>
+                  {srcSkipped > 0 ? (
+                    <span style={{ color: t.td, cursor: "help" }} title={srcSkippedTitle}>
+                      {" "}· {srcSkipped} skipped (not scan-eligible)
+                    </span>
+                  ) : null}
                 </div>
               )}
             </div>
@@ -1394,6 +1130,7 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
           onCancel={() => setShowHygieneConfirm(false)}
         />
       )}
+      {cleanup.open && <MissingCleanupModal cleanup={cleanup} />}
     </div>
   );
 }
@@ -1609,367 +1346,6 @@ function Pill({ label, ok, warn }: PillProps) {
   );
 }
 
-interface TileProps {
-  label: string;
-  value: React.ReactNode;
-  color?: string;
-  sub?: string;
-  onClick?: () => void;
-}
-
-function Tile({ label, value, color, sub, onClick, compact = false }: TileProps & { compact?: boolean }) {
-  const t = useTheme();
-  // v2.21.0 Phase F.3 — compact variant scoped to the Seshat Stats
-  // widget. ~30% less vertical real estate per tile so the widget
-  // fits the new Amazon Cache section without a full dashboard
-  // redesign.
-  const padding = compact ? "6px 10px" : "12px 14px";
-  const valueSize = compact ? 16 : 24;
-  const labelSize = compact ? 10 : 13;
-  const subSize = compact ? 9 : 10;
-  const labelMargin = compact ? 1 : 4;
-  return (
-    <div
-      onClick={onClick}
-      style={{
-        background: t.bg3,
-        borderRadius: compact ? 6 : 8,
-        padding,
-        cursor: onClick ? "pointer" : "default",
-      }}
-    >
-      <div
-        style={{
-          fontSize: valueSize,
-          fontWeight: 700,
-          color: color || t.text,
-          lineHeight: 1.1,
-        }}
-      >
-        {value === null ? <Spin size={compact ? 12 : 16} /> : value}
-      </div>
-      <div style={{ fontSize: labelSize, color: t.td, marginTop: labelMargin }}>{label}</div>
-      {sub && (
-        <div
-          style={{
-            fontSize: subSize,
-            color: t.tf,
-            marginTop: 2,
-            textTransform: "uppercase",
-            letterSpacing: "0.04em",
-          }}
-        >
-          {sub}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── Amazon cache rail (v2.21.0 Phase F.3 / v3.6.0 dual-source) ──
-//
-// Lives at the bottom of the Seshat Stats widget. Four compact tiles:
-// enabled state, cached authors fraction, scans today, blocks today
-// (tone warn when >0). The pre-v3.6.0 "Recent finds" list was
-// dropped when the dual-source layout landed — keeping two sources'
-// rails compact + symmetric matters more than the celebratory list,
-// and the worker's progress is observable through Scans Today.
-//
-// Polls /status every 60s, fails silently on auth / network /
-// legacy-image errors so the dashboard doesn't crash for unrelated
-// reasons.
-
-type AmazonCacheStatus = {
-  enabled: boolean;
-  cooldown: { blocked: boolean; remaining_s: number };
-  worker: {
-    today_scan_count: number;
-    today_block_count: number;
-    seconds_since_heartbeat: number | null;
-  };
-  queue: { pending: number; due_now?: number; scheduled_later?: number };
-  cache: {
-    state_rows: number;
-    ok_authors: number;
-    // v2.22.0 — author-level dedup (DISTINCT author_id) so 2-library
-    // setups don't double-count. Fall back to legacy fields if the
-    // server is pre-v2.22.0.
-    unique_total_authors?: number;
-    unique_ok_authors?: number;
-  };
-};
-
-const STATUS_POLL_MS = 60_000;
-
-function AmazonCacheRail({
-  mobileMode,
-  wideMode,
-  sectionHdrStyle,
-  onNavSettings,
-}: {
-  mobileMode: boolean;
-  wideMode: boolean;
-  sectionHdrStyle: React.CSSProperties;
-  onNavSettings: () => void;
-}) {
-  const t = useTheme();
-  const [status, setStatus] = useState<AmazonCacheStatus | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    let statusTimer: ReturnType<typeof setInterval> | null = null;
-    const fetchStatus = async () => {
-      try {
-        const r = await api.get<AmazonCacheStatus>(
-          "/v1/metadata-cache/amazon/status",
-        );
-        if (!cancelled) setStatus(r);
-      } catch {
-        /* silent — auth, network, legacy image */
-      }
-    };
-    fetchStatus();
-    statusTimer = setInterval(fetchStatus, STATUS_POLL_MS);
-    return () => {
-      cancelled = true;
-      if (statusTimer) clearInterval(statusTimer);
-    };
-  }, []);
-
-  // Cached authors fraction: author-level (DISTINCT author_id),
-  // not per-library state rows. A 2-library setup with 645 unique
-  // authors should report 645/645, not the inflated 1290/1290 that
-  // the per-library row count produces. Falls back to legacy
-  // state_rows/ok_authors when talking to a pre-v2.22.0 server.
-  const cachedTotal = (
-    status?.cache.unique_total_authors ?? status?.cache.state_rows ?? 0
-  );
-  const queuePending = (status?.queue.pending ?? 0);
-  const totalAuthors = Math.max(cachedTotal, queuePending);
-  const okAuthors = (
-    status?.cache.unique_ok_authors ?? status?.cache.ok_authors ?? 0
-  );
-
-  return (
-    <>
-      <div style={sectionHdrStyle}>Amazon Cache</div>
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: mobileMode
-            ? "repeat(2, 1fr)"
-            : wideMode
-            ? "repeat(2, 1fr)"
-            : "repeat(4, 1fr)",
-          gap: 6,
-          marginBottom: 8,
-        }}
-      >
-        <Tile
-          compact
-          label="Worker"
-          value={
-            status === null
-              ? null
-              : status.cooldown.blocked
-              ? "Cooldown"
-              : status.enabled
-              ? "On"
-              : "Off"
-          }
-          color={
-            status === null
-              ? undefined
-              : status.cooldown.blocked
-              ? t.warn
-              : status.enabled
-              ? t.ok
-              : t.td
-          }
-          onClick={onNavSettings}
-        />
-        <Tile
-          compact
-          label="Cached"
-          value={
-            status === null
-              ? null
-              : `${fmtNum(okAuthors)} / ${fmtNum(totalAuthors)}`
-          }
-          color={t.accent}
-          sub="authors"
-          onClick={onNavSettings}
-        />
-        <Tile
-          compact
-          label="Scans"
-          value={status === null ? null : fmtNum(status.worker.today_scan_count)}
-          color={t.jade}
-          sub="today"
-        />
-        <Tile
-          compact
-          label="Blocks"
-          value={status === null ? null : fmtNum(status.worker.today_block_count)}
-          color={
-            (status?.worker.today_block_count ?? 0) > 0 ? t.warn : t.td
-          }
-          sub="today"
-        />
-      </div>
-    </>
-  );
-}
-
-
-// ─── Goodreads cache rail (v3.6.0) ──────────────────────────────
-//
-// Parity with the Amazon rail. Same 4-tile layout, different polling
-// endpoint and different 4th-tile metric (Pages instead of Blocks).
-// No "Recent finds" list — GR caches list pages, not per-book detail
-// (ADR-0018 §1 Path B), so the celebratory per-book feed doesn't have
-// a data source on the GR side. The list-page count is a cumulative
-// glance metric: "how much GR data does the worker have cached."
-//
-// Polls /goodreads/status every 60s with the same silent-fail
-// posture as the Amazon rail.
-
-type GoodreadsCacheStatus = {
-  enabled: boolean;
-  mode?: string;
-  cooldown: { blocked: boolean; remaining_s: number };
-  worker: {
-    today_scan_count: number;
-    today_block_count: number;
-    seconds_since_heartbeat: number | null;
-  };
-  queue: { pending: number; due_now?: number };
-  cache: {
-    state_rows: number;
-    ok_authors: number;
-    unique_total_authors?: number;
-    unique_ok_authors?: number;
-    list_pages_rows: number;
-    today_budget_exhaust_count: number;
-  };
-};
-
-function GoodreadsCacheRail({
-  mobileMode,
-  wideMode,
-  sectionHdrStyle,
-  onNavSettings,
-}: {
-  mobileMode: boolean;
-  wideMode: boolean;
-  sectionHdrStyle: React.CSSProperties;
-  onNavSettings: () => void;
-}) {
-  const t = useTheme();
-  const [status, setStatus] = useState<GoodreadsCacheStatus | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    let timer: ReturnType<typeof setInterval> | null = null;
-    const fetchStatus = async () => {
-      try {
-        const r = await api.get<GoodreadsCacheStatus>(
-          "/v1/metadata-cache/goodreads/status",
-        );
-        if (!cancelled) setStatus(r);
-      } catch {
-        /* silent — auth, network, legacy image */
-      }
-    };
-    fetchStatus();
-    timer = setInterval(fetchStatus, STATUS_POLL_MS);
-    return () => {
-      cancelled = true;
-      if (timer) clearInterval(timer);
-    };
-  }, []);
-
-  const cachedTotal = (
-    status?.cache.unique_total_authors ?? status?.cache.state_rows ?? 0
-  );
-  const queuePending = (status?.queue.pending ?? 0);
-  const totalAuthors = Math.max(cachedTotal, queuePending);
-  const okAuthors = (
-    status?.cache.unique_ok_authors ?? status?.cache.ok_authors ?? 0
-  );
-  const listPages = status?.cache.list_pages_rows ?? 0;
-
-  // Worker tile: GR has no IP-level cooldown (ADR-0018 — Goodreads
-  // softly degrades via per-author budget exhaust rather than hard
-  // walls), so the "Cooldown" path that Amazon shows folds into a
-  // generic "Off" when the operator disables the worker via mode.
-  const workerLabel = (
-    status === null ? null
-    : status.mode === "disabled" || !status.enabled ? "Off"
-    : (status.cache.today_budget_exhaust_count ?? 0) > 0 ? "Budget"
-    : "On"
-  );
-  const workerColor = (
-    status === null ? undefined
-    : workerLabel === "On" ? t.ok
-    : workerLabel === "Budget" ? t.warn
-    : t.td
-  );
-
-  return (
-    <>
-      <div style={sectionHdrStyle}>Goodreads Cache</div>
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: mobileMode
-            ? "repeat(2, 1fr)"
-            : wideMode
-            ? "repeat(2, 1fr)"
-            : "repeat(4, 1fr)",
-          gap: 6,
-          marginBottom: 8,
-        }}
-      >
-        <Tile
-          compact
-          label="Worker"
-          value={workerLabel}
-          color={workerColor}
-          onClick={onNavSettings}
-        />
-        <Tile
-          compact
-          label="Cached"
-          value={
-            status === null
-              ? null
-              : `${fmtNum(okAuthors)} / ${fmtNum(totalAuthors)}`
-          }
-          color={t.accent}
-          sub="authors"
-          onClick={onNavSettings}
-        />
-        <Tile
-          compact
-          label="Scans"
-          value={status === null ? null : fmtNum(status.worker.today_scan_count)}
-          color={t.jade}
-          sub="today"
-        />
-        <Tile
-          compact
-          label="Pages"
-          value={status === null ? null : fmtNum(listPages)}
-          color={t.accent}
-          sub="cached"
-        />
-      </div>
-    </>
-  );
-}
-
-
 function formatAgo(ts: number | null | undefined): string | null {
   if (!ts) return null;
   const secs = Math.max(0, Date.now() / 1000 - ts);
@@ -2130,7 +1506,7 @@ const HYGIENE_JOBS: { name: string; blurb: string }[] = [
   },
   {
     name: "Book deduplication",
-    blurb: "Merges book rows sharing any non-null identifier (Goodreads / Hardcover / ISBN / ASIN / Audible) plus same-series-position duplicates.",
+    blurb: "Merges book rows sharing any non-null identifier (Goodreads / Hardcover / ISBN / ASIN / Audible).",
   },
   {
     name: "Series consolidation",
@@ -2273,6 +1649,68 @@ function HygieneConfirmModal({
             {starting ? <Spin size={12} /> : null}
             Run Hygiene
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MissingCleanupModal({ cleanup }: { cleanup: ReturnType<typeof useMissingCleanup> }) {
+  const t = useTheme();
+  const busy = cleanup.starting || cleanup.running;
+  const button = (primary: boolean, disabled: boolean): React.CSSProperties => ({
+    padding: "7px 14px",
+    borderRadius: 5,
+    fontSize: 13,
+    fontWeight: primary ? 600 : 400,
+    background: primary ? t.accent : t.bg4,
+    color: primary ? t.bg : t.text2,
+    border: `1px solid ${primary ? t.accent : t.border}`,
+    cursor: disabled ? "wait" : "pointer",
+    opacity: disabled ? 0.6 : 1,
+  });
+  return (
+    <div
+      onClick={cleanup.close}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.55)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 100,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "min(720px, 92vw)",
+          background: t.bg2,
+          border: `1px solid ${t.border}`,
+          borderRadius: 8,
+          padding: 20,
+          color: t.text,
+          maxHeight: "85vh",
+          overflowY: "auto",
+        }}
+      >
+        <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 10 }}>Clean up missing books</div>
+        <MissingCleanupBody mc={cleanup} />
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
+          <button onClick={cleanup.close} style={button(false, false)}>
+            Close
+          </button>
+          {!cleanup.running && (
+            <button onClick={cleanup.preview} disabled={busy} style={button(!cleanup.canApply, busy)}>
+              {cleanup.last ? "Preview again" : "Preview"}
+            </button>
+          )}
+          {cleanup.canApply && (
+            <button onClick={cleanup.apply} disabled={busy} style={button(true, busy)}>
+              Apply {fmtNum(cleanup.changes)} changes
+            </button>
+          )}
         </div>
       </div>
     </div>

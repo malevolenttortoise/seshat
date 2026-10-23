@@ -129,20 +129,23 @@ def register_goodreads_canary(scheduler: AsyncIOScheduler) -> None:
     rotate credentials. Recovery is user-driven: see the
     GoodreadsStatusCard's "Run probe" / "Mark as active" buttons.
 
-    Cadence: weekly is the design's "we don't expect Cloudflare to
-    flip mid-week if cookies aren't part of the bypass" cadence.
-    Phase B may tighten to daily once cookies enter the mix
-    (cf_clearance typically lasts hours-to-days).
+    Cadence: weekly. The canary goes out even while book pages are
+    backing off (it exists to test whether that is over); its outcome
+    updates the book-page backoff like any other request.
     """
     async def _canary():
-        from app.metadata import goodreads_session, id_cache
+        from app.metadata import goodreads_session, id_cache, source_gate
         from app.notifications import bus, events
 
         _log.info("goodreads canary tick")
         try:
             session = await goodreads_session.get_session()
-            resp = await session.get("https://www.goodreads.com/book/show/5907")
-            soft_blocked = goodreads_session.is_cloudflare_soft_block(resp)
+            with source_gate.caller(source_gate.CALLER_PROBE):
+                resp = await session.get(
+                    "https://www.goodreads.com/book/show/5907",
+                    ignore_backoff=True,
+                )
+            soft_blocked = goodreads_session.is_soft_block(resp)
         except Exception:
             _log.exception("goodreads canary fetch crashed")
             return
@@ -167,10 +170,10 @@ def register_goodreads_canary(scheduler: AsyncIOScheduler) -> None:
                 events.SOURCE_GOODREADS_CANARY_FAILED,
                 title="Goodreads soft-blocked",
                 message=(
-                    "Weekly canary detected a Cloudflare soft-block. "
-                    "Open Settings > Sources > Goodreads and run a probe "
-                    "to confirm + investigate. Discovery scans will skip "
-                    "Goodreads until the session state is marked active."
+                    "Weekly canary was blocked by Goodreads' bot protection "
+                    "(AWS WAF). Book pages back off and retry by themselves; "
+                    "Settings > Sources > Goodreads shows until when, and "
+                    "its probe tests whether the block is over."
                 ),
             )
         except Exception:
@@ -181,6 +184,62 @@ def register_goodreads_canary(scheduler: AsyncIOScheduler) -> None:
         trigger=CronTrigger(day_of_week="mon", hour=3, minute=0),
         id="goodreads_canary",
         name="Goodreads session canary",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
+
+
+# ─── 2026-10 audit wave 4b (G84): weekly Goodreads author-ID job ──────
+
+
+def register_goodreads_author_backfill(scheduler: AsyncIOScheduler) -> None:
+    """Register the weekly Goodreads author-ID job: Sundays 15:00 local,
+    inside the Goodreads worker's usual 10:00-22:00 window and after its
+    daily 10:00-13:00 list refresh (G187: at 11:00 the two ran together
+    and 6 of 2026-10-18's 8 book-page blocks fell in that window).
+
+    Copies IDs from the same person's author in another library, then
+    resolves the ebook libraries' authors with books (autocomplete first;
+    a book page only for a co-authored book or the Calibre route). A new
+    author gets its Goodreads ID this way without a Hygiene run; until the
+    2026-10 audit scans looked it up themselves, a book page per author.
+    """
+    async def _weekly():
+        from app.discovery.goodreads_author_backfill import weekly_author_id_backfill
+        try:
+            await weekly_author_id_backfill()
+        except Exception:
+            _log.exception("goodreads author-ID weekly job crashed (non-fatal)")
+
+    scheduler.add_job(
+        _weekly,
+        trigger=CronTrigger(day_of_week="sun", hour=15, minute=0),
+        id="goodreads_author_id_backfill",
+        name="Goodreads author-ID backfill (weekly)",
+        replace_existing=True,
+        coalesce=True,
+        max_instances=1,
+    )
+
+
+def register_enrich_retry(scheduler: AsyncIOScheduler) -> None:
+    """Every 5 min: re-run, for pending reviews, the enrichment sources
+    that were skipped while backing off, once the backoff is over (G182)."""
+    from apscheduler.triggers.interval import IntervalTrigger
+
+    async def _tick():
+        from app.orchestrator.enrich_retry import retry_skipped_sources
+        try:
+            await retry_skipped_sources()
+        except Exception:
+            _log.exception("enrichment retry crashed (non-fatal)")
+
+    scheduler.add_job(
+        _tick,
+        trigger=IntervalTrigger(minutes=5),
+        id="enrich_retry_skipped_sources",
+        name="Enrichment: retry sources skipped while backing off",
         replace_existing=True,
         coalesce=True,
         max_instances=1,

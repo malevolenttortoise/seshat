@@ -59,7 +59,13 @@ logger = logging.getLogger("seshat.discovery.scheduled")
 
 async def sync_all_libraries() -> None:
     """Interval job: sync each discovered library with mtime skip."""
+    from app.discovery import missing_cleanup
     from app.discovery import sync_state as _sync_state
+    if missing_cleanup.is_running():
+        # It folds books into owned rows and deletes others; a sync's own
+        # merges in between would race it. The next interval syncs.
+        logger.info("library sync skipped: the missing-books cleanup is running")
+        return
     current_active = get_active_library()
     st = load_settings()
     if _sync_state.migrate_settings(st):

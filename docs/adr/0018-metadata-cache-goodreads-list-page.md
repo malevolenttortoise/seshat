@@ -1,6 +1,6 @@
 # 0018. Metadata cache extended to Goodreads as a list-page cache
 
-- Status: Accepted
+- Status: Accepted; §6 superseded by [0026](0026-goodreads-candidate-worker-and-detail-store.md) (2026-10-09)
 - Date: 2026-05-30 (effective from v3.4.0)
 
 ## Context

@@ -6,16 +6,17 @@
 // The desktop page surfaces a richer multi-source cover picker and
 // per-source confidence chips; mobile keeps it focused on what the
 // user actually does daily — verify and approve.
-import { useEffect, useState } from "react";
-import { api } from "../api";
+import { useState } from "react";
 import { useTheme } from "../theme";
-import { useVisibleInterval } from "../hooks/useVisibleInterval";
+import { useReviewQueue } from "../hooks/useReviewQueue";
 import {
   MobileBtn,
   MobileChip,
   MobileSection,
   MobileBackButton,
 } from "../components/mobile";
+import { ImportFailedCard } from "../components/review/ImportFailedCard";
+import { CategoryChips } from "../components/CategoryChips";
 
 interface ReviewItem {
   id: number;
@@ -59,11 +60,10 @@ interface ReviewItem {
   cover_path: string | null;
   status: string;
   created_at: string;
-}
-
-interface ReviewListResponse {
-  items: ReviewItem[];
-  pending_count: number;
+  // Why the CWA import failed, for status "import_failed" (wave 5a).
+  decision_note?: string | null;
+  // The grab's MAM content tags (wave 5a); null when only one is known.
+  categories?: string[] | null;
 }
 
 function metaString(item: ReviewItem, key: string): string {
@@ -73,118 +73,34 @@ function metaString(item: ReviewItem, key: string): string {
 
 export default function MobileReviewPage() {
   const t = useTheme();
-  const [items, setItems] = useState<ReviewItem[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busyId, setBusyId] = useState<number | null>(null);
-  const [bulkBusy, setBulkBusy] = useState(false);
-
-  const refresh = async () => {
-    try {
-      const r = await api.get<ReviewListResponse>("/v1/review");
-      setItems(r.items);
-      setError(null);
-    } catch (e) {
-      setError(String(e));
-    }
-  };
-
-  useEffect(() => { refresh(); }, []);
-  useVisibleInterval(refresh, 30_000);
-
-  const approve = async (
-    id: number,
-    metadata?: Record<string, unknown>,
-  ) => {
-    setBusyId(id);
-    try {
-      await api.post(`/v1/review/${id}/approve`, {
-        metadata: metadata || null,
-      });
-      await refresh();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusyId(null);
-    }
-  };
+  const {
+    items, error, busyId, bulkBusy, failed, pending,
+    approve, saveEdits, reEnrich, reject: rejectReview, claimForOwned: claim, redrop, markImported, bulk,
+  } = useReviewQueue<ReviewItem>();
 
   const reject = async (id: number) => {
     if (!confirm("Reject this book? Staging dir will be deleted.")) return;
-    setBusyId(id);
-    try {
-      await api.post(`/v1/review/${id}/reject`, { note: "rejected via UI" });
-      await refresh();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusyId(null);
-    }
+    await rejectReview(id);
   };
 
   const claimForOwned = async (
     id: number, library_slug: string, book_id: number,
   ) => {
     if (!confirm("Pin this MAM URL to the existing owned book and reject this duplicate import?")) return;
-    setBusyId(id);
-    try {
-      await api.post(`/v1/review/${id}/claim-for-owned`, {
-        library_slug, book_id, note: "claimed for owned via mobile UI",
-      });
-      await refresh();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusyId(null);
-    }
+    await claim(id, library_slug, book_id, "claimed for owned via mobile UI");
   };
 
-  const saveEdits = async (id: number, metadata: Record<string, unknown>) => {
-    setBusyId(id);
-    try {
-      await api.post(`/v1/review/${id}/save`, { metadata });
-      await refresh();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusyId(null);
-    }
-  };
-
-  const reEnrich = async (
-    id: number,
-    metadata: Record<string, unknown>,
-  ): Promise<boolean> => {
-    setBusyId(id);
-    setError(null);
-    try {
-      await api.post(`/v1/review/${id}/re-enrich`, { metadata });
-      await refresh();
-      return true;
-    } catch (e) {
-      setError(String(e));
-      return false;
-    } finally {
-      setBusyId(null);
-    }
-  };
-
+  // Import failures come first with their own actions; the bulk chips
+  // only ever touch pending reviews (the hook splits them).
   const bulkAction = async (action: "approve" | "reject") => {
-    if (!items || items.length === 0) return;
+    if (pending.length === 0) return;
     if (
       !confirm(
-        `${action === "approve" ? "Approve" : "Reject"} all ${items.length} pending review(s)?`,
+        `${action === "approve" ? "Approve" : "Reject"} all ${pending.length} pending review(s)?`,
       )
     )
       return;
-    setBulkBusy(true);
-    try {
-      await api.post(`/v1/review/bulk/${action}`);
-      await refresh();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBulkBusy(false);
-    }
+    await bulk(action);
   };
 
   return (
@@ -215,7 +131,7 @@ export default function MobileReviewPage() {
         </div>
       )}
 
-      {items && items.length > 1 && (
+      {pending.length > 1 && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
           <MobileBtn
             variant="primary"
@@ -224,7 +140,7 @@ export default function MobileReviewPage() {
             onClick={() => bulkAction("approve")}
             disabled={bulkBusy}
           >
-            Approve all ({items.length})
+            Approve all ({pending.length})
           </MobileBtn>
           <MobileBtn
             variant="danger"
@@ -256,7 +172,18 @@ export default function MobileReviewPage() {
           Review queue is empty.
         </div>
       ) : (
-        items.map((item) => (
+        [
+          ...failed.map((item) => (
+            <ImportFailedCard
+              key={item.id}
+              item={item}
+              mobile
+              busy={busyId === item.id}
+              onRedrop={() => redrop(item.id)}
+              onMarkImported={() => markImported(item.id)}
+            />
+          )),
+          ...pending.map((item) => (
           <ReviewCard
             key={item.id}
             item={item}
@@ -267,7 +194,8 @@ export default function MobileReviewPage() {
             onClaimForOwned={claimForOwned}
             busy={busyId === item.id}
           />
-        ))
+          )),
+        ]
       )}
     </div>
   );
@@ -422,6 +350,9 @@ function ReviewCard({
           <div style={{ fontSize: 13, color: t.td, marginTop: 2 }}>
             {metaString(item, "author") || "(unknown author)"}
           </div>
+          {item.categories && item.categories.length > 0 && (
+            <div style={{ marginTop: 4 }}><CategoryChips categories={item.categories} /></div>
+          )}
           {metaString(item, "series") && (
             <div style={{ fontSize: 12, color: t.purt, marginTop: 2 }}>
               {metaString(item, "series")}

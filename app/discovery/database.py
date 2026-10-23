@@ -7,10 +7,14 @@ Per-library databases live under DATA_DIR with filenames like
 against the right database without passing the slug explicitly.
 """
 import asyncio
+import contextlib
+import contextvars
 import logging
+import os
 import re
 from collections import defaultdict
-from typing import Iterable, Optional
+from pathlib import Path
+from typing import Iterable, Iterator, Optional
 import aiosqlite
 from app.config import DATA_DIR
 
@@ -24,6 +28,42 @@ HF = "b.hidden = 0"
 # ─── Active Library Tracking ─────────────────────────────────
 _active_library_slug = None
 
+# The missing-books cleanup's preview runs its steps on copies of the
+# library DBs (discovery fix pass S8, C27). These point the preview task's
+# own connections, and its active library, at the copies; every other task
+# keeps the real ones (a ContextVar is per task, inherited by the tasks it
+# starts).
+_path_override: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
+    "discovery_db_path_override", default=None,
+)
+_active_override: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "discovery_active_library_override", default=None,
+)
+
+
+@contextlib.contextmanager
+def using_copies(paths: dict, active: Optional[str] = None) -> Iterator[None]:
+    """Inside this block (this task and the tasks it starts), library
+    `slug` opens `paths[slug]`; `active` stands in for the active library."""
+    tp = _path_override.set(dict(paths))
+    ta = _active_override.set(active)
+    try:
+        yield
+    finally:
+        _active_override.reset(ta)
+        _path_override.reset(tp)
+
+
+@contextlib.contextmanager
+def with_active_library(slug: str) -> Iterator[None]:
+    """`slug` is the active library for this task only (the process-wide
+    one is left alone)."""
+    t = _active_override.set(slug)
+    try:
+        yield
+    finally:
+        _active_override.reset(t)
+
 
 def set_active_library(slug):
     """Set the active library slug. All get_db() calls will use this library."""
@@ -33,8 +73,15 @@ def set_active_library(slug):
 
 
 def get_active_library():
-    """Get the current active library slug."""
-    return _active_library_slug
+    """Get the current active library slug (this task's stand-in, inside
+    `using_copies` / `with_active_library`)."""
+    override = _active_override.get()
+    return override if override is not None else _active_library_slug
+
+
+# What `config.slugify` makes of a library's name: the only shape a
+# library slug takes.
+_SLUG_RX = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 
 
 def get_db_path(slug=None):
@@ -43,9 +90,24 @@ def get_db_path(slug=None):
     If slug is provided, returns the per-library path.
     If slug is None, uses the active library slug.
     Falls back to seshat_default.db if no library is set.
+
+    Slugs reach here from requests (`?slug=`, the library switch), so one
+    `config.slugify` couldn't have made raises ValueError: nothing but a
+    `seshat_<slug>.db` in DATA_DIR is ever opened (CodeQL #69).
     """
-    effective_slug = slug or _active_library_slug or "default"
-    return DATA_DIR / f"seshat_{effective_slug}.db"
+    effective_slug = slug or get_active_library() or "default"
+    override = _path_override.get()
+    if override and effective_slug in override:
+        return Path(override[effective_slug])
+    if not _SLUG_RX.fullmatch(str(effective_slug)):
+        raise ValueError(f"not a library slug: {effective_slug!r}")
+    # The pattern above is the rule; this containment check is the form
+    # CodeQL's path-injection query recognises.
+    base = os.path.normpath(DATA_DIR)
+    path = os.path.normpath(os.path.join(base, f"seshat_{effective_slug}.db"))
+    if not path.startswith(base + os.sep):
+        raise ValueError(f"not a library slug: {effective_slug!r}")
+    return Path(path)
 
 
 SCHEMA = """
@@ -696,6 +758,22 @@ MIGRATIONS = [
     # book up by `calibre_id` inside its loop; unindexed, 3,696 lookups
     # took 4.07s on a real library (0.014s with the index).
     "CREATE INDEX IF NOT EXISTS idx_books_calibre_id ON books(calibre_id)",
+    # ── 2026-10 audit wave 4b, S8 (G63): provenance ──────────────────────
+    # `discovered_by` keeps the source that created a discovered book after
+    # it becomes owned (Calibre sync sets `source` to 'calibre' then). Rows
+    # discovered before this can only be backfilled while they're unowned:
+    # an owned row's discoverer was already overwritten.
+    "ALTER TABLE books ADD COLUMN discovered_by TEXT",
+    "UPDATE books SET discovered_by = source WHERE discovered_by IS NULL "
+    "AND source IS NOT NULL AND source NOT IN ('calibre', 'audiobookshelf')",
+    # 2026-10 discovery fix pass S3 (ADR-0029, F4 / C7): why Seshat hid a
+    # row: a filter family, `shown` once Mark showed it, S5's `author_off`;
+    # NULL for a book hidden by hand.
+    "ALTER TABLE books ADD COLUMN hidden_reason TEXT",
+    "CREATE INDEX IF NOT EXISTS idx_books_hidden_reason ON books(hidden_reason)",
+    # S5 (D6 / F8 / C7): the per-author "list missing books" switch; off,
+    # scans skip the author and their missing books are hidden `author_off`.
+    "ALTER TABLE authors ADD COLUMN list_missing INTEGER NOT NULL DEFAULT 1",
 ]
 
 
@@ -780,7 +858,7 @@ def _norm_series_name(name: str) -> str:
     return re.sub(r'\s+', ' ', n).strip()
 
 
-async def _backfill_series_index_from_title(db) -> tuple[int, int]:
+async def _backfill_series_index_from_title(db) -> int:
     """Set `series_index` on rows whose title encodes a position the
     column lost.
 
@@ -791,18 +869,17 @@ async def _backfill_series_index_from_title(db) -> tuple[int, int]:
         title→series pass linked the series_id but `_RX_TITLE_SERIES_IDX`
         only catches `#N`, `Book N`, or trailing `\\d+$` — none of which
         fit the prefix-style.
-      - A duplicate row already sits at the canonical position; if so,
-        we drop the loser (un-owned, longer "Book N"-style title, or
-        higher id) instead of setting the index. Mirrors the dedup
-        rules in `_title_to_series_pass`.
+    A row whose number another book already holds is left as it is:
+    until the 2026-10 fix pass it deleted one of the two, by the number
+    alone (G215: "Just Over the Horizon (The Complete Short Fiction of
+    Greg Bear Book 1)" went for the book at #1).
 
-    Returns (rows_indexed, rows_deduped). Idempotent — runs each
-    startup but the typical steady-state touch count is 0.
+    Returns the rows indexed. Idempotent — runs each startup but the
+    typical steady-state touch count is 0.
     """
     from app.discovery.lookup import (
         _RX_SERIES_PREFIX_TITLE,
         _RX_SERIES_PAREN_TITLE,
-        _RX_BOOK_N_SUFFIX,
         _norm_consensus_series,
     )
 
@@ -830,7 +907,6 @@ async def _backfill_series_index_from_title(db) -> tuple[int, int]:
     )).fetchall()
 
     indexed = 0
-    deduped = 0
     for t in targets:
         title = t["title"]
         # Extract candidate (series_name, series_index) from the title.
@@ -877,30 +953,10 @@ async def _backfill_series_index_from_title(db) -> tuple[int, int]:
                 (idx, t["id"]),
             )
             indexed += 1
-            continue
 
-        # Same-position collision — pick a winner using the same rules
-        # as `_title_to_series_pass`: owned wins, then non-Book-N
-        # title, then lowest id. Higher tuple wins.
-        ex_owned = int(existing["owned"] or 0)
-        in_owned = int(t["owned"] or 0)
-        ex_book_n = bool(_RX_BOOK_N_SUFFIX.search(existing["title"] or ""))
-        in_book_n = bool(_RX_BOOK_N_SUFFIX.search(title or ""))
-        ex_score = (ex_owned, 0 if ex_book_n else 1, -existing["id"])
-        in_score = (in_owned, 0 if in_book_n else 1, -t["id"])
-        if ex_score >= in_score:
-            await db.execute("DELETE FROM books WHERE id = ?", (t["id"],))
-        else:
-            await db.execute("DELETE FROM books WHERE id = ?", (existing["id"],))
-            await db.execute(
-                "UPDATE books SET series_index = ? WHERE id = ?",
-                (idx, t["id"]),
-            )
-        deduped += 1
-
-    if indexed or deduped:
+    if indexed:
         await db.commit()
-    return indexed, deduped
+    return indexed
 
 
 async def _backfill_omnibus_flag(db) -> int:
@@ -1851,48 +1907,21 @@ async def _backfill_metadata_snapshots(db) -> tuple[int, int]:
     return cal_inserted, abs_inserted
 
 
-async def _dedupe_same_series_position(db) -> int:
-    """Collapse book rows that occupy the same `(series_id, series_index)`.
+async def _check_series_positions(db) -> int:
+    """Report owned books sharing a `(series_id, series_index)`; never
+    deletes (G215, ADR-0028 amended).
 
-    The Remnant case: Mark owns "Remnant II" at series_index=2, and a
-    source scan inserted "Remnant Book 2" also at series_index=2 as a
-    separate book row. Both are the same book — just different title
-    conventions — but they co-exist because Seshat's book-dedup was
-    driven by fuzzy title match and those titles don't collide
-    ("remnant book 2" vs "remnant ii" has low similarity).
+    Until the 2026-10 fix pass this collapsed every unowned row on a
+    taken number into the other book at every start (the "Remnant II" /
+    "Remnant Book 2" case, 2026-04). The number alone isn't a match: on
+    the reference library it would have deleted "The Forge of God" for
+    its Spanish edition at that number and "Harmonia" for "The Champions
+    of Elan: Volume One". The title identity decides matches now; owned
+    copies fold at the Calibre sync and in the missing-books cleanup.
 
-    Winner selection:
-      1. OWNED (owned=1) beats NEW (owned=0) — keep the user's actual
-         library row.
-      2. Titles without "Book N"/"Bk N" suffix win — matches the
-         convention the canonical source rendered. "Remnant II" beats
-         "Remnant Book 2".
-      3. Stable tiebreak on lowest id.
-
-    SAFETY GUARD (added 2026-05-09 after the Witcher case): when 2+
-    candidates in the same group are OWNED (owned=1), this function
-    refuses to delete any of them and logs a warning instead.
-    Multiple owned books at the same series position is almost always
-    a metadata error in the source-of-truth library (Calibre,
-    Audiobookshelf) — e.g. Mark added "The Last Wish" and "Time of
-    Contempt" to Calibre at the same series_index values that "Blood
-    of Elves" and "Sword of Destiny" already occupied, so dedup was
-    silently dropping a real Calibre book on every container restart
-    until the next manual sync re-inserted it. Better to surface the
-    collision than data-loss-by-tiebreaker; the user fixes the
-    metadata in their library app.
-
-    book_series_suggestions.book_id has ON DELETE CASCADE, so the
-    loser's suggestion rows auto-drop. work_links in the pipeline DB
-    become dangling but get reconciled by the next works-matcher
-    run — same as every other book-delete path in discovery.
-
-    The displayed "X of Y" series totals are live-COUNT'd in the
-    series endpoint, so they self-correct once losers are deleted.
-    `series.total_books` isn't consumed anywhere currently, so we
-    skip maintaining it here.
-
-    Inert on healthy databases. Returns the number of rows collapsed.
+    Two owned books on one number are almost always a numbering slip in
+    Calibre / Audiobookshelf (the Witcher case, 2026-05-09), so they're
+    logged for the user to fix there. Returns 0 (nothing changed).
     """
     # Normalize any empty-string series_index to NULL before reading.
     # The PUT /books/{bid} edit path could store '' when the user
@@ -1912,70 +1941,26 @@ async def _dedupe_same_series_position(db) -> int:
         "SELECT id, title, "
         "(SELECT author_id FROM book_authors WHERE book_id=books.id AND position=0) AS author_id, "
         "series_id, series_index, owned "
-        "FROM books WHERE series_id IS NOT NULL AND series_index IS NOT NULL"
+        "FROM books WHERE series_id IS NOT NULL AND series_index IS NOT NULL AND owned = 1"
     )).fetchall()
-
     groups: dict[tuple[int, int, float], list[dict]] = defaultdict(list)
     for r in rows:
-        key = (r["author_id"], r["series_id"], float(r["series_index"]))
-        groups[key].append({
-            "id": r["id"],
-            "title": r["title"] or "",
-            "owned": int(r["owned"] or 0),
-        })
-
-    # Detect "Book N" / "Bk N" suffixes so we prefer the canonical
-    # title variant. Trailing whitespace tolerated; number may be
-    # decimal (rare — "Book 2.5" novellas).
-    book_n_suffix_re = re.compile(
-        r"\s+(book|bk)\s+\d+(\.\d+)?\s*$", re.IGNORECASE,
-    )
-
-    def _score(m: dict) -> tuple[int, int, int]:
-        title_score = 0 if book_n_suffix_re.search(m["title"]) else 1
-        return (m["owned"], title_score, -m["id"])
-
-    deleted = 0
+        groups[(r["author_id"], r["series_id"], float(r["series_index"]))].append(
+            {"id": r["id"], "title": r["title"] or "", "owned": int(r["owned"] or 0)})
     for (_author_id, _series_id, _idx), members in groups.items():
         if len(members) < 2:
             continue
-        # Owned-collision guard: keep all rows when 2+ members are
-        # owned. The dedup picks ONE winner via title/id tiebreakers,
-        # and applying that to two real owned books would silently
-        # drop one of them. Surface the metadata conflict instead so
-        # the user fixes the source-of-truth library; a warning here
-        # plus the duplicate-rows-still-present state is recoverable,
-        # the deletion isn't.
-        owned_count = sum(1 for m in members if m["owned"])
-        if owned_count >= 2:
-            _db_logger.warning(
-                f"Series-position collision (kept all {len(members)} "
-                f"books): author_id={_author_id}, series_id={_series_id}, "
-                f"index={_idx} — fix the series numbering in your "
-                f"source library: "
-                + ", ".join(
-                    f"id={m['id']} '{m['title']}' (owned={m['owned']})"
-                    for m in members
-                )
+        _db_logger.warning(
+            f"Series-position collision (kept all {len(members)} "
+            f"books): author_id={_author_id}, series_id={_series_id}, "
+            f"index={_idx} — fix the series numbering in your "
+            f"source library: "
+            + ", ".join(
+                f"id={m['id']} '{m['title']}' (owned={m['owned']})"
+                for m in members
             )
-            continue
-        scored = sorted(members, key=_score, reverse=True)
-        winner = scored[0]
-        losers = scored[1:]
-        for loser in losers:
-            await db.execute(
-                "DELETE FROM books WHERE id = ?", (loser["id"],)
-            )
-            deleted += 1
-            _db_logger.info(
-                f"  Merged book '{loser['title']}' (id={loser['id']}) → "
-                f"'{winner['title']}' (id={winner['id']}) "
-                f"[series_id={_series_id}, index={_idx}]"
-            )
-
-    if deleted:
-        await db.commit()
-    return deleted
+        )
+    return 0
 
 
 async def _dedupe_intra_author_series(db) -> int:
@@ -2145,6 +2130,7 @@ async def init_db(slug=None):
             # v2.3.0 metadata source pref + user-edit map.
             ("books", "metadata_source_pref", "TEXT NOT NULL DEFAULT 'seshat'"),
             ("books", "field_source_map", "TEXT"),
+            ("books", "discovered_by", "TEXT"),
             ("books", "user_edited_fields", "TEXT NOT NULL DEFAULT '[]'"),
             ("books", "amazon_format_asins", "TEXT"),
             # v2.12.0 — slug columns for badge URL fallback.
@@ -2255,18 +2241,10 @@ async def init_db(slug=None):
                 f"intra-author rows"
             )
 
-        # ── Step 5.5: Same-series-position book dedupe ─────────────
-        # Collapses duplicate book rows sharing the same
-        # (author_id, series_id, series_index) — the Remnant case
-        # where "Remnant II" and "Remnant Book 2" both live at index
-        # 2. Runs AFTER the series dedup so any series merges that
-        # just happened feed their books into this pass's grouping.
-        collapsed_books = await _dedupe_same_series_position(db)
-        if collapsed_books:
-            _db_logger.info(
-                f"Book-position dedupe collapsed {collapsed_books} "
-                f"duplicate same-series-index rows"
-            )
+        # ── Step 5.5: Series-position check ────────────────────────
+        # Blank series numbers scrubbed; owned books sharing a number
+        # logged. Books on a taken number are no longer deleted (G215).
+        await _check_series_positions(db)
 
         # ── Step 6: Omnibus flag backfill ──────────────────────────
         # Idempotent rescan that flips is_omnibus=1 on books whose
@@ -2286,14 +2264,11 @@ async def init_db(slug=None):
         # because the source emitted them as standalone (Goodreads's
         # "(Paths of Akashic #5)" tagline is in the title but not
         # tagged in the API). Extracts the implicit index from the
-        # title and either sets it on the row or — when a duplicate
-        # already sits at that position — dedupes the pair.
-        idx_touched, idx_deduped = await _backfill_series_index_from_title(db)
-        if idx_touched or idx_deduped:
-            _db_logger.info(
-                f"Series-index recovery indexed {idx_touched} row(s), "
-                f"deduped {idx_deduped} same-position pair(s)"
-            )
+        # title and sets it on the row, unless another book already
+        # holds that number (then the row stays as it is: G215).
+        idx_touched = await _backfill_series_index_from_title(db)
+        if idx_touched:
+            _db_logger.info(f"Series-index recovery indexed {idx_touched} row(s)")
 
         # ── Step 8: v2.3.0 metadata snapshot backfill ─────────────
         # Cold-start seed of books_calibre_snapshot / books_abs_snapshot
