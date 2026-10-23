@@ -165,6 +165,10 @@ of what was filtered, and nothing for the next scan or the Goodreads worker to r
   beside the owned Backyard Dungeon 7 ebook is listed hidden as a listing at creation and in step 3; matching is
   unchanged. Not in the audiobook library, where the UK Edition audiobooks are the ones Mark collects
   (`filter_reason(content_type=)`, from the scanned library / the cleanup's library).
+- **"Series / Episodes N-M" is a box set** (G254, G234's shapes): Aer-Ki Jyr's 4-book "Star Force: Origin Series 5-8"
+  … "97-100" bundles, "Star Guild Episodes 1 - 9". Anywhere in the title: anchored at the end it only missed more
+  bundles ("The Wheel of Time Series 1-15 Books Collection Set", "… Episodes 1-3 (Dottie For You Bundles Book 1)").
+  Over every stored title: 25 listed rows, all bundles; 0 owned.
 - The sample (50 first scans, 1,203 listed / 355 hidden, 72 cards) read 68 right. The word test's one wrong call, the
   invented "Ventura Starway", is G233's accepted cost: an English blurb, an English source language or a series with an
   owned book would each un-hide 40–135 real translations (sources label translations "English" and give them the

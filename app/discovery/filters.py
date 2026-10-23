@@ -122,6 +122,7 @@ _RX_BOX_SET = re.compile(
     r"(?:two|three|four|five|six|seven|eight|nine|ten|i{1,3}|iv|v|vi{1,3}|ix|x|\d{1,2})\b"   # "Books I-V", "Books One Through Six"
     r"|#\d+(?:\.\d+)?\s*[-–]\s*\d{1,2}(?:\.\d+)?\b"           # "(Alpha & Omega, #0.5-3)" (not "#2-1976")
     r"|\bvolumes?\s+\d+\s*[-–&]\s*\d+"
+    r"|\b(?:series|episodes?)\s+\d{1,3}\s*[-–]\s*\d{1,3}\b"   # "Star Force: Origin Series 13-16" (G254)
     r"|\b\d+[-\s]book\s+(?:collection|set|bundle|omnibus|series)\b"
     r"|\b(?:two|three|four|five|six|seven|eight|nine|ten)[-\s]book\s+(?:collection|set|bundle|box|omnibus|series)\b"
     r"|\b\d+\s+books?\s+in\s+(?:\d+|one)\b"

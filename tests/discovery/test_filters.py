@@ -287,6 +287,15 @@ def test_an_orientation_edition_is_hidden_but_matches_as_before():
     assert F.filter_reason("Straight Up Edition Wars") is None
 
 
+def test_a_series_or_episode_range_ending_a_title_is_a_box_set():
+    """G254: Aer-Ki Jyr's 4-book "Origin Series" bundles."""
+    for t in ("Star Force: Origin Series 13-16", "Star Force: Origin Series 97-100", "Hollow Kingdom (Episodes 1-4)",
+              "Prime Cuts: Dottie For You Episodes 1-3 (Dottie For You Bundles Book 1)"):
+        assert F.filter_reason(t) == F.BOX_SET, t
+    assert F.filter_reason("Star Force: Origin Series 1: We found a starship, inside an alien battlefort...") is None
+    assert F.filter_reason("The 1-2 Punch Series") is None
+
+
 def test_a_uk_edition_is_a_listing_in_an_ebook_library():
     """G252: another cut of a book, ebook library only; matching unchanged."""
     t = "Backyard Dungeon: UK Edition 7"
