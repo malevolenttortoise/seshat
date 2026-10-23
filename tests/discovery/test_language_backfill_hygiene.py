@@ -306,6 +306,32 @@ async def test_sweep_hides_foreign_and_leaves_english_and_unknown(lib):
         await db.close()
 
 
+async def test_sweep_hides_with_its_reason_and_gives_it_to_its_earlier_hides(lib):
+    """G238: its rows showed under Hidden → "Hidden by you", not Filtered."""
+    db = await disco_db.get_db("test")
+    try:
+        new = await _book(db, "Die Spiderwick Geheimnisse", language="de")
+        earlier = await _book(db, "Gefallene Sonnen", language="de", hidden=1)
+        mine = await _book(db, "A Book I Hid", language="de", hidden=1)
+        await db.execute("UPDATE books SET language_swept_at = 1 WHERE id = ?", (earlier,))
+        await db.execute("UPDATE books SET language_swept_at = 1 WHERE id = ?", (mine,))
+        await db.execute("UPDATE books SET language_swept_at = NULL WHERE id = ?", (mine,))
+        await db.commit()
+    finally:
+        await db.close()
+
+    await hygiene.job_foreign_language_sweep("test", _stats())
+
+    db = await disco_db.get_db("test")
+    try:
+        reasons = {r[0]: r[1] for r in await (await db.execute(
+            "SELECT id, hidden_reason FROM books")).fetchall()}
+    finally:
+        await db.close()
+    assert reasons[new] == "not_english" and reasons[earlier] == "not_english"
+    assert reasons[mine] is None          # no sweep marker: a hide of yours
+
+
 async def test_sweep_never_touches_owned_books(lib):
     db = await disco_db.get_db("test")
     try:

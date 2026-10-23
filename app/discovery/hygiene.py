@@ -837,11 +837,14 @@ async def _dedupe_by_identifier(
 
     For each duplicate group, pick the lowest-id row as the winner
     and use the local field-resolution merge (a streamlined version
-    of `book_merge.merge_books` that only handles the in-library
-    case — we don't touch the pipeline DB / book_grab_links here
-    because the Hygiene-time hits should be rare and pipeline
-    redirects on a stale pre-merge book_id self-heal on the next
-    grab-link write).
+    of `book_merge.merge_books`); each loser's grab link moves to the
+    winner after the library commit, as `merge_books` does (G239: a
+    stale link never healed: 20 dangling on the reference install).
+
+    Two owned rows that are each their own Calibre / Audiobookshelf item
+    are left alone (G239): they are two copies in the library (the boot
+    warns about them as numbering collisions), and deleting one row lost
+    track of that copy until a full sync re-added it.
 
     Hidden books are excluded from the comparison set: a hidden row
     sharing a goodreads_id with an active row was explicitly hidden
@@ -884,10 +887,12 @@ async def _dedupe_by_identifier(
     )
     groups = await cur.fetchall()
     merged = 0
+    folds: list[tuple[int, int]] = []
     for grp in groups:
         ident = grp[col]
         cur2 = await db.execute(
-            f"SELECT b.id, b.owned, b.title, b.hidden_reason, s.name AS series_name, b.series_index "
+            f"SELECT b.id, b.owned, b.title, b.hidden_reason, s.name AS series_name, b.series_index, "
+            f"b.calibre_id, b.audiobookshelf_id "
             f"FROM books b LEFT JOIN series s ON s.id = b.series_id WHERE b.{col} = ? "
             f"AND b.hidden = 0 ORDER BY b.owned DESC, b.id ASC",
             (ident,),
@@ -900,6 +905,12 @@ async def _dedupe_by_identifier(
         labels = await _labels(winner_id)
         loser_ids = []
         for m in members[1:]:
+            if _two_library_items(winner, m):
+                logger.debug(
+                    "hygiene[%s] dedup-by-%s: kept id=%d %r beside id=%d (two library items)",
+                    slug, col, m["id"], m["title"], winner_id,
+                )
+                continue
             if _family(m) == _family(winner) and same_book(_ref(winner), _ref(m), labels):
                 loser_ids.append(int(m["id"]))
             else:
@@ -940,6 +951,7 @@ async def _dedupe_by_identifier(
             # book_series_suggestions rows; work_links in the
             # pipeline DB reconcile on next works-matcher run.
             await db.execute("DELETE FROM books WHERE id = ?", (loser_id,))
+            folds.append((loser_id, winner_id))
             merged += 1
             logger.info(
                 "hygiene[%s] dedup-by-%s: merged loser id=%d -> winner id=%d "
@@ -948,7 +960,41 @@ async def _dedupe_by_identifier(
             )
     if merged:
         await db.commit()
+        await _move_grab_links(slug, folds)
     return merged
+
+
+def _two_library_items(winner, loser) -> bool:
+    """Both owned, and each its own Calibre book or Audiobookshelf item."""
+    if not (winner["owned"] and loser["owned"]):
+        return False
+    for col in ("calibre_id", "audiobookshelf_id"):
+        if winner[col] and loser[col] and str(winner[col]) != str(loser[col]):
+            return True
+    return False
+
+
+async def _move_grab_links(slug: str, folds: list[tuple[int, int]]) -> None:
+    """Each folded row's grab link to the row it folded into, or dropped when
+    that row has its own (UNIQUE(library_slug, book_id); `merge_books`'s rule)."""
+    from app.database import get_db as get_pipeline_db
+    pdb = await get_pipeline_db()
+    try:
+        for loser_id, winner_id in folds:
+            taken = await (await pdb.execute(
+                "SELECT 1 FROM book_grab_links WHERE library_slug = ? AND book_id = ?",
+                (slug, winner_id),
+            )).fetchone()
+            if taken:
+                await pdb.execute(
+                    "DELETE FROM book_grab_links WHERE library_slug = ? AND book_id = ?", (slug, loser_id))
+            else:
+                await pdb.execute(
+                    "UPDATE book_grab_links SET book_id = ? WHERE library_slug = ? AND book_id = ?",
+                    (winner_id, slug, loser_id))
+        await pdb.commit()
+    finally:
+        await pdb.close()
 
 
 async def job_book_dedup(slug: str, stats: dict[str, Any]) -> None:
@@ -2329,6 +2375,12 @@ async def job_foreign_language_sweep(slug: str, stats: dict[str, Any]) -> None:
     hidden = 0
     db = await get_lib_db(slug)
     try:
+        # G238: rows this sweep hid before it wrote a reason (they showed
+        # under "Hidden by you").
+        await db.execute(
+            "UPDATE books SET hidden_reason = 'not_english' WHERE owned = 0 AND hidden = 1 "
+            "AND hidden_reason IS NULL AND language_swept_at IS NOT NULL"
+        )
         rows = [dict(r) for r in await (await db.execute(
             "SELECT id, title, source, language FROM books "
             "WHERE owned = 0 AND hidden = 0 AND language_swept_at IS NULL "
@@ -2338,7 +2390,7 @@ async def job_foreign_language_sweep(slug: str, stats: dict[str, Any]) -> None:
             if not is_foreign(r["language"]):
                 continue
             await db.execute(
-                "UPDATE books SET hidden = 1, "
+                "UPDATE books SET hidden = 1, hidden_reason = 'not_english', "
                 "language_swept_at = strftime('%s','now') WHERE id = ?",
                 (r["id"],))
             hidden += 1

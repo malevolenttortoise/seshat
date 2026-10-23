@@ -33,6 +33,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- **Hygiene's foreign-language sweep hid books with no reason**, so they
+  showed under Hidden → "Hidden by you"; they are now Filtered → Not
+  English, the earlier ones too.
+- **Hygiene's identifier fold deleted the second copy of a book you own
+  twice in Calibre or Audiobookshelf**, and never moved a folded book's
+  grab link. Two library items stay two rows, and links follow the fold.
 - **"(Complete)" in a series name made a book an omnibus**: Amazon writes
   series as "My Paranormal Girlfriends (Complete)", so "My Vampire
   Bodyguards (… (Complete) Book 1)" never matched its copy, and start-up
