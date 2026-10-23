@@ -33,6 +33,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- **The title identity joined books that differ by one word or number**:
+  "Dark Nest III" and "Dark Nest II", "Clockwork Princess" and "Clockwork
+  Prince", "Episode Zero" and "Episode One", "… South Island" and "… North
+  Island", "Tales From The Cobra Wars" and "Hearts and Minds". An owned book
+  no longer takes in a book that matches it only by series number (your
+  "Dune" and "Dune: A Whisper of Caladan Seas").
 - **Hygiene's foreign-language sweep hid books with no reason**, so they
   showed under Hidden → "Hidden by you"; they are now Filtered → Not
   English, the earlier ones too.

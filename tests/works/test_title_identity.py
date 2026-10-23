@@ -364,6 +364,28 @@ CASES = [
     ("The Star Trek: Deep Space Nine: The Siege", "Star Trek: Deep Space Nine", 2,
      "Star Trek Deep Space Nine - The Siege", "Star Trek: Deep Space Nine", 2,
      True, "a number word in an earlier part is a name (G226: 'Deep Space Nine')"),
+    # ── Wave D, found reading S30's listed-copy folds (each was a wrong fold) ──
+    ("Star Wars : Dark Nest III", None, None, "Star Wars : Dark Nest II", None, None,
+     False, "a Roman numeral ending a subtitle is a number"),
+    ("The Infernal Devices: Clockwork Princess", "The Infernal Devices", 2, "Clockwork Prince", None, None,
+     False, "one different word isn't a spelling ('Prince' / 'Princess')"),
+    ("NZ Frenzy: New Zealand South Island", None, None, "NZ Frenzy: New Zealand North Island", None, None,
+     False, "word by word: 'South' isn't 'North'"),
+    ("The Country Justice", None, None, "The Countrey Justice", None, None, True, "a misspelt word"),
+    ("Alvin Jorneyman", None, None, "Alvin Journeyman", "Tales of Alvin Maker", 4, True, "a misspelt word"),
+    ("Counterstrike: Offensive: Book 3", None, None, "Counter Strike", "Offensive", 3,
+     True, "a space inside a word, 8+ letters (owned)"),
+    ("Matt Forbeck's Brave New World: Revolution", None, None,
+     "Matt Forbeck's Brave New World: Revelation", "Matt Forbeck's Brave New World", 2, False, "two books"),
+    ("The World of Shannara", None, None, "The Sword of Shannara", "The Original Shannara Trilogy", 1,
+     False, "'World' isn't 'Sword' (owned)"),
+    ("Star Trek The Next Generation - Starfleet Academy - Worf's First Adventure", None, None,
+     "I, Q: Star Trek The Next Generation", "Star Trek: Die nächste Generation", 68,
+     False, "a description never spans a ' - ', and extra words in front aren't a spelling"),
+    ("Star Guild : Book One - Episode One", None, None, "Star Guild: Episode Zero", None, None,
+     False, "'Zero' is a number"),
+    ("G.I. Joe: Tales From The Cobra Wars", None, None, "G.I. Joe: Hearts and Minds", None, None,
+     False, "'Tales From …' starts a title, not a description"),
     ("Space Fleet Academy: Year One (Biostellar Book 1)", "Biostellar", 1,
      "Space Fleet Academy: Year One", "Biostellar", 3,
      True, "G213 reads the titles as written, so 'Year One' stays one title"),
@@ -504,6 +526,22 @@ class TestOneTitleWhateverTheNumbers:
         three = TitleRef("Blade Angels (Blade Academy Book 3)", "Blade Academy", 3)
         assert not same_book(two, three, labels)
         assert not same_book(TitleRef("Blade Angels", "Blade Academy", 1), two, labels)
+
+
+def test_a_match_on_stored_series_numbers_alone():
+    """The owned "Dune" (Dune #1) and "Dune: A Whisper of Caladan Seas" a
+    source filed at Dune #1 are the same book only by position; an owned
+    book doesn't take that row in (Calibre sync, the cleanup's fold)."""
+    from app.works.title_identity import position_only_match
+    dune = TitleRef("Dune", "Dune", 1)
+    story = TitleRef("Dune: A Whisper of Caladan Seas", "Dune", 1)
+    assert same_book(dune, story) and position_only_match(dune, story)
+    # A title that writes its number, on either side, isn't position alone.
+    hwfwm = TitleRef("He Who Fights with Monsters", "He Who Fights with Monsters", 1)
+    assert not position_only_match(hwfwm, TitleRef("HE WHO FIGHTS WITH MONSTERS, BOOK 1: OUTWORLDER", None, None))
+    assert not position_only_match(TitleRef("He Who Fights With Monsters 4", "He Who Fights with Monsters", 4),
+                                   TitleRef("He Who Fights With Monsters, Book 4: Home", None, None))
+    assert not position_only_match(dune, TitleRef("Dune", None, None))       # the titles match
 
 
 class TestSeriesInTitle:

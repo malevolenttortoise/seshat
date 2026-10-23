@@ -124,7 +124,7 @@ class ParsedTitle:
 # ─── Numbers ──────────────────────────────────────────────────
 
 _WORD_NUMBERS = {
-    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
     "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11,
     "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
     "first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5,
@@ -151,7 +151,7 @@ def _number(token: str) -> Optional[float]:
 
 # A number token after a volume word ("Book Two", "Vol. 3", "Part IV").
 _NUMBER_TOKEN = (
-    r"(\d{1,3}(?:\.\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|"
+    r"(\d{1,3}(?:\.\d+)?|zero|one|two|three|four|five|six|seven|eight|nine|ten|"
     r"eleven|twelve|i{1,3}|iv|v|vi{0,3}|ix|x)"
 )
 _RX_VOLUME = re.compile(
@@ -177,7 +177,7 @@ _RX_HEAD_NUMBER = re.compile(r"(?:^|\s)(\d{1,3}(?:\.\d)?|[IVX]{1,4})\s*$")
 
 # Every volume word + number, stripped from title keys.
 _NUMBER_WORDS = (
-    r"one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
+    r"zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
     r"thirteen|fourteen|fifteen|first|second|third|fourth|fifth|sixth|"
     r"seventh|eighth|ninth|tenth|i{1,3}|iv|vi{0,3}|ix|xi{0,3}|xiv|xv|v|x"
 )
@@ -230,20 +230,31 @@ _GENERIC_WORDS = (
 # the title's last part. Only after a real separator (the hyphen in
 # "Sci-Fi" or "Spider-Man" is not one), and never across another one:
 # "Star Wars: Tales of the Jedi - Redemption" keeps its title.
-_RX_GENERIC_SUBTITLE = re.compile(
-    # ", an Urban Fantasy Men's Adventure" too: a comma, then "a" / "an".
-    r"(?i)(?:\s*:\s*|\s+-\s+|,\s+(?=(?:a|an)\s))(?:(?:a|an|the)\s+)?(?:[\w'&+-]+\s+){0,6}"
-    r"(?:" + _GENERIC_WORDS + r")s?\b"
-    # The generic word ends the part, or what follows it is more of a
-    # description ("… Romance with Forced Proximity", "… thriller about",
-    # "… Saga, Book 2", "… Novella A Penguin eSpecial", "… Stories Inspired
-    # by …", "… epic Agent Cormac science fiction series"), not a title
-    # going on ("Long Story Short").
+# A word of a description: hyphenated is fine ("Sci-Fi"), a lone "-" is a
+# separator, never a word ("Starfleet Academy - Worf's First Adventure" is a
+# title part, then a description).
+_DESC_WORD = r"[\w'&+]+(?:-[\w'&+]+)*"
+# The generic word ends the part, or what follows it is more of a
+# description ("… Romance with Forced Proximity", "… thriller about", "…
+# Saga, Book 2", "… Novella A Penguin eSpecial", "… Fantasy Novel THE …",
+# "… epic Agent Cormac science fiction series"), not a title going on
+# ("Long Story Short").
+_DESC_FOLLOW = (
     r"(?:\s*$|(?=\s*[,;(\[!./·|])"
     r"|\s+(?:with|for|about|in|of|set|from|featuring|where|that|and|to|on|by|like|a|an|the|inspired|based|box|boxed)\b"
     r"|\s+(?:" + _GENERIC_WORDS + r")s?\b"
-    r"|(?:\s+[\w'&+-]+)*?\s+(?:" + _GENERIC_WORDS + r")s?\s*$)"
-    r"(?:(?!\s*:\s|\s+-\s+).)*$"
+    r"|(?:\s+" + _DESC_WORD + r")*?\s+(?:" + _GENERIC_WORDS + r")s?\s*$)"
+)
+_RX_GENERIC_SUBTITLE = re.compile(
+    # ", an Urban Fantasy Men's Adventure" too: a comma, then "a" / "an".
+    r"(?i)(?:\s*:\s*|\s+-\s+|,\s+(?=(?:a|an)\s))(?:"
+    r"(?:a|an|the)\s+(?:" + _DESC_WORD + r"\s+){0,6}(?:" + _GENERIC_WORDS + r")s?\b" + _DESC_FOLLOW
+    + r"|(?:" + _DESC_WORD + r"\s+){1,6}(?:" + _GENERIC_WORDS + r")s?\b" + _DESC_FOLLOW
+    # A part that starts with its generic word is a title going on ("Tales
+    # From the Cobra Wars", "Stories of the Raksura"), unless it ends there
+    # or says what it's based on ("Stories Inspired by the Music of Rush").
+    + r"|(?:" + _GENERIC_WORDS + r")s?\b(?:\s*$|(?=\s*[,;(\[!./·|])|\s+(?:inspired|based|featuring)\b)"
+    r")(?:(?!\s*:\s|\s+-\s+).)*$"
 )
 # ": A Matt Kearns Novel 3", ": The Valkeryn Chronicles 1": an article-led
 # description that numbers the book (": Collection 2" is a title).
@@ -407,7 +418,9 @@ def _subtitle_tags(proper: str) -> list[tuple[str, float, str, tuple[str, ...]]]
     for i, sub in enumerate(segments[1:], 1):
         if _RX_BARE_VOLUME.match(sub):
             continue
-        m = _RX_VOLUME.search(sub) or re.search(r"(?:^|\s)(\d{1,3}(?:\.\d)?)\s*$", sub)
+        m = _RX_VOLUME.search(sub) or re.search(
+            r"(?:^|\s)(\d{1,3}(?:\.\d)?|II|III|IV|V|VI|VII|VIII|IX|X|XI|XII|XIII|XIV|XV)\s*$", sub,
+        )                                  # "Dark Nest III" (upper case: "I" is a word)
         if not m:
             continue
         v = _match_number(m)
@@ -604,13 +617,7 @@ def _title_keys(
                 if len(rest) >= 3:
                     whole_keys.append(rest)
     whole = frozenset(whole_keys)
-    parts: list[str] = []
-    for i, segment in enumerate(s for s in _RX_SEGMENTS.split(p) if s.strip()):
-        if i and _RX_BARE_VOLUME.match(segment):
-            continue
-        text = _key_text(_without_description(segment) if i else segment)
-        if text and not (i and _RX_GENERIC_ALONE.match(text)):
-            parts.append(text)
+    parts = title_parts(proper)
     if len(parts) < 2:
         return _Keys(whole, "", "", (), ())
     # G229: a series either title names in its parentheses counts too
@@ -637,6 +644,20 @@ def _title_keys(
     return _Keys(whole, head, tail, head_rest, tail_rest)
 
 
+@lru_cache(maxsize=65536)
+def title_parts(proper: str) -> list[str]:
+    """A title proper's parts as keys ("Head: Middle: Tail"), bare "Book 3"
+    parts and generic descriptions left out."""
+    parts: list[str] = []
+    for i, segment in enumerate(s for s in _RX_SEGMENTS.split(proper.lower()) if s.strip()):
+        if i and _RX_BARE_VOLUME.match(segment):
+            continue
+        text = _key_text(_without_description(segment) if i else segment)
+        if text and not (i and _RX_GENERIC_ALONE.match(text)):
+            parts.append(text)
+    return parts
+
+
 def _close(x: str, y: str) -> bool:
     """Equal, or a near-identical spelling ("unauthorized" / "unauthorised",
     a truncated title)."""
@@ -649,7 +670,21 @@ def _close(x: str, y: str) -> bool:
     if min(len(x), len(y)) < 8:
         return False
     m = SequenceMatcher(None, x, y)
-    return m.real_quick_ratio() >= 0.92 and m.quick_ratio() >= 0.92 and m.ratio() >= 0.92
+    if not (m.real_quick_ratio() >= 0.92 and m.quick_ratio() >= 0.92 and m.ratio() >= 0.92):
+        return False
+    # Word by word when the words line up: one different word is another
+    # title ("… South Island" / "… North Island", "Clockwork Prince" /
+    # "… Princess"), a misspelt one isn't ("Countrey", "Jorneyman").
+    xs, ys = x.split(), y.split()
+    if len(xs) == len(ys):
+        return all(a == b or SequenceMatcher(None, a, b).ratio() >= 0.88 for a, b in zip(xs, ys))
+    # Different word counts: only a title cut short ("… of the Sable Ke");
+    # extra words in front are another title ("I, Q: Star Trek The Next
+    # Generation" isn't "Star Trek The Next Generation").
+    if x.replace(" ", "") == y.replace(" ", ""):
+        return True                        # "Counterstrike" / "Counter Strike" (8+ letters)
+    short, long_ = (xs, ys) if len(xs) < len(ys) else (ys, xs)
+    return long_[:len(short) - 1] == short[:-1] and long_[len(short) - 1].startswith(short[-1])
 
 
 def _without_articles(k: str) -> str:
@@ -951,6 +986,25 @@ def _placements_agree(a: TitleRef, b: TitleRef) -> bool:
     return not (a.series and b.series) or series_key(a.series) == series_key(b.series)
 
 
+def position_only_match(a: TitleRef, b: TitleRef) -> bool:
+    """One title is only its series name (or a placeholder) and the two
+    titles differ: `same_book` could only have joined them by series
+    position (rule 5). The owned "Dune" filed as Dune #1 and "Dune: A
+    Whisper of Caladan Seas" a source filed there are two books; an owned
+    book takes in such a row only when the titles themselves match."""
+    pa, pb = parse_title(a.title or ""), parse_title(b.title or "")
+    # Neither title writes a number: only stored series numbers joined them
+    # ("He Who Fights With Monsters 4" is "…, Book 4: Home", and the bare
+    # "He Who Fights with Monsters" is "…, Book 1: Outworlder").
+    if not (_no_real_title(pa.proper, a.series) or _no_real_title(pb.proper, b.series)):
+        return False
+    if any(p.core is not None or p.tags for p in (pa, pb)):
+        return False
+    ka = _key_text(_without_description(pa.proper.lower()))
+    kb = _key_text(_without_description(pb.proper.lower()))
+    return ka != kb
+
+
 def different_edition_or_volume(a: TitleRef, b: TitleRef) -> bool:
     """`same_book`'s format and number rules alone (rules 1–3): another
     format (comic, dramatised) or another volume, whatever the titles.
@@ -1171,7 +1225,9 @@ __all__ = [
     "author_labels",
     "book_prefix",
     "parse_title",
+    "position_only_match",
     "same_book",
     "series_in_title",
     "series_key",
+    "title_parts",
 ]

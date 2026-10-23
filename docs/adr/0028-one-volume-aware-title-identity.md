@@ -261,6 +261,29 @@ The same parser reads "(Series Book N)" out of a title at creation (G171) and Ha
   Wolf #2–#8" comic issues the old merge had folded into the owned novel (the filters' job). Two guards tried and
   dropped, changing no pair: word order in the spelling-variant check, and a number belonging to the other title.
 
+## Amendment (2026-10-23, wave D: wrong "same" calls found reading the listed-copy fold)
+
+- Reading the missing-books cleanup's new fold of listed copies turned up identity calls that would fold two books
+  (and merge them on a scan): Roman numerals ending a subtitle weren't numbers ("Dark Nest III" = "Dark Nest II");
+  "Zero" wasn't a number ("Episode Zero" = "Episode One"); the spelling check compared whole strings, so one different
+  word ("… South Island" / "… North Island", "Clockwork Prince" / "… Princess", "World" / "Sword") or extra words in
+  front ("I, Q: Star Trek The Next Generation" ~ "Star Trek The Next Generation") passed its 92%; a description could
+  span a " - " ("Starfleet Academy - Worf's First Adventure"); a part starting with its generic word was a description
+  ("G.I. Joe: Tales From The Cobra Wars"). Now: Roman numerals II–XV ending a subtitle and "Zero" are numbers; the
+  spelling check goes word by word (a misspelt word, "Countrey" / "Jorneyman", still passes; a title cut short or a
+  space inside an 8+-letter word, "Counterstrike" / "Counter Strike", still passes); a description's words never
+  include a lone "-"; a part starting with its generic word is a description only if it ends there or says what it
+  is based on ("Stories Inspired by the Music of Rush").
+- **A match on stored series numbers alone isn't an owned book's copy** (`position_only_match`): a title that is
+  only its series name, neither title writing a number, titles otherwise different. The owned "Dune" (Dune #1) had
+  taken in "Dune: A Whisper of Caladan Seas", which a source filed at Dune #1, once G211 stopped covering it (the two
+  other such rows now read as different books). The Calibre-sync absorb and the cleanup's owned-copy fold skip it;
+  "He Who Fights with Monsters" still takes "…, Book 1: Outworlder" (that title writes its number).
+- Measured on 2026-10-23 copies: 49 of 2,498,085 same-author pairs change, all to "different", every one read (the
+  wrong joins above, Dresden "War Cry" / "Wild Card" issues, Nebula Showcase years, magazine issues; ~6 new duplicates,
+  mostly hidden rows: "Penny, the Engineering Tail of the Fourth (Little) Pig", "W3 Women in Deep Time"); grab history
+  unchanged (78 of 2,136); a full Calibre sync unchanged.
+
 ## Related
 
 - [0003](0003-bundle-dedup-prefer-duplicates.md) — the same duplicates-over-loss stance, for bundles.

@@ -161,6 +161,16 @@ async def test_a_book_of_another_filter_family_is_not_absorbed(env, monkeypatch)
     assert await _row(bid) == (0, None, "hardcover")
 
 
+async def test_a_match_on_stored_series_numbers_alone_is_not_absorbed(env, monkeypatch):
+    """Wave D: the owned "Dune" filed as Dune #1 took in "Dune: A Whisper of
+    Caladan Seas" a source filed there once the other two such rows stopped
+    matching (G211 had been the only thing holding it)."""
+    a = await _author("Frank Herbert", calibre_id=1)
+    story = await _missing("Dune: A Whisper of Caladan Seas", [a], series="Dune", index=1.0)
+    await _sync(monkeypatch, [_book(10, "Dune", [(1, "Frank Herbert")], series="Dune", index=1.0)])
+    assert await _row(story) == (0, None, "hardcover")
+
+
 async def test_two_matches_are_flipped_owned_not_merged(env, monkeypatch):
     a = await _author("Susan Dennard", calibre_id=1)
     b1 = await _missing("Truthwitch: The Witchlands", [a])
