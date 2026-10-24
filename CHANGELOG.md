@@ -48,9 +48,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **"Missing Cleanup" re-reads books an older title rule hid**: a series
   named "Tapped (COMPLETE SERIES)" no longer makes its books box sets, and
   they're listed again (or folded into the one you own).
-- **A shared credit like "Various" or "Unknown" is never scanned as an
-  author**, even when you own a book credited to it: Hardcover's "Various"
-  is every compilation anywhere. The missing-books cleanup removes the
+- **A shared credit like "Various" or "Unknown", or a publisher such as
+  "Litforge Press", is never scanned as an author**, even when you own a
+  book credited to it: Hardcover's "Various" is every compilation anywhere. The missing-books cleanup removes the
   books only such a credit wrote.
 - **Another spelling of an author you own or allow-listed counts as that
   author** for scans and the missing-books cleanup: "Thomas Doscher"'s

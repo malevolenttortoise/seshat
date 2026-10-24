@@ -136,7 +136,9 @@ def test_a_shared_credit_is_never_scanned():
     assert not r.counts_for_scans("Various Authors", None)
     assert r.admits("Various", 571)                       # still linked on books
     assert all(map(is_placeholder_credit, ("Anonymous", "N/A", "Various Artists", "Anon.")))
-    assert not any(map(is_placeholder_credit, ("Varian Johnson", "Nanna Fujimi", "Unknown Worlds Press Author")))
+    assert not any(map(is_placeholder_credit, ("Varian Johnson", "Nanna Fujimi", "Unknown Worlds Press Author", "Press")))
+    # G267: a publisher Hardcover / Amazon credit as an author
+    assert all(map(is_placeholder_credit, ("Litforge Press", "LitForge Press", "Aethon Publishing", "Baen Publications")))
 
 
 def test_uses_the_filter_normalizer_not_the_author_row_one():

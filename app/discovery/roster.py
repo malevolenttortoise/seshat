@@ -70,7 +70,7 @@ SKIP_PLACEHOLDER = "placeholder_credit"
 SKIP_MESSAGES = {
     SKIP_NOT_ELIGIBLE: "not on your allow list and owns nothing; add them to scan",
     SKIP_LIST_MISSING_OFF: "List missing books is off for this author",
-    SKIP_PLACEHOLDER: "a shared credit like \"Various\", not an author to scan",
+    SKIP_PLACEHOLDER: "a shared credit like \"Various\" or a publisher, not an author to scan",
 }
 
 # A shared credit, not a person (G260): Hardcover's "Various" is every
@@ -82,8 +82,16 @@ PLACEHOLDER_CREDITS = frozenset({
 })
 
 
+# A publisher credited as an author (G267): "Litforge Press" on one owned
+# book made Amazon's publisher catalogue a scan (38 listed copies of its
+# authors' books).
+_PUBLISHER_WORDS = frozenset({"press", "publishing", "publications", "publishers"})
+
+
 def is_placeholder_credit(name: str) -> bool:
-    return normalize_author(name or "") in PLACEHOLDER_CREDITS
+    norm = normalize_author(name or "")
+    words = norm.split()
+    return norm in PLACEHOLDER_CREDITS or (len(words) >= 2 and words[-1] in _PUBLISHER_WORDS)
 
 
 @dataclass(frozen=True)

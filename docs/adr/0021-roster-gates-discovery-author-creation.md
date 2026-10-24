@@ -194,3 +194,7 @@ prune-linkage operate on two rows that already exist and mint nothing.
   and autobrr's import allow-listed it; its F–Z first scan read Hardcover's "Various" record, every compilation
   anywhere: +978 listed (cookbooks, magazine issues, guides) and +953 hidden. It stays linked on books and on the
   allow list (announces unchanged); the missing-books cleanup's step 1 removes the books only such a credit wrote.
+- **A publisher is a shared credit too** (G267, 2026-10-24): a credit of 2+ words ending in Press / Publishing /
+  Publications / Publishers. "Litforge Press" is credited on one owned book, so its Amazon catalogue was scanned: 38
+  listed rows, mostly copies of its authors' books (a "Tapped: Book 1" listed beside the owned one). It is the only such
+  credit in either library or on the allow list today.
