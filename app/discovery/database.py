@@ -977,14 +977,14 @@ async def _backfill_omnibus_flag(db) -> int:
     runner doesn't pay for a discovery-module import on every db get.
     Returns the number of rows touched.
     """
-    from app.discovery.lookup import _RX_OMNIBUS
+    from app.discovery.lookup import _is_omnibus
 
     rows = await (await db.execute(
         "SELECT id, title FROM books WHERE is_omnibus = 0 AND title IS NOT NULL"
     )).fetchall()
     touched = 0
     for r in rows:
-        if _RX_OMNIBUS.search(r["title"] or ""):
+        if _is_omnibus(r["title"] or ""):
             await db.execute(
                 "UPDATE books SET is_omnibus = 1, series_index = NULL WHERE id = ?",
                 (r["id"],),

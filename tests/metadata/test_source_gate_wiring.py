@@ -54,7 +54,7 @@ async def test_enrichment_sources_get_in_their_turn(clock, rates):
     from app.metadata.sources.ibdb import IbdbSource
 
     src = IbdbSource(rate_limit=0)
-    src.set_client(_client(lambda req: httpx.Response(429)))
+    src.set_client(_client(lambda req: httpx.Response(403)))
     with source_gate.caller("enrichment"):
         for _ in range(2):
             with pytest.raises(httpx.HTTPStatusError):
@@ -62,6 +62,111 @@ async def test_enrichment_sources_get_in_their_turn(clock, rates):
     row = _pending("ibdb", "enrichment")
     assert (row["requests"], row["blocks"]) == (2, 2)
     assert clock.slept == [3.0]
+
+
+# ─── A 429 cools the source down (G255) ──────────────────────
+
+
+def _counting(status, headers=None):
+    sent = []
+
+    def handler(req):
+        sent.append(str(req.url))
+        return httpx.Response(status, headers=headers or {}, json={})
+    return sent, handler
+
+
+async def test_a_429_is_not_retried_and_nothing_goes_until_the_cooldown_ends(clock, rates):
+    """ibdb said 429 for 12 of the first 100 F–Z scans; each author still
+    sent 3 requests and the next author asked again at once."""
+    from app.discovery.sources.ibdb import IbdbSource
+
+    sent, handler = _counting(429)
+    src = IbdbSource(rate_limit=0)
+    src._client = _client(handler)
+    with source_gate.caller("scan"):
+        with pytest.raises(httpx.HTTPStatusError):
+            await src._get("https://ibdb.dev/api/search")
+        assert (len(sent), clock.slept) == (1, [])
+        assert source_gate.cooling_seconds("ibdb") == source_gate.COOLDOWN_429_S
+        with pytest.raises(source_gate.SourceCoolingDown):
+            await src._get("https://ibdb.dev/api/search")
+        assert len(sent) == 1
+        clock.now += source_gate.COOLDOWN_429_S
+        src._client = _client(lambda req: (sent.append(1), httpx.Response(200, json={}))[1])
+        await src._get("https://ibdb.dev/api/search")
+    assert len(sent) == 2
+    assert _pending("ibdb", "scan")["blocks"] == 1
+
+
+async def test_a_429s_retry_after_sets_the_cooldown(clock, rates):
+    from app.discovery.sources.openlibrary import OpenLibrarySource
+
+    _, handler = _counting(429, {"Retry-After": "120"})
+    src = OpenLibrarySource(rate_limit=0)
+    src._client = _client(handler)
+    with pytest.raises(httpx.HTTPStatusError):
+        await src._get("https://openlibrary.org/search/authors.json")
+    assert source_gate.cooling_seconds("openlibrary") == 120.0
+    assert source_gate._retry_after_seconds("Fri, 09 Oct 2026 16:02:00 GMT") is not None
+    assert source_gate._retry_after_seconds("soon") is None
+
+
+async def test_enrichment_waits_out_a_scans_429(clock, rates):
+    from app.discovery.sources.ibdb import IbdbSource as ScanIbdb
+    from app.metadata.sources.ibdb import IbdbSource as EnrichIbdb
+
+    _, handler = _counting(429)
+    scan = ScanIbdb(rate_limit=0)
+    scan._client = _client(handler)
+    with pytest.raises(httpx.HTTPStatusError):
+        await scan._get("https://ibdb.dev/api/search")
+    sent, handler = _counting(200)
+    enrich = EnrichIbdb(rate_limit=0)
+    enrich.set_client(_client(handler))
+    with pytest.raises(source_gate.SourceCoolingDown):
+        await enrich._get("https://ibdb.dev/api/search")
+    assert sent == []
+
+
+async def test_other_failures_still_retry(clock, rates):
+    from app.discovery.sources.ibdb import IbdbSource
+
+    sent, handler = _counting(503)
+    src = IbdbSource(rate_limit=0)
+    src._client = _client(handler)
+    with pytest.raises(httpx.HTTPStatusError):
+        await src._get("https://ibdb.dev/api/search")
+    assert len(sent) == 3 and source_gate.cooling_seconds("ibdb") == 0.0
+
+
+async def test_ibdb_asks_its_search_once_per_scan(clock, rates):
+    from app.discovery.sources.ibdb import IbdbSource
+
+    sent, handler = _counting(200)
+    src = IbdbSource(rate_limit=0)
+    src._client = _client(handler)
+    await src.search_author("Ann Leckie")
+    await src.get_author_books("Ann Leckie")
+    assert len(sent) == 1
+    await src.search_author("Martha Wells")
+    assert len(sent) == 2
+
+
+async def test_a_scan_skips_a_cooling_source_without_a_request(clock, rates, caplog):
+    """…and says so, instead of "No author match found"."""
+    import logging
+    from app.discovery import lookup
+    from app.discovery.sources.ibdb import IbdbSource
+
+    sent, handler = _counting(200)
+    src = IbdbSource(rate_limit=0)
+    src._client = _client(handler)
+    source_gate.cool_down("ibdb")
+    with caplog.at_level(logging.INFO, logger="seshat.discovery.lookup"):
+        assert await lookup._try_source(src, "Ann Leckie", 1, [], ["English"], "ibdb") == 0
+    assert sent == []
+    assert "cooling down after a 429" in caplog.text and "No author match" not in caplog.text
 
 
 # ─── Hardcover (G61) ─────────────────────────────────────────

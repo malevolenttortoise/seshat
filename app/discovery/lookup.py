@@ -137,6 +137,10 @@ _RX_OMNIBUS = re.compile(
     r'|\(\s*complete\s*\)'  # bare "(complete)" parenthetical anywhere — series-status annotation pulled into title
     r')'
 )
+# "(My Paranormal Girlfriends (Complete) Book 1)": the series' status inside
+# its parenthetical, removed before `_is_omnibus` looks (G230).
+_RX_SERIES_POSITION_PAREN = re.compile(r'(?i)\([^()]*?\b(?:book|#)\s*\d+(?:\.\d+)?\s*\)')
+_RX_SERIES_COMPLETE = re.compile(r'(?i)\(([^()]*?)\s*\(\s*complete(?:\s+series)?\s*\)([^()]*)\)')
 
 # Audiobook / non-ebook format detection. Matches titles and metadata
 # that indicate audiobook-only editions, narrator credits, or non-ebook
@@ -673,8 +677,18 @@ def _is_omnibus(title: str) -> bool:
       - "Mistborn: The Complete Trilogy"
       - "Super Sales on Super Heroes Books 1-3"
       - "The Expanse Box Set"
+
+    A "(Complete)" or "(COMPLETE SERIES)" inside a series parenthetical is
+    the series' status, not a set (G230, wave D): "My Vampire Bodyguards (My
+    Paranormal Girlfriends (Complete) Book 1)", "Tapped: Book 1 (…) (Tapped
+    (COMPLETE SERIES))" are one book.
     """
-    return bool(_RX_OMNIBUS.search(title))
+    t = _RX_SERIES_COMPLETE.sub(r"(\1\2)", title or "")
+    # A series parenthetical naming the book's place is one book of it:
+    # "Far Thoughts and Pale Gods (The Complete Short Fiction of Greg Bear
+    # Book 2)" (wave D, beside G230).
+    t = _RX_SERIES_POSITION_PAREN.sub(" ", t)
+    return bool(_RX_OMNIBUS.search(t))
 
 
 def _is_audiobook(title: str) -> bool:
@@ -1388,6 +1402,8 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
             for r in rows
         }
 
+        content_type = state.get_active_library_content_type()
+
         def _filter_reasons(bk, series_name=None) -> tuple[Optional[str], Optional[str]]:
             """(the family the book is created hidden for, the family it
             matches within). Matching reads the title only, as a stored
@@ -1404,7 +1420,7 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
                 title, description=bk.description,
                 n_authors=_filters.author_role_count(getattr(bk, "contributors", None)),
                 authors=author_names, series_name=series_name, page_count=bk.page_count,
-                genres=getattr(bk, "genres", None) or (),
+                genres=getattr(bk, "genres", None) or (), content_type=content_type,
             )))
             return reason, match_cls
 
@@ -2264,7 +2280,7 @@ async def _merge_result(author_id: int, result: AuthorResult, source_name: str, 
             title_sid = title_sidx = title_series = None
             if not omnibus and reason is None:
                 from app.works.title_identity import series_in_title
-                named = series_in_title(bk.title)
+                named = series_in_title(bk.title, known=author_series_id_by_name)
                 if named is not None:
                     title_series, title_sidx = named
                     title_sid = await _series_for_title(title_series)
@@ -3443,6 +3459,11 @@ async def _try_source(source, author_name, author_id, our_titles, languages, sou
     part of the base interface.
     """
     try:
+        cooling = source_gate.cooling_seconds(getattr(source, "name", source_name))
+        if cooling > 0:
+            # G255: the source said 429; this author's scan skips it.
+            logger.info(f"  [{source_name}] skipped for '{author_name}': cooling down after a 429 ({cooling:.0f}s left)")
+            return 0
         if start_at > 0:
             logger.info(f"  [{source_name}] {'Full scan' if full_scan else 'Searching'} for '{author_name}' (resuming from book {start_at})...")
         else:

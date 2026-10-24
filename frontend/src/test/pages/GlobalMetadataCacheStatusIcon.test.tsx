@@ -1,7 +1,9 @@
 import { afterEach, describe, it, vi } from "vitest";
 import { GlobalMetadataCacheStatusIcon } from "../../components/GlobalMetadataCacheStatusIcon";
 import { expectRendered, renderPage, resetPageEnv } from "../render";
-import { cacheStatusCooldownRoutes, cacheStatusRoutes } from "../fixtures/cacheStatus";
+import {
+  cacheStatusCooldownRoutes, cacheStatusRoutes, cacheStatusRoutineRoutes, cacheStatusStoppedRoutes,
+} from "../fixtures/cacheStatus";
 
 afterEach(resetPageEnv);
 
@@ -11,6 +13,22 @@ describe("Navbar cache-worker icon (desktop)", () => {
     const r = await renderPage(<GlobalMetadataCacheStatusIcon onClick={vi.fn()} />, {
       viewport: "desktop",
       routes: cacheStatusRoutes,
+    });
+    expectRendered(r, "☁");
+  });
+
+  it("a short cooldown and two authors failed for good: still green (G269)", async () => {
+    const r = await renderPage(<GlobalMetadataCacheStatusIcon onClick={vi.fn()} />, {
+      viewport: "desktop",
+      routes: cacheStatusRoutineRoutes,
+    });
+    expectRendered(r, "☁");
+  });
+
+  it("Goodreads stopped: red", async () => {
+    const r = await renderPage(<GlobalMetadataCacheStatusIcon onClick={vi.fn()} />, {
+      viewport: "desktop",
+      routes: cacheStatusStoppedRoutes,
     });
     expectRendered(r, "☁");
   });

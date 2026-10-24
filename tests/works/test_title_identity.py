@@ -291,6 +291,138 @@ CASES = [
     ("Star Trek: New Frontier", None, None,
      "Star Trek: New Frontier: Blind Man's Bluff", None, None,
      False, "a series name and its book (unchanged; 'Operation: Yellow Ribbon' stays a duplicate)"),
+    # ── Wave D S26 (2026-10-23): wave C's gaps (G225–G229) and three bugs (C41) ──
+    ("The School for Good and Evil #3: The Last Ever After: Now a Netflix Originals Movie",
+     "The School for Good and Evil", 3, "The Last Ever After", "The School for Good and Evil", 3.0,
+     True, "a marketing tail is a description (G225; owned)"),
+    ("The End of Ordinary: The Humorous Science Fiction Thriller From the Author of Mickey 7", None, None,
+     "The End of Ordinary", None, None, True, "'From the Author of Mickey 7': its 7 isn't a volume"),
+    ("The School for Good and Evil #3: The Last Ever After: Now a Netflix Originals Movie",
+     "The School for Good and Evil", 3, "A World Without Princes", "The School for Good and Evil", 2.0,
+     False, "the tail doesn't join two books"),
+    ("The Cannabis Preacher: Sermon Three", None, None,
+     "The Cannabis Preacher, Sermon 3: A hunt for a ruthless killer, the uphill battle to rebrand a company",
+     "The Cannabis Preacher", 3, True, "a spelled-out number in a subtitle (G226)"),
+    ("The Cannabis Preacher: Sermon Three", None, None,
+     "The Cannabis Preacher – Sermon Two: A financial thriller about resurrecting a failed company",
+     "The Cannabis Preacher", 2, False, "three vs two"),
+    ("The Cannabis Preacher: Sermon One: A financial thriller about building and losing the biggest Cannabis Operation",
+     "The Cannabis Preacher", 1, "The Cannabis Preacher: Sermon Three", None, None,
+     False, "one vs three: why 'one' counts too"),
+    ("Down the Rabbit Hole | Collection 1", None, None,
+     "Down the Rabbit Hole: Collection Two", None, None, False, "two collections (both owned)"),
+    ("Ready Player One", None, None, "Ready Player Two", None, None, False, "a head keeps its words"),
+    ("The War Ship", None, None, "The Warship", "Polity Universe: Rise of the Jain", 2,
+     True, "spaces don't count when the placements agree (G227)"),
+    ("Endgame", "Merovingen Nights", 7, "End Game", "Merovingen Nights", 8,
+     False, "spaces count across two places of one series"),
+    ("Rise of the Infernal Paladin, Book Three: Infernal Liberation (Rise of The Infernal Paladin - A LitRPG Apocalypse Adventure 3)",
+     "Rise of The Infernal Paladin - A LitRPG Apocalypse Adventure", 3,
+     "Rise of The Infernal Paladin: Infernal Liberation", None, None,
+     True, "'Series, Book N: Title' is a position (G228)"),
+    ("Rise of the Infernal Paladin, Book Two: World Eater (Rise of The Infernal Paladin - A LitRPG Apocalypse Adventure 2)",
+     "Rise of The Infernal Paladin - A LitRPG Apocalypse Adventure", 2,
+     "Rise of The Infernal Paladin: Infernal Liberation", None, None, False, "a position, two titles"),
+    ("Zero Point: The Owner: Book Two", "Owner Trilogy", 2, "Zero Point", "Owner Trilogy", None,
+     True, "'Title: Series: Book N' is a position (G228)"),
+    ("Towerbound Is Not Just a Game", None, None,
+     "Towerbound, Book 5: Towerbound Is Not Just a Game", "Towerbound", 5,
+     True, "an owned re-grab (grab 4245)"),
+    ("86—EIGHTY-SIX, Vol. 7: Mist", "86—EIGHTY-SIX", 7, "Mist", None, None,
+     False, "only 'Book' is a position; 'Vol. 7' is a volume"),
+    ("Turning of the Tides Daughters of the High Seas (Book 2)", "Daughters of the High Seas", 2,
+     "Turning of the Tides (Daughters of the High Seas Book 2)", "Daughters of the High Seas", 2,
+     True, "the stored series as a suffix (G229)"),
+    ("Invasion (The Autumn War #1)", None, None,
+     "The Autumn War: Volume 1: Invasion", "Pinwheel", 25,
+     True, "a series named in the other title (G229; owned)"),
+    ("Series: Operator Chronicles, Book 1", None, None,
+     "Series: The Children of Earth, Book 1", None, None,
+     False, "'Series' is never a title part (both owned)"),
+    ("Roommate Control (Part Four)", None, None, "Roommate Control (Part Three)", None, None,
+     False, "a parenthetical number of the title's own (C41; G213 overrode it)"),
+    ("Roommate Control: A Novel", None, None, "Roommate Control (Part Four)", None, None,
+     False, "the whole and a part"),
+    ("NieR: Automata: Long Story Short", "Nier", None, "NieR:Automata: Short Story Long", "Nier", None,
+     False, "the same words in another order (the description rule keeps 'Long Story Short')"),
+    ("NieR:Automata", "Nier", None, "NieR: Automata: Long Story Short", "Nier", None,
+     False, "'Long Story Short' is a title, not a '… Story' description"),
+    ("Treachery", "Nightshade", 5.5,
+     "Treachery: A Nightshade Novella A Penguin eSpecial from Philomel Books", "Nightshade", None,
+     True, "a description goes on after its generic word ('Novella A Penguin …')"),
+    ("2113", None, None, "2113: Stories Inspired by the Music of Rush", None, None,
+     True, "'Stories Inspired by …' is a description"),
+    ("Gridlinked", "Agent Cormac", 1,
+     "Gridlinked: The thrilling first instalment of the epic Agent Cormac science fiction series", "Agent Cormac", None,
+     True, "a description ending in a generic word"),
+    ("Towerbound Book 5: Towerbound is Not Just a Game: LitRPG · Time Travel · Dystopia",
+     "Towerbound (LITRPG + REGRESSOR + OPMC)", 6,
+     "Towerbound, Book 5: Towerbound Is Not Just a Game", "Towerbound (LITRPG + REGRESSOR + OPMC)", 5,
+     True, "a '·'-separated description"),
+    ("Fathomless: A Cate Granger Novel 1", "Cate Granger", 1, "Fathomless", "Cate Granger", 1,
+     True, "an article-led description that numbers the book"),
+    ("The Star Trek: Deep Space Nine: The Siege", "Star Trek: Deep Space Nine", 2,
+     "Star Trek Deep Space Nine - The Siege", "Star Trek: Deep Space Nine", 2,
+     True, "a number word in an earlier part is a name (G226: 'Deep Space Nine')"),
+    # ── Wave D, found reading S30's listed-copy folds (each was a wrong fold) ──
+    ("Star Wars : Dark Nest III", None, None, "Star Wars : Dark Nest II", None, None,
+     False, "a Roman numeral ending a subtitle is a number"),
+    ("The Infernal Devices: Clockwork Princess", "The Infernal Devices", 2, "Clockwork Prince", None, None,
+     False, "one different word isn't a spelling ('Prince' / 'Princess')"),
+    ("NZ Frenzy: New Zealand South Island", None, None, "NZ Frenzy: New Zealand North Island", None, None,
+     False, "word by word: 'South' isn't 'North'"),
+    ("The Country Justice", None, None, "The Countrey Justice", None, None, True, "a misspelt word"),
+    ("Alvin Jorneyman", None, None, "Alvin Journeyman", "Tales of Alvin Maker", 4, True, "a misspelt word"),
+    ("Counterstrike: Offensive: Book 3", None, None, "Counter Strike", "Offensive", 3,
+     True, "a space inside a word, 8+ letters (owned)"),
+    ("Matt Forbeck's Brave New World: Revolution", None, None,
+     "Matt Forbeck's Brave New World: Revelation", "Matt Forbeck's Brave New World", 2, False, "two books"),
+    ("The World of Shannara", None, None, "The Sword of Shannara", "The Original Shannara Trilogy", 1,
+     False, "'World' isn't 'Sword' (owned)"),
+    ("Star Trek The Next Generation - Starfleet Academy - Worf's First Adventure", None, None,
+     "I, Q: Star Trek The Next Generation", "Star Trek: Die nächste Generation", 68,
+     False, "a description never spans a ' - ', and extra words in front aren't a spelling"),
+    ("Star Guild : Book One - Episode One", None, None, "Star Guild: Episode Zero", None, None,
+     False, "'Zero' is a number"),
+    ("G.I. Joe: Tales From The Cobra Wars", None, None, "G.I. Joe: Hearts and Minds", None, None,
+     False, "'Tales From …' starts a title, not a description"),
+    ("Towerbound Book 5: Towerbound is Not Just a Game: LitRPG · Time Travel · Dystopia",
+     "Towerbound (LITRPG + REGRESSOR + OPMC)", 6, "Towerbound is Not Just a Game", "Towerbound", 5,
+     True, "a trailing description is no title part"),
+    ("Space Fleet Academy: Year One (Biostellar Book 1)", "Biostellar", 1,
+     "Space Fleet Academy: Year One", "Biostellar", 3,
+     True, "G213 reads the titles as written, so 'Year One' stays one title"),
+    ("Round One (Mixed Martial Cultivator #1)", "Mixed Martial Cultivator", 1,
+     "Mixed Martial Cultivator: Round One", "Mixed Martial Cultivator", 1,
+     True, "titles also compare as written (G226)"),
+    ("The Malevolent Eight: The Explosive Sequel to the Massive Hit Fantasy Novel THE MALEVOLENT SEVEN",
+     "The Malevolent Seven", 2, "The Malevolent Eight", "The Malevolent Seven", 2,
+     True, "a description's number isn't the book's (owned)"),
+    ("Omega Squad", "Omega Metahumans", 1, "Omega Apex: Omega Squad 3", None, None,
+     False, "the number belongs to the other title (G229: 'Omega Squad' is a named series)"),
+    # ── Wave D, Mark's sort of the cleanup preview ──
+    ("Secrets of the Silent Witch",
+     "サイレント・ウィッチ 沈黙の魔女の隠しごと [Silent Witch: Chinmoku no Mahou no Kakushigoto] (Light Novel)", 0,
+     "Secrets of the Silent Witch, Vol. ", "Secrets of the Silent Witch (Light Novel)", 4.5,
+     False, "a 'Vol.' that lost its number is some volume, not the plain-titled book"),
+    ("Secrets of the Silent Witch, Vol. ", "Secrets of the Silent Witch", 3,
+     "Secrets of the Silent Witch", "Secrets of the Silent Witch", 3,
+     True, "… unless both are filed at one place in one series"),
+    # ── Wave D, Mark's sort of the cleanup after the F–Z scans ──
+    ("The Lost Dragon", "Cycle of Dragons", 3, "Lost Dragons", "The Shadow's Dragon", 3,
+     False, "a near-miss spelling doesn't join two series (owned)"),
+    ("Final Days: Colony", "Final Days", 2, "The Colony", "The Survivors", 17,
+     False, "two numbered series at two numbers: only the same title joins them"),
+    ("Star Force: Termination", "Star Force", 12, "Star Force: Termination (SF12)", "Star Force Universe", 30,
+     True, "… the same title does; and 'Star Force Universe' is the same series written longer"),
+    ("Alvin Jorneyman", None, None, "Alvin Journeyman", "Tales of Alvin Maker", 4,
+     True, "a misspelling still joins when one side has no series"),
+    ("Shifting Shadows: Stories From the World of Mercy Thompson", "Mercy Thompson", 0.1,
+     "Shifting Shadows", "Mercy Thompson #0.1, #0.5, #0.6", 8.5,
+     True, "one series written longer isn't two series"),
+    ("Tales from Mos Eisley Cantina: Star Wars Legends", "Star Wars - Legends", None,
+     "Tales from the Mos Eisley Cantina", "Star Wars: Tales", 1,
+     True, "across two series small words may differ"),
 ]
 
 
@@ -422,6 +554,22 @@ class TestOneTitleWhateverTheNumbers:
         assert not same_book(TitleRef("Blade Angels", "Blade Academy", 1), two, labels)
 
 
+def test_a_match_on_stored_series_numbers_alone():
+    """The owned "Dune" (Dune #1) and "Dune: A Whisper of Caladan Seas" a
+    source filed at Dune #1 are the same book only by position; an owned
+    book doesn't take that row in (Calibre sync, the cleanup's fold)."""
+    from app.works.title_identity import position_only_match
+    dune = TitleRef("Dune", "Dune", 1)
+    story = TitleRef("Dune: A Whisper of Caladan Seas", "Dune", 1)
+    assert same_book(dune, story) and position_only_match(dune, story)
+    # A title that writes its number, on either side, isn't position alone.
+    hwfwm = TitleRef("He Who Fights with Monsters", "He Who Fights with Monsters", 1)
+    assert not position_only_match(hwfwm, TitleRef("HE WHO FIGHTS WITH MONSTERS, BOOK 1: OUTWORLDER", None, None))
+    assert not position_only_match(TitleRef("He Who Fights With Monsters 4", "He Who Fights with Monsters", 4),
+                                   TitleRef("He Who Fights With Monsters, Book 4: Home", None, None))
+    assert not position_only_match(dune, TitleRef("Dune", None, None))       # the titles match
+
+
 class TestSeriesInTitle:
     """G171 / F14: the series a title names, for a source that gave none."""
 
@@ -440,6 +588,16 @@ class TestSeriesInTitle:
     ])
     def test_cases(self, title, expected):
         assert series_in_title(title) == expected
+
+    def test_a_head_ending_in_a_known_series_names_that_series(self):
+        """G232: step 5 had filed this in a new series named after the whole head."""
+        title = "Treachery at Martinique Isle Daughters of the High Seas: Book 1"
+        known = ["Daughters of the High Seas", "Pirates"]
+        assert series_in_title(title, known) == ("Daughters of the High Seas", 1.0)
+        assert series_in_title(title) == ("Treachery at Martinique Isle Daughters of the High Seas", 1.0)
+        # The head is itself a known series, or the ending is one word: unchanged.
+        assert series_in_title("Splinter Angel: Book 3", ["Splinter Angel", "Angel"]) == ("Splinter Angel", 3.0)
+        assert series_in_title("Star Wars Legends: Book 2", ["Legends"]) == ("Star Wars Legends", 2.0)
 
 
 @pytest.mark.parametrize("title,expected", [

@@ -157,6 +157,34 @@ async def test_a_switched_off_author_you_picked_still_counts(env):
     assert await _exists(bid)
 
 
+async def test_another_spelling_of_an_owned_author_counts(env):
+    """G245: Thomas Doscher's seven listed books went because Calibre
+    has him as "Thomas J. Doscher"; a different surname still doesn't count."""
+    owner = await _author("Thomas J. Doscher")
+    await _book("Owned One", [owner], owned=1, calibre_id=1)
+    variant = await _author("Thomas Doscher")
+    other = await _author("Thomas J. Dosher")
+    kept = await _book("Doscher's Next", [variant])
+    gone = await _book("Dosher's Book", [other])
+    await _apply()
+    assert await _exists(kept) and not await _exists(gone)
+
+
+async def test_a_book_credited_only_to_various_goes(env):
+    """G260: the F–Z scan of "Various" listed 978 cookbooks and magazine
+    issues; a shared credit doesn't make its books scanned."""
+    various = await _author("Various")
+    await _allow("Various")
+    await _book("Halo: Evolutions", [various], owned=1, calibre_id=1)
+    editor = await _author("John Joseph Adams")
+    await _allow("John Joseph Adams")
+    junk = await _book("Pillsbury Cook Book", [various])
+    edited = await _book("Wastelands", [various, editor])
+    _, report = await _apply()
+    assert not await _exists(junk)
+    assert await _exists(edited) and await _exists(1)
+
+
 async def test_owning_books_in_the_other_library_doesnt_count(env):
     """G212: Matt Dinniman owns audiobooks only; his ebook missing rows go,
     as the ebook scan gate already skips him."""
@@ -208,6 +236,56 @@ async def test_a_stored_comic_is_hidden_with_its_reason(env):
     assert rows[blurb] == (1, "anthology")
     assert rows[novel] == (0, None)
     assert rows[shown] == (0, "shown")
+
+
+async def test_a_uk_edition_is_hidden_in_the_ebook_library_only(env):
+    """G252: the ebook "Backyard Dungeon: UK Edition 7" is another cut of
+    the owned Backyard Dungeon 7; the audiobook library's UK Edition
+    audiobooks are the ones Mark collects."""
+    mine = await _author("Logan Jacobs")
+    await _allow("Logan Jacobs")
+    ebook = await _book("Backyard Dungeon: UK Edition 7", [mine])
+    abs_mine = await _author("Logan Jacobs", slug="audio")
+    audio = await _book("Backyard Dungeon: UK Edition 7", [abs_mine], slug="audio")
+    await _apply()
+    assert (await _q("SELECT hidden, hidden_reason FROM books WHERE id = ?", (ebook,)))[0] == (1, "listing")
+    assert (await _q("SELECT hidden, hidden_reason FROM books WHERE id = ?", (audio,), "audio"))[0] == (0, None)
+
+
+async def test_a_row_a_title_rule_hid_is_read_again(env):
+    """G266: "Tapped: Book 1 (… (COMPLETE SERIES))" was hidden as a box set;
+    today it is a book: listed again, then folded into the owned copy. A
+    title family that changed is relabelled; your hides, an anthology by
+    contributor count and a real box set stay."""
+    mine = await _author("Bram Kingsley")
+    await _allow("Bram Kingsley")
+    owned = await _book("Tapped: Book 1", [mine], owned=1, calibre_id=7)
+    copy = await _book("Tapped: Book 1 (A Slice-Of-Life HaremLit Adventure) (Tapped (COMPLETE SERIES))", [mine],
+                       hidden=1, reason="box_set")
+    relabel = await _book("God Emperor of Dune (1 of 2)", [mine], hidden=1, reason="box_set")
+    real_set = await _book("Tapped: The Complete Series", [mine], hidden=1, reason="box_set")
+    yours = await _book("Tapped: Book 2 (Tapped (COMPLETE SERIES))", [mine], hidden=1)
+    anth = await _book("Tapped Tales", [mine], hidden=1, reason="anthology")
+    _, report = await _apply()
+    rows = dict((r[0], r[1:]) for r in await _q("SELECT id, hidden, hidden_reason FROM books"))
+    assert copy not in rows and rows[owned][0] == 0          # listed again, then folded into the owned book
+    assert rows[relabel] == (1, "split")
+    assert rows[real_set] == (1, "box_set") and rows[yours] == (1, None) and rows[anth] == (1, "anthology")
+    notes = {r["id"]: r["detail"] for r in next(s for s in report["steps"] if s["key"] == "filtered")["rows"]}
+    assert notes[copy] == "listed again (was box_set)" and notes[relabel] == "split (was box_set)"
+    assert real_set not in notes                              # its label holds: not in the report
+
+
+async def test_a_row_listed_again_takes_part_in_the_listed_copy_fold(env):
+    """G266: the books-listed-twice step sees a row step 3 listed again."""
+    mine = await _author("Damien Hanson")
+    await _allow("Damien Hanson")
+    await _book("Something Owned", [mine], owned=1, calibre_id=3)
+    plain = await _book("Gears & Girls: Book 1", [mine], amazon_id="B0GEARS1")
+    hidden = await _book("Gears & Girls: Book 1 (A HaremLit LitRPG Fantasy Adventure) (Gears & Girls (COMPLETE SERIES))",
+                         [mine], hidden=1, reason="box_set")
+    await _apply()
+    assert await _exists(plain) != await _exists(hidden)      # one row of the book left
 
 
 async def test_a_family_whose_setting_is_off_keeps_its_reason_and_shows(env):
@@ -289,7 +367,53 @@ async def test_a_copy_folds_into_an_audiobookshelf_book_too(env):
     assert await _exists(owned, "audio") and not await _exists(copy, "audio")
 
 
-# ─── Step 5: the series a title names (F14 / G171) ───────────
+# ─── Step 5: books listed twice (G237, C44) ─────────────────
+
+
+async def _series(name, author):
+    return await _q("INSERT INTO series (name, author_id) VALUES (?, ?)", (name, author))
+
+
+async def test_two_listed_copies_of_one_book_fold_into_the_one_more_sources_know(env):
+    mine = await _author("Joshua Dalzelle")
+    await _allow("Joshua Dalzelle")
+    trilogy = await _series("Black Fleet Trilogy", mine)
+    hardcover = await _book("Warship", [mine], series_id=trilogy, index=1.0, hardcover_id="hc1", isbn="111")
+    ibdb = await _book("Warship: Black Fleet Trilogy 1 (Black Fleet Saga)", [mine], source="ibdb",
+                       series_id=trilogy, ibdb_id="ib1")
+    other = await _book("Counterstrike", [mine], series_id=trilogy, index=3.0)
+    p, _ = await _apply()
+    assert _count(p, "listed_copy") == 1
+    assert await _exists(hardcover) and not await _exists(ibdb) and await _exists(other)
+    assert await _q("SELECT ibdb_id FROM books WHERE id = ?", (hardcover,)) == [("ib1",)]
+
+
+async def test_listed_copies_that_arent_one_book_stay(env):
+    """C44: a match on series position alone, a bare title against "Title:
+    Another Title" (unless the other part is the series)."""
+    mine = await _author("John Birmingham")
+    await _allow("John Birmingham")
+    without = await _book("Without Warning", [mine])
+    after = await _book("Without Warning - After America", [mine], source="google_books")
+    owner = await _series("Owner Trilogy", mine)
+    zero_kobo = await _book("Zero Point", [mine], source="kobo", series_id=owner)
+    zero_amazon = await _book("Zero Point: The Owner: Book Two", [mine], source="amazon", series_id=owner,
+                              index=2.0, amazon_id="B0ZP")
+    dune = await _series("Dune", mine)
+    named = await _book("Dune", [mine], series_id=dune, index=1.0)
+    story = await _book("Dune: A Whisper of Caladan Seas", [mine], series_id=dune, index=1.0)
+    frontier = await _series("Star Trek: New Frontier", mine)
+    series_titled = await _book("Star Trek: New Frontier", [mine], series_id=frontier, index=1.0)
+    returned = await _book("The Returned, Part 1", [mine], source="amazon", series_id=frontier, index=1.0)
+    p, _ = await _apply()
+    assert _count(p, "listed_copy") == 1                     # the two Zero Points only
+    assert await _exists(without) and await _exists(after)
+    assert await _exists(zero_amazon) and not await _exists(zero_kobo)
+    assert await _exists(named) and await _exists(story)
+    assert await _exists(series_titled) and await _exists(returned)     # position alone
+
+
+# ─── Step 6: the series a title names (F14 / G171) ───────────
 
 
 async def test_a_standalone_titled_with_its_series_is_filed_there(env):
@@ -306,6 +430,18 @@ async def test_a_standalone_titled_with_its_series_is_filed_there(env):
     assert rows[reused] == ("Xenowealth", 5.0)
     assert rows[plain] == (None, None)
     assert await _q("SELECT series_id FROM books WHERE id = ?", (reused,)) == [(existing,)]
+
+
+async def test_a_head_ending_in_the_authors_series_is_filed_in_it(env):
+    """G232: "… Daughters of the High Seas: Book 1" had made a series named
+    after the whole head."""
+    mine = await _author("Rachel Cherie")
+    await _allow("Rachel Cherie")
+    existing = await _q("INSERT INTO series (name, author_id) VALUES ('Daughters of the High Seas', ?)", (mine,))
+    book = await _book("Treachery at Martinique Isle Daughters of the High Seas: Book 1", [mine])
+    await _apply()
+    assert await _q("SELECT series_id, series_index FROM books WHERE id = ?", (book,)) == [(existing, 1.0)]
+    assert await _q("SELECT COUNT(*) FROM series") == [(1,)]
 
 
 # ─── Step 6: the caches merged again (F13) ───────────────────

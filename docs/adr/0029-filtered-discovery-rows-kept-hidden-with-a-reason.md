@@ -93,6 +93,106 @@ of what was filtered, and nothing for the next scan or the Goodreads worker to r
   72 filed, 1,158 created by step 6 (700 hidden by the filters; skipped: 4 blacklisted Amazon records, 19 authors
   failing the author check, 62 known Goodreads ids); preview 13 s, the copies and caches unchanged.
 
+## Amendment (2026-10-23, wave D S28: what wave C's filters missed)
+
+- **Foreign titles with no edition marker** (G233): beside the marker and word-list rules (now with more Italian,
+  Spanish, Portuguese, German, Polish and Czech words, held to no owned title), a title is `not_english` when every
+  word of it (author names, possessives and short words left out) is one no English blurb uses, two or more of them
+  ("Gefallene Sonnen", "Un amore diabolico", "Vangin valtaistuin"), or when its blurb is in another language and a
+  word of the title is unseen ("Hechicero", "Preludio a Dune"). The blurb alone isn't enough: Hardcover files English
+  titles with a translation's blurb ("The Wrath of Mulgarath"). The vocabulary is a fixed file,
+  `app/discovery/wordlists/english_words.txt` (~39,000 words from the reference install's 8,700 English blurbs,
+  `tools/build_english_words.py`): built per install it would be empty on a fresh one and every title would look
+  foreign; a missing file turns the test off. The vocabulary test runs last, after every other family, so an English
+  comic issue named with invented words ("Hopcross Jilly #2") keeps its family.
+- **The Goodreads worker checks the title before an autocomplete** (G234): a foreign title is set aside
+  (`not_english`) without the request, and the next candidate's autocomplete isn't held for it.
+- **Box sets:** "The Complete <Name>" (not "Complete Guide / Book of"), word and Roman ranges ("Books I-V", "Books One
+  Through Six"), set names beside "Trilogy" ("Quintet", "Quartet", "Duology"…, not "Part I of an … Duology"), G235;
+  a list of titles after the last colon, three or more, two of them 2+ words or after a set word ("The Wax & Wayne
+  Series: Alloy of Law, Shadows of Self, …"), G236. Not a list: a description's ("A Paranormal Romance with …, …"),
+  genre words ("LitRPG, Progression Fantasy, …"), volume marks ("…, Book 1"), a byline ("by Card, Orson Scott, …"),
+  or a title worded as an anthology, sampler or listing.
+- Also: "Word Search" is not a book; a web novel's "Chapter 001-050" is a split; a comic sold under its author's name
+  with an issue number ("Patricia Briggs' Alpha & Omega: Cry Wolf #2") is a comic (C43, C45).
+- Measured on 2026-10-23 copies, old vs new verdict over every stored title: 0 owned titles change; listed rows newly
+  `not_english` 134 (about 120 real translations, the rest English books with rare or Latin titles, "Sua Sponte",
+  "Secondhand Spaceman", "Tripoint", accepted: recoverable, and a later copy with a fuller title is listed again),
+  `box_set` 23, `comic` 5, `split` 5. The cleanup's preview hides 172 rows in step 3 and creates the Cry Wolf / Moon
+  Called comic issues hidden instead of listed.
+
+## Amendment (2026-10-23, wave D S30: books listed twice)
+
+- **The missing-books cleanup folds listed copies of one book into each other** (G237), a new step after the
+  owned-copy fold: rows sharing a contributor that the title identity calls one book. The row more sources know
+  (then the older) is kept; ids, links, contributors and grab links carry over (`merge_books`). Not folded (C44): a
+  match on series position alone (a title that is only its series name: "Star Trek: New Frontier" and "The Returned,
+  Part 1" both filed at #1), and a bare "X" against "X: Y" whose "Y" isn't the series ("Without Warning" and
+  "Without Warning - After America", "Dark Faith" and "Dark Faith: Invocations"; "Zero Point" and "Zero Point: The
+  Owner: Book Two" fold). Family, omnibus and two-series checks were measured and left out: no change, or only right
+  folds lost (Tithe, KTF, Takhini Wolves…).
+- Reading the step's folds found identity calls that would fold two books (ADR-0028, amended) and, beside G230, that
+  a series parenthetical naming a position ("Far Thoughts and Pale Gods (The Complete Short Fiction of Greg Bear Book
+  2)") marked a book an omnibus, so the cache re-merge re-created it beside its copy.
+- Measured on 2026-10-23 copies: 183 folds, every one read (about 180 right; wrong: "Marvel 1602: Fantastick Four"
+  into "Fantastic Four", two unflagged comic rows).
+
+## Amendment (2026-10-23, wave D S30b: Mark's sort of the cleanup preview)
+
+- **An orientation edition is listed hidden as a listing** (G246): "Birds of Prey - Bisexual Edition (Pinwheel Book
+  20)" when Mark owns the other cut. "Bisexual / Bi / Gay / Lesbian / Queer / Hetero(sexual) / Straight Edition" marks
+  it at creation and in the cleanup's step 3, only when no other family does; matching (`book_class`) reads the title
+  without the rule, so the edition stays its own row beside the owned one and announces are unaffected. An owned row is
+  never filtered ("Human Resources: Hetero Edition" stays as it is).
+- **C45 also takes a volume:** the author's possessive name and "Vol. N" / "Volume N" mark a comic ("Patricia Briggs'
+  Mercy Thompson: Moon Called Vol. 1", "Brandon Sanderson's White Sand Vol. 2"). Amazon's lone "(Volume N)" tag doesn't
+  ("Matt Forbeck's Brave New World: Revolution (Volume 1)" is a novel), nor does a magazine ("Isaac Asimov's Science
+  Fiction Magazine, Volume 4").
+- **A last part that is only a byline is a listing**, whoever it names: "Dracula : by Bram Stoker", which Amazon filed
+  under Holly Black. The "by" must follow a colon or dash and be lower case (a title-case subtitle starts "By": "Learn
+  German: By Reading Urban Fantasy"). Without the separator real titles do it ("Milked by Her Master", "On The
+  Anatomization of an Unknown Man (1637) by Frans Mier"), so "Dracula by Bram Stoker" stays listed.
+- Measured on the 2026-10-23 post-update copies (verdicts over every stored title): 4 listed comics hidden (Dresden
+  Files, White Sand, Moon Called), 2 Dresden comic omnibuses `box_set` → `comic`, the edition `listing`; 0 other owned
+  changes.
+
+## Amendment (2026-10-23, wave D S31: Mark's sort of the F–Z sample)
+
+- **A place name isn't a foreign article**: "Las Vegas", "Los Angeles", "Los Alamos", "El Paso", "El Dorado", "La
+  Jolla", "La Paz" are left out of the word-list count ("Viva, Las Vega IX" and "Dirty Magick: Los Angeles" are English
+  books). Over every stored title it changes one row.
+- **A "UK / US Edition" is another cut, in the ebook library** (G252, G246 extended): "Backyard Dungeon: UK Edition 7"
+  beside the owned Backyard Dungeon 7 ebook is listed hidden as a listing at creation and in step 3; matching is
+  unchanged. Not in the audiobook library, where the UK Edition audiobooks are the ones Mark collects
+  (`filter_reason(content_type=)`, from the scanned library / the cleanup's library).
+- **"Series / Episodes N-M" is a box set** (G254, G234's shapes): Aer-Ki Jyr's 4-book "Star Force: Origin Series 5-8"
+  … "97-100" bundles, "Star Guild Episodes 1 - 9". Anywhere in the title: anchored at the end it only missed more
+  bundles ("The Wheel of Time Series 1-15 Books Collection Set", "… Episodes 1-3 (Dottie For You Bundles Book 1)").
+  Over every stored title: 25 listed rows, all bundles; 0 owned.
+- **"Books 1, 2, and 3" is a box set** (G261): a comma list of book numbers ("A Throne for Sisters (Books 1, 2, and
+  3)", "Books 4, 5, 6"). Over every stored title: 2 listed bundles and the owned ABS omnibus "The Circuit: The
+  Circuit, Book 1, 2, 3" (its class only; an owned row isn't hidden).
+- The sample (50 first scans, 1,203 listed / 355 hidden, 72 cards) read 68 right. The word test's one wrong call, the
+  invented "Ventura Starway", is G233's accepted cost: an English blurb, an English source language or a series with an
+  owned book would each un-hide 40–135 real translations (sources label translations "English" and give them the
+  original's blurb).
+
+## Amendment (2026-10-24, wave D S33: Mark's sort of the cleanup after the F–Z scans)
+
+- **"(N of M)" is a split** (G262): "God Emperor of Dune (1 of 2)" is a part, never the whole book you own (its class
+  for matching is `split` in every library). Hidden in the ebook library only: the audiobook library's GraphicAudio
+  parts ("Dark Age (3 of 3) [Dramatized Adaptation]") are what Mark buys, so there they're listed.
+- **Scripts are not a book** (G263): "Screenplay", "Shooting Script", "Teleplay" ("The Green Mile: The Screenplay").
+- **"(X (COMPLETE SERIES))" is a series' status**, as "(Complete)" was (G230): "Tapped: Book 1 (…) (Tapped
+  (COMPLETE SERIES))" is one book, for the omnibus flag and the box-set family both.
+- **The cleanup re-reads a row a title rule filtered** (G266): rows under a family the title alone decides (box set,
+  split, sampler, listing, junk, not a book, study guide) are read again in step 3 and listed again ("listed again
+  (was box_set)") or relabelled ("comic (was box_set)") under today's rules; comics, anthologies and foreign titles
+  can rest on a blurb, genres or a contributor count and aren't re-read. Today: 23 "(COMPLETE SERIES)" books listed
+  again (the Tapped and Monster Rocker copies then fold into Mark's owned books), ~30 Dresden comic issues
+  relabelled box set → comic, the Expanse / Extinction Parade issues junk → comic.
+- **G264:** a UK Edition keeps the listing label (hidden either way; no "other edition" family).
+
 ## Related
 
 - [0021](0021-roster-gates-discovery-author-creation.md) — roster and scan eligibility (amended: scan eligibility is

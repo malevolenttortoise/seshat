@@ -215,6 +215,7 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
     const why: Record<string, string> = {
       not_scan_eligible: "not on your allow list and owns nothing",
       list_missing_off: "List missing books is off",
+      placeholder_credit: "a shared credit, not an author",
     };
     return (v as { name?: string; reason?: string }[])
       .map((x) => `${x.name ?? "?"}: ${why[x.reason ?? ""] ?? x.reason ?? ""}`)
@@ -372,7 +373,7 @@ function DesktopUnifiedDashboard({ onNav }: Props) {
             <CmdBtn
               label={
                 <>
-                  <Dot color={t.ylw} /> Clean up missing books
+                  <Dot color={t.ylw} /> Missing Cleanup
                 </>
               }
               onClick={cleanup.show}

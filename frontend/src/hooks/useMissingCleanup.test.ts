@@ -114,6 +114,7 @@ describe("the dialog's words", () => {
     expect(rowNote("filtered", { ...row, reason: "listing", stays_shown: true }))
       .toBe("Split / sampler / listing · stays shown: that filter is off");
     expect(rowNote("owned_copy", { ...row, into_title: "Truthwitch" })).toBe("into “Truthwitch”");
+    expect(rowNote("listed_copy", { ...row, into_title: "Warship" })).toBe("into “Warship”");
     expect(rowNote("series_in_title", { ...row, detail: "Xenowealth #5" })).toBe("Xenowealth #5");
     expect(rowNote("cache_remerge", { ...row, hidden: true, hidden_reason: "box_set" })).toBe("hidden: Box set");
     expect(rowNote("cache_remerge", { ...row, hidden: false })).toBe("listed as missing");

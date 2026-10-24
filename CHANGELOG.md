@@ -7,6 +7,127 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [Unreleased]
+
+## [3.15.0] — 2026-10-24
+
+Wave D of the **discovery fix pass**, built while the first scans of the
+F–Z authors ran and checked on the live container after each batch: the
+title identity and the filters learned what those scans turned up, the
+missing-books cleanup gained a step, and shared credits are no longer
+scanned. No database migrations.
+
+**Behaviour changes to know about:**
+
+- **The vocabulary filter can hide an English book.** A title whose words
+  no English blurb in the reference library uses is filtered as Not
+  English, so an English book with invented or rare words ("Ventura
+  Starway") can be hidden. Find it under Hidden → Filtered → Not English;
+  **Unhide** keeps it listed for good.
+- **"Missing Cleanup" removes more and re-lists some books.** It removes
+  the books only a shared credit wrote ("Various", "Unknown") or a
+  publisher Hardcover credits as an author ("Litforge Press"), listed and
+  hidden alike, and it re-reads the books an older title-only rule hid, so
+  some come back listed (or fold into the one you own). As before, nothing
+  happens until you press it, and Preview shows each step's count first.
+- **A 429 pauses that source.** When ibdb, OpenLibrary, Google Books or
+  Audible answer "429 Too Many Requests", Seshat sends that source nothing
+  until its Retry-After (or 5 minutes) has passed; a scan in that window
+  skips it and says so in the log.
+
+### Changed
+
+- **The title identity knows more ways to write one book** (ADR-0028,
+  discovery wave D): a marketing tail is ignored ("…: Now a Netflix
+  Originals Movie", "…From the Author of Mickey 7"); a spelled-out number
+  ending a subtitle is that number ("Sermon Three" = "Sermon 3"); spaces
+  don't count when the two books can't sit in different series ("The War
+  Ship" = "The Warship"); "Series, Book N: Title" and "Title: Series: Book
+  N" name a position, like "Title: Book N of Series"; a series named in
+  either title counts as a series name ("Invasion (The Autumn War #1)" is
+  your "The Autumn War: Volume 1: Invasion"). Five School for Good and
+  Evil movie editions and an owned Towerbound re-upload are now
+  recognised as books you own.
+
+- **The navbar's cache-worker cloud is red only when a worker stops**
+  (no check-in for 5+ minutes during its hours); amber when a source
+  backs off for long; a short cooldown or a few authors that failed for
+  good stay green and show in the tooltip.
+- **"Clean up missing books" also folds books listed twice** into one row
+  (a new step after "Copies of books you own"), keeping the row more sources
+  know. Its Dashboard button is now **Missing Cleanup**.
+- **Discovery filters catch more** (ADR-0029, wave D): foreign titles with
+  no edition marker (more languages' words, and a title whose words no
+  English blurb uses), box sets written as "The Complete Wheel of Time",
+  "Books I-V", "The Ender Quintet" or a list of titles, "Word Search", web
+  novel chapter ranges, and comic issues sold under their author's name.
+  The Goodreads worker no longer spends an autocomplete on a title in
+  another language. A comic is also known by its author's name and a
+  volume number ("Patricia Briggs' Mercy Thompson: Moon Called Vol. 1"); a
+  title ending in another person's byline ("Dracula : by Bram Stoker") is a
+  seller's listing; an orientation edition of a book ("Birds of Prey -
+  Bisexual Edition") is listed hidden as a listing. A place name ("Las
+  Vegas", "Los Angeles") no longer makes an English title look Spanish.
+  In the ebook library a "UK Edition" of a book is listed hidden too, and
+  bundles written "Origin Series 13-16", "Episodes 1-9" or "Books 1, 2,
+  and 3" are box sets.
+- **Split editions and scripts are filtered**: "God Emperor of Dune (1 of
+  2)" is a split (hidden in the ebook library; GraphicAudio's parts stay
+  listed in the audiobook library) and never folds into the whole book you
+  own; "The Green Mile: The Screenplay" is not a book.
+- **"Missing Cleanup" re-reads books an older title rule hid**: a series
+  named "Tapped (COMPLETE SERIES)" no longer makes its books box sets, and
+  they're listed again (or folded into the one you own).
+- **A shared credit like "Various" or "Unknown", or a publisher such as
+  "Litforge Press", is never scanned as an author**, even when you own a
+  book credited to it: Hardcover's "Various" is every compilation anywhere. The missing-books cleanup removes the
+  books only such a credit wrote.
+- **Another spelling of an author you own or allow-listed counts as that
+  author** for scans and the missing-books cleanup: "Thomas Doscher"'s
+  books stay when you own "Thomas J. Doscher".
+
+### Fixed
+
+- **Books in two different series were joined by a near-miss title**: "The
+  Lost Dragon" folded into your "Lost Dragons", "Final Days: Colony" into
+  "The Colony", "Wastelands: Stories of the Apocalypse" matched your "The
+  Waste Lands". "Spice & Wolf" and "Spice and Wolf" now match.
+- **A metadata source that said "429 Too Many Requests" was asked again
+  within seconds**: ibdb, OpenLibrary, Google Books and Audible now get
+  nothing until the source's Retry-After (or 5 minutes) has passed, and a
+  scan says it skipped them. ibdb's scan also asks its search once instead
+  of twice per author.
+- **The title identity joined books that differ by one word or number**:
+  "Dark Nest III" and "Dark Nest II", "Clockwork Princess" and "Clockwork
+  Prince", "Episode Zero" and "Episode One", "… South Island" and "… North
+  Island", "Tales From The Cobra Wars" and "Hearts and Minds". An owned book
+  no longer takes in a book that matches it only by series number (your
+  "Dune" and "Dune: A Whisper of Caladan Seas").
+- **Hygiene's foreign-language sweep hid books with no reason**, so they
+  showed under Hidden → "Hidden by you"; they are now Filtered → Not
+  English, the earlier ones too.
+- **Hygiene's identifier fold deleted the second copy of a book you own
+  twice in Calibre or Audiobookshelf**, and never moved a folded book's
+  grab link. Two library items stay two rows, and links follow the fold.
+- **"(Complete)" in a series name made a book an omnibus**: Amazon writes
+  series as "My Paranormal Girlfriends (Complete)", so "My Vampire
+  Bodyguards (… (Complete) Book 1)" never matched its copy, and start-up
+  cleared its series number. A "(Complete)" standing alone still marks a
+  set.
+- **A title like "Treachery at Martinique Isle Daughters of the High
+  Seas: Book 1" made a new series named after its whole head**: it is now
+  filed in the author's existing series the head ends with.
+- **"Roommate Control (Part Four)" and "(Part Three)" were one book**:
+  the same-title rule ignored a title's own number in its parentheses.
+- **"Secrets of the Silent Witch" folded into "Secrets of the Silent
+  Witch, Vol. "**, a volume whose number the source lost; such a title is
+  now one book with the plain title only when both are filed at one place
+  in one series.
+- **"Long Story Short" was read as a description** ("… Story …"), which
+  made "NieR:Automata: Long Story Short" and "… Short Story Long" one book;
+  a description now has to end, or go on as a description, after its
+  generic word.
+
 ## [3.14.0] — 2026-10-22
 
 Phase 2 of the 2026-10 roadmap, the **codebase audit**, waves 4 and 5,

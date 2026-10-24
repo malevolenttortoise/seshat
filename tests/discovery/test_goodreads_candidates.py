@@ -484,6 +484,21 @@ async def test_a_foreign_snippet_rejects_before_the_page(env):
     assert "page" not in env["gr"].kinds()
 
 
+async def test_a_foreign_title_costs_no_autocomplete(env):
+    """G234: one author's translations took an autocomplete every 3 minutes
+    the night of the 3.14.0 release."""
+    await _seeded(env, [_rec(100, "Gefallene Sonnen"), _rec(101, "New Book")])
+    env["gr"].autocomplete["New Book"] = [_hit(101, "New Book")]
+    res = await gc.step()
+    assert env["gr"].urls == []
+    row = (await _rows())["100"]
+    assert (row["state"], row["reason"]) == ("skipped", "not_english")
+    assert "not English" in res.detail
+    # No request was spent, so the next candidate's autocomplete isn't held.
+    await gc.step()
+    assert env["gr"].kinds() == ["ac"]
+
+
 async def test_a_blocked_autocomplete_leaves_the_candidate_alone(env):
     await _seeded(env)
     env["gr"].block_autocomplete = True

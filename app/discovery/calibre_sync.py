@@ -575,7 +575,7 @@ async def _absorb_matches(
     source filed at "Dune #1"; they go to `ambiguous` when given. Rows: id,
     title, owned, hidden, series_name, series_index."""
     from app.discovery import filters
-    from app.works.title_identity import TitleRef, same_book
+    from app.works.title_identity import TitleRef, position_only_match, same_book
 
     ids = {int(a) for a in author_ids if a is not None}
     if not ids or not title:
@@ -617,6 +617,7 @@ async def _absorb_matches(
         if r["id"] != exclude_id and r["calibre_id"] is None and r["source"] != "calibre"
         and tokens & _title_tokens(r["title"] or "", r["series_name"], r["series_index"])
         and same_book(mine, TitleRef(r["title"] or "", r["series_name"], r["series_index"]), labels)
+        and not position_only_match(mine, TitleRef(r["title"] or "", r["series_name"], r["series_index"]))
     ]
     if not hits:
         return []

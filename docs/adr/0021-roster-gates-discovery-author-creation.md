@@ -174,3 +174,27 @@ prune-linkage operate on two rows that already exist and mint nothing.
 - **A book credited to more than 3 authors trains none of them** (G204, the anthology line of ADR-0029's F7), for
   the co-author list and the delivery's announce-author train alike; the matched author is already allowed.
 - Accepted cost: until a book is delivered, its co-authors' own announces still need their own match.
+
+## Amendment (2026-10-23, wave D S30b: another spelling of an author)
+
+- **A name that is another spelling of a scan-eligible author is scan-eligible** (G245): same surname and
+  `authors_match` against the name of an author who owns a book in this library (listing switch on) or an operator
+  allow-list entry. Calibre has "Thomas J. Doscher" (owns 7) and IBDB credited "Thomas Doscher", a second author row
+  that owned nothing, so the missing-books cleanup would have removed his 7 listed books (Mark's sort). Scans and the
+  cleanup's step 1 both read it (`Roster.counts_for_scans`); linking (`admits`) is unchanged. Accepted cost: two people
+  whose names differ by a middle initial both count.
+- On the 2026-10-23 copies it changes one author (Doscher); every other non-eligible author with books has no
+  same-surname match.
+
+## Amendment (2026-10-24, wave D S31: a shared credit is no author, G260)
+
+- **A placeholder credit is never scan-eligible**, even owning books or allow-listed: "Various", "Unknown",
+  "Anonymous", "Various Authors / Artists / Writers / Contributors", "Anon", "N/A", "Multiple Authors"
+  (`roster.is_placeholder_credit`, skip reason `placeholder_credit`). Mark owns 3 anthologies credited "Various"
+  and autobrr's import allow-listed it; its F–Z first scan read Hardcover's "Various" record, every compilation
+  anywhere: +978 listed (cookbooks, magazine issues, guides) and +953 hidden. It stays linked on books and on the
+  allow list (announces unchanged); the missing-books cleanup's step 1 removes the books only such a credit wrote.
+- **A publisher is a shared credit too** (G267, 2026-10-24): a credit of 2+ words ending in Press / Publishing /
+  Publications / Publishers. "Litforge Press" is credited on one owned book, so its Amazon catalogue was scanned: 38
+  listed rows, mostly copies of its authors' books (a "Tapped: Book 1" listed beside the owned one). It is the only such
+  credit in either library or on the allow list today.

@@ -234,6 +234,16 @@ class TestSeriesWrittenInTheTitle:
         rows = await _rows()
         assert [(r["series"], r["series_index"]) for r in rows] == [("Kingdom", 4), ("Kingdom", 5)]
 
+    async def test_a_head_ending_in_this_authors_series_is_filed_there(self, library):
+        """G232: not in a new series named after the whole head."""
+        await _book(library, "Turning of the Tides", series="Daughters of the High Seas", index=2)
+
+        await _merge(library, _standalone("Treachery at Martinique Isle Daughters of the High Seas: Book 1"))
+
+        rows = await _rows()
+        assert sorted((r["series"], r["series_index"]) for r in rows) == [
+            ("Daughters of the High Seas", 1), ("Daughters of the High Seas", 2)]
+
     async def test_series_colon_book_n(self, library):
         await _merge(library, _standalone("Splinter Angel: Book 3"))
 

@@ -548,6 +548,52 @@ class TestIdentifierDedup:
         rows = {r["id"] for r in await (await db.execute("SELECT id FROM books")).fetchall()}
         assert {novel, listing} <= rows
 
+    async def test_two_owned_library_items_stay_two_rows(self, hygiene_dbs):
+        """G239: two copies of one book in Calibre (Warwitch Academy) were
+        folded into one row, and Seshat lost track of the second copy."""
+        db = hygiene_dbs
+        a = await _insert_author(db, "Virgil Knightley")
+        first = await _insert_book(db, author_id=a, title="Warwitch Academy", amazon_id="B0WWA",
+                                   owned=1, calibre_id=3590)
+        second = await _insert_book(db, author_id=a, title="Warwitch Academy", amazon_id="B0WWA",
+                                    owned=1, calibre_id=4383)
+        copy = await _insert_book(db, author_id=a, title="Warwitch Academy", amazon_id="B0WWA", owned=0)
+        stats = hygiene._zero_stats()
+        assert await hygiene._dedupe_by_identifier(db, "amazon_id", stats, "testlib") == 1
+        rows = {r["id"] for r in await (await db.execute("SELECT id FROM books")).fetchall()}
+        assert {first, second} <= rows and copy not in rows
+
+    async def test_a_fold_moves_the_grab_link(self, hygiene_dbs):
+        """G239: pass A deleted the row and left its grab link pointing at
+        nothing (20 dangling on the reference install)."""
+        from app.database import get_db as get_pipeline_db
+        db = hygiene_dbs
+        a = await _insert_author(db, "James S. A. Corey")
+        winner = await _insert_book(db, author_id=a, title="Abaddon's Gate", isbn="111", owned=1)
+        loser = await _insert_book(db, author_id=a, title="Abaddon's Gate", isbn="111", owned=0)
+        other_winner = await _insert_book(db, author_id=a, title="Caliban's War", isbn="222", owned=1)
+        other_loser = await _insert_book(db, author_id=a, title="Caliban's War", isbn="222", owned=0)
+        pdb = await get_pipeline_db()
+        try:
+            for gid, book in ((4201, loser), (4300, other_winner), (4301, other_loser)):
+                await pdb.execute(
+                    "INSERT INTO grabs (id, mam_torrent_id, torrent_name, state) VALUES (?, ?, ?, 'complete')",
+                    (gid, str(gid), f"grab {gid}"))
+                await pdb.execute("INSERT INTO book_grab_links (grab_id, library_slug, book_id) VALUES (?, 'testlib', ?)",
+                                  (gid, book))
+            await pdb.commit()
+        finally:
+            await pdb.close()
+        stats = hygiene._zero_stats()
+        assert await hygiene._dedupe_by_identifier(db, "isbn", stats, "testlib") == 2
+        pdb = await get_pipeline_db()
+        try:
+            links = dict(await (await pdb.execute(
+                "SELECT grab_id, book_id FROM book_grab_links WHERE library_slug = 'testlib'")).fetchall())
+        finally:
+            await pdb.close()
+        assert links == {4201: winner, 4300: other_winner}   # moved; the winner's own link kept
+
     async def test_skips_hidden_books(self, hygiene_dbs):
         """A hidden row sharing an identifier with an active row must
         NOT be merged — the user hid it intentionally."""

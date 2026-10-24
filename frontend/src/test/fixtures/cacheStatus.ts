@@ -77,3 +77,24 @@ export const cacheStatusCooldownRoutes = {
   "GET /v1/metadata-cache/amazon/status": amazonStatus,
   "GET /v1/metadata-cache/goodreads/status": goodreadsCooldownStatus,
 };
+
+// G269: a short routine cooldown and two authors that failed for good
+// are green; a worker with no check-in for 12 minutes is red.
+export const cacheStatusRoutineRoutes = {
+  "GET /v1/metadata-cache/amazon/status": {
+    ...amazonStatus,
+    cooldown: { blocked: true, remaining_s: 304, reason: "store pages" },
+  },
+  "GET /v1/metadata-cache/goodreads/status": {
+    ...goodreadsStatus,
+    queue: { ...goodreadsStatus.queue, failed_permanent: 2 },
+  },
+};
+
+export const cacheStatusStoppedRoutes = {
+  "GET /v1/metadata-cache/amazon/status": amazonStatus,
+  "GET /v1/metadata-cache/goodreads/status": {
+    ...goodreadsStatus,
+    worker: { ...goodreadsStatus.worker, seconds_since_heartbeat: 720 },
+  },
+};

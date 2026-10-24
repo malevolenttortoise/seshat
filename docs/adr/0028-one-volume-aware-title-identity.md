@@ -222,6 +222,96 @@ The same parser reads "(Series Book N)" out of a title at creation (G171) and Ha
   ~15 copies the identity misses; 94 of the 96 read right (the two wrong ones: German-titled Slime rows filed into
   "The Slime Diaries" at the numbers of the English books).
 
+## Amendment (2026-10-23, wave D S26: more ways to write one book)
+
+- **A marketing tail is a description** (G225): a last part "Now a … Movie / Series / Show", "Soon to be a …",
+  "From / By the (bestselling) Author of …", "… #1 / New York Times bestseller" is dropped, its numbers too ("The
+  Humorous Science Fiction Thriller From the Author of Mickey 7"). "The School for Good and Evil #3: The Last Ever
+  After: Now a Netflix Originals Movie" is the owned "The Last Ever After".
+- **A spelled-out number (one–fifteen) ending a subtitle part is that number** (G226), in the last part that isn't a
+  description ("The Cannabis Preacher: Sermon Three" = "…, Sermon 3: A hunt for …"; "Sermon One: A financial thriller
+  …" is 1). An earlier part is a name ("The Star Trek: Deep Space Nine: The Siege"), a description's number isn't the
+  book's, a head is left alone ("Ready Player One"). Titles also compare as written, so "Round One (Mixed Martial
+  Cultivator #1)" still matches "Mixed Martial Cultivator: Round One", and the same-title rule (G213) reads the titles
+  as written. Of 144 stored titles the reading touches, 6 aren't volumes (Rogue One, Fantastick Four…): accepted, the
+  worst case is a later duplicate.
+- **Spaces don't count when the two books can't sit in different series** (G227): one side has no series, or both
+  are in one series ("The War Ship" = "The Warship"; "Endgame" in Merovingen Nights and "End Game" in Fallen Empire
+  stay two books). The scan merge's candidate index joins adjacent words so it offers such a pair.
+- **F29's mirror** (G228): "Series, Book N: Title" and "Title: Series: Book N" name a position when the named series
+  is where the book is filed (only "Book"; "86—EIGHTY-SIX, Vol. 7: Mist" stays a volume): "Rise of the Infernal
+  Paladin, Book Three: Infernal Liberation" = "Rise of The Infernal Paladin: Infernal Liberation", "Zero Point: The
+  Owner: Book Two" = "Zero Point".
+- **A series named in either title counts as a series name** (G229): the stored series as a suffix with no colon when
+  both are at one place ("Turning of the Tides Daughters of the High Seas (Book 2)"), and any series named in a
+  title's parentheses ("Invasion (The Autumn War #1)" = the owned "The Autumn War: Volume 1: Invasion", filed in
+  Calibre as Pinwheel #25). A bare "Series", "Book", "Volume", "Novel", "Saga" or "Collection" is never a title part.
+- **Fixed:** the same-title rule (G213) ignored a title's own number in its parentheses ("Roommate Control (Part
+  Four)" = "(Part Three)"); a generic word followed by more title was read as a description ("NieR:Automata: Long
+  Story Short" = "… Short Story Long"). A description now ends at its generic word, or goes on as one: a function
+  word ("with", "about", "inspired by"), an article ("Novella A Penguin eSpecial"), another generic word ("Fantasy
+  Novel"), punctuation ("LitRPG · Time Travel"), a part ending in a generic word, or, after an article, the book's
+  number (": A Matt Kearns Novel 3").
+- Measured on 2026-10-23 copies (after Hygiene): 79 of 2,498,085 same-author pairs change, every one read (joins: the
+  five SGE movie editions, Sermon 3, Zero Point, Infernal Paladin ×2, The Warship, Turning of the Tides, Excalibur:
+  Requiem, Gatefather, Changes; splits: comic issues from their collections, "Red School (Part 2)", two owned "Under
+  the Oak Tree" books, NieR); grab history 77 → 78 of 2,136 snatched auto-grabs stopped as owned, the new one a real
+  owned re-grab (4245 "Towerbound Is Not Just a Game"), no wanted volume blocked; the missing-books cleanup's preview
+  folds the five SGE copies into the owned books and its cache re-merge creates 7 "Patricia Briggs' Alpha & Omega: Cry
+  Wolf #2–#8" comic issues the old merge had folded into the owned novel (the filters' job). Two guards tried and
+  dropped, changing no pair: word order in the spelling-variant check, and a number belonging to the other title.
+
+## Amendment (2026-10-23, wave D: wrong "same" calls found reading the listed-copy fold)
+
+- Reading the missing-books cleanup's new fold of listed copies turned up identity calls that would fold two books
+  (and merge them on a scan): Roman numerals ending a subtitle weren't numbers ("Dark Nest III" = "Dark Nest II");
+  "Zero" wasn't a number ("Episode Zero" = "Episode One"); the spelling check compared whole strings, so one different
+  word ("… South Island" / "… North Island", "Clockwork Prince" / "… Princess", "World" / "Sword") or extra words in
+  front ("I, Q: Star Trek The Next Generation" ~ "Star Trek The Next Generation") passed its 92%; a description could
+  span a " - " ("Starfleet Academy - Worf's First Adventure"); a part starting with its generic word was a description
+  ("G.I. Joe: Tales From The Cobra Wars"). Now: Roman numerals II–XV ending a subtitle and "Zero" are numbers; the
+  spelling check goes word by word (a misspelt word, "Countrey" / "Jorneyman", still passes; a title cut short or a
+  space inside an 8+-letter word, "Counterstrike" / "Counter Strike", still passes); a description's words never
+  include a lone "-"; a part starting with its generic word is a description only if it ends there or says what it
+  is based on ("Stories Inspired by the Music of Rush").
+- **A match on stored series numbers alone isn't an owned book's copy** (`position_only_match`): a title that is
+  only its series name, neither title writing a number, titles otherwise different. The owned "Dune" (Dune #1) had
+  taken in "Dune: A Whisper of Caladan Seas", which a source filed at Dune #1, once G211 stopped covering it (the two
+  other such rows now read as different books). The Calibre-sync absorb and the cleanup's owned-copy fold skip it;
+  "He Who Fights with Monsters" still takes "…, Book 1: Outworlder" (that title writes its number).
+- Measured on 2026-10-23 copies: 49 of 2,498,085 same-author pairs change, all to "different", every one read (the
+  wrong joins above, Dresden "War Cry" / "Wild Card" issues, Nebula Showcase years, magazine issues; ~6 new duplicates,
+  mostly hidden rows: "Penny, the Engineering Tail of the Fourth (Little) Pig", "W3 Women in Deep Time"); grab history
+  unchanged (78 of 2,136); a full Calibre sync unchanged.
+
+## Amendment (2026-10-23, wave D S30b: a volume that lost its number)
+
+- **A title ending in a volume word with no number** ("Secrets of the Silent Witch, Vol. ", a light-novel volume a
+  source filed at 4.5) is not the plain-titled book ("Secrets of the Silent Witch"): its keys dropped the dangling
+  word, so the listed-copy fold joined them (Mark's sort of the cleanup preview). It still is when both are filed at
+  one place in one series, and a written number on either side goes on to the number rules.
+- Measured on the 2026-10-23 post-update copies: the one wrong fold gone; grab history and a full Calibre sync
+  unchanged.
+
+## Amendment (2026-10-24, wave D S33: Mark's sort of the cleanup after the F–Z scans)
+
+- **Across two stored series a near-miss spelling doesn't join two titles**; only small words may differ ("the", "a",
+  "an", "of", "and", "&"). "The Lost Dragon" (Cycle of Dragons #3) is not the owned "Lost Dragons" (The Shadow's
+  Dragon #3); "Tales from Mos Eisley Cantina" (Star Wars - Legends) still is "Tales from the Mos Eisley Cantina"
+  (Star Wars: Tales), and "Spice & Wolf, Vol. 4" is "Spice and Wolf (Light Novel), Vol. 4". With one side unfiled or
+  both in one series, a misspelling still joins ("Alvin Jorneyman").
+- **Two titles filed at two numbers in two unrelated series are one book only when written alike** (descriptions and
+  parentheticals aside): "Final Days: Colony" (Final Days #2) is not "The Colony" (The Survivors #17). One series
+  written two ways isn't two series: parentheticals aside, equal or one starting with the other ("Towerbound (LITRPG +
+  REGRESSOR + OPMC)" / "Towerbound", "Mercy Thompson" / "Mercy Thompson #0.1, #0.5, #0.6"). A "a title that writes
+  the other side's number" exemption was measured and left out (it kept 1 right join and 2 wrong).
+- Measured on the 2026-10-24 copies: 63 of 5,917,785 same-author pairs change, every one read. Fixed: "The Waste
+  Lands" (owned) / "Wastelands: Stories of the Apocalypse", Knightfall / Nightfall, Evolution / Revolution, Dresden
+  "Storm Front Vol. 2" / "Vol. 1", "Wizard at Large" / the Landover Volume 1 omnibus; new right joins: the owned
+  Spice & Wolf volumes and their "Spice and Wolf (Light Novel)" copies (~20). Lost joins: ~15 issue / collection
+  pairs among hidden comics, the anthologies "Legends II" and "Tales from the Lyon's Den" (two rows each), and the
+  two owned "Machine Crusade" copies.
+
 ## Related
 
 - [0003](0003-bundle-dedup-prefer-duplicates.md) — the same duplicates-over-loss stance, for bundles.

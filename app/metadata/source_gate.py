@@ -643,6 +643,71 @@ async def request(
         return resp
 
 
+# ─── A source that said 429 (G255) ───────────────────────────
+#
+# ibdb.dev answered 429 for 12 of wave D's first 100 F–Z scans while the
+# generic clients retried 3s and 6s later and asked again for the next
+# author (ADR-0025 tier 0: back off when told to). The generic clients
+# (`discovery.sources.base`, `metadata.sources.base`: ibdb, OpenLibrary,
+# Google Books, Audible) now cool the source down and send it nothing
+# until the cooldown ends. Amazon, Goodreads, Kobo and Hardcover keep
+# their own handling (Amazon cools per request kind, G181).
+
+COOLDOWN_429_S = 300.0
+_MAX_COOLDOWN_S = 3600.0
+_cooling_until: dict[str, float] = {}
+
+
+class SourceCoolingDown(Exception):
+    """The source said 429 recently; nothing is sent until it's over."""
+
+    def __init__(self, source: str, seconds: float) -> None:
+        super().__init__(f"{source} is cooling down after a 429 ({seconds:.0f}s left)")
+        self.source, self.seconds = source, seconds
+
+
+def _retry_after_seconds(value: Optional[str]) -> Optional[float]:
+    """A Retry-After header's wait: seconds, or an HTTP date."""
+    if not value:
+        return None
+    value = value.strip()
+    if value.isdigit():
+        return float(value)
+    try:
+        from email.utils import parsedate_to_datetime
+        return parsedate_to_datetime(value).timestamp() - _wall()
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return None
+
+
+def cool_down(source: str, retry_after: Optional[str] = None) -> float:
+    """Start (or lengthen) `source`'s cooldown after a 429: its Retry-After,
+    else COOLDOWN_429_S, within 1s–1h. Returns the seconds."""
+    wait = _retry_after_seconds(retry_after)
+    wait = COOLDOWN_429_S if wait is None else min(max(wait, 1.0), _MAX_COOLDOWN_S)
+    until = _clock() + wait
+    if until > _cooling_until.get(source, 0.0):
+        _cooling_until[source] = until
+        _log.warning("%s said 429: sending it nothing for %.0fs", source, wait)
+    return wait
+
+
+def cooling_seconds(source: str) -> float:
+    """Seconds left on `source`'s 429 cooldown (0 when there is none)."""
+    left = _cooling_until.get(source, 0.0) - _clock()
+    if left <= 0:
+        _cooling_until.pop(source, None)
+        return 0.0
+    return left
+
+
+def check_cooling(source: str) -> None:
+    """Raise SourceCoolingDown while `source`'s cooldown runs."""
+    left = cooling_seconds(source)
+    if left > 0:
+        raise SourceCoolingDown(source, left)
+
+
 # ─── Counters ────────────────────────────────────────────────
 
 COLUMNS = (
@@ -799,4 +864,5 @@ def reset() -> None:
     _pages_waiting.clear()
     _last_other_start.clear()
     _pending.clear()
+    _cooling_until.clear()
     _last_prune_day = None
