@@ -9,6 +9,32 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [3.15.0] — 2026-10-24
+
+Wave D of the **discovery fix pass**, built while the first scans of the
+F–Z authors ran and checked on the live container after each batch: the
+title identity and the filters learned what those scans turned up, the
+missing-books cleanup gained a step, and shared credits are no longer
+scanned. No database migrations.
+
+**Behaviour changes to know about:**
+
+- **The vocabulary filter can hide an English book.** A title whose words
+  no English blurb in the reference library uses is filtered as Not
+  English, so an English book with invented or rare words ("Ventura
+  Starway") can be hidden. Find it under Hidden → Filtered → Not English;
+  **Unhide** keeps it listed for good.
+- **"Missing Cleanup" removes more and re-lists some books.** It removes
+  the books only a shared credit wrote ("Various", "Unknown") or a
+  publisher Hardcover credits as an author ("Litforge Press"), listed and
+  hidden alike, and it re-reads the books an older title-only rule hid, so
+  some come back listed (or fold into the one you own). As before, nothing
+  happens until you press it, and Preview shows each step's count first.
+- **A 429 pauses that source.** When ibdb, OpenLibrary, Google Books or
+  Audible answer "429 Too Many Requests", Seshat sends that source nothing
+  until its Retry-After (or 5 minutes) has passed; a scan in that window
+  skips it and says so in the log.
+
 ### Changed
 
 - **The title identity knows more ways to write one book** (ADR-0028,
