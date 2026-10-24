@@ -169,6 +169,9 @@ of what was filtered, and nothing for the next scan or the Goodreads worker to r
   … "97-100" bundles, "Star Guild Episodes 1 - 9". Anywhere in the title: anchored at the end it only missed more
   bundles ("The Wheel of Time Series 1-15 Books Collection Set", "… Episodes 1-3 (Dottie For You Bundles Book 1)").
   Over every stored title: 25 listed rows, all bundles; 0 owned.
+- **"Books 1, 2, and 3" is a box set** (G261): a comma list of book numbers ("A Throne for Sisters (Books 1, 2, and
+  3)", "Books 4, 5, 6"). Over every stored title: 2 listed bundles and the owned ABS omnibus "The Circuit: The
+  Circuit, Book 1, 2, 3" (its class only; an owned row isn't hidden).
 - The sample (50 first scans, 1,203 listed / 355 hidden, 72 cards) read 68 right. The word test's one wrong call, the
   invented "Ventura Starway", is G233's accepted cost: an English blurb, an English source language or a series with an
   owned book would each un-hide 40–135 real translations (sources label translations "English" and give them the

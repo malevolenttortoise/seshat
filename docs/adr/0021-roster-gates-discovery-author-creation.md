@@ -185,3 +185,12 @@ prune-linkage operate on two rows that already exist and mint nothing.
   whose names differ by a middle initial both count.
 - On the 2026-10-23 copies it changes one author (Doscher); every other non-eligible author with books has no
   same-surname match.
+
+## Amendment (2026-10-24, wave D S31: a shared credit is no author, G260)
+
+- **A placeholder credit is never scan-eligible**, even owning books or allow-listed: "Various", "Unknown",
+  "Anonymous", "Various Authors / Artists / Writers / Contributors", "Anon", "N/A", "Multiple Authors"
+  (`roster.is_placeholder_credit`, skip reason `placeholder_credit`). Mark owns 3 anthologies credited "Various"
+  and autobrr's import allow-listed it; its F–Z first scan read Hardcover's "Various" record, every compilation
+  anywhere: +978 listed (cookbooks, magazine issues, guides) and +953 hidden. It stays linked on books and on the
+  allow list (announces unchanged); the missing-books cleanup's step 1 removes the books only such a credit wrote.

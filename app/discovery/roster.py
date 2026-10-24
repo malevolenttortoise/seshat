@@ -66,10 +66,24 @@ SCAN_EXCLUDED_SOURCES = ("coauthor_train", "auto_train")
 # Why a scan skipped an author (F15: the UI says so).
 SKIP_NOT_ELIGIBLE = "not_scan_eligible"
 SKIP_LIST_MISSING_OFF = "list_missing_off"
+SKIP_PLACEHOLDER = "placeholder_credit"
 SKIP_MESSAGES = {
     SKIP_NOT_ELIGIBLE: "not on your allow list and owns nothing; add them to scan",
     SKIP_LIST_MISSING_OFF: "List missing books is off for this author",
+    SKIP_PLACEHOLDER: "a shared credit like \"Various\", not an author to scan",
 }
+
+# A shared credit, not a person (G260): Hardcover's "Various" is every
+# compilation anywhere (its F–Z first scan listed 978 cookbooks, magazine
+# issues and guides). Still linked and allow-listed; never scanned.
+PLACEHOLDER_CREDITS = frozenset({
+    "various", "various authors", "various artists", "various writers", "various contributors",
+    "unknown", "unknown author", "anonymous", "anon", "n a", "multiple authors", "various various",
+})
+
+
+def is_placeholder_credit(name: str) -> bool:
+    return normalize_author(name or "") in PLACEHOLDER_CREDITS
 
 
 @dataclass(frozen=True)
@@ -125,13 +139,18 @@ class Roster:
         co-author is still linked on discovered books, but not scanned."""
         if author_id is not None and author_id in self.listing_off_ids:
             return SKIP_LIST_MISSING_OFF
+        if is_placeholder_credit(name):
+            return SKIP_PLACEHOLDER
         return None if self.counts_for_scans(name, author_id) else SKIP_NOT_ELIGIBLE
 
     def counts_for_scans(self, name: str, author_id: Optional[int]) -> bool:
         """Owns a book here, was allow-listed by the operator, or is another
         spelling of one of those (G245: "Thomas Doscher" for the owned
-        "Thomas J. Doscher" — same surname, `authors_match`). The listing
-        switch is the caller's business."""
+        "Thomas J. Doscher" — same surname, `authors_match`). Never a
+        shared credit like "Various" (G260). The listing switch is the
+        caller's business."""
+        if is_placeholder_credit(name):
+            return False
         if author_id is not None and author_id in self.owned_author_ids:
             return True
         norm = normalize_author(name or "")

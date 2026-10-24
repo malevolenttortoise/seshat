@@ -287,6 +287,14 @@ def test_an_orientation_edition_is_hidden_but_matches_as_before():
     assert F.filter_reason("Straight Up Edition Wars") is None
 
 
+def test_a_comma_list_of_book_numbers_is_a_box_set():
+    """G261: Morgan Rice's "A Throne for Sisters (Books 1, 2, and 3)"."""
+    for t in ("A Throne for Sisters (Books 1, 2, and 3)", "Kings and Sorcerers (Books 1, 2 & 3)", "Rise of the Dragons: Books 4, 5, 6"):
+        assert F.filter_reason(t) == F.BOX_SET, t
+    assert F.filter_reason("The Rising, Book 3, 2nd Chances") is None
+    assert F.filter_reason("Book 1, Part 2: The Fall") is None
+
+
 def test_a_series_or_episode_range_ending_a_title_is_a_box_set():
     """G254: Aer-Ki Jyr's 4-book "Origin Series" bundles."""
     for t in ("Star Force: Origin Series 13-16", "Star Force: Origin Series 97-100", "Hollow Kingdom (Episodes 1-4)",

@@ -123,6 +123,22 @@ def test_another_spelling_of_an_owned_or_picked_author_is_scanned():
     assert r.scan_skip_reason("", None) == SKIP_NOT_ELIGIBLE
 
 
+def test_a_shared_credit_is_never_scanned():
+    """G260: "Various" owns 3 anthologies and autobrr's import allow-listed
+    it; Hardcover's "Various" record is every compilation anywhere."""
+    from app.discovery.roster import SKIP_PLACEHOLDER, is_placeholder_credit
+    r = Roster(
+        allowed_names=frozenset({"various"}), owned_author_ids=frozenset({571, 7443}),
+        scan_allowed_names=frozenset({"various"}), owned_names=frozenset({"various", "unknown"}),
+    )
+    assert r.scan_skip_reason("Various", 571) == SKIP_PLACEHOLDER
+    assert r.scan_skip_reason("Unknown", 7443) == SKIP_PLACEHOLDER
+    assert not r.counts_for_scans("Various Authors", None)
+    assert r.admits("Various", 571)                       # still linked on books
+    assert all(map(is_placeholder_credit, ("Anonymous", "N/A", "Various Artists", "Anon.")))
+    assert not any(map(is_placeholder_credit, ("Varian Johnson", "Nanna Fujimi", "Unknown Worlds Press Author")))
+
+
 def test_uses_the_filter_normalizer_not_the_author_row_one():
     """⚠️ The two normalizers disagree. `authors_allowed.normalized` is
     keyed on filter.normalize.normalize_author, which maps "J.R.R. Tolkien"

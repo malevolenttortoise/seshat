@@ -118,6 +118,7 @@ def genres_say_comic(genres: Iterable[str]) -> bool:
 _RX_BOX_SET = re.compile(
     r"(?i)\bbox(?:ed)?\s*set\b|\bboxset\b|\bomnibus\b|\bcompilation\b"
     r"|\bbooks?\s+#?\d+\s*(?:[-–&+]|to|and|through)\s*#?\d+"   # "Books 1-3", "Book 1 & 2"
+    r"|\bbooks?\s+\d+(?:\s*,\s*\d+)+(?:\s*,?\s*(?:and|&)\s*\d+)?\b"   # "Books 1, 2, and 3" (G261)
     r"|\bbooks?\s+(?:one|two|three|four|five|six|i{1,3}|iv|v|vi)\s*(?:[-–&+]|to|and|through|thru)\s*(?:books?\s+)?"
     r"(?:two|three|four|five|six|seven|eight|nine|ten|i{1,3}|iv|v|vi{1,3}|ix|x|\d{1,2})\b"   # "Books I-V", "Books One Through Six"
     r"|#\d+(?:\.\d+)?\s*[-–]\s*\d{1,2}(?:\.\d+)?\b"           # "(Alpha & Omega, #0.5-3)" (not "#2-1976")

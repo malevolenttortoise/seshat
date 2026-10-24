@@ -170,6 +170,21 @@ async def test_another_spelling_of_an_owned_author_counts(env):
     assert await _exists(kept) and not await _exists(gone)
 
 
+async def test_a_book_credited_only_to_various_goes(env):
+    """G260: the F–Z scan of "Various" listed 978 cookbooks and magazine
+    issues; a shared credit doesn't make its books scanned."""
+    various = await _author("Various")
+    await _allow("Various")
+    await _book("Halo: Evolutions", [various], owned=1, calibre_id=1)
+    editor = await _author("John Joseph Adams")
+    await _allow("John Joseph Adams")
+    junk = await _book("Pillsbury Cook Book", [various])
+    edited = await _book("Wastelands", [various, editor])
+    _, report = await _apply()
+    assert not await _exists(junk)
+    assert await _exists(edited) and await _exists(1)
+
+
 async def test_owning_books_in_the_other_library_doesnt_count(env):
     """G212: Matt Dinniman owns audiobooks only; his ebook missing rows go,
     as the ebook scan gate already skips him."""

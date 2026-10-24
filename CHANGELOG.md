@@ -39,7 +39,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   Bisexual Edition") is listed hidden as a listing. A place name ("Las
   Vegas", "Los Angeles") no longer makes an English title look Spanish.
   In the ebook library a "UK Edition" of a book is listed hidden too, and
-  bundles written "Origin Series 13-16" or "Episodes 1-9" are box sets.
+  bundles written "Origin Series 13-16", "Episodes 1-9" or "Books 1, 2,
+  and 3" are box sets.
+- **A shared credit like "Various" or "Unknown" is never scanned as an
+  author**, even when you own a book credited to it: Hardcover's "Various"
+  is every compilation anywhere. The missing-books cleanup removes the
+  books only such a credit wrote.
 - **Another spelling of an author you own or allow-listed counts as that
   author** for scans and the missing-books cleanup: "Thomas Doscher"'s
   books stay when you own "Thomas J. Doscher".
