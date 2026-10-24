@@ -23,6 +23,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   Evil movie editions and an owned Towerbound re-upload are now
   recognised as books you own.
 
+- **The navbar's cache-worker cloud is red only when a worker stops**
+  (no check-in for 5+ minutes during its hours); amber when a source
+  backs off for long; a short cooldown or a few authors that failed for
+  good stay green and show in the tooltip.
 - **"Clean up missing books" also folds books listed twice** into one row
   (a new step after "Copies of books you own"), keeping the row more sources
   know. Its Dashboard button is now **Missing Cleanup**.

@@ -4,12 +4,14 @@
 // A passive 18×18 indicator that lives in the navbar's right-rail
 // alongside the other tool icons. Color-coded to the worst-of-both-
 // sources health so the operator can glance at the bar and know
-// whether either metadata cache worker needs attention:
+// whether either metadata cache worker needs attention (G269: red only
+// for what needs Mark; routine back-off and a few authors that failed
+// for good stay green, in the tooltip):
 //
-//   gray   — all enabled sources disabled (intentional pause)
-//   green  — all enabled sources healthy
-//   amber  — at least one source stalled / cooldown / off-hours
-//   red    — at least one source has failed_permanent rows
+//   gray   — disabled, or outside its scheduled hours
+//   green  — working, a short cooldown included
+//   amber  — backing off: blocked again within the hour (10+ min left)
+//   red    — stopped: no check-in for 5+ min during its hours
 //
 // Hover tooltip surfaces brief per-source stats. Click navigates to
 // the Settings page where the full cache status cards live.
@@ -63,34 +65,39 @@ const SOURCE_LABEL: Record<SourceKey, string> = {
 
 const POLL_INTERVAL_MS = 60_000;
 const HEARTBEAT_STALE_S = 300;  // 5 min — supervised task is dead
+// A first block cools a source down 600s; more than that left means it
+// was blocked again within the hour (the worker escalated).
+const LONG_COOLDOWN_S = 600;
 
 
-type Health = "loading" | "disabled" | "ok" | "off-hours" | "stalled" | "cooldown" | "failed";
+type Health = "loading" | "disabled" | "ok" | "cooling" | "off-hours" | "backing-off" | "stopped";
 
 function _classify(status: WorkerStatus | null): Health {
   if (status === null) return "loading";
   if (!status.enabled || status.mode === "disabled") return "disabled";
-  if (status.queue.failed_permanent > 0) return "failed";
-  if (status.cooldown.blocked) return "cooldown";
+  // A cooling worker sleeps, so its heartbeat ages: never "stopped" then.
+  if (status.cooldown.blocked) {
+    return status.cooldown.remaining_s > LONG_COOLDOWN_S ? "backing-off" : "cooling";
+  }
   const insideWindow = status.inside_schedule_window ?? true;
   if (status.mode === "scheduled" && !insideWindow) return "off-hours";
   const stale = status.worker.seconds_since_heartbeat === null
     || status.worker.seconds_since_heartbeat > HEARTBEAT_STALE_S;
-  if (insideWindow && stale) return "stalled";
+  if (insideWindow && stale) return "stopped";
   return "ok";
 }
 
 
-// Worst-of-both aggregation: red > amber > green > gray > loading.
-// Returns a tuple of (dotColor, primaryLabel) for the icon.
+// Worst-of-both aggregation: red > amber > gray (off-hours) > green > gray
+// (disabled) > loading.
 const HEALTH_RANK: Record<Health, number> = {
   loading: 0,
   disabled: 1,
   ok: 2,
+  cooling: 2,
   "off-hours": 3,
-  stalled: 4,
-  cooldown: 4,
-  failed: 5,
+  "backing-off": 4,
+  stopped: 5,
 };
 
 
@@ -117,16 +124,22 @@ function _composeTooltipLines(states: SourceState): string[] {
     const dueNow = status.queue.due_now ?? status.queue.pending;
     const okAuthors = status.cache.unique_ok_authors ?? status.cache.ok_authors;
     const totalAuthors = status.cache.unique_total_authors ?? status.cache.state_rows;
+    const left = Math.round(status.cooldown.remaining_s).toLocaleString();
+    const since = status.worker.seconds_since_heartbeat;
     let primary: string;
     switch (h) {
-      case "disabled":  primary = "disabled"; break;
-      case "failed":    primary = `${status.queue.failed_permanent} failed perm`; break;
-      case "cooldown":  primary = `cooldown (${Math.round(status.cooldown.remaining_s)}s)`; break;
-      case "off-hours": primary = "off-hours"; break;
-      case "stalled":   primary = "stalled"; break;
-      case "ok":        primary = "active"; break;
-      default:          primary = "—";
+      case "disabled":    primary = "disabled"; break;
+      case "cooling":     primary = `cooling down (${left}s)`; break;
+      case "backing-off": primary = `backing off (${left}s)`; break;
+      case "off-hours":   primary = "off-hours"; break;
+      case "stopped":
+        primary = since === null ? "stopped (no check-in yet)" : `stopped (no check-in for ${Math.round(since / 60)} min)`;
+        break;
+      case "ok":          primary = "active"; break;
+      default:            primary = "—";
     }
+    const failed = status.queue.failed_permanent;
+    if (failed > 0) primary += ` · ${failed} author${failed === 1 ? "" : "s"} failed for good`;
     lines.push(
       `  ${label}: ${primary} · queue ${dueNow.toLocaleString()}` +
       ` · cached ${okAuthors.toLocaleString()}/${totalAuthors.toLocaleString()}` +
@@ -168,20 +181,20 @@ export function GlobalMetadataCacheStatusIcon({
   let dotColor: string;
   let primaryLabel: string;
   switch (worst) {
-    case "failed":
+    case "stopped":
       dotColor = t.err;
-      primaryLabel = "Triage needed";
+      primaryLabel = "Stopped";
       break;
-    case "stalled":
-    case "cooldown":
+    case "backing-off":
       dotColor = "#cc9933";  // amber
-      primaryLabel = worst === "stalled" ? "Stalled" : "Cooldown";
+      primaryLabel = "Backing off";
       break;
     case "off-hours":
       dotColor = t.textDim;
       primaryLabel = "Off-hours";
       break;
     case "ok":
+    case "cooling":
       dotColor = t.ok;
       primaryLabel = "Active";
       break;
