@@ -177,6 +177,22 @@ of what was filtered, and nothing for the next scan or the Goodreads worker to r
   owned book would each un-hide 40–135 real translations (sources label translations "English" and give them the
   original's blurb).
 
+## Amendment (2026-10-24, wave D S33: Mark's sort of the cleanup after the F–Z scans)
+
+- **"(N of M)" is a split** (G262): "God Emperor of Dune (1 of 2)" is a part, never the whole book you own (its class
+  for matching is `split` in every library). Hidden in the ebook library only: the audiobook library's GraphicAudio
+  parts ("Dark Age (3 of 3) [Dramatized Adaptation]") are what Mark buys, so there they're listed.
+- **Scripts are not a book** (G263): "Screenplay", "Shooting Script", "Teleplay" ("The Green Mile: The Screenplay").
+- **"(X (COMPLETE SERIES))" is a series' status**, as "(Complete)" was (G230): "Tapped: Book 1 (…) (Tapped
+  (COMPLETE SERIES))" is one book, for the omnibus flag and the box-set family both.
+- **The cleanup re-reads a row a title rule filtered** (G266): rows under a family the title alone decides (box set,
+  split, sampler, listing, junk, not a book, study guide) are read again in step 3 and listed again ("listed again
+  (was box_set)") or relabelled ("comic (was box_set)") under today's rules; comics, anthologies and foreign titles
+  can rest on a blurb, genres or a contributor count and aren't re-read. Today: 23 "(COMPLETE SERIES)" books listed
+  again (the Tapped and Monster Rocker copies then fold into Mark's owned books), ~30 Dresden comic issues
+  relabelled box set → comic, the Expanse / Extinction Parade issues junk → comic.
+- **G264:** a UK Edition keeps the listing label (hidden either way; no "other edition" family).
+
 ## Related
 
 - [0021](0021-roster-gates-discovery-author-creation.md) — roster and scan eligibility (amended: scan eligibility is

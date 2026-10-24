@@ -326,6 +326,8 @@ class TestOmnibusRegexCoverage:
         "My Happy Ending: A Paranormal Harem Serial Fantasy (My Paranormal Girlfriends (Complete) Book 5)",
         # Wave D: a series parenthetical naming the book's place is one book
         "Far Thoughts and Pale Gods (The Complete Short Fiction of Greg Bear Book 2)",
+        # …and "(COMPLETE SERIES)" there is the series' status too
+        "Tapped: Book 1 (A Slice-Of-Life HaremLit Adventure) (Tapped (COMPLETE SERIES))",
     ])
     def test_does_not_match(self, title: str) -> None:
         from app.discovery.lookup import _is_omnibus

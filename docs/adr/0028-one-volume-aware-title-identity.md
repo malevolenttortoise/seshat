@@ -293,6 +293,25 @@ The same parser reads "(Series Book N)" out of a title at creation (G171) and Ha
 - Measured on the 2026-10-23 post-update copies: the one wrong fold gone; grab history and a full Calibre sync
   unchanged.
 
+## Amendment (2026-10-24, wave D S33: Mark's sort of the cleanup after the F–Z scans)
+
+- **Across two stored series a near-miss spelling doesn't join two titles**; only small words may differ ("the", "a",
+  "an", "of", "and", "&"). "The Lost Dragon" (Cycle of Dragons #3) is not the owned "Lost Dragons" (The Shadow's
+  Dragon #3); "Tales from Mos Eisley Cantina" (Star Wars - Legends) still is "Tales from the Mos Eisley Cantina"
+  (Star Wars: Tales), and "Spice & Wolf, Vol. 4" is "Spice and Wolf (Light Novel), Vol. 4". With one side unfiled or
+  both in one series, a misspelling still joins ("Alvin Jorneyman").
+- **Two titles filed at two numbers in two unrelated series are one book only when written alike** (descriptions and
+  parentheticals aside): "Final Days: Colony" (Final Days #2) is not "The Colony" (The Survivors #17). One series
+  written two ways isn't two series: parentheticals aside, equal or one starting with the other ("Towerbound (LITRPG +
+  REGRESSOR + OPMC)" / "Towerbound", "Mercy Thompson" / "Mercy Thompson #0.1, #0.5, #0.6"). A "a title that writes
+  the other side's number" exemption was measured and left out (it kept 1 right join and 2 wrong).
+- Measured on the 2026-10-24 copies: 63 of 5,917,785 same-author pairs change, every one read. Fixed: "The Waste
+  Lands" (owned) / "Wastelands: Stories of the Apocalypse", Knightfall / Nightfall, Evolution / Revolution, Dresden
+  "Storm Front Vol. 2" / "Vol. 1", "Wizard at Large" / the Landover Volume 1 omnibus; new right joins: the owned
+  Spice & Wolf volumes and their "Spice and Wolf (Light Novel)" copies (~20). Lost joins: ~15 issue / collection
+  pairs among hidden comics, the anthologies "Legends II" and "Tales from the Lyon's Den" (two rows each), and the
+  two owned "Machine Crusade" copies.
+
 ## Related
 
 - [0003](0003-bundle-dedup-prefer-duplicates.md) — the same duplicates-over-loss stance, for bundles.

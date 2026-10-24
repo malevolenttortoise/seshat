@@ -707,20 +707,35 @@ def _rests_agree(x: tuple, y: tuple) -> bool:
     return len(x) == len(y) and all(_close(a, b) for a, b in zip(x, y))
 
 
-def _titles_match(ka: _Keys, kb: _Keys) -> bool:
-    if any(_close(x, y) for x in ka.whole for y in kb.whole):
+_SMALL_WORDS = frozenset({"the", "a", "an", "of", "and", "&"})
+
+
+def _same_words(x: str, y: str) -> bool:
+    """The same words, small ones aside ("tales from mos eisley cantina" =
+    "tales from the mos eisley cantina"; "lost dragon" isn't "lost
+    dragons")."""
+    return x == y or [w for w in x.split() if w not in _SMALL_WORDS] == [w for w in y.split() if w not in _SMALL_WORDS]
+
+
+def _titles_match(ka: _Keys, kb: _Keys, spelling: bool = True) -> bool:
+    """`spelling`: a near-miss spelling counts ("Alvin Jorneyman"); off
+    across two stored series, where only small words may differ ("The Lost
+    Dragon" in Cycle of Dragons is not "Lost Dragons" in The Shadow's
+    Dragon, wave D)."""
+    near = _close if spelling else _same_words
+    if any(near(x, y) for x in ka.whole for y in kb.whole):
         return True
     # One side's head or tail is the other side's whole title:
     # "Dragon Bound" = "Dragon Bound: A Legacy Building Fantasy".
     for ends, whole in (((ka.head, ka.tail), kb.whole), ((kb.head, kb.tail), ka.whole)):
-        if any(_close(e, w) for e in ends if e for w in whole):
+        if any(near(e, w) for e in ends if e for w in whole):
             return True
     # Part to part, only when the other parts agree.
     for x, x_rest in ((ka.head, ka.head_rest), (ka.tail, ka.tail_rest)):
         if not x:
             continue
         for y, y_rest in ((kb.head, kb.head_rest), (kb.tail, kb.tail_rest)):
-            if y and _close(x, y) and _rests_agree(x_rest, y_rest):
+            if y and near(x, y) and _rests_agree(x_rest, y_rest):
                 return True
     return False
 
@@ -947,6 +962,8 @@ def same_book(
         return True
     if _cut_off_volume(pa, pb, a, b):
         return False
+    if _numbered_apart(a, b) and not _same_written(pa, pb):
+        return False
     position_agrees = _volumes_agree(a, b, pa, pb)
     if position_agrees is None:
         return False
@@ -962,7 +979,8 @@ def same_book(
     named = frozenset(series_key(n) for n, _ in (*pa.tags, *pb.tags) if n)
     ka = _title_keys(pa.proper, a.series, same_core, labels, position_agrees, b.series, shared_place, named)
     kb = _title_keys(pb.proper, b.series, same_core, labels, position_agrees, a.series, shared_place, named)
-    if _titles_match(ka, kb):
+    spelling = _placements_agree(a, b)
+    if _titles_match(ka, kb, spelling):
         return True
     # G226: also as written ("Round One" = "Mixed Martial Cultivator: Round
     # One", whose "One" was read as 1); the numbers were compared above.
@@ -970,6 +988,7 @@ def same_book(
     if (wa, wb) != (pa.proper, pb.proper) and _titles_match(
         _title_keys(wa, a.series, same_core, labels, position_agrees, b.series, shared_place, named),
         _title_keys(wb, b.series, same_core, labels, position_agrees, a.series, shared_place, named),
+        spelling,
     ):
         return True
     # G227: spaces don't count when the placements can't disagree ("The War
@@ -1000,6 +1019,26 @@ def _cut_off_volume(pa: ParsedTitle, pb: ParsedTitle, a: TitleRef, b: TitleRef) 
         return False
     ia, ib = _as_index(a.index), _as_index(b.index)
     return not (a.series and ia is not None and ia == ib and series_key(a.series) == series_key(b.series))
+
+
+def _numbered_apart(a: TitleRef, b: TitleRef) -> bool:
+    """Both filed at a number, in two unrelated series, at two numbers
+    ("Final Days: Colony", Final Days #2, and "The Colony", The Survivors
+    #17). Not one series written two ways ("Towerbound (LITRPG + REGRESSOR +
+    OPMC)" and "Towerbound"; "Star Force" and "Star Force Universe")."""
+    ia, ib = _as_index(a.index), _as_index(b.index)
+    if not (a.series and b.series and ia is not None and ib is not None and ia != ib):
+        return False
+    sa, sb = (series_key(re.sub(r"\([^)]*\)", " ", n)) for n in (a.series, b.series))
+    return not (sa == sb or sa.startswith(sb + " ") or sb.startswith(sa + " "))
+
+
+def _same_written(pa: ParsedTitle, pb: ParsedTitle) -> bool:
+    """The two titles as written are one, descriptions and parentheticals
+    aside ("Star Force: Termination" = "Star Force: Termination (SF12)")."""
+    def key(p: ParsedTitle) -> str:
+        return _key_text(_without_description((p.written or p.proper).lower()))
+    return bool(key(pa)) and key(pa) == key(pb)
 
 
 def _placements_agree(a: TitleRef, b: TitleRef) -> bool:

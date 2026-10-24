@@ -140,7 +140,7 @@ _RX_OMNIBUS = re.compile(
 # "(My Paranormal Girlfriends (Complete) Book 1)": the series' status inside
 # its parenthetical, removed before `_is_omnibus` looks (G230).
 _RX_SERIES_POSITION_PAREN = re.compile(r'(?i)\([^()]*?\b(?:book|#)\s*\d+(?:\.\d+)?\s*\)')
-_RX_SERIES_COMPLETE = re.compile(r'(?i)\(([^()]*?)\s*\(\s*complete\s*\)([^()]*)\)')
+_RX_SERIES_COMPLETE = re.compile(r'(?i)\(([^()]*?)\s*\(\s*complete(?:\s+series)?\s*\)([^()]*)\)')
 
 # Audiobook / non-ebook format detection. Matches titles and metadata
 # that indicate audiobook-only editions, narrator credits, or non-ebook
@@ -678,9 +678,10 @@ def _is_omnibus(title: str) -> bool:
       - "Super Sales on Super Heroes Books 1-3"
       - "The Expanse Box Set"
 
-    A "(Complete)" inside a series parenthetical is the series' status,
-    not a set (G230): "My Vampire Bodyguards (My Paranormal Girlfriends
-    (Complete) Book 1)" is one book.
+    A "(Complete)" or "(COMPLETE SERIES)" inside a series parenthetical is
+    the series' status, not a set (G230, wave D): "My Vampire Bodyguards (My
+    Paranormal Girlfriends (Complete) Book 1)", "Tapped: Book 1 (…) (Tapped
+    (COMPLETE SERIES))" are one book.
     """
     t = _RX_SERIES_COMPLETE.sub(r"(\1\2)", title or "")
     # A series parenthetical naming the book's place is one book of it:

@@ -41,6 +41,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   In the ebook library a "UK Edition" of a book is listed hidden too, and
   bundles written "Origin Series 13-16", "Episodes 1-9" or "Books 1, 2,
   and 3" are box sets.
+- **Split editions and scripts are filtered**: "God Emperor of Dune (1 of
+  2)" is a split (hidden in the ebook library; GraphicAudio's parts stay
+  listed in the audiobook library) and never folds into the whole book you
+  own; "The Green Mile: The Screenplay" is not a book.
+- **"Missing Cleanup" re-reads books an older title rule hid**: a series
+  named "Tapped (COMPLETE SERIES)" no longer makes its books box sets, and
+  they're listed again (or folded into the one you own).
 - **A shared credit like "Various" or "Unknown" is never scanned as an
   author**, even when you own a book credited to it: Hardcover's "Various"
   is every compilation anywhere. The missing-books cleanup removes the
@@ -51,6 +58,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- **Books in two different series were joined by a near-miss title**: "The
+  Lost Dragon" folded into your "Lost Dragons", "Final Days: Colony" into
+  "The Colony", "Wastelands: Stories of the Apocalypse" matched your "The
+  Waste Lands". "Spice & Wolf" and "Spice and Wolf" now match.
 - **A metadata source that said "429 Too Many Requests" was asked again
   within seconds**: ibdb, OpenLibrary, Google Books and Audible now get
   nothing until the source's Retry-After (or 5 minutes) has passed, and a

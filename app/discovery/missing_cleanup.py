@@ -297,11 +297,23 @@ async def _goodreads_genres(goodreads_ids) -> dict[str, list[str]]:
     return out
 
 
+# Families a title alone decides (G266): a row a title rule hid is read
+# again under today's rules; comics, anthologies and foreign titles can
+# rest on a blurb, genres or a contributor count and stay as they are.
+TITLE_FAMILIES = frozenset({
+    filters.BOX_SET, filters.SPLIT, filters.SAMPLER, filters.LISTING, filters.JUNK,
+    filters.NOT_A_BOOK, filters.STUDY_GUIDE,
+})
+
+
 async def _filtered(lib: _Library, report: dict) -> None:
     """Step 3 (ADR-0029, C31): the creation verdict on a stored, visible,
     unclassified row: title, description, series name, page count, the
     stored Goodreads page's genres; C22's owned-stem rule and the language
-    rule as at creation."""
+    rule as at creation. A row filtered under a title-only family is read
+    again (G266): listed again when today's rules pass it ("Tapped: Book 1
+    (… (COMPLETE SERIES))", once read as a box set), relabelled when they
+    give another family."""
     languages = lib.settings.get("languages", ["English"])
     owned_stems: dict[int, set[str]] = {}
     for row in lib.rows.values():
@@ -312,11 +324,13 @@ async def _filtered(lib: _Library, report: dict) -> None:
                     owned_stems.setdefault(aid, set()).add(stem)
     todo = [
         r for r in lib.rows.values()
-        if not r["owned"] and not r["hidden"] and r["hidden_reason"] is None
+        if not r["owned"] and (
+            (not r["hidden"] and r["hidden_reason"] is None) or r["hidden_reason"] in TITLE_FAMILIES)
     ]
     genres = await _goodreads_genres(r["goodreads_id"] for r in todo)
     step = _step(report, "filtered")
     for row in todo:
+        was = row["hidden_reason"]
         title = row["title"] or ""
         contribs = lib.contribs.get(row["id"], [])
         reason = filters.filter_reason(
@@ -330,15 +344,24 @@ async def _filtered(lib: _Library, report: dict) -> None:
             reason = None
         if reason == filters.FOREIGN and "English" not in languages:
             reason = None
+        if reason == was:
+            continue
         if reason is None:
+            if was is None:
+                continue
+            # Today's rules pass it: listed again (the copy steps see it: rows reload per step).
+            await lib.db.execute("UPDATE books SET hidden_reason = NULL, hidden = 0 WHERE id = ?", (row["id"],))
+            step["rows"].append(lib.record(row, detail=f"listed again (was {was})", reason=None, was=was))
+            step["count"] += 1
             continue
         hide = filters.hides(reason, lib.settings)
         await lib.db.execute(
             "UPDATE books SET hidden_reason = ?, hidden = ? WHERE id = ?",
             (reason, 1 if hide else 0, row["id"]),
         )
-        step["rows"].append(lib.record(row, detail=reason if hide else f"{reason} (shown: its setting is off)",
-                                       reason=reason, stays_shown=not hide))
+        detail = reason if hide else f"{reason} (shown: its setting is off)"
+        step["rows"].append(lib.record(row, detail=detail if was is None else f"{detail} (was {was})",
+                                       reason=reason, stays_shown=not hide, **({"was": was} if was else {})))
         step["count"] += 1
 
 

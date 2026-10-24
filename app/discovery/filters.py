@@ -181,6 +181,10 @@ _RX_SPLIT = re.compile(
     r"|\bchapters?\s+\d{1,4}\s*[-–]\s*\d{1,4}\b"                   # "Kumo Desu ga, Nani ka? Chapter 001-050"
     r"|\bseason\s+\d+,?\s+episode\s+\d+\b|\bepisode\s+\d+\s+of\s+\d+\b|\bdisc\s+\d+\b|\bdisk\s+\d+\b"
 )
+# "God Emperor of Dune (1 of 2)" (G262): a part, never the whole book.
+# Hidden in the ebook library only: the audiobook library's GraphicAudio
+# parts ("Dark Age (3 of 3) [Dramatized Adaptation]") are what Mark buys.
+_RX_PART_OF_PARTS = re.compile(r"[(\[]\s*\d+\s+of\s+\d+\s*[)\]]")
 _RX_SAMPLER = re.compile(
     r"(?i)\bexcerpt\b|\bsampler\b|\bsneak\s+peek\b|\bfree\s+(?:sample|preview|chapters?)\b"
     r"|\bpreview\b|\bfirst\s+\d+\s+chapters\b|\b(?:chapter|book)\s+teaser\b|\bteaser\s+(?:chapter|excerpt)\b"
@@ -226,6 +230,7 @@ _RX_NOT_A_BOOK = re.compile(
     r"|\bsourcebook\b|\bcore\s+rule\s*book\b|\bplaytest\b|\bgame\s+master'?s?\s+(?:guide|screen)\b"
     r"|\bpathfinder\s+(?:2e|second\s+edition|roleplaying|rpg|adventure|module)\b|\b(?:ad&d|d&d)\b"
     r"|\bprepack\b|\benamel\s+pins?\b|\bbookmarks?\b|\bpostcards?\b"
+    r"|\bscreenplay\b|\bshooting\s+script\b|\bteleplay\b"            # "The Green Mile: The Screenplay" (G263)
 )
 # "The Expanse #3", "New Novella #2": nothing but a series name before the
 # number (a real title with its series, "Organ Donor: Afterlife of Ebon
@@ -432,7 +437,13 @@ def _title_list(t: str) -> bool:
     return sum(1 for i in titles if len(i.split()) >= 2) >= 2 or bool(_LIST_HEAD_WORDS.search(head))
 
 
+# "(Tapped (COMPLETE SERIES))": the series' status, not a set (G230's
+# shape, wave D).
+_RX_SERIES_STATUS = re.compile(r"(?i)\(([^()]*?)\s*\(\s*complete(?:\s+series)?\s*\)([^()]*)\)")
+
+
 def _box_set(t: str) -> bool:
+    t = _RX_SERIES_STATUS.sub(r"(\1\2)", t)
     if _RX_JOINED_TITLES.search(t) or t.count(";") >= 2:
         return True
     if (_RX_COMPLETE_NAME.search(t) or _title_list(t)) and not (
@@ -489,7 +500,7 @@ def _authors_comic_issue(title: str, authors: Iterable[str]) -> bool:
     tie-in carries neither ("Dean Koontz's Frankenstein, Book One"), nor
     does a magazine ("Isaac Asimov's Science Fiction Magazine, Volume 4")."""
     t = title or ""
-    if not (re.search(r"#\d+", t)
+    if not (re.search(r"# ?\d+", t)            # "Cry Wolf # 1 of 4"
             or (_RX_VOLUME_MARK.search(_RX_LONE_VOLUME_TAG.sub("", t)) and not _RX_ANTHOLOGY.search(t))):
         return False
     tl = (title or "").lower()
@@ -532,6 +543,8 @@ def filter_reason(
     if reason is None and (_RX_ORIENTATION_EDITION.search(title or "") or (
             content_type != "audiobook" and _RX_REGIONAL_EDITION.search(title or ""))):
         return LISTING
+    if reason == SPLIT and content_type == "audiobook" and not _RX_SPLIT.search(title or ""):
+        return None          # a GraphicAudio part is listed (G262)
     return reason
 
 
@@ -568,7 +581,7 @@ def _title_family(
         return JUNK
     if _box_set(t):
         return BOX_SET
-    if _RX_SPLIT.search(t):
+    if _RX_SPLIT.search(t) or _RX_PART_OF_PARTS.search(t):
         return SPLIT
     if _RX_SAMPLER.search(t):
         return SAMPLER

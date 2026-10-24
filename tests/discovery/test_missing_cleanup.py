@@ -252,6 +252,42 @@ async def test_a_uk_edition_is_hidden_in_the_ebook_library_only(env):
     assert (await _q("SELECT hidden, hidden_reason FROM books WHERE id = ?", (audio,), "audio"))[0] == (0, None)
 
 
+async def test_a_row_a_title_rule_hid_is_read_again(env):
+    """G266: "Tapped: Book 1 (… (COMPLETE SERIES))" was hidden as a box set;
+    today it is a book: listed again, then folded into the owned copy. A
+    title family that changed is relabelled; your hides, an anthology by
+    contributor count and a real box set stay."""
+    mine = await _author("Bram Kingsley")
+    await _allow("Bram Kingsley")
+    owned = await _book("Tapped: Book 1", [mine], owned=1, calibre_id=7)
+    copy = await _book("Tapped: Book 1 (A Slice-Of-Life HaremLit Adventure) (Tapped (COMPLETE SERIES))", [mine],
+                       hidden=1, reason="box_set")
+    relabel = await _book("God Emperor of Dune (1 of 2)", [mine], hidden=1, reason="box_set")
+    real_set = await _book("Tapped: The Complete Series", [mine], hidden=1, reason="box_set")
+    yours = await _book("Tapped: Book 2 (Tapped (COMPLETE SERIES))", [mine], hidden=1)
+    anth = await _book("Tapped Tales", [mine], hidden=1, reason="anthology")
+    _, report = await _apply()
+    rows = dict((r[0], r[1:]) for r in await _q("SELECT id, hidden, hidden_reason FROM books"))
+    assert copy not in rows and rows[owned][0] == 0          # listed again, then folded into the owned book
+    assert rows[relabel] == (1, "split")
+    assert rows[real_set] == (1, "box_set") and rows[yours] == (1, None) and rows[anth] == (1, "anthology")
+    notes = {r["id"]: r["detail"] for r in next(s for s in report["steps"] if s["key"] == "filtered")["rows"]}
+    assert notes[copy] == "listed again (was box_set)" and notes[relabel] == "split (was box_set)"
+    assert real_set not in notes                              # its label holds: not in the report
+
+
+async def test_a_row_listed_again_takes_part_in_the_listed_copy_fold(env):
+    """G266: the books-listed-twice step sees a row step 3 listed again."""
+    mine = await _author("Damien Hanson")
+    await _allow("Damien Hanson")
+    await _book("Something Owned", [mine], owned=1, calibre_id=3)
+    plain = await _book("Gears & Girls: Book 1", [mine], amazon_id="B0GEARS1")
+    hidden = await _book("Gears & Girls: Book 1 (A HaremLit LitRPG Fantasy Adventure) (Gears & Girls (COMPLETE SERIES))",
+                         [mine], hidden=1, reason="box_set")
+    await _apply()
+    assert await _exists(plain) != await _exists(hidden)      # one row of the book left
+
+
 async def test_a_family_whose_setting_is_off_keeps_its_reason_and_shows(env):
     env["settings"]["hide_comics"] = False
     mine = await _author("Holly Black")

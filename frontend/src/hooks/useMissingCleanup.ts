@@ -24,9 +24,11 @@ export interface CleanupRow {
   hidden?: boolean;
   hidden_reason?: string | null;
   detail?: string;
-  // Step 3: the family the row joins; false when that family is shown.
-  reason?: string;
+  // Step 3: the family the row joins (null: listed again); false when that
+  // family is shown; the family a title rule had given it (G266).
+  reason?: string | null;
   stays_shown?: boolean;
+  was?: string;
   // Step 4: the owned book the copy folds into.
   into_id?: number;
   into_title?: string;
@@ -76,7 +78,7 @@ export const CLEANUP_STEPS: { key: string; name: string; blurb: string }[] = [
   {
     key: "filtered",
     name: "Comics, box sets, anthologies and other non-books",
-    blurb: "Hides them with their reason, as new books are hidden now (Hidden → Filtered).",
+    blurb: "Hides them with their reason, as new books are hidden now (Hidden → Filtered). A book a title rule hid that today's rules pass is listed again.",
   },
   {
     key: "owned_copy",
@@ -121,7 +123,9 @@ const reasonLabel = (reason?: string | null): string =>
 export function rowNote(stepKey: string, row: CleanupRow): string {
   switch (stepKey) {
     case "filtered":
-      return reasonLabel(row.reason) + (row.stays_shown ? " · stays shown: that filter is off" : "");
+      if (!row.reason) return row.was ? `listed again (was ${reasonLabel(row.was)})` : "";
+      return reasonLabel(row.reason) + (row.was ? ` (was ${reasonLabel(row.was)})` : "")
+        + (row.stays_shown ? " · stays shown: that filter is off" : "");
     case "owned_copy":
     case "listed_copy":
       return row.into_title ? `into “${row.into_title}”` : "";

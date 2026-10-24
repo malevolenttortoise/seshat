@@ -408,6 +408,21 @@ CASES = [
     ("Secrets of the Silent Witch, Vol. ", "Secrets of the Silent Witch", 3,
      "Secrets of the Silent Witch", "Secrets of the Silent Witch", 3,
      True, "… unless both are filed at one place in one series"),
+    # ── Wave D, Mark's sort of the cleanup after the F–Z scans ──
+    ("The Lost Dragon", "Cycle of Dragons", 3, "Lost Dragons", "The Shadow's Dragon", 3,
+     False, "a near-miss spelling doesn't join two series (owned)"),
+    ("Final Days: Colony", "Final Days", 2, "The Colony", "The Survivors", 17,
+     False, "two numbered series at two numbers: only the same title joins them"),
+    ("Star Force: Termination", "Star Force", 12, "Star Force: Termination (SF12)", "Star Force Universe", 30,
+     True, "… the same title does; and 'Star Force Universe' is the same series written longer"),
+    ("Alvin Jorneyman", None, None, "Alvin Journeyman", "Tales of Alvin Maker", 4,
+     True, "a misspelling still joins when one side has no series"),
+    ("Shifting Shadows: Stories From the World of Mercy Thompson", "Mercy Thompson", 0.1,
+     "Shifting Shadows", "Mercy Thompson #0.1, #0.5, #0.6", 8.5,
+     True, "one series written longer isn't two series"),
+    ("Tales from Mos Eisley Cantina: Star Wars Legends", "Star Wars - Legends", None,
+     "Tales from the Mos Eisley Cantina", "Star Wars: Tales", 1,
+     True, "across two series small words may differ"),
 ]
 
 

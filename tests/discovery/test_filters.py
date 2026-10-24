@@ -274,6 +274,7 @@ def test_an_authors_name_and_a_volume_make_a_comic():
     assert F.filter_reason("Isaac Asimov's Science Fiction Magazine, Volume 4, Issue 6, June 1980",
                            authors=["Isaac Asimov"]) == F.ANTHOLOGY
     assert F.filter_reason("Moon Called Vol. 1", authors=briggs) is None
+    assert F.book_class("Patricia Briggs' Alpha & Omega: Cry Wolf # 1 of 4", authors=briggs) == F.COMIC
 
 
 def test_an_orientation_edition_is_hidden_but_matches_as_before():
@@ -285,6 +286,28 @@ def test_an_orientation_edition_is_hidden_but_matches_as_before():
         assert F.book_class(t, authors=["Snekguy"]) is None
     assert F.filter_reason("The Ship: Library Edition") is None
     assert F.filter_reason("Straight Up Edition Wars") is None
+
+
+def test_a_part_of_n_parts_is_a_split_and_a_script_is_not_a_book():
+    """G262 / G263: "God Emperor of Dune (1 of 2)"; "The Green Mile: The
+    Screenplay". A series position "(Book 1 of 9)" is no split."""
+    assert F.filter_reason("God Emperor of Dune (1 of 2)") == F.SPLIT
+    assert F.filter_reason("Red Rising (2 of 2) [Dramatized Adaptation]") == F.SPLIT
+    assert F.filter_reason("Leviathan Wakes (Book 1 of 9)") is None
+    # The audiobook library lists GraphicAudio's parts; still never the whole
+    assert F.filter_reason("Warbreaker (1 of 3) [Dramatized Adaptation]", content_type="audiobook") is None
+    assert F.book_class("Warbreaker (1 of 3) [Dramatized Adaptation]") == F.SPLIT
+    assert F.filter_reason("Oathbringer, Part 1 of 2", content_type="audiobook") == F.SPLIT
+    for t in ("Screenplay", "The Green Mile: The Screenplay", "The Shawshank Redemption: The Shooting Script"):
+        assert F.filter_reason(t) == F.NOT_A_BOOK, t
+
+
+def test_a_complete_series_status_in_a_series_parenthetical_isnt_a_box_set():
+    """Wave D: Amazon's "(Tapped (COMPLETE SERIES))" is the series' status
+    (G230's shape); "Witch Hunter (The Complete Series)" is still a set."""
+    assert F.filter_reason("Tapped: Book 1 (A Slice-Of-Life HaremLit Adventure) (Tapped (COMPLETE SERIES))") is None
+    assert F.filter_reason("BuyMort: Singularity (BuyMort - The Shopocalypse Saga (Complete Series) Book 7)") is None
+    assert F.filter_reason("Witch Hunter (The Complete Series)") == F.BOX_SET
 
 
 def test_a_comma_list_of_book_numbers_is_a_box_set():
