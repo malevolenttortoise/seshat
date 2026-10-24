@@ -3,12 +3,12 @@
 exports[`Navbar cache-worker icon (desktop) > Goodreads in cooldown > markup 1`] = `
 <DocumentFragment>
   <button
-    aria-label="Metadata cache workers: Cooldown"
+    aria-label="Metadata cache workers: Backing off"
     style="background: transparent; border: medium; cursor: pointer; font-size: 18px; padding: 4px 8px; border-radius: 4px; color: rgb(204, 153, 51); opacity: 0.85; display: inline-flex; align-items: center; justify-content: center;"
-    title="Cache workers: Cooldown
+    title="Cache workers: Backing off
 Metadata cache workers:
   Amazon: active · queue 12 · cached 595/640 · today 42 scans
-  Goodreads: cooldown (1800s) · queue 12 · cached 595/640 · today 17 scans"
+  Goodreads: backing off (1,800s) · queue 12 · cached 595/640 · today 17 scans"
   >
     ☁
   </button>
@@ -16,6 +16,50 @@ Metadata cache workers:
 `;
 
 exports[`Navbar cache-worker icon (desktop) > Goodreads in cooldown > requests 1`] = `
+[
+  "GET /v1/metadata-cache/amazon/status",
+  "GET /v1/metadata-cache/goodreads/status",
+]
+`;
+
+exports[`Navbar cache-worker icon (desktop) > Goodreads stopped: red > markup 1`] = `
+<DocumentFragment>
+  <button
+    aria-label="Metadata cache workers: Stopped"
+    style="background: transparent; border: medium; cursor: pointer; font-size: 18px; padding: 4px 8px; border-radius: 4px; color: rgb(224, 96, 96); opacity: 0.85; display: inline-flex; align-items: center; justify-content: center;"
+    title="Cache workers: Stopped
+Metadata cache workers:
+  Amazon: active · queue 12 · cached 595/640 · today 42 scans
+  Goodreads: stopped (no check-in for 12 min) · queue 12 · cached 595/640 · today 17 scans"
+  >
+    ☁
+  </button>
+</DocumentFragment>
+`;
+
+exports[`Navbar cache-worker icon (desktop) > Goodreads stopped: red > requests 1`] = `
+[
+  "GET /v1/metadata-cache/amazon/status",
+  "GET /v1/metadata-cache/goodreads/status",
+]
+`;
+
+exports[`Navbar cache-worker icon (desktop) > a short cooldown and two authors failed for good: still green (G269) > markup 1`] = `
+<DocumentFragment>
+  <button
+    aria-label="Metadata cache workers: Active"
+    style="background: transparent; border: medium; cursor: pointer; font-size: 18px; padding: 4px 8px; border-radius: 4px; color: rgb(76, 184, 136); opacity: 0.85; display: inline-flex; align-items: center; justify-content: center;"
+    title="Cache workers: Active
+Metadata cache workers:
+  Amazon: cooling down (304s) · queue 12 · cached 595/640 · today 42 scans
+  Goodreads: active · 2 authors failed for good · queue 12 · cached 595/640 · today 17 scans"
+  >
+    ☁
+  </button>
+</DocumentFragment>
+`;
+
+exports[`Navbar cache-worker icon (desktop) > a short cooldown and two authors failed for good: still green (G269) > requests 1`] = `
 [
   "GET /v1/metadata-cache/amazon/status",
   "GET /v1/metadata-cache/goodreads/status",
