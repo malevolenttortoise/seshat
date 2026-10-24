@@ -1397,7 +1397,7 @@ exports[`Dashboard (desktop) > Clean up missing books: a preview over an hour ol
               <div
                 style="font-size: 12px; color: rgb(214, 212, 224); margin-top: 2px;"
               >
-                Hides them with their reason, as new books are hidden now (Hidden → Filtered).
+                Hides them with their reason, as new books are hidden now (Hidden → Filtered). A book a title rule hid that today's rules pass is listed again.
               </div>
             </li>
             <li>
@@ -7632,7 +7632,7 @@ exports[`Dashboard (desktop) > Clean up missing books: before any preview > mark
               <div
                 style="font-size: 12px; color: rgb(214, 212, 224); margin-top: 2px;"
               >
-                Hides them with their reason, as new books are hidden now (Hidden → Filtered).
+                Hides them with their reason, as new books are hidden now (Hidden → Filtered). A book a title rule hid that today's rules pass is listed again.
               </div>
             </li>
             <li>
@@ -17312,7 +17312,7 @@ exports[`Dashboard (phone) > Clean up missing books: a preview over an hour old 
               <div
                 style="font-size: 12px; color: rgb(214, 212, 224); margin-top: 2px;"
               >
-                Hides them with their reason, as new books are hidden now (Hidden → Filtered).
+                Hides them with their reason, as new books are hidden now (Hidden → Filtered). A book a title rule hid that today's rules pass is listed again.
               </div>
             </li>
             <li>
@@ -23547,7 +23547,7 @@ exports[`Dashboard (phone) > Clean up missing books: before any preview > markup
               <div
                 style="font-size: 12px; color: rgb(214, 212, 224); margin-top: 2px;"
               >
-                Hides them with their reason, as new books are hidden now (Hidden → Filtered).
+                Hides them with their reason, as new books are hidden now (Hidden → Filtered). A book a title rule hid that today's rules pass is listed again.
               </div>
             </li>
             <li>
